@@ -39,7 +39,7 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `codingTools` | Select the built-in coding tools. Unset: `read`, `bash`, `edit`, `write` (what a local pi session offers the model); `true`: those plus `grep`, `find`, `ls`; `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
+| `codingTools` | Which tools that CHANGE things the agent gets, on top of `read`/`grep`/`find`/`ls`, which are always mounted. Unset/`true`: `bash`, `edit`, `write`; `false`/`[]`: none of them; an array such as `["edit"]`: exactly those. Authored and conditional built-ins are independent. |
 | `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
@@ -281,28 +281,29 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-By default, `config.tools` are appended after pi's four active coding tools (`read`, `bash`, `edit`,
-`write`), and discovered `tools/` are appended after those.
+An agent always has `read`, `grep`, `find` and `ls`. They are not a capability you opt into — they are
+how FastAgent's own features work: `skills/` are loaded by the model reading `SKILL.md` on demand, and
+channel attachments arrive as local paths. An agent without them cannot use either.
 
-That set is the default for fidelity: it is what a local pi session offers the model, and an agent
-that quietly gains or loses capabilities when served is a different agent. pi also mounts `grep`,
-`find` and `ls` without activating them — `codingTools: true` is how you take those as well, and it
-is worth it for an agent that has to locate a file before reading it.
-
-Narrowing is your call about your own deployment. FastAgent has no boundary to offer here (see
-[Bind address](#bind-address)), so a narrower default would imply one it cannot enforce:
+`codingTools` chooses what is added on top: the tools that **change** something.
 
 ```ts
 import { defineConfig } from "@fastagent-sh/fastagent";
 
 export default defineConfig({
-  codingTools: ["read", "grep", "find", "ls"], // look, don't touch
-});
-
-export default defineConfig({
-  codingTools: false, // authored tools only
+  codingTools: false,      // read and search, nothing else
+  // codingTools: true,    // + bash, edit, write  (the default)
+  // codingTools: ["edit"] // + edit only: writes files, runs nothing
 });
 ```
+
+Unset means all of them, for fidelity: you vibed in local pi with a full toolset, and an agent whose
+capabilities change when served is a different agent. Narrowing is your call about your own
+deployment — FastAgent has no boundary to offer here (see [Bind address](#bind-address)), so a
+narrower default would imply one it cannot enforce.
+
+`config.tools` and discovered `tools/` are appended after whatever this resolves to, and **an authored
+tool takes its name outright** — ship `tools/read.ts` and yours is the `read` the model gets.
 
 Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
 attachments are downloaded to local paths. Both are read with a file tool.

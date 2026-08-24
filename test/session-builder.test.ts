@@ -142,7 +142,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("keeps an empty codingTools false chat surface empty and uses a capability-neutral default identity", async () => {
+  it("leaves the baseline under codingTools false, with a capability-neutral default identity", async () => {
     const dir = await freshAgentDir("fa-chat-empty-", { persona: false });
     try {
       await writeFile(
@@ -152,8 +152,11 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const state = rt.session.agent.state;
-        expect(state.tools).toEqual([]);
-        expect(state.systemPrompt).toContain("Available tools:\n(none)");
+        // `false` removes what CHANGES things; reading and searching are how skills and attachments
+        // work at all, so they stay.
+        expect(state.tools.map((t) => t.name).sort()).toEqual(["find", "grep", "ls", "read"]);
+        expect(state.systemPrompt).toContain("- read:");
+        expect(state.systemPrompt).not.toContain("- bash:");
         expect(state.systemPrompt).toContain("You are an AI assistant operating inside pi, an agent harness.");
         expect(state.systemPrompt).not.toContain("You help users by reading files");
       } finally {
@@ -164,7 +167,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("honors codingTools false in chat's mounted surface and generated prompt", async () => {
+  it("honors codingTools false in chat's mounted surface and generated prompt — baseline aside", async () => {
     const dir = await freshAgentDir("fa-chat-no-coding-");
     try {
       await writeFile(
@@ -183,9 +186,11 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const state = rt.session.agent.state;
-        expect(state.tools.map((t) => t.name)).toEqual(["lookup"]);
+        // The authored tool rides on top of the baseline; what `false` removed is the mutating half.
+        expect(state.tools.map((t) => t.name)).toEqual(["read", "grep", "find", "ls", "lookup"]);
         expect(state.systemPrompt).toContain("- lookup: Look up a business record.");
-        for (const name of ["read", "bash", "edit", "write"]) {
+        expect(state.systemPrompt).toContain("- read:");
+        for (const name of ["bash", "edit", "write"]) {
           expect(state.systemPrompt).not.toContain(`- ${name}:`);
         }
       } finally {
@@ -245,7 +250,16 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         const st = rt.session.agent.state;
         // Default coding tools (rebuilt by pi from names) PLUS the config's custom tool, registered
         // through the session factory — definition-only, nothing machine-global leaked in.
-        expect(st.tools.map((t) => t.name).sort()).toEqual(["bash", "edit", "ping", "read", "write"]);
+        expect(st.tools.map((t) => t.name).sort()).toEqual([
+          "bash",
+          "edit",
+          "find",
+          "grep",
+          "ls",
+          "ping",
+          "read",
+          "write",
+        ]);
         // The injected system prompt is fastagent's: the definition's AGENTS.md and skill are in it.
         const sp = st.systemPrompt ?? "";
         expect(sp).toContain("MAGIC_CHAT_MARKER_91");
@@ -497,7 +511,7 @@ describe("session builder: chat offers the model the same tool set serving does"
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
       const active = rt.session.getActiveToolNames().sort();
-      expect(active).toEqual(["bash", "edit", "read", "write"]);
+      expect(active).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
       // Exactly one copy of each: `noTools: "builtin"` keeps pi's own read/bash/edit/write out, and
       // fastagent mounts its own. Two under one name would be the model's problem to disambiguate.
       expect(rt.session.getAllTools().filter((tool) => tool.name === "bash")).toHaveLength(1);
@@ -517,11 +531,11 @@ describe("session builder: codingTools narrows chat exactly as it narrows servin
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
     await writeFile(
       join(dir, "fastagent.config.mjs"),
-      'export default { model: "openai-codex/gpt-5.5", codingTools: ["read"] };\n',
+      'export default { model: "openai-codex/gpt-5.5", codingTools: ["edit"] };\n',
     );
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
-      expect(rt.session.getActiveToolNames().sort()).toEqual(["read"]);
+      expect(rt.session.getActiveToolNames().sort()).toEqual(["edit", "find", "grep", "ls", "read"]);
       // A BOUNDARY, not a default: the disabled built-ins are refused at the registry, so nothing
       // that activates by name — a TUI command, the control plane, a deferred-tool loader — can put
       // one back. "Mounted but inactive" would be the whole distance between safe and not for a

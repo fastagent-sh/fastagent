@@ -18,7 +18,8 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import {
   CODING_TOOL_NAMES,
-  DEFAULT_CODING_TOOL_NAMES,
+  BASELINE_TOOL_NAMES,
+  MUTATING_TOOL_NAMES,
   type CodingToolName,
   type FastagentConfig,
   defaultAuthPath,
@@ -86,9 +87,9 @@ export function piAllCodingTools(cwd: string): MountedTool[] {
   return [...createReadOnlyTools(cwd), ...mutating];
 }
 
-/** What an agent mounts unasked: pi's default ACTIVE set — see {@link DEFAULT_CODING_TOOL_NAMES}. */
+/** What an agent mounts unasked: everything. `codingTools` subtracts from it, never adds. */
 export function piDefaultTools(cwd: string): MountedTool[] {
-  return createCodingTools(cwd);
+  return piAllCodingTools(cwd);
 }
 
 export interface ResolvedCodingTools {
@@ -100,13 +101,15 @@ export interface ResolvedCodingTools {
  *  re-interpreting undefined/true/false/arrays independently. */
 export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
-  // Unset = pi's active four, for fidelity: that is what a local pi session offers the model, and an
-  // agent whose capabilities change when served is a different agent. `true` = all seven, taking the
-  // ones pi mounts inactive. Narrowing is the author's call about their own deployment, not a default
-  // that would imply a boundary this cannot enforce — see the §1 note above.
-  const enabled = new Set<CodingToolName>(
-    requested === false ? [] : requested === true ? CODING_TOOL_NAMES : (requested ?? DEFAULT_CODING_TOOL_NAMES),
-  );
+  // The baseline is not part of the decision — it is always there (BASELINE_TOOL_NAMES). What
+  // `codingTools` chooses is what gets ADDED to it, so `false` leaves an agent that reads and
+  // searches rather than one that cannot open its own skills. Unset means all of them, for fidelity:
+  // an agent whose capabilities change when served is a different agent, and narrowing is the
+  // author's call about their own deployment — not a default that would imply a boundary this cannot
+  // enforce (see the §1 note above).
+  const added =
+    requested === false ? [] : requested === true || requested === undefined ? MUTATING_TOOL_NAMES : requested;
+  const enabled = new Set<CodingToolName>([...BASELINE_TOOL_NAMES, ...added]);
   const tools = piAllCodingTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
@@ -160,7 +163,13 @@ export async function resolveAgentTools(
   // `read`/`bash` to land, and which is not always the definition directory.
   const discovered = await loadTools(agentDir);
   const coding = resolveCodingTools(config, cwd);
-  const configured = config.tools ? [...coding.tools, ...config.tools] : coding.tools;
+  // An AUTHORED tool wins its name outright, baseline included: an author who ships `tools/read.ts`
+  // means their reader, and pi's would shadow it under the same name. This is the same rule
+  // `disabledBuiltinNames` follows for the mutating half — a name someone took is theirs — applied
+  // where the baseline would otherwise take it back by never being optional.
+  const authoredNames = new Set([...(config.tools ?? []), ...discovered.tools].map((tool) => tool.name));
+  const codingTools = coding.tools.filter((tool) => !authoredNames.has(tool.name));
+  const configured = config.tools ? [...codingTools, ...config.tools] : codingTools;
   const merged = mergeDiscoveredTools(configured, discovered.tools);
   // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
   // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; an
@@ -175,8 +184,9 @@ export async function resolveAgentTools(
   // coding tools, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
   // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
   // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`. When
-  // coding tools are disabled, an authored `read`/`bash`/`edit`/`write` is ordinary author surface.
-  const defaultNames = new Set<string>(coding.names);
+  // A name the AUTHOR took is theirs in this report too, even when pi has one like it: `codingTools`
+  // reports what pi mounted, and an authored `read` is not that.
+  const defaultNames = new Set<string>(coding.names.filter((name) => !authoredNames.has(name)));
   const toolNames = tools
     .filter(
       (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
@@ -184,7 +194,7 @@ export async function resolveAgentTools(
     .map((t) => t.name);
   return {
     tools,
-    codingToolNames: coding.names,
+    codingToolNames: coding.names.filter((name) => !authoredNames.has(name)),
     toolNames,
     deferredToolNames: tools.filter(isDeferredTool).map((t) => t.name),
     toolCollisions,
@@ -229,7 +239,7 @@ export function piBasePrompt(
   const codingNames = options.codingToolNames ?? codingToolNamesIn(mounted);
   // The four this sentence NAMES — reading, executing, editing, writing. Searching is not part of the
   // claim, so requiring it would demote an agent that can do everything the identity says it can.
-  const fullCodingSurface = DEFAULT_CODING_TOOL_NAMES.every((name) => codingNames.includes(name));
+  const fullCodingSurface = (["read", "bash", "edit", "write"] as const).every((name) => codingNames.includes(name));
   const identity =
     options.persona?.trim() ||
     (fullCodingSurface

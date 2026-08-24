@@ -34,6 +34,7 @@ export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.t
 
 export {
   type CodingToolName,
+  type MutatingToolName,
   defineConfig,
   listModels,
   resolveModel,

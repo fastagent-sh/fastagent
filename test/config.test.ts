@@ -72,10 +72,13 @@ describe("config: loadConfig validation", () => {
       return loadConfig(dir);
     };
     expect((await load("false")).config.codingTools).toBe(false);
-    expect((await load('["read"]')).config.codingTools).toEqual(["read"]);
+    expect((await load('["edit"]')).config.codingTools).toEqual(["edit"]);
     await expect(load('"no"')).rejects.toThrow(/codingTools.*must be a boolean or an array/);
-    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*read, grep, find, ls, bash, edit, write/);
-    await expect(load('["read", "read"]')).rejects.toThrow(/must not contain duplicate "read"/);
+    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*bash, edit, write/);
+    await expect(load('["edit", "edit"]')).rejects.toThrow(/must not contain duplicate "edit"/);
+    // A baseline name is not on the menu: read/grep/find/ls are always mounted, so accepting one
+    // would be accepting a request that changes nothing.
+    await expect(load('["read"]')).rejects.toThrow(/codingTools\[0\].*bash, edit, write/);
   });
 });
 
@@ -298,36 +301,36 @@ describe("config: loadConfig", () => {
 });
 
 describe("config: resolveTools (coding defaults + authored tools)", () => {
-  it("defaults to pi's active four; `true` adds the ones pi mounts but leaves inactive", () => {
-    // Fidelity means the set a local pi session OFFERS the model, which is read/bash/edit/write — pi
-    // mounts grep/find/ls too and does not activate them. `true` is how an author says they want
-    // those as well; narrowing is theirs to choose either way.
-    const four = ["read", "bash", "edit", "write"];
-    expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(four);
-    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual([
-      "read",
-      "grep",
-      "find",
-      "ls",
-      "bash",
-      "edit",
-      "write",
-    ]);
+  it("always mounts the baseline; `codingTools` decides what is added to it", () => {
+    // read/grep/find/ls are not a capability an author opts into — skills load by the model reading
+    // SKILL.md, and channel attachments arrive as paths. An agent without them cannot use fastagent's
+    // own features, so they are not on the menu; `codingTools` chooses what CHANGES things.
+    const baseline = ["read", "grep", "find", "ls"];
+    const all = [...baseline, "bash", "edit", "write"];
+    expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(all);
+    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(all);
 
     // config.tools are APPENDED after them, never replacing.
     const extra = { name: "ping" } as unknown as FastagentTool;
-    expect(resolveTools({ tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([...four, "ping"]);
+    expect(resolveTools({ tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([...all, "ping"]);
   });
 
-  it("codingTools false/[] remove all coding tools; an array selects names in canonical order", () => {
+  it("false/[] leave the baseline; an array adds exactly those, in canonical order", () => {
+    const baseline = ["read", "grep", "find", "ls"];
     const extra = { name: "ping" } as unknown as FastagentTool;
-    expect(resolveTools({ codingTools: false }, process.cwd()).map((t) => t.name)).toEqual([]);
-    expect(resolveTools({ codingTools: [] }, process.cwd()).map((t) => t.name)).toEqual([]);
-    expect(resolveTools({ codingTools: ["write", "read"] }, process.cwd()).map((t) => t.name)).toEqual([
-      "read",
+    // Not "no tools": an agent that cannot read is one that cannot open its own skills.
+    expect(resolveTools({ codingTools: false }, process.cwd()).map((t) => t.name)).toEqual(baseline);
+    expect(resolveTools({ codingTools: [] }, process.cwd()).map((t) => t.name)).toEqual(baseline);
+    // Order is the config's, not the caller's: reports, prompts and mount order all read this list.
+    expect(resolveTools({ codingTools: ["write", "edit"] }, process.cwd()).map((t) => t.name)).toEqual([
+      ...baseline,
+      "edit",
       "write",
     ]);
-    expect(resolveTools({ codingTools: false, tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual(["ping"]);
+    expect(resolveTools({ codingTools: false, tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([
+      ...baseline,
+      "ping",
+    ]);
   });
 });
 
@@ -460,21 +463,5 @@ describe("rewriteConfigModel (first-run picker write-back)", async () => {
   it("returns null for a hand-shaped config (no model line, no scaffold block shape)", () => {
     expect(rewriteConfigModel("export default { http: { port: 8787 } };\n", "x/y")).toBeNull(); // one-liner
     expect(rewriteConfigModel("export default defineConfig({\n});\n", "x/y")).toBeNull(); // wrapper call
-  });
-});
-
-describe("config: codingTools accepts the read-only names too", () => {
-  it("mounts grep/find/ls when named explicitly", () => {
-    expect(resolveTools({ codingTools: ["grep", "ls"] }, process.cwd()).map((t) => t.name)).toEqual(["grep", "ls"]);
-  });
-
-  it("keeps canonical order regardless of how the array is written", () => {
-    // Order is the config's, not the caller's: reports, prompts and mount order all read this list,
-    // and two definitions with the same set should present identically.
-    expect(resolveTools({ codingTools: ["write", "grep", "read"] }, process.cwd()).map((t) => t.name)).toEqual([
-      "read",
-      "grep",
-      "write",
-    ]);
   });
 });

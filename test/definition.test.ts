@@ -251,9 +251,9 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // default = pi's active four (fidelity with a local session); `codingTools: true` adds the rest.
-    // Custom code tools stay an explicit `tools:` injection, no magic dir.
-    expect(seenTools.sort()).toEqual(["bash", "edit", "read", "write"]);
+    // default = every pi coding tool; `codingTools` subtracts. Custom code tools stay an explicit
+    // `tools:` injection, no magic dir.
+    expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 });
 
@@ -314,11 +314,11 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is pi's active four; piAllCodingTools is every one", () => {
-    // Asserted against pi's own groupings rather than hand-written lists, so both follow upstream;
-    // the ORDER of the full set is ours, and it is what the config reports and mounts in.
+  it("piDefaultTools is every pi coding tool; codingTools subtracts from it", () => {
+    // Asserted against pi's own groupings rather than a hand-written list, so the set follows
+    // upstream; the ORDER is ours, and it is what the config reports and mounts in.
     expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(
-      createCodingTools(process.cwd()).map((t) => t.name),
+      piAllCodingTools(process.cwd()).map((t) => t.name),
     );
     const names = piAllCodingTools(process.cwd()).map((t) => t.name);
     expect(names).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);

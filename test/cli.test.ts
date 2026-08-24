@@ -318,7 +318,7 @@ describe("cli papercuts", () => {
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
-    expect(info.codingTools).toEqual([]);
+    expect(info.codingTools).toEqual(["read", "grep", "find", "ls"]); // `false` keeps the baseline
     expect(info.tools).toEqual(["lookup"]); // authored surface remains; coding defaults are disabled
     expect(info.context.length).toBeGreaterThan(0); // the AGENTS.md is loaded as ② project context
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
@@ -402,7 +402,7 @@ describe("cli papercuts", () => {
     expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
     expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
     expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
-    expect(info.codingTools).toEqual(["read", "bash", "edit", "write"]); // omitted = pi's active four
+    expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]); // omitted = everything
 
     // text mode: next instant on the schedules line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);

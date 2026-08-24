@@ -25,23 +25,27 @@ import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../.
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
 /**
- * pi's coding tools, in canonical mount/report order.
+ * The tools an agent always has: reading and looking around its workspace.
  *
- * pi ships two overlapping groupings and neither is the whole set: `createCodingTools` is the classic
- * four it hands a terminal (read/bash/edit/write, no searching), `createReadOnlyTools` is
- * read/grep/find/ls. `read` is in both. This union is what `codingTools` selects from, read-only ones
- * first — the order a report reads in, and the order of increasing consequence.
+ * Not configurable, because they are not a capability the author opts into — they are how fastagent's
+ * own features work. `skills/` are loaded by the model reading `SKILL.md` on demand, and channel
+ * attachments arrive as local paths. An agent without `read` cannot use either, which is not a
+ * posture anyone wants; it is a broken agent.
  */
-export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+export const BASELINE_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 /**
- * What an agent mounts when `codingTools` is unset: pi's own default ACTIVE set.
+ * The tools that change something: files, or the machine. These are what `codingTools` decides.
  *
- * pi mounts all seven and activates these four, so this is what an author's local session offers the
- * model — the fidelity this default exists for. `grep`/`find`/`ls` are one `codingTools: true` away,
- * and worth it for an agent that has to locate a file, but they are not what pi hands you unasked.
+ * The split is pi's own (`createReadOnlyTools` vs the rest of `createCodingTools`), and it is the
+ * only line worth putting a switch on — a served agent acts on messages from whoever can reach it,
+ * so this is the difference between answering questions and taking actions.
  */
-export const DEFAULT_CODING_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
+export const MUTATING_TOOL_NAMES = ["bash", "edit", "write"] as const;
+export type MutatingToolName = (typeof MUTATING_TOOL_NAMES)[number];
+
+/** Everything pi offers, in canonical mount/report order. */
+export const CODING_TOOL_NAMES = [...BASELINE_TOOL_NAMES, ...MUTATING_TOOL_NAMES] as const;
 export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 
 export interface FastagentConfig {
@@ -51,16 +55,18 @@ export interface FastagentConfig {
    *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
    *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
   thinkingLevel?: ThinkingLevel;
-  /** Which pi coding tools to mount.
+  /**
+   * Which tools that CHANGE things the agent gets, on top of the ones it always has
+   * ({@link BASELINE_TOOL_NAMES}: `read`, `grep`, `find`, `ls`).
    *
-   *  - unset — `read`, `bash`, `edit`, `write`: what a local pi session offers the model
-   *  - `true` — those plus `grep`, `find`, `ls` (pi mounts these but leaves them inactive)
-   *  - `false` / `[]` — none
-   *  - an array — exactly those names, in canonical order
+   *  - unset / `true` — all of them: `bash`, `edit`, `write`
+   *  - `false` / `[]` — none; the agent can read and search, and that is all
+   *  - an array — exactly those, e.g. `["edit"]` for an agent that writes files but runs nothing
    *
-   *  Authored tools (`config.tools` + discovered `tools/`) and conditional built-ins
-   *  (`search_tools`, `wake`) are independent of this. */
-  codingTools?: boolean | CodingToolName[];
+   * Authored tools (`config.tools` + discovered `tools/`) and conditional built-ins (`search_tools`,
+   * `wake`) are independent of this.
+   */
+  codingTools?: boolean | MutatingToolName[];
   /** Extra custom tools, appended after enabled pi coding tools — never replaces them. `FastagentTool`
    *  = AgentTool plus the optional `deferred` marker (see defineTool). */
   tools?: FastagentTool[];
@@ -178,10 +184,10 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "sessionControl" must be a boolean`);
   }
   if (c.codingTools !== undefined && typeof c.codingTools !== "boolean" && !Array.isArray(c.codingTools)) {
-    throw new Error(`${path}: "codingTools" must be a boolean or an array of ${CODING_TOOL_NAMES.join(", ")}`);
+    throw new Error(`${path}: "codingTools" must be a boolean or an array of ${MUTATING_TOOL_NAMES.join(", ")}`);
   }
   if (Array.isArray(c.codingTools)) {
-    const valid = new Set<string>(CODING_TOOL_NAMES);
+    const valid = new Set<string>(MUTATING_TOOL_NAMES);
     const seen = new Set<string>();
     for (const [i, name] of c.codingTools.entries()) {
       if (typeof name !== "string" || !valid.has(name)) {

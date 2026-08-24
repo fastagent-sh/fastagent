@@ -175,17 +175,20 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: load config, res
 Directory config can disable pi's default coding tools without changing the authored tool surface:
 
 ```ts
-type CodingToolName = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "write";
+// Always mounted, not selectable: read, grep, find, ls
+type MutatingToolName = "bash" | "edit" | "write";
+type CodingToolName = "read" | "grep" | "find" | "ls" | MutatingToolName;
 
 interface FastagentConfig {
-  codingTools?: boolean | CodingToolName[];
+  codingTools?: boolean | MutatingToolName[];
   tools?: FastagentTool[];
 }
 ```
 
-Unset mounts `read`, `bash`, `edit`, `write` — pi's own active set; `true` adds `grep`, `find`, `ls`,
-which pi mounts but leaves inactive; `false`/`[]` mounts none; an array mounts exactly those names in
-canonical order. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
+`read`, `grep`, `find`, `ls` are always mounted — fastagent's own features are built on them (skills
+load by the model reading `SKILL.md`; channel attachments arrive as local paths). `codingTools`
+chooses what is added: unset/`true` mounts `bash`, `edit`, `write`; `false`/`[]` mounts none of them;
+an array mounts exactly those. An authored tool takes its name outright, baseline included. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
 `info`) applies the same resolved surface, and `createPiAgentFromDefinition` lands on the same default
 when the caller names no `tools`.
 

@@ -93,12 +93,14 @@ describe("loadTools (filesystem discovery)", () => {
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
-  it("codingTools false with an empty definition stays empty instead of restoring pi defaults", async () => {
+  it("codingTools false leaves the baseline, and nothing else", async () => {
+    // `false` removes what CHANGES things. read/grep/find/ls stay because fastagent's own features
+    // are built on them — skills load by the model reading SKILL.md, attachments arrive as paths.
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-empty-"));
     const resolved = await resolveAgentTools({ codingTools: false }, agentDir, process.cwd());
-    expect(resolved.tools).toEqual([]);
-    expect(resolved.codingToolNames).toEqual([]);
-    expect(resolved.toolNames).toEqual([]);
+    expect(resolved.tools.map((t) => t.name)).toEqual(["read", "grep", "find", "ls"]);
+    expect(resolved.codingToolNames).toEqual(["read", "grep", "find", "ls"]);
+    expect(resolved.toolNames).toEqual([]); // no AUTHORED tools
   });
 
   it("codingTools false mounts and reports only authored tools, including a tool named like a coding default", async () => {
@@ -114,7 +116,10 @@ describe("loadTools (filesystem discovery)", () => {
       agentDir,
       process.cwd(),
     );
-    expect(tools.map((t) => t.name)).toEqual(["read"]);
+    // The authored `read` takes the name outright — pi's would otherwise shadow it — while the rest
+    // of the baseline is untouched. Same rule the mutating half follows: a name someone took is theirs.
+    expect(tools.map((t) => t.name).sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect(tools.find((t) => t.name === "read")?.description).toBe("Business read");
     expect(toolNames).toEqual(["read"]);
     expect(toolCollisions).toEqual([]);
   });
@@ -134,7 +139,7 @@ describe("loadTools (filesystem discovery)", () => {
       agentDir,
       process.cwd(),
     );
-    expect(tools.map((t) => t.name).sort()).toEqual(["lookup", "search_tools"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["find", "grep", "lookup", "ls", "read", "search_tools"]);
     expect(deferredToolNames).toEqual(["lookup"]);
   });
 
