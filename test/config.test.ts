@@ -14,8 +14,6 @@ import {
   resolveSessionsDirOverride,
 } from "../src/engines/pi/config.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
-import { resolveTools } from "../src/engines/pi/create.ts";
-import type { FastagentTool } from "../src/engines/pi/tool.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -65,17 +63,10 @@ describe("config: loadConfig validation", () => {
     await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
   });
 
-  it("codingTools: accepts booleans or a unique known-name array; rejects every other shape", async () => {
-    const load = async (value: string) => {
-      const dir = await mkdtemp(join(tmpdir(), "fa-coding-tools-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), `export default { codingTools: ${value} };\n`);
-      return loadConfig(dir);
-    };
-    expect((await load("false")).config.codingTools).toBe(false);
-    expect((await load('["read"]')).config.codingTools).toEqual(["read"]);
-    await expect(load('"no"')).rejects.toThrow(/codingTools.*must be a boolean or an array/);
-    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*read, bash, edit, write/);
-    await expect(load('["read", "read"]')).rejects.toThrow(/must not contain duplicate "read"/);
+  it("rejects codingTools because directory agents always get the complete set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-coding-tools-retired-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { codingTools: false };\n`);
+    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "codingTools"/);
   });
 });
 
@@ -294,29 +285,6 @@ describe("config: loadConfig", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { channels: (agent) => ({}) };`);
     await expect(loadConfig(dir)).rejects.toThrow(/unknown key "channels"/);
-  });
-});
-
-describe("config: resolveTools (coding defaults + authored tools)", () => {
-  it("enables pi coding tools by default and appends config.tools", () => {
-    const defaults = resolveTools({}, process.cwd());
-    expect(defaults.map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
-    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(defaults.map((t) => t.name));
-
-    const extra = { name: "ping" } as unknown as FastagentTool;
-    const merged = resolveTools({ tools: [extra] }, process.cwd());
-    expect(merged.map((t) => t.name)).toEqual([...defaults.map((t) => t.name), "ping"]);
-  });
-
-  it("codingTools false/[] remove all coding tools; an array selects names in canonical order", () => {
-    const extra = { name: "ping" } as unknown as FastagentTool;
-    expect(resolveTools({ codingTools: false }, process.cwd()).map((t) => t.name)).toEqual([]);
-    expect(resolveTools({ codingTools: [] }, process.cwd()).map((t) => t.name)).toEqual([]);
-    expect(resolveTools({ codingTools: ["write", "read"] }, process.cwd()).map((t) => t.name)).toEqual([
-      "read",
-      "write",
-    ]);
-    expect(resolveTools({ codingTools: false, tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual(["ping"]);
   });
 });
 

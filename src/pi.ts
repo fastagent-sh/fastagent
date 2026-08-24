@@ -33,7 +33,6 @@ export {
 export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
 
 export {
-  type CodingToolName,
   defineConfig,
   listModels,
   resolveModel,

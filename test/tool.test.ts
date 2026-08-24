@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool, loadTools, z } from "../src/index.ts";
-import { resolveAgentTools } from "../src/engines/pi/create.ts";
+import { CODING_TOOL_NAMES, resolveAgentTools } from "../src/engines/pi/create.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -93,34 +93,39 @@ describe("loadTools (filesystem discovery)", () => {
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
-  it("codingTools false with an empty definition stays empty instead of restoring pi defaults", async () => {
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-empty-"));
-    const resolved = await resolveAgentTools({ codingTools: false }, agentDir, process.cwd());
-    expect(resolved.tools).toEqual([]);
-    expect(resolved.codingToolNames).toEqual([]);
-    expect(resolved.toolNames).toEqual([]);
+  it("always mounts every coding tool", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-all-"));
+    const resolved = await resolveAgentTools({}, agentDir, process.cwd());
+    expect(resolved.tools.map((tool) => tool.name)).toEqual([...CODING_TOOL_NAMES]);
+    expect(resolved.toolNames).toEqual([]); // no authored tools
   });
 
-  it("codingTools false mounts and reports only authored tools, including a tool named like a coding default", async () => {
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-"));
+  it("keeps a coding built-in when authored tools reuse its name", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-read-collision-"));
     await mkdir(join(agentDir, "tools"));
     await writeFile(
       join(agentDir, "tools", "read.mjs"),
-      `export default { description: "Business read", parameters: { type: "object" }, async execute() { return { content: [], details: "ok" }; } };`,
+      `export default { description: "Discovered read", parameters: { type: "object" }, async execute() { return "mine"; } };`,
     );
+    const configuredRead = defineTool({
+      name: "read",
+      description: "Configured read",
+      input: z.object({}),
+      execute: () => "mine",
+    });
 
-    const { tools, toolNames, toolCollisions } = await resolveAgentTools(
-      { codingTools: false },
-      agentDir,
-      process.cwd(),
-    );
-    expect(tools.map((t) => t.name)).toEqual(["read"]);
-    expect(toolNames).toEqual(["read"]);
-    expect(toolCollisions).toEqual([]);
+    const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDir, process.cwd());
+    expect(resolved.tools.filter((tool) => tool.name === "read")).toHaveLength(1);
+    expect(resolved.tools.find((tool) => tool.name === "read")?.description).not.toMatch(/Configured|Discovered/);
+    expect(resolved.toolNames).not.toContain("read");
+    expect(resolved.toolCollisions).toEqual([
+      { name: "read", source: "config.tools" },
+      { name: "read", source: "tools/read" },
+    ]);
   });
 
-  it("codingTools false leaves the deferred search_tools policy unchanged", async () => {
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-deferred-"));
+  it("keeps the deferred search_tools policy independent", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-deferred-"));
     const deferred = defineTool({
       name: "lookup",
       description: "Look up a business record.",
@@ -129,12 +134,18 @@ describe("loadTools (filesystem discovery)", () => {
       execute: () => "ok",
     });
 
-    const { tools, deferredToolNames } = await resolveAgentTools(
-      { codingTools: false, tools: [deferred] },
-      agentDir,
-      process.cwd(),
-    );
-    expect(tools.map((t) => t.name).sort()).toEqual(["lookup", "search_tools"]);
+    const { tools, deferredToolNames } = await resolveAgentTools({ tools: [deferred] }, agentDir, process.cwd());
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "bash",
+      "edit",
+      "find",
+      "grep",
+      "lookup",
+      "ls",
+      "read",
+      "search_tools",
+      "write",
+    ]);
     expect(deferredToolNames).toEqual(["lookup"]);
   });
 

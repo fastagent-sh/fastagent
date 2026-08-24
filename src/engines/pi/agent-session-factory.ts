@@ -89,13 +89,7 @@ export interface PiAgentSessionFactoryOptions {
    * that entry point upstream, not a workaround here.
    */
   extensionPaths?: string[];
-  /**
-   * Built-in coding tools this definition DISABLED, refused at the registry rather than merely left
-   * inactive. `noTools: "builtin"` only keeps pi's own copies out of the active set, and anything
-   * that can activate a tool by name — a TUI command, the control plane, a deferred-tool loader —
-   * could put one back. `codingTools` is a capability decision for public-facing agents, so the
-   * disabled names must not be mountable at all.
-   */
+  /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
   /** Filesystem/process environment: definition loading, and the turn context for tools that read one. */
   env: ExecutionEnv;
@@ -193,8 +187,8 @@ function toolDefinitions(
       if (!session) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
       return turnContext.run(
         { cwd, sessionManager: agentSessionManager(session, sessionId), tools: sessionToolActivation(session) },
-        // pi's own fifth `execute` parameter is read only by its default coding tools; fastagent's
-        // take theirs from turnContext. This env is here to satisfy the shape.
+        // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
+        // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
         () => tool.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
       );
     },
@@ -358,9 +352,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       sessionManager,
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
-      // pi would otherwise mount its own read/bash/edit/write ON TOP of ours: fastagent's default
-      // tool set already IS those four (create.ts piDefaultTools), so letting both in would offer
-      // the model each one twice, under one name.
+      // pi would otherwise mount its built-ins on top of fastagent's copies, offering duplicate names.
+      // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted.
       noTools: "builtin",
       ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
       customTools: toolDefinitions(tools, cwd, env, sessionId, bound),

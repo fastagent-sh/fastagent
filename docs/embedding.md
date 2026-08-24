@@ -149,11 +149,11 @@ createPiAgent({
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 
-`env` governs definition loading. It does NOT govern the default coding tools (`read`/`bash`/`edit`/
-`write`), which are pi's own and reach the filesystem directly, rooted at the workspace they were
-built for; nor author-written `tools/`, which are code and can import anything. Injecting `env`
-therefore does not isolate a directory agent — a sandbox has to constrain the process, and that
-adapter is future work.
+`env` governs definition loading. It does NOT govern the coding tools (`read`/`grep`/`find`/`ls`/
+`bash`/`edit`/`write`), which reach the local process directly, rooted at the workspace they were built
+for; nor author-written `tools/`, which are code and can import anything. Injecting `env` therefore
+does not isolate a directory agent — a sandbox has to constrain the process, and that adapter is
+future work.
 
 ## 4. Auth
 

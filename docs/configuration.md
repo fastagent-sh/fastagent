@@ -39,8 +39,7 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `codingTools` | Select the built-in coding tools. Unset/`true`: all of `read`, `bash`, `edit`, `write`; `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
-| `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
+| `tools` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |
@@ -221,6 +220,13 @@ the opposite: `--bind 127.0.0.1` keeps the port — `/control/*` with it — unr
 `<stateRoot>/control.json` records the address a client should dial, so clients read it rather than
 assume one.
 
+**FastAgent does not provide a security boundary, and a default cannot be one.** The built-in
+`POST /invoke` has no authentication; author-written `tools/` can import anything; a WebSocket or
+Socket-Mode channel dials OUT, so no bind address constrains who can message the agent. Whoever can
+reach an agent can use everything it mounts. Put it behind an application, a gateway, or a network
+you control — that is where the boundary belongs, and a narrower default here would substitute a
+feeling for one.
+
 Two edges: `--tunnel` reaches the serve by dialing `localhost`, so a bind that name never resolves to
 (`--bind 192.168.1.5`, or even `--bind 127.0.0.2`) is refused with it; and `http.host` travels into a deployed image, where any non-wildcard bind
 breaks the container (unreachable, or unable to bind at all) — `deploy` warns and gates `--run`, so keep
@@ -274,49 +280,20 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-By default, `config.tools` are appended after the pi coding tools (`read`, `bash`, `edit`, `write`),
-and discovered `tools/` are appended after those. To expose only authored tools:
+Every directory agent mounts pi's complete coding set: `read`, `grep`, `find`, `ls`, `bash`, `edit`,
+and `write`. These are basic agent capabilities, not a security policy. `read` also opens model-visible
+skills and downloaded channel attachments.
 
-```ts
-import { defineConfig } from "@fastagent-sh/fastagent";
+If a deployment needs isolation, sandbox the whole agent process and restrict what that sandbox can
+reach. A tool allowlist would cover only pi's built-ins while authored tools and channel code remain
+ordinary executable code, so it cannot provide that boundary.
 
-export default defineConfig({
-  codingTools: false,
-});
-```
+`config.tools` and discovered `tools/` are appended after the coding tools. Name collisions are
+reported and the existing coding tool wins. Conditional built-ins remain independent: `search_tools`
+mounts when a deferred tool needs it, and `wake` remains controlled by `selfSchedule` on the serving
+path. Run `fastagent info --json` to inspect the complete mounted surface.
 
-For least privilege while retaining file-backed capabilities, select only `read`:
-
-```ts
-export default defineConfig({
-  codingTools: ["read"],
-});
-```
-
-Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
-attachments are downloaded to local paths. Both are read with a file tool.
-
-Neither is checked ahead of time. A channel states what it attached (name, size, path) and the agent
-answers for itself; a skill listing is loaded when the model reaches for it. Without a reader the
-agent says it cannot open the file — the direct, visible consequence of the posture you configured,
-and images still travel inline through vision either way. (A pre-flight check would also have to
-guess: `codingTools: false` plus an authored `tools/read.ts` is a perfectly readable agent.)
-
-A disabled built-in is **refused, not merely hidden**: it never enters the session's tool registry,
-so nothing that activates a tool by name — a `chat` command, the control plane, the deferred-tool
-loader — can bring it back at runtime. That makes `codingTools` usable as a capability boundary for a
-public-facing agent, rather than a default someone can undo. It does not restrict tools you author
-yourself: `tools/` and `config.tools` are yours to scope.
-
-The setting removes only the selected coding tools. Authored `config.tools` and `tools/` still mount;
-`search_tools` still mounts when a deferred tool needs it, and `wake` remains controlled by
-`selfSchedule` on the serving path. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`,
-`tool`, and `info`) resolves the same setting. Run `fastagent info --json` and inspect `codingTools`
-(the resolved name array) plus `tools`.
-
-Name collisions are surfaced as warnings; existing tools win. With a coding tool enabled, its name
-wins over discovered tools; with it disabled, an authored tool may use that name. Reusable
-packages do not need a separate plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
+Reusable packages do not need a separate plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
 
 ```ts
 import { integrationTools } from "@acme/fastagent-tools";

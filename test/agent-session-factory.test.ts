@@ -15,7 +15,7 @@ import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.t
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
-import { piDefaultTools } from "../src/engines/pi/create.ts";
+import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -211,7 +211,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         systemPrompt: "base",
         // pi lists skills only when `read` is mounted — a skill is a file the model has to open, so
         // advertising one it cannot read would be an empty offer. Serving always has it.
-        tools: piDefaultTools(process.cwd()),
+        tools: piAllCodingTools(process.cwd()),
         skills: [{ name: "release", description: "Cut a release", filePath: skillFile }] as Parameters<
           typeof piAgentSessionFactory
         >[0]["skills"],

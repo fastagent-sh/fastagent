@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCodingTools } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -12,9 +12,17 @@ import {
   collect,
   createPiAgent,
   createPiAgentFromDefinition,
+  defineTool,
   type CreatePiAgentFromDefinitionOptions,
+  z,
 } from "../src/index.ts";
-import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
+import {
+  CODING_TOOL_NAMES,
+  assembleSystemPrompt,
+  type PiAssemblyParts,
+  piAllCodingTools,
+  piBasePrompt,
+} from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/engines/pi/definition.ts";
@@ -186,14 +194,14 @@ describe("create: assembleSystemPrompt (four segments)", () => {
   });
 
   it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piDefaultTools(process.cwd()) });
+    const withTools = piBasePrompt({ tools: piAllCodingTools(process.cwd()) });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
   });
 
   it("a persona.md persona overrides the engine identity but keeps the tool list + guidelines", () => {
-    const tools = piDefaultTools(process.cwd());
+    const tools = piAllCodingTools(process.cwd());
     const persona = piBasePrompt({ tools, persona: "You are the Repo Bot." });
     expect(persona).toContain("You are the Repo Bot.");
     expect(persona).not.toContain("operating inside pi"); // default identity replaced
@@ -251,8 +259,9 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // default = pi core toolset (fidelity); custom code tools = explicit tools: injection, no magic dir
-    expect(seenTools.sort()).toEqual(["bash", "edit", "read", "write"]);
+    // Every directory agent gets pi's complete coding set. Custom tools stay an explicit `tools:`
+    // injection, with no second discovery mechanism.
+    expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 });
 
@@ -273,9 +282,40 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
-    // pi appends its own working-directory line; what matters is that nothing else was imposed.
     expect((seen ?? "").split("\nCurrent working directory:")[0]).toBe("You are a support bot.");
     expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+  });
+
+  it("cannot activate a coding tool omitted from its replacement set", async () => {
+    let activated: string[] | undefined;
+    let offeredAfter: string[] = [];
+    const { faux } = makeFaux();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("try_enable_bash", {}, { id: "c1" })),
+      (context) => {
+        offeredAfter = (context.tools ?? []).map((tool) => tool.name);
+        return fauxAssistantMessage("done");
+      },
+    ]);
+    const agent = createPiAgent({
+      providers: [faux.provider],
+      model: "faux/faux-1",
+      tools: [
+        defineTool({
+          name: "try_enable_bash",
+          description: "Try to enable bash.",
+          input: z.object({}),
+          execute: async (_input, ctx) => {
+            activated = await ctx.tools?.activate(["bash"]);
+            return activated;
+          },
+        }),
+      ],
+    });
+
+    await collect(agent.invoke({ session: "s" }, { text: "enable bash" }));
+    expect(activated).toEqual([]);
+    expect(offeredAfter).toEqual(["try_enable_bash"]);
   });
 
   it("appends the skills listing when skills are mounted", async () => {
@@ -313,26 +353,23 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is pi-coding-agent's coding four, and nothing else", () => {
-    // Same set createCodingTools returns — asserted against the source rather than a hand-written
-    // list, so it follows upstream instead of drifting from it.
-    expect(
-      piDefaultTools(process.cwd())
-        .map((t) => t.name)
-        .sort(),
-    ).toEqual(
-      createCodingTools(process.cwd())
-        .map((t) => t.name)
-        .sort(),
+  it("piAllCodingTools is every pi coding tool", () => {
+    // Asserted against pi's own groupings rather than a hand-written list, so the set follows
+    // upstream; the ORDER is ours, and it is what directory agents report and mount.
+    const names = piAllCodingTools(process.cwd()).map((t) => t.name);
+    expect(names).toEqual([...CODING_TOOL_NAMES]);
+    expect([...names].sort()).toEqual(
+      [
+        ...new Set([...createReadOnlyTools(process.cwd()), ...createCodingTools(process.cwd())].map((t) => t.name)),
+      ].sort(),
     );
-    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
   });
 
   it("pi's read tool is rooted at the workspace it was built for", async () => {
     // The root is fixed at CONSTRUCTION now, not handed in per turn: these are pi-coding-agent's
     // tools, which take a cwd. Every caller builds them for the workspace the agent works on, so a
     // relative path resolves against that workspace and nothing else.
-    const read = piDefaultTools(fixtureDir).find((t) => t.name === "read")!;
+    const read = piAllCodingTools(fixtureDir).find((t) => t.name === "read")!;
     const r = await read.execute("t1", { path: "AGENTS.md" }, undefined, undefined, {} as never);
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
@@ -500,7 +537,7 @@ describe("create L2: an explicit tools list states its own coding capabilities",
       await createPiAgentFromDefinition(dir, {
         model: "faux/faux-1",
         providers: [faux.provider],
-        tools: piDefaultTools(process.cwd()),
+        tools: piAllCodingTools(process.cwd()),
       });
       expect(warn.mock.calls.flat().join("\n")).not.toMatch(/reader/i);
     } finally {
@@ -558,5 +595,55 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     // as the working directory would be a lie the model has no way to detect.
     expect(systemPrompt).toContain(workspace);
     expect(systemPrompt).not.toContain(definitionDir);
+  });
+});
+
+describe("create L2: explicit tools replace the coding defaults", () => {
+  it("keeps omitted built-ins out of the runtime registry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    const { faux } = makeFaux();
+    let assembly!: PiAssemblyParts;
+    await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      tools: piAllCodingTools(dir).filter((tool) => tool.name === "read"),
+      onAssembly: (parts) => {
+        assembly = parts;
+      },
+    });
+
+    const session = await assembly.sessionFactory("s");
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["read"]);
+    session.setActiveToolsByName(["read", "bash", "write"]);
+    expect(session.getActiveToolNames()).toEqual(["read"]);
+  });
+
+  it("does not claim a coding surface it did not mount", async () => {
+    // Reporting a capability set derived from "was `tools` passed?" rather than from the tools told
+    // the model it could execute commands and edit files while none of that was mounted. It has no
+    // way to find out except by trying.
+    const dir = await mkdtemp(join(tmpdir(), "fa-identity-"));
+    await writeFile(join(dir, "persona.md"), "");
+    const { faux } = makeFaux();
+    let prompt = "";
+    faux.setResponses([
+      (context) => {
+        prompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      tools: piAllCodingTools(dir).filter((t) => t.name === "read" || t.name === "grep"),
+    });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    expect(prompt).toContain("- read:");
+    expect(prompt).toContain("- grep:");
+    expect(prompt).not.toContain("- bash:");
+    // ...and the identity is the capability-neutral one, not pi's "executing commands, editing code".
+    expect(prompt).not.toContain("executing commands");
   });
 });

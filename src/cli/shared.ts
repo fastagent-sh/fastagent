@@ -44,11 +44,6 @@ export function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(13)}${value}`);
 }
 
-/** Human-facing form of the resolved coding-tool surface; callers pass resolver output, never config. */
-export function codingToolsLabel(names: readonly string[]): string {
-  return names.length > 0 ? names.join(", ") : "(none)";
-}
-
 /** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}):
  *  you pointed at the agent, and the project around it is probably what you meant. A hint, so it renders
  *  as one and is silent otherwise — `dev` and `start` both print the pair, so both ask for it. */

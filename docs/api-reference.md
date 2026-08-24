@@ -127,10 +127,10 @@ Common options:
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
 | `instructions` | String or function returning the system prompt. |
-| `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's default coding tools, which are rooted at the workspace they were built for. |
+| `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's cwd-bound coding tools. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionRecordStore`. |
-| `env` | `ExecutionEnv` handed to tools that read one as the turn's context; at L2 it also reads `persona.md` and `skills/`. Not a sandbox, and narrower than it looks: ② project context (`loadProjectContextFiles`), the default coding tools, and author-written `tools/` all reach the machine directly. |
+| `env` | `ExecutionEnv` handed to lower-level tools that read one; at L2 it also reads `persona.md` and `skills/`. Not a sandbox: ② project context, all seven directory coding tools, and author-written `tools/` reach the machine directly. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 
@@ -172,24 +172,17 @@ function createPiAgentFromDir(
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
-Directory config can disable pi's default coding tools without changing the authored tool surface:
-
 ```ts
-type CodingToolName = "read" | "bash" | "edit" | "write";
-
 interface FastagentConfig {
-  codingTools?: boolean | CodingToolName[];
   tools?: FastagentTool[];
 }
 ```
 
-Unset/`true` mounts all four; `false`/`[]` mounts none; an array mounts exactly those names in canonical
-order. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) applies
-the same resolved surface. Model-visible skills and chat-channel non-image attachments require the
-built-in `read`; use `codingTools: ["read"]` when those capabilities remain needed. Conditional
-built-ins stay independent: deferred tools may add `search_tools`, and `selfSchedule` may add `wake`
-while serving. The lower-level `createPiAgent` API remains explicit: its `tools` option is the exact set
-supplied by the caller and has no `codingTools` option.
+Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) mounts the
+complete coding set. Conditional built-ins stay independent: deferred tools may add `search_tools`,
+and `selfSchedule` may add `wake` while serving. `createPiAgentFromDefinition` uses the complete coding
+set unless `tools` replaces it; `createPiAgent` starts from the passed `tools`. In both APIs, omitted
+coding built-ins cannot be reactivated, while deferred tools may add `search_tools`.
 
 ## Tool authoring
 

@@ -11,8 +11,8 @@
  *   - prompt  → systemPromptOverride = base + instructions ONLY; pi appends the skill section and env
  *               (cwd) itself (including it here would duplicate it).
  *   - skills  → skillsOverride (fastagent's skills, for the section + invocation).
- *   - tools   → enabled default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
- *               fastagent's custom tools via pi's customTools path (so they survive /new, /resume, fork).
+ *   - tools   → all seven coding tools plus authored tools through pi's customTools path; pi's builtin
+ *               copies are suppressed, and the injected set survives /new, /resume, and fork.
  *   - models  → a ModelRuntime with builtins only (`modelsPath: null`, no availability network), so
  *               the model surface equals serving's `createPiModels()` — pi's machine-global
  *               models.json does not leak in.
@@ -43,7 +43,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
-import { assembleSystemPrompt, disabledBuiltinNames, piBasePrompt } from "./create.ts";
+import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
@@ -118,18 +118,8 @@ export async function buildAgentSessionRuntime(
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of the served one.
-    const {
-      config,
-      modelSpec,
-      agentDir,
-      authPath,
-      stateRoot,
-      tools,
-      codingToolNames,
-      deferredToolNames,
-      toolCollisions,
-      toolFailures,
-    } = await resolveAgentAssembly(cwd, options);
+    const { config, modelSpec, agentDir, authPath, stateRoot, tools, deferredToolNames, toolCollisions, toolFailures } =
+      await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth; see models.ts.
@@ -142,20 +132,13 @@ export async function buildAgentSessionRuntime(
     // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
     // happen once per runtime rather than per session rebuild (/new, /resume, fork).
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
-    // ALL of them, pi's four included: fastagent's `read` is `createReadTool({ imageProcessor })`
-    // (create.ts), and letting pi mount its own instead would silently drop image reading in chat.
-    // Serving already does it this way. And `tools` is ALREADY the configured surface —
-    // resolveTools() applied `codingTools` — so narrowing needs nothing here: what the definition
-    // disabled never reaches this list, and pi's own copies stay out via `noTools: "builtin"`.
-    const customTools = tools;
-    // What the definition turned OFF, for pi to refuse rather than merely leave inactive — minus any
-    // name an authored tool has taken (that name is the author's once the built-in is disabled).
-    const excludedCodingTools = disabledBuiltinNames(codingToolNames, tools);
+    // fastagent mounts pi's complete coding set itself; `noTools: "builtin"` below keeps the runtime
+    // from adding duplicate copies.
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
     // resolves through sessionRef at call time, exactly like the serving path resolves its session.
-    const customToolDefs = customTools.map((t) => ({
+    const customToolDefs = tools.map((t) => ({
       name: t.name,
       label: t.name,
       description: t.description ?? "",
@@ -171,9 +154,8 @@ export async function buildAgentSessionRuntime(
         if (!bound) throw new Error("tool executed before its session was built (lifecycle invariant broken)");
         return turnContext.run(
           { cwd, sessionManager: bound.sessionManager, tools: bound.activation },
-          // pi's per-turn TOOL context (5th parameter) is read only by its default coding tools;
-          // fastagent's own take theirs from `turnContext` (AsyncLocalStorage). This env satisfies
-          // the shape for both, and is the chat cwd's — the same root pi would have handed them.
+          // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
+          // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
           () => t.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
         );
       },
@@ -182,7 +164,7 @@ export async function buildAgentSessionRuntime(
     // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including
     // them here would duplicate them).
     const systemPrompt = assembleSystemPrompt({
-      base: piBasePrompt({ tools, persona: definition.persona, codingToolNames }),
+      base: piBasePrompt({ tools, persona: definition.persona }),
       contextFiles: definition.contextFiles,
     });
 
@@ -194,9 +176,8 @@ export async function buildAgentSessionRuntime(
       thinkingLevel: config.thinkingLevel,
       definition,
       extensionPaths,
-      customTools,
+      customTools: tools,
       customToolDefs,
-      excludedCodingTools,
       deferredToolNames,
       systemPrompt,
     };
@@ -242,7 +223,6 @@ export async function buildAgentSessionRuntime(
       definition,
       extensionPaths,
       customToolDefs,
-      excludedCodingTools,
       deferredToolNames,
       systemPrompt,
     } = await assemblyFor(cwd);
@@ -304,10 +284,6 @@ export async function buildAgentSessionRuntime(
       // was really there for (the machine's `defaultTools` setting cannot add pi's own copies on top
       // of ours) without freezing anything.
       noTools: "builtin",
-      // Disabled coding tools are refused at the REGISTRY, not just left inactive: chat has a TUI
-      // that can activate a tool by name, so "mounted but inactive" would make `codingTools` a
-      // default rather than a boundary.
-      ...(excludedCodingTools.length > 0 ? { excludeTools: excludedCodingTools } : {}),
       customTools: customToolDefs,
     });
     sessionRef.current = {
@@ -319,11 +295,10 @@ export async function buildAgentSessionRuntime(
     // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
     // here too would emit session_start twice per chat, so an extension opening a resource on start
     // would open two.
-    // Deferral emulation: pi starts THIS agent's tools active — its own four default names, which
-    // our customTools have replaced, plus every custom and extension tool. (Tools pi mounts but does
-    // not activate, like grep/find/ls, stay inactive, which is the same set serving offers.) So
-    // narrow by SUBTRACTING the deferred names from whatever is active, rather than stating a set:
-    // an exact-set-equality gate would silently stop narrowing the day pi activates one more.
+    // Deferral emulation: pi starts THIS agent's tools active — every coding tool it mounted, plus
+    // every custom and extension tool. So narrow by SUBTRACTING the deferred names from whatever is
+    // active, rather than stating a set: an exact-set-equality gate would silently stop narrowing the
+    // day pi activates one more.
     //
     // Applied on EVERY build including /resume: pi's chat session does not record activations (its
     // SessionContext has no activeToolNames), so "restore prior activations" is not implementable

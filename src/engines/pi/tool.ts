@@ -53,8 +53,8 @@ export interface DefineToolOptions<I extends z.ZodType> {
 
 /**
  * A tool as MOUNTED: what the engine actually runs. Wider than the authored {@link AgentTool} on
- * purpose — pi's default coding tools read the turn's tool context (its ExecutionEnv) as a fifth
- * `execute` parameter, while fastagent's own tools take four and are assignable to it unchanged.
+ * purpose — a lower-level mounted tool may read an `ExecutionEnv` from the fifth `execute` parameter,
+ * while coding-agent's cwd-bound tools ignore it and fastagent's authored tools take four arguments.
  * Naming the wider type is what lets `defineTool` stay context-free for authors while both families
  * live in one array; every helper that only inspects or reorders tools is typed on THIS.
  */
@@ -182,7 +182,7 @@ export async function loadTools(
 }
 
 /**
- * Merge resolved tools (enabled pi coding tools + `config.tools`) with discovered `tools/`, deduped by name.
+ * Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name.
  * Existing tools win; dropped discovered tools surface as collisions.
  */
 export function mergeDiscoveredTools(

@@ -11,7 +11,6 @@
 import { mkdir } from "node:fs/promises";
 import type { Agent } from "../../agent.ts";
 import {
-  type CodingToolName,
   type FastagentConfig,
   type LoadedConfig,
   defaultSessionsDir,
@@ -92,10 +91,8 @@ export interface AgentAssembly {
   stateRoot: string;
   /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
-  /** The full mounted tool surface (enabled coding tools + config.tools + discovered tools/, search_tools applied). */
+  /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
   tools: MountedTool[];
-  /** The pi coding tools selected by the one config resolver, in canonical order. */
-  codingToolNames: CodingToolName[];
   toolNames: string[];
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
@@ -117,8 +114,11 @@ export async function resolveAgentAssembly(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  const { tools, codingToolNames, toolNames, deferredToolNames, toolCollisions, toolFailures } =
-    await resolveAgentTools(config, agentDir, workspace);
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveAgentTools(
+    config,
+    agentDir,
+    workspace,
+  );
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
   // in one knob — a container points it at its volume); the finer overrides below still win.
   const stateRoot = resolveStateRoot(agentDir);
@@ -134,7 +134,6 @@ export async function resolveAgentAssembly(
     stateRoot,
     authPath,
     tools,
-    codingToolNames,
     toolNames,
     deferredToolNames,
     toolCollisions,
@@ -172,8 +171,6 @@ export async function createPiAgentFromDir(
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
-  /** pi coding tools selected by config, in canonical order. */
-  codingToolNames: CodingToolName[];
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
    *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
   toolNames: string[];
@@ -192,7 +189,6 @@ export async function createPiAgentFromDir(
     stateRoot,
     authPath,
     tools,
-    codingToolNames,
     toolNames,
     deferredToolNames,
     toolCollisions,
@@ -253,7 +249,6 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
-    codingToolNames,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
@@ -290,7 +285,6 @@ export async function createPiAgentFromDir(
     stateRoot,
     sessionsDir,
     authPath,
-    codingToolNames,
     toolNames,
     deferredToolNames,
     toolCollisions,

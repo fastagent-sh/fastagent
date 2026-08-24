@@ -76,7 +76,7 @@ Prints the assembled surface without starting a server:
 - config path,
 - persona presence and context files (`AGENTS.md`),
 - skills and their diagnostics,
-- the resolved coding-tool names (`read`/`bash`/`edit`/`write`), plus authored tools and collisions,
+- the complete coding-tool set (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), plus authored tools and collisions,
 - channel files,
 - schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),
 - whether self-scheduling (`selfSchedule`) is on,
