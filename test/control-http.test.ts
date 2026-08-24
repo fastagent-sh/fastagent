@@ -15,7 +15,7 @@ import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { router, serveNode } from "../src/host/node.ts";
+import { type ChannelHandler, router, serveNode } from "../src/host/node.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
@@ -77,6 +77,9 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
+        // OPTIONS is the ONE unauthenticated method here, and deliberately so: a preflight cannot
+        // carry a token. Asserted below rather than skipped silently.
+        if (method === "OPTIONS") continue;
         const url = `${served.url}${path}?session=s`;
         expect((await fetch(url, { method, body: method === "POST" ? "{}" : undefined })).status).toBe(401);
         expect(
@@ -90,6 +93,50 @@ describe("session control over HTTP (Phase 3)", () => {
         ).toBe(401);
       }
       await expect(connectSessionControl({ url: served.url, token: "wrong" })).rejects.toThrow(/401/);
+    } finally {
+      served.close();
+    }
+  });
+
+  it("a browser can reach the plane: preflight without a token, CORS headers on every answer", async () => {
+    const served = await serveControl();
+    const cors = (res: Response) => ({
+      origin: res.headers.get("access-control-allow-origin"),
+      headers: res.headers.get("access-control-allow-headers"),
+      methods: res.headers.get("access-control-allow-methods"),
+    });
+    const expected = { origin: "*", headers: "authorization", methods: "GET, POST, OPTIONS" };
+    try {
+      // DERIVED, like the 401 sweep: every mounted path preflights, so a route added later cannot
+      // ship browser-unreachable. A hand-written list would silently keep passing.
+      const paths = [...new Set(served.routeKeys.map((key) => key.split(" ")[1] as string))];
+      expect(paths).toContain("/control/events");
+      for (const path of paths) {
+        // No token, and an Origin like a browser sends: a preflight cannot carry credentials.
+        const res = await fetch(`${served.url}${path}`, {
+          method: "OPTIONS",
+          headers: { origin: "http://localhost:5173", "access-control-request-headers": "authorization" },
+        });
+        expect(res.status).toBe(204);
+        expect(cors(res)).toEqual(expected);
+      }
+
+      // A rejected call must stay READABLE: without the headers the browser hands the client an
+      // opaque network error instead of the 401 that says "your token is wrong".
+      expect(cors(await fetch(`${served.url}/control/capabilities`))).toEqual(expected);
+      // 400 (authenticated, missing param) and 200 alike.
+      const auth = { authorization: `Bearer ${TOKEN}` };
+      expect(cors(await fetch(`${served.url}/control/state`, { headers: auth }))).toEqual(expected);
+      expect(cors(await fetch(`${served.url}/control/capabilities`, { headers: auth }))).toEqual(expected);
+      // SSE too — the long-lived route a GUI actually renders from. Asserted at the handler, not
+      // over the wire: a quiet session sends no chunk, and Node withholds response headers until
+      // one, so a fetch here would block for the full heartbeat interval.
+      const { control } = await fauxControlledAgent([]);
+      const events = controlRoutes(control, { token: TOKEN })["GET /control/events"] as ChannelHandler;
+      const sse = await events(new Request("http://x/control/events?session=s", { headers: auth }));
+      expect(sse.headers.get("content-type")).toBe("text/event-stream");
+      expect(cors(sse)).toEqual(expected);
+      await sse.body?.cancel();
     } finally {
       served.close();
     }
@@ -131,7 +178,12 @@ describe("session control over HTTP (Phase 3)", () => {
     // Both arrive as an uncoded non-2xx; without the distinction a client reports "this agent's
     // skills are unreadable" about a serve that simply predates the route.
     const { control } = await fauxControlledAgent([]);
-    const { "GET /control/commands": _dropped, ...withoutCommands } = controlRoutes(control, { token: TOKEN });
+    // Drop the PATH, not one key: a serve that predates the route has no entry for it under any
+    // method, so leaving the derived OPTIONS behind would make the path exist and answer 405 —
+    // turning a diagnosable skew back into the uncoded failure this distinction exists to prevent.
+    const withoutCommands = Object.fromEntries(
+      Object.entries(controlRoutes(control, { token: TOKEN })).filter(([key]) => !key.endsWith(" /control/commands")),
+    );
     const server = serveNode(router(withoutCommands), { port: 0 });
     const port = await server.listening;
     try {

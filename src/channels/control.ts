@@ -21,7 +21,7 @@ import type { ImageRef, Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
-import type { Routes } from "../host/node.ts";
+import { type Routes, parseRouteKey } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
 import { text } from "./respond.ts";
@@ -39,6 +39,42 @@ export interface WireEvent {
 
 const json = (value: unknown, status = 200): Response =>
   new Response(`${JSON.stringify(value)}\n`, { status, headers: { "content-type": "application/json" } });
+
+/**
+ * CORS for the whole plane. `*` is the answer rather than a concession: authorisation here is the
+ * bearer token — never the origin, never a cookie — so an origin that cannot present it gets 401
+ * either way, and a deployment cannot know the origins of the GUIs that will manage it (§14's
+ * asymmetry). Without this the plane is unreachable from ANY browser: `authorization` is not
+ * CORS-safelisted, so every call preflights, including a plain GET.
+ */
+const CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "authorization",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+};
+
+const withCorsHeaders = (res: Response): Response => {
+  for (const [name, value] of Object.entries(CORS_HEADERS)) res.headers.set(name, value);
+  return res;
+};
+
+/**
+ * The plane's routes, made reachable from a browser: CORS headers on EVERY response (a 401 or 400
+ * without them reaches the client as an opaque "network error", hiding the very answer it needs),
+ * plus an unauthenticated `OPTIONS` per path — a preflight carries no token, which is its entire
+ * purpose. Paths are DERIVED from the table, so a route added later is covered without anyone
+ * remembering to; `router` does exact matching, so each one needs its own entry.
+ */
+function browserReachable(routes: Routes): Routes {
+  const wrapped: Routes = {};
+  for (const [key, handler] of Object.entries(routes)) {
+    wrapped[key] = async (req) => withCorsHeaders(await handler(req));
+  }
+  for (const path of new Set(Object.keys(routes).map((key) => parseRouteKey(key).path))) {
+    wrapped[`OPTIONS ${path}`] = () => withCorsHeaders(new Response(null, { status: 204 }));
+  }
+  return wrapped;
+}
 
 // ONE constant for every Prompt-bearing wire surface (imported from the invoke channel — the two
 // caps cannot drift apart): commands carry Prompts, which may ride base64 images.
@@ -133,6 +169,8 @@ export interface ControlRoutesOptions {
 /**
  * Mount the control plane: `GET /control/capabilities|commands|state|entries|events` + `POST
  * /control/dispatch`, all bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
+ * Every path also answers `OPTIONS` without a token, and every response carries CORS headers — see
+ * {@link browserReachable}.
  */
 export function controlRoutes(control: SessionControl, options: ControlRoutesOptions): Routes {
   const { token } = options;
@@ -157,7 +195,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
   // Extraction only — each route still answers its own 400 (the name must not imply enforcement).
   const sessionParam = (url: URL): string | undefined => url.searchParams.get("session") ?? undefined;
 
-  return {
+  return browserReachable({
     ...(invokeHandler ? { "POST /control/invoke": guard((req) => invokeHandler(req)) } : {}),
     "GET /control/capabilities": guard(() => json(control.capabilities())),
 
@@ -263,5 +301,5 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
         },
       });
     }),
-  };
+  });
 }

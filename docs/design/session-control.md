@@ -432,6 +432,17 @@ The remote adapter consumes the envelope internally and re-exposes the same `Ses
 interface (and `connectAgent` does the same for the data plane's `Agent`). Local and remote
 consumers are isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
+**Browser reachability.** The bearer token travels in `Authorization`, which is not CORS-safelisted,
+so a browser preflights EVERY call to the plane — including a plain `GET`. Each path therefore
+answers `OPTIONS` with 204 and no token (a preflight carries none, which is its purpose), and every
+response carries `access-control-allow-origin: *` plus the allowed headers and methods. `*` is the
+answer rather than a concession: authorisation here is the token — never the origin, never a cookie
+— so an origin that cannot present it gets 401 either way, and a deployment cannot know the origins
+of the GUIs that will manage it (the same asymmetry [§14](#14-security-boundary) settles). The
+headers ride error responses too: without them a 401 reaches the client as an opaque network error,
+hiding the answer it needs. `fastagent attach` is unaffected either way — Node's fetch does not
+enforce CORS — which is why the gap stayed invisible while blocking every browser client.
+
 ## 14. Security boundary
 
 A remotely exposed control plane MUST be wrapped by a host that enforces: an authenticated
