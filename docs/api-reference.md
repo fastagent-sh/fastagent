@@ -182,8 +182,8 @@ interface FastagentConfig {
 
 Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) mounts the
 complete coding set. Conditional built-ins stay independent: deferred tools may add `search_tools`,
-and `selfSchedule` may add `wake` while serving. The lower-level `createPiAgent` and
-`createPiAgentFromDefinition` APIs remain explicit: pass `tools` to replace their default set.
+and `selfSchedule` may add `wake` while serving. `createPiAgentFromDefinition` uses the complete set
+unless `tools` replaces it; the lower-level `createPiAgent` mounts only the `tools` explicitly passed.
 
 ## Tool authoring
 
