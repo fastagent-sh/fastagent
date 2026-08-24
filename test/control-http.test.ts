@@ -155,7 +155,10 @@ describe("session control over HTTP (Phase 3)", () => {
           .map((m) => m.trim())
           .filter((m) => m !== "OPTIONS")
           .sort();
-        expect({ path, advertised }).toEqual({ path, advertised: [...new Set(servedHere)].sort() });
+        // What the path serves — including the HEAD the router answers from every GET route, which
+        // the browser would otherwise refuse to send.
+        const expectedMethods = [...new Set(servedHere.flatMap((m) => (m === "GET" ? ["GET", "HEAD"] : [m])))].sort();
+        expect({ path, advertised }).toEqual({ path, advertised: expectedMethods });
       }
 
       // A rejected call must stay READABLE: without the headers the browser hands the client an
@@ -199,6 +202,10 @@ describe("session control over HTTP (Phase 3)", () => {
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
       expect((await fetch(`${served.url}/not-control`)).status).toBe(404);
+      // 4. A HEAD the plane will actually serve must not be refused by its own advertisement.
+      const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD", headers: auth });
+      expect(headable.status).toBe(200);
+      expect(await headable.text()).toBe(""); // HEAD carries no content (RFC 9110)
     } finally {
       served.close();
     }

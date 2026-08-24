@@ -73,9 +73,17 @@ function planeApp(routes: Record<string, ChannelHandler>): Hono {
     if (method) methods.add(method);
     methodsByPath.set(path, methods);
   }
-  // Per PATH, never plane-wide: advertising a method a path does not serve invites the browser to
-  // send it, only to meet a rejection it cannot read.
-  const allowMethods = (path: string) => [...(methodsByPath.get(path) ?? []), "OPTIONS"].join(", ");
+  // Per PATH, never plane-wide, and it must state what the path ACTUALLY serves — in both
+  // directions. Advertising a method the path does not serve invites a request that meets a
+  // rejection the browser cannot read; omitting one it DOES serve has the browser refuse a request
+  // that would have worked. `HEAD` is the second kind: the router answers it from the `GET` route
+  // (RFC 9110 — HEAD is GET without content), so leaving it unlisted would deny a call the plane
+  // is willing to serve.
+  const allowMethods = (path: string) => {
+    const methods = new Set(methodsByPath.get(path) ?? []);
+    if (methods.has("GET")) methods.add("HEAD");
+    return [...methods, "OPTIONS"].join(", ");
+  };
 
   // THE single exit. Every reply below — route, preflight, 404, 405, 500 — leaves through here.
   app.use("*", async (c, next) => {
