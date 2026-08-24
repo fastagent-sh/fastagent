@@ -191,7 +191,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     const seen = new Set<string>();
     for (const [i, name] of c.codingTools.entries()) {
       if (typeof name !== "string" || !valid.has(name)) {
-        throw new Error(`${path}: "codingTools[${i}]" must be one of ${CODING_TOOL_NAMES.join(", ")}`);
+        throw new Error(`${path}: "codingTools[${i}]" must be one of ${MUTATING_TOOL_NAMES.join(", ")}`);
       }
       if (seen.has(name)) throw new Error(`${path}: "codingTools" must not contain duplicate "${name}"`);
       seen.add(name);

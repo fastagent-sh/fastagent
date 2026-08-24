@@ -12,7 +12,6 @@ export default {
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   // codingTools: false,    // read + search only; no bash/edit/write (read/grep/find/ls always mount)
   // codingTools: ["edit"], // ...or just the one you want
-  // codingTools: false,    // no coding tools at all; skills and file attachments need `read`
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.

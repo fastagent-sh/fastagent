@@ -306,21 +306,20 @@ narrower default would imply one it cannot enforce.
 tool takes its name outright** — ship `tools/read.ts` and yours is the `read` the model gets.
 
 Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
-attachments are downloaded to local paths. Both are read with a file tool.
+attachments are downloaded to local paths. Both are read with `read`, which is why it is baseline
+rather than a setting.
 
 Neither is checked ahead of time. A channel states what it attached (name, size, path) and the agent
-answers for itself; a skill listing is loaded when the model reaches for it. Without a reader the
-agent says it cannot open the file — the direct, visible consequence of the posture you configured,
-and images still travel inline through vision either way. (A pre-flight check would also have to
-guess: `codingTools: false` plus an authored `tools/read.ts` is a perfectly readable agent.)
+answers for itself; a skill listing is loaded when the model reaches for it.
 
-A disabled built-in is **refused, not merely hidden**: it never enters the session's tool registry,
-so nothing that activates a tool by name — a `chat` command, the control plane, the deferred-tool
-loader — can bring it back at runtime. That makes `codingTools` usable as a capability boundary for a
-public-facing agent, rather than a default someone can undo. It does not restrict tools you author
-yourself: `tools/` and `config.tools` are yours to scope.
+A tool `codingTools` did not select is **refused, not merely hidden**: it never enters the session's
+tool registry, so nothing that activates a tool by name — a `chat` command, the control plane, the
+deferred-tool loader — can bring it back at runtime. That is what makes `codingTools: false` mean
+something at runtime rather than at startup only. It is not a security boundary and nothing here is
+(see [Bind address](#bind-address)); it does not restrict tools you author yourself, which are yours
+to scope.
 
-The setting removes only the selected coding tools. Authored `config.tools` and `tools/` still mount;
+The setting decides only the mutating tools. The baseline, authored `config.tools` and `tools/` still mount;
 `search_tools` still mounts when a deferred tool needs it, and `wake` remains controlled by
 `selfSchedule` on the serving path. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`,
 `tool`, and `info`) resolves the same setting. Run `fastagent info --json` and inspect `codingTools`

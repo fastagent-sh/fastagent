@@ -7,9 +7,9 @@
  *   - the prompt-suffix wording: {@link attachedFilesManifest}, {@link backgroundImagesManifest},
  *     {@link missingAttachmentsNote}, {@link attributedFileName}.
  *
- * None of it asks what the agent can DO with an attachment. A channel resolves platform resources
- * and states what it found; deciding whether to open a file is the agent's, and an agent without a
- * file tool answers that it cannot — visibly, and as the direct consequence of its own `codingTools`.
+ * None of it asks what the agent can DO with an attachment. A channel resolves platform resources and
+ * states what it found; deciding whether to open a file is the agent's, and one assembled without a
+ * file tool answers that it cannot — visibly, at the moment it is asked.
  *
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.

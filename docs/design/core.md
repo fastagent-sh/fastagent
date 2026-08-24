@@ -266,12 +266,12 @@ Workspace tools are merged in this order:
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
-Unset/`true` adds all three mutating tools, for authoring/serving fidelity; `false`/`[]` selects none; an array selects
-exact names in canonical order. The array is deliberate minimum privilege: file-backed skills and
-non-image channel attachments need `read`, while a public-facing read-only agent should not have to
-accept `bash`/`edit`/`write` merely to retain those capabilities. An agent with neither capability can
-remove the full machine-reaching coding surface without changing its standard `fastagent start`
-workflow. Conditional built-ins (`search_tools` for deferred tools, `wake` for self-scheduling) keep
+Unset/`true` adds all three mutating tools, for authoring/serving fidelity; `false`/`[]` adds none; an
+array adds exactly those. `read`/`grep`/`find`/`ls` are not selectable — file-backed skills and
+non-image channel attachments are built on `read`, so an agent that could drop it would be one whose
+own features stop working. What an author can say is that it should not also change files or run
+commands, which is the line the setting draws, and it costs nothing else about the standard
+`fastagent start` workflow. Conditional built-ins (`search_tools` for deferred tools, `wake` for self-scheduling) keep
 their own policies. Earlier names win and collisions are reported. Broken discovered tools are reported and skipped.
 Reusable integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting; package
 origin does not create a second tool runtime.
