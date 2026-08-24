@@ -36,11 +36,10 @@ export function bindAddress(host: string): string {
 }
 
 /**
- * How far a bind address reaches: `wildcard` (unset or all-interfaces) reaches every interface and answers on
- * loopback too; `loopback` is this machine only; `specific` is one interface, reachable only as
- * itself. Loopback covers the whole reserved range (127/8, ::1) — a `127.0.0.2` bind is no more
- * LAN-reachable than `127.0.0.1`.
- *
+ * How far a bind address reaches: `wildcard` (unset or all-interfaces) reaches every interface and
+ * answers on loopback too; `loopback` is this machine only; `specific` is one interface, reachable
+ * only as itself. Loopback covers the whole reserved range (127/8, ::1) — a `127.0.0.2` bind is no
+ * more LAN-reachable than `127.0.0.1`.
  */
 export function classifyBind(host: string | undefined): "wildcard" | "loopback" | "specific" {
   if (host === undefined) return "wildcard";

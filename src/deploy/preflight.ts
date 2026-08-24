@@ -479,12 +479,13 @@ export async function preflightDeploy(input: {
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   }
-
-  const dockerfileHome = join(agentDir, "Dockerfile");
+  // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
+  // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
   const extraSecrets = config.deploy?.secrets ?? [];
   // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
   // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts. Don't suggest
   // --force here: it would overwrite the user's hand-written file.
+  const dockerfileHome = join(agentDir, "Dockerfile");
   if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
     if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
       messages.push({
