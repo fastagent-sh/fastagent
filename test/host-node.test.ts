@@ -68,6 +68,25 @@ describe("host/node: the route path language", () => {
 });
 
 describe("host/node: serveNode", () => {
+  it("serving does not swap the process's global Request/Response", async () => {
+    // fastagent is EMBEDDED: the host may not reshape the globals of the app it is mounted in. The
+    // failure is not hypothetical either — a channel holding a Response captured before mount would
+    // fail an `instanceof` against a swapped constructor and be answered 500.
+    const NativeResponse = globalThis.Response;
+    const NativeRequest = globalThis.Request;
+    const host = serveNode(async () => new NativeResponse("held-from-before-mount"), { port: 0 });
+    const port = await host.listening;
+    try {
+      expect(globalThis.Response).toBe(NativeResponse);
+      expect(globalThis.Request).toBe(NativeRequest);
+      const res = await fetch(`http://127.0.0.1:${port}/x`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("held-from-before-mount");
+    } finally {
+      await host.close();
+    }
+  });
+
   it("a bind failure rejects `listening` instead of hanging", async () => {
     const first = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
     const taken = await first.listening;

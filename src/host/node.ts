@@ -8,6 +8,12 @@
  * gateway contract as `(Request) => Response`, a channel directory ships hand-written modules with
  * that signature, and an app embedding fastagent may already run Express/Fastify/its own Hono. What
  * we must not do is pick their framework for them.
+ *
+ * `overrideGlobalObjects: false` is part of that containment, not a tuning knob. The adapter
+ * otherwise swaps `globalThis.Request`/`Response` for its own, which reaches every line in the
+ * embedding process — and breaks code here first: a channel holding a `Response` captured before
+ * mount fails the `instanceof` check in {@link totalFetch} and is answered 500, the totality
+ * boundary rejecting a CORRECT handler.
  */
 import { serve, getRequestListener } from "@hono/node-server";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -161,7 +167,7 @@ function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response
 export function nodeListener(
   handler: (req: Request) => Promise<Response>,
 ): (req: IncomingMessage, res: ServerResponse) => void {
-  return getRequestListener(totalFetch(handler));
+  return getRequestListener(totalFetch(handler), { overrideGlobalObjects: false });
 }
 
 /**
@@ -186,6 +192,7 @@ export function serveNode(
   const server = serve(
     {
       fetch: totalFetch(handler),
+      overrideGlobalObjects: false,
       port: options.port,
       ...(options.host !== undefined ? { hostname: options.host } : {}),
     },
