@@ -193,11 +193,11 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
     if (method) app.on(method, path, bound);
     else app.all(path, bound);
   }
-  // "The path exists" is decided by the SAME matcher that dispatches, never by comparing pathname
-  // strings: a pattern route (`POST /x/*`) matches paths no literal comparison would recognise, and
-  // the two answers drifting apart is exactly how a method miss starts reporting itself as 404 —
-  // which a remote client reads as version skew rather than as its own mistake. Registered after
-  // the method-qualified routes, so it is only reached when the path matched and the method did not.
+  // "The path exists" is answered by the SAME matcher that dispatches, as a fallback route rather
+  // than a second lookup of our own. The two could only drift — and the drift shows up as a method
+  // miss reporting itself 404, which a remote client reads as version skew rather than as its own
+  // mistake. Registered after the method-qualified routes, so it is reached only when the path
+  // matched and the method did not.
   for (const path of paths) app.all(path, () => text("method not allowed\n", 405));
   // Mounts last: a mount owns everything under its prefix, including paths it does not serve, so it
   // must not intercept a literal route — the loop above already refused any that would collide.
