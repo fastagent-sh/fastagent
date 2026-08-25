@@ -66,9 +66,11 @@ export async function routesFor(
   const builtinInvoke =
     options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
   const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
+  // Asked as an OVERLAP, not as equality: a channel mounting `/health/*` owns `/health` too, and
+  // adding the built-in beside it would shadow the channel on its own path.
   const healthCovered = Object.keys(channels).some((key) => {
     const entry = parseRouteKey(key);
-    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
+    return routePathsOverlap(entry.path, "/health") && (entry.method === undefined || entry.method === "GET");
   });
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
@@ -94,30 +96,40 @@ export async function routesFor(
  * and silently shadowing either side would serve a surface the author didn't write.
  */
 /**
- * Refuse channel routes the control plane would shadow.
+ * Refuse channel routes that a framework-mounted surface would shadow — the ONE place that answers
+ * it, for every surface that mounts alongside channels.
  *
- * The plane OWNS its prefix, so a channel landing anywhere beneath it is unreachable — including on
- * a path the plane does not itself serve, where the request meets the plane's own 404 instead of the
- * channel. It is a configuration error, and one that is otherwise completely silent.
+ * Shadowing is silent by construction: the merge just wins, and the channel is simply never reached.
+ * With prefix mounts it does not even need the same path — a plane owning `/control/*` swallows
+ * `/control/mine`, which it does not serve, into its own 404.
  *
- * A function rather than an inline check because there are TWO mount points — the boot-time merge
- * below and agentcore's lazy one (cli/commands/start.ts), whose channels load after this ran against
- * an empty base. Two sites re-implementing "the same rule" is how they stop being the same rule:
- * this one already drifted once, one side comparing paths for equality while the other asked
- * {@link routePathsOverlap}.
+ * One function because there are FOUR askers (the control plane at boot, the control plane on
+ * agentcore's lazy path, the agentcore adapter itself, and channel-vs-channel in `loadChannels`),
+ * and re-implementing "the same rule" is how they stop being the same rule — this drifted twice
+ * already, each site comparing path strings while {@link routePathsOverlap} was right there.
  */
-export function assertNoControlPlaneCollision(channelRoutes: Routes, controlPlaneRoutes: Routes): void {
+function assertNoRouteOverlap(
+  channelRoutes: Routes,
+  mountedRoutes: Routes,
+  conflict: (routes: string) => string,
+): void {
   const collisions = Object.keys(channelRoutes).filter((key) =>
-    Object.keys(controlPlaneRoutes).some((mountKey) =>
+    Object.keys(mountedRoutes).some((mountKey) =>
       routePathsOverlap(parseRouteKey(key).path, parseRouteKey(mountKey).path),
     ),
   );
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
-        `rename the channel route or disable sessionControl in fastagent.config`,
-    );
-  }
+  if (collisions.length > 0) throw new Error(conflict(collisions.map((key) => `"${key}"`).join(", ")));
+}
+
+/** The control plane's wording for {@link assertNoRouteOverlap}; both of its mount points use it. */
+export function assertNoControlPlaneCollision(channelRoutes: Routes, controlPlaneRoutes: Routes): void {
+  assertNoRouteOverlap(
+    channelRoutes,
+    controlPlaneRoutes,
+    (rs) =>
+      `channel route(s) ${rs} collide with the session control plane — ` +
+      `rename the channel route or disable sessionControl in fastagent.config`,
+  );
 }
 
 export function mountSessionControl(
@@ -241,14 +253,12 @@ export function mountAgentcore(
             return fireScheduleOnce({ agent, stateRoot, schedule, slot });
           },
   });
-  const mountedPaths = new Set(Object.keys(mounted).map((key) => parseRouteKey(key).path));
-  const collisions = Object.keys(routes).filter((key) => mountedPaths.has(parseRouteKey(key).path));
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the AgentCore adapter ` +
-        `(/invocations, /ping) — rename the channel route`,
-    );
-  }
+  assertNoRouteOverlap(
+    routes,
+    mounted,
+    (rs) =>
+      `channel route(s) ${rs} collide with the AgentCore adapter (/invocations, /ping) — rename the channel route`,
+  );
   return { ...routes, ...mounted };
 }
 

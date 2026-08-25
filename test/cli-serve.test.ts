@@ -38,6 +38,20 @@ describe("serving surface", () => {
     surface.markReady();
     expect((await health(new Request("http://x/health"))).status).toBe(200);
   });
+
+  it("a channel owning /health/* is not shadowed by the built-in health route", async () => {
+    // The built-in is added only when nothing covers /health. A prefix mount covers it without
+    // equalling it, so an equality check would mount `GET /health` on top of the channel's own
+    // prefix and take the path away from it.
+    const dir = await mkdtemp(join(tmpdir(), "fa-health-prefix-"));
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "probe.mjs"),
+      `export default () => ({ "/health/*": () => new Response("mine") });\n`,
+    );
+    const surface = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
+    expect(Object.keys(surface.routes)).toEqual(["/health/*"]);
+  });
 });
 
 describe("mountAgentcore", () => {
@@ -63,6 +77,11 @@ describe("mountAgentcore", () => {
   it("fails startup on a channel colliding with the adapter's paths", () => {
     expect(() =>
       mountAgentcore({ "POST /invocations": () => text("mine\n", 200) }, { agent, stateRoot: "/tmp", schedules: [] }),
+    ).toThrow(/collide with the AgentCore adapter/);
+    // A PREFIX mount swallows the platform's own endpoint without ever equalling its path — the
+    // adapter would keep answering, and the channel would be silently unreachable.
+    expect(() =>
+      mountAgentcore({ "/ping/*": () => text("mine\n", 200) }, { agent, stateRoot: "/tmp", schedules: [] }),
     ).toThrow(/collide with the AgentCore adapter/);
   });
 
