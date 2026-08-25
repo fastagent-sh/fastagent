@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Routes } from "../src/channel.ts";
-import { assertRoutePath, parseRouteKey, routePathsOverlap, router, serveNode } from "../src/channels/serve.ts";
+import {
+  assertRoutePath,
+  parseRouteKey,
+  routeKeysOverlap,
+  routePathsOverlap,
+  router,
+  serveNode,
+} from "../src/channels/serve.ts";
 
 describe("serve: router", () => {
   const routes: Routes = {
@@ -67,6 +74,28 @@ describe("serve: the route path language", () => {
     expect(parseRouteKey("GET /x")).toEqual({ method: "GET", path: "/x" });
     const handle = router({ " /any": () => new Response("any-method") });
     expect((await handle(new Request("http://h/any", { method: "DELETE" }))).status).toBe(200);
+  });
+
+  it("router() refuses a table whose own routes fight each other", () => {
+    // Registration order would decide the winner and nothing would say so. `loadChannels` reports
+    // this across FILES; within one table — the shape an embedder hands over directly — it is a
+    // plain configuration error, and refusing it is what makes "a prefix mount owns everything
+    // beneath it" true for every caller rather than only for channel directories.
+    expect(() => router({ "/files/*": () => new Response("a"), "GET /files/report": () => new Response("b") })).toThrow(
+      /overlaps .* would never receive a request/,
+    );
+    expect(() => router({ "/x": () => new Response("a"), "GET /x": () => new Response("b") })).toThrow(/overlaps/);
+    // Distinct methods on one path are the normal case and must stay legal.
+    expect(() => router({ "GET /x": () => new Response("a"), "POST /x": () => new Response("b") })).not.toThrow();
+    expect(() => router({ "/a/*": () => new Response("a"), "/b/*": () => new Response("b") })).not.toThrow();
+  });
+
+  it("routeKeysOverlap asks the WHOLE question: paths overlap AND methods are compatible", () => {
+    expect(routeKeysOverlap("GET /x", "POST /x")).toBe(false); // same path, different methods
+    expect(routeKeysOverlap("GET /x", "GET /x")).toBe(true);
+    expect(routeKeysOverlap("/x", "GET /x")).toBe(true); // no method answers every method
+    expect(routeKeysOverlap("/control/*", "GET /control/state")).toBe(true);
+    expect(routeKeysOverlap("POST /a", "POST /b")).toBe(false);
   });
 
   it("router() enforces the language too, not just the channel loader", () => {

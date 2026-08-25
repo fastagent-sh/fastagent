@@ -11,7 +11,7 @@ import type {
   LongConnectionChannelModule,
   Routes,
 } from "../../channel.ts";
-import { assertRoutePath, parseRouteKey, routePathsOverlap } from "../../channels/serve.ts";
+import { assertRoutePath, parseRouteKey, routeKeysOverlap } from "../../channels/serve.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 
@@ -162,14 +162,7 @@ export async function loadChannels(
       }
       const declaredRoutes = validateRoutes(declared, label);
       for (const [route, handler] of declaredRoutes) {
-        const parsed = parseRouteKey(route);
-        const clash = Object.keys(routes).some((key) => {
-          const existing = parseRouteKey(key);
-          return (
-            routePathsOverlap(existing.path, parsed.path) &&
-            (existing.method === undefined || parsed.method === undefined || existing.method === parsed.method)
-          );
-        });
+        const clash = Object.keys(routes).some((key) => routeKeysOverlap(key, route));
         if (clash) {
           collisions.push({ route, source: label });
           continue;

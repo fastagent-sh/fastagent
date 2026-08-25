@@ -15,7 +15,7 @@ import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/ch
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { Routes } from "../channel.ts";
-import { parseRouteKey, routePathsOverlap, router, serveNode } from "../channels/serve.ts";
+import { parseRouteKey, routeKeysOverlap, routePathsOverlap, router, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { loadSchedules } from "../schedule/discover.ts";
@@ -114,9 +114,7 @@ function assertNoRouteOverlap(
   conflict: (routes: string) => string,
 ): void {
   const collisions = Object.keys(channelRoutes).filter((key) =>
-    Object.keys(mountedRoutes).some((mountKey) =>
-      routePathsOverlap(parseRouteKey(key).path, parseRouteKey(mountKey).path),
-    ),
+    Object.keys(mountedRoutes).some((mountKey) => routeKeysOverlap(key, mountKey)),
   );
   if (collisions.length > 0) throw new Error(conflict(collisions.map((key) => `"${key}"`).join(", ")));
 }

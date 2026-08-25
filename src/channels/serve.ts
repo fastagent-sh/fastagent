@@ -70,11 +70,24 @@ function mountPrefix(path: string): string | undefined {
 }
 
 /**
- * Would these two route paths answer the same request? THE overlap question, asked in one place so
- * every caller that must refuse a collision (channel loading, control-plane mounting) refuses the
- * same set. A literal pair collides when equal; a prefix mount collides with anything beneath it,
- * including a path it does not itself serve — the request would still reach the mount's own 404
- * instead of the other channel.
+ * Would these two route KEYS fight over the same request? The complete question — paths overlap AND
+ * methods are compatible — asked in one place because it has one answer, and because the half of it
+ * that lived in callers is exactly the half that drifted.
+ *
+ * A key with no method answers every method, so it is compatible with all of them.
+ */
+export function routeKeysOverlap(a: string, b: string): boolean {
+  const ka = parseRouteKey(a);
+  const kb = parseRouteKey(b);
+  if (!routePathsOverlap(ka.path, kb.path)) return false;
+  return ka.method === undefined || kb.method === undefined || ka.method === kb.method;
+}
+
+/**
+ * Would these two route paths answer the same request? A literal pair collides when equal; a prefix
+ * mount collides with anything beneath it, including a path it does not itself serve — the request
+ * would still reach the mount's own 404 instead of the other channel. Method-blind: {@link
+ * routeKeysOverlap} is what callers comparing whole keys should ask.
  */
 export function routePathsOverlap(a: string, b: string): boolean {
   const pa = mountPrefix(a);
@@ -98,6 +111,7 @@ export function routePathsOverlap(a: string, b: string): boolean {
 export function router(routes: Routes): ChannelHandler {
   const app = new Hono();
   const paths: string[] = [];
+  const registered: string[] = [];
   for (const [key, handler] of Object.entries(routes)) {
     const { method, path } = parseRouteKey(key);
     // Enforced HERE, not only where channel files are loaded: this is the other door into the
@@ -105,6 +119,16 @@ export function router(routes: Routes): ChannelHandler {
     // pattern syntax. A `:param` route would still MATCH, while routePathsOverlap — which every
     // collision check depends on — reads it as a literal string and silently answers wrong.
     assertRoutePath(path, (problem) => `route "${key}" is not a valid route key — ${problem}`);
+    // Same door, same reason: a table where two keys fight over a request resolves by registration
+    // order, so one of them simply never runs. `loadChannels` reports that across FILES (naming the
+    // loser); within a single table it is a plain configuration error, and refusing it here is what
+    // makes "a prefix mount owns everything beneath it" true for every caller, not just for channel
+    // directories.
+    const shadowed = registered.find((other) => routeKeysOverlap(other, key));
+    if (shadowed) {
+      throw new Error(`route "${key}" overlaps "${shadowed}" — one of them would never receive a request`);
+    }
+    registered.push(key);
     if (!paths.includes(path)) paths.push(path);
     const bound = (c: { req: { raw: Request } }) => handler(c.req.raw);
     if (method) app.on(method, path, bound);
