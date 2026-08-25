@@ -61,6 +61,16 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   if (method === "HEAD") {
     throw new Error(describe("HEAD is served by the GET route (RFC 9110); an explicit HEAD route never runs"));
   }
+  assertLiteralPath(path, describe);
+}
+
+/**
+ * The path rule, shared by route keys and {@link PrefixMount} prefixes — they are the same kind of
+ * thing, and a prefix that was never checked would let the matcher resolve `/files/:id` its own way
+ * while {@link pathUnderPrefix} compared it as a literal string, which is precisely the split this
+ * whole language exists to close.
+ */
+function assertLiteralPath(path: string, describe: (problem: string) => string): void {
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
   // Percent-encoding is refused for the same reason HEAD is — it does not do what it looks like it
   // does. Request paths are DECODED before matching, so a `/%63ontrol` route is unreachable by any
@@ -83,7 +93,7 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   // argument to `router` (see PrefixMount), not a spelling of a route key.
   const pattern = [":", "*"].find((ch) => path.includes(ch));
   if (pattern) {
-    throw new Error(describe(`"${pattern}" is not allowed — a route key is a literal path`));
+    throw new Error(describe(`"${pattern}" is not allowed — this must be a literal path`));
   }
 }
 
@@ -127,6 +137,10 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
   // `/control/admin` both claim `/control/admin/*`, and registration order would pick a winner in
   // silence. "Owns everything beneath it" has to mean the same thing in every direction.
   for (const [i, mount] of mounts.entries()) {
+    assertLiteralPath(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
+    if (mount.prefix.endsWith("/")) {
+      throw new Error(`mount prefix "${mount.prefix}" is invalid — no trailing slash (write "/control")`);
+    }
     const clash = mounts
       .slice(0, i)
       .find((other) => pathUnderPrefix(mount.prefix, other.prefix) || pathUnderPrefix(other.prefix, mount.prefix));

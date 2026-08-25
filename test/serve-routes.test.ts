@@ -99,6 +99,18 @@ describe("serve: the route path language", () => {
     expect(await (await handle(new Request("http://h/telegram"))).text()).toBe("tg");
   });
 
+  it("a mount prefix is held to the same path rule as a route key", () => {
+    // A prefix IS a path. Unchecked, `/files/:id` would be resolved by the matcher its own way while
+    // pathUnderPrefix compared it as a literal — the exact split this language exists to close.
+    const mount = (prefix: string) => () => router({}, [{ prefix, handler: () => new Response("m") }]);
+    expect(mount("/files/:id")).toThrow(/literal path/);
+    expect(mount("/files/*")).toThrow(/literal path/);
+    expect(mount("/%63ontrol")).toThrow(/percent-encoding/);
+    expect(mount("control")).toThrow(/must start/);
+    expect(mount("/control/")).toThrow(/no trailing slash/);
+    expect(mount("/control")).not.toThrow();
+  });
+
   it("two mounts may not claim the same ground", () => {
     const at = (prefix: string) => ({ prefix, handler: () => new Response(prefix) });
     expect(() => router({}, [at("/control"), at("/control/admin")])).toThrow(/overlaps/);
