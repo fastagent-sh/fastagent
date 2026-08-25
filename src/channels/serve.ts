@@ -54,6 +54,14 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   // it meant `"/x"`, and the ONE thing worse than an unsupported spelling is a supported one nobody
   // documented.
   if (method === "") throw new Error(describe('a leading space is not a method — write "/path" for any method'));
+  // "ALL" is the matcher's own word for any-method, which we already spell `"/path"`. Two spellings
+  // for one meaning is what the leading-space case above was; keep one.
+  if (method === "ALL") throw new Error(describe('write "/path" for any method, not "ALL /path"'));
+  // A method is an HTTP token (RFC 9110). Anything else cannot arrive: `fetch` refuses to construct
+  // the request, so the route would sit there unreachable rather than doing something surprising.
+  if (method !== undefined && !/^[A-Z0-9!#$%&'*+\-.^_`|~]+$/.test(method)) {
+    throw new Error(describe(`"${method}" is not a valid HTTP method`));
+  }
   // HEAD is not a method you can route here: the matcher answers HEAD from the GET route (RFC 9110)
   // and never reaches an explicitly registered HEAD handler — verified in both registration orders,
   // and a HEAD-only route 404s outright. Refusing it says so at mount instead of leaving an author

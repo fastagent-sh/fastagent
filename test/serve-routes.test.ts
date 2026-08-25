@@ -68,6 +68,17 @@ describe("serve: the route path language", () => {
     expect(pathUnderPrefix("/other", "/control")).toBe(false);
   });
 
+  it("a method must be one that can actually arrive", () => {
+    const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
+    // `fetch` refuses to construct a request with this method, so the route could only ever sit
+    // there unreachable.
+    expect(check("BAD@ /x")).toThrow(/not a valid HTTP method/);
+    // The matcher's own word for any-method — which we already spell `"/x"`. One meaning, one way.
+    expect(check("ALL /x")).toThrow(/write "\/path" for any method/);
+    expect(check("PATCH /x")).not.toThrow();
+    expect(check("PROPFIND /x")).not.toThrow(); // extension methods are legal tokens
+  });
+
   it("a leading space is refused, not quietly read as 'any method'", async () => {
     // Normalising `" /x"` would define a spelling the contract does not have — and define it only
     // in the parser's head. The author meant `"/x"`, which is the documented way to say any method.
