@@ -127,6 +127,9 @@ describe("serve: the route path language", () => {
     // way to spell a path the overlap check would not recognise as the same one.
     expect(check("/%63ontrol/mine")).toThrow(/percent-encoding/);
     expect(check("GET /a%2Fb")).toThrow(/percent-encoding/);
+    // Query and fragment never reach the matcher: such a route answers nothing, ever.
+    expect(check("GET /x?y=1")).toThrow(/not part of a path/);
+    expect(check("/x#frag")).toThrow(/not part of a path/);
     expect(check("/files/*/raw")).toThrow(/trailing/);
     expect(check("files")).toThrow(/must start/);
     expect(check("/files/*")).not.toThrow();

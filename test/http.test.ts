@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
+import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { createInvokeHandler, nodeListener, serveNode, type Agent, type AgentEvent } from "../src/index.ts";
@@ -330,6 +331,41 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
       expect((await fetch(`http://127.0.0.1:${host.port}/plain`)).status).toBe(200);
     } finally {
       await host.close();
+    }
+  });
+
+  it("an empty CHUNKED post behind middleware is not mistaken for an eaten one", async () => {
+    // Chunked framing says nothing about content: an empty chunked body is legal, arrives already
+    // drained, and looks exactly like an eaten one. The guard must stay quiet rather than reject a
+    // valid request — being wrong here turns a diagnostic into the outage.
+    const listener = nodeListener(async (req) => new Response(`ok:[${await req.text()}]`));
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((r) => {
+        req.resume();
+        req.on("end", r);
+      });
+      listener(req, res);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const raw = await new Promise<string>((resolve) => {
+        const sock = connect(port, "127.0.0.1", () => {
+          sock.write("POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+        });
+        let out = "";
+        sock.on("data", (d) => {
+          out += String(d);
+        });
+        setTimeout(() => {
+          sock.destroy();
+          resolve(out);
+        }, 250);
+      });
+      expect(raw.split("\r\n")[0]).toMatch(/200 OK/);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 

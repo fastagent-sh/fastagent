@@ -72,6 +72,12 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   if (path.includes("%")) {
     throw new Error(describe("percent-encoding is not allowed in a route path — write the decoded path"));
   }
+  // A key is a PATH. `?`/`#` start the query and fragment, which never reach the matcher, so such a
+  // route is registered, looks mounted, and answers nothing — the same dead-code shape as HEAD.
+  const marker = ["?", "#"].find((ch) => path.includes(ch));
+  if (marker) {
+    throw new Error(describe(`"${marker}" is not part of a path — a route key is a path, without query or fragment`));
+  }
   if (path.includes(":")) throw new Error(describe("parameter patterns (:id) are not supported"));
   const star = path.indexOf("*");
   if (star !== -1 && path !== `${path.slice(0, star - 1)}/*`) {
@@ -193,16 +199,16 @@ function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response
  * symptom and neither the cause (something read it first) nor the fix (mount order). For a webhook
  * channel that surfaces as "the integration is broken, and the platform keeps retrying".
  *
- * `readableEnded` alone would be wrong: it is also true once anything upstream has touched a request
- * that never carried a body, so the headers must say a body was actually SENT. And "sent" means a
- * NON-ZERO length — an empty POST carries `content-length: 0`, is drained by any middleware it
- * passes through, and has nothing to lose; treating it as eaten would reject a perfectly good
- * request, the guard becoming the failure it exists to explain.
+ * Deliberately answers only when it is CERTAIN, which means a positive `content-length` and nothing
+ * else. `readableEnded` alone is true for any request something upstream merely touched, and a
+ * chunked request announces framing rather than content — an empty chunked body is legal, arrives
+ * drained, and is indistinguishable from an eaten one. Guessing there would reject a valid request,
+ * making this guard the outage it exists to explain; the cost of staying quiet is only that such a
+ * request falls back to the adapter's own less helpful error.
  */
 function bodyAlreadyRead(req: IncomingMessage): boolean {
-  const length = req.headers["content-length"];
-  const sentBody = (length !== undefined && Number(length) > 0) || req.headers["transfer-encoding"] !== undefined;
-  return sentBody && req.readableEnded;
+  const length = Number(req.headers["content-length"]);
+  return Number.isFinite(length) && length > 0 && req.readableEnded;
 }
 
 /** The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting
