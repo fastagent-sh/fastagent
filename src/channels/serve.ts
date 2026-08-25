@@ -129,12 +129,43 @@ function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response
   };
 }
 
+/**
+ * Has upstream middleware already drained the request body?
+ *
+ * Node's `req` is a ONE-SHOT stream, so a body parser mounted ahead of this route consumes it and
+ * the Request built here has nothing left — a limitation of the Node/Fetch seam itself, shared by
+ * every adapter of this kind, not something a different implementation would avoid. What we can
+ * avoid is the diagnosis: undici's own answer is `TypeError: Body is unusable`, which names the
+ * symptom and neither the cause (something read it first) nor the fix (mount order). For a webhook
+ * channel that surfaces as "the integration is broken, and the platform keeps retrying".
+ *
+ * `readableEnded` alone would be wrong — it is false for a GET with no body at all, so the headers
+ * have to say a body was SENT before its absence means anything.
+ */
+function bodyAlreadyRead(req: IncomingMessage): boolean {
+  const sentBody = req.headers["content-length"] !== undefined || req.headers["transfer-encoding"] !== undefined;
+  return sentBody && req.readableEnded;
+}
+
 /** The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting
  *  fastagent on its OWN node:http server can too. */
 export function nodeListener(
   handler: (req: Request) => Promise<Response>,
 ): (req: IncomingMessage, res: ServerResponse) => void {
-  return getRequestListener(totalFetch(handler), { overrideGlobalObjects: false });
+  const listener = getRequestListener(totalFetch(handler), { overrideGlobalObjects: false });
+  return (req, res) => {
+    if (bodyAlreadyRead(req)) {
+      log.error(
+        `[serve] ${req.method} ${req.url}: the request body was already read by upstream middleware ` +
+          `(e.g. express.json()) — mount fastagent BEFORE the body parser, or scope the parser away ` +
+          `from this route. Channels that verify webhook signatures need the RAW body.`,
+      );
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("internal error\n");
+      return;
+    }
+    listener(req, res);
+  };
 }
 
 /**

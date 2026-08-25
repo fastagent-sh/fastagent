@@ -289,6 +289,50 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
     };
   }
 
+  it("a drained body is diagnosed with its fix, not with 'Body is unusable'", async () => {
+    // The embedding trap: `app.use(express.json())` ahead of the mount eats the one-shot stream.
+    // Simulated without a framework — draining `req` first is exactly what a body parser does.
+    // What is asserted is the DIAGNOSIS: the adapter's native error names only the symptom, and a
+    // webhook channel failing this way looks like a broken integration with a retrying platform.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const listener = nodeListener(async (req) => new Response(await req.text()));
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((r) => {
+        req.resume();
+        req.on("end", r);
+      });
+      listener(req, res);
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/hook`, { method: "POST", body: '{"a":1}' });
+      expect(res.status).toBe(500);
+      const logged = errs.join("\n");
+      expect(logged).toMatch(/already read by upstream middleware/);
+      expect(logged).toMatch(/mount fastagent BEFORE the body parser/); // the fix, not just the fault
+      expect(await res.text()).not.toMatch(/express|middleware/); // internals stay internal
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("a body that was NOT read still reaches the handler (the check must not misfire)", async () => {
+    const host = await serving(async (req) => new Response(`got:${await req.text()}`));
+    try {
+      const res = await fetch(`http://127.0.0.1:${host.port}/hook`, { method: "POST", body: "payload" });
+      expect(await res.text()).toBe("got:payload");
+      // ...and a GET, whose body is absent rather than eaten, must not trip it either.
+      expect((await fetch(`http://127.0.0.1:${host.port}/plain`)).status).toBe(200);
+    } finally {
+      await host.close();
+    }
+  });
+
   it("a client that disconnects mid-handler leaves the server serving the next request", async () => {
     // The dead-socket case: the client is gone before the handler resolves. Writing to that socket
     // throws inside the bridge, and an escaped throw would take the process down — so the proof is

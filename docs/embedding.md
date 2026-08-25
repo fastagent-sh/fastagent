@@ -88,7 +88,19 @@ import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
 ```
 
-The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`:
+The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it.
+
+> **Mount before your body parser.** Node's request is a one-shot stream, so `app.use(express.json())`
+> registered *ahead* of the mount consumes it and nothing reaches the agent — and webhook channels
+> verify signatures over the RAW body, which a re-serialised one would fail. Order is the whole fix:
+>
+> ```ts
+> app.use("/agent", nodeListener(handler));  // first: fastagent takes these requests
+> app.use(express.json());                   // then: parses everything else as usual
+> ```
+>
+> Scoping the parser (`app.use("/other", express.json())`) works too. Get it wrong and the log says
+> so, naming the fix rather than `Body is unusable`.
 
 ```ts
 // Next.js App Router — app/api/chat/route.ts
@@ -97,8 +109,8 @@ export const POST = handler;
 // Hono — c.req.raw is a Web Request
 app.post("/chat", (c) => handler(c.req.raw));
 
-// Express — nodeListener bridges (req, res) to the Fetch handler; it reads the raw
-// body stream, so don't put a body parser on this route
+// Express — nodeListener bridges (req, res) to the Fetch handler. It reads the RAW body
+// stream, so mount it BEFORE any body parser (see the note below).
 import { nodeListener } from "@fastagent-sh/fastagent";
 app.post("/chat", nodeListener(handler));
 
