@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Routes } from "../src/channel.ts";
-import { assertRoutePath, routePathsOverlap, router, serveNode } from "../src/channels/serve.ts";
+import { assertRoutePath, parseRouteKey, routePathsOverlap, router, serveNode } from "../src/channels/serve.ts";
 
 describe("serve: router", () => {
   const routes: Routes = {
@@ -56,6 +56,17 @@ describe("serve: the route path language", () => {
     expect(routePathsOverlap("/a", "/b")).toBe(false);
     expect(routePathsOverlap("/a/*", "/b/*")).toBe(false);
     expect(routePathsOverlap("/a/*", "/a/b/*")).toBe(true);
+  });
+
+  it("an empty method means any method, to every reader of the key", async () => {
+    // `" /x"` yields an empty method. As `""` it was falsy to the router (any method) but a real
+    // method to the collision check, so `" /x"` and `"GET /x"` passed as distinct and then fought
+    // over the same requests. Both questions must get the same answer.
+    expect(parseRouteKey(" /x")).toEqual({ path: "/x" });
+    expect(parseRouteKey("/x")).toEqual({ path: "/x" });
+    expect(parseRouteKey("GET /x")).toEqual({ method: "GET", path: "/x" });
+    const handle = router({ " /any": () => new Response("any-method") });
+    expect((await handle(new Request("http://h/any", { method: "DELETE" }))).status).toBe(200);
   });
 
   it("router() enforces the language too, not just the channel loader", () => {

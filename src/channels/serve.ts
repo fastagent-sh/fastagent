@@ -30,10 +30,20 @@ import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
-/** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
+/**
+ * Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method).
+ *
+ * An empty method normalises to `undefined` rather than `""`. A leading space (`" /x"`) is the way
+ * to produce one, and the two values are not interchangeable to every reader: `""` is falsy, so the
+ * router treated it as any-method, while the collision check compared it as a method and found no
+ * clash with `"GET /x"` — letting the pair coexist, then shadow each other at runtime. One
+ * representation for one meaning, decided here so no caller has to know the difference.
+ */
 export function parseRouteKey(key: string): { method?: string; path: string } {
   const sp = key.indexOf(" ");
-  return sp === -1 ? { path: key } : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1) };
+  if (sp === -1) return { path: key };
+  const method = key.slice(0, sp).toUpperCase();
+  return method ? { method, path: key.slice(sp + 1) } : { path: key.slice(sp + 1) };
 }
 
 /**
