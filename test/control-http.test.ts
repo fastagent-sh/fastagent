@@ -703,7 +703,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const { mkdtemp, rm, readFile, stat } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { mountSessionControl } = await import("../src/cli/serve.ts");
+    const { assertNoControlPlaneCollision, mountSessionControl } = await import("../src/cli/serve.ts");
     const root = await mkdtemp(join(tmpdir(), "fa-ctl-mount-"));
     const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
     try {
@@ -718,6 +718,19 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(() => mountSessionControl({ "/control/dispatch": () => new Response("x") }, control, stateRoot)).toThrow(
         /collide with the session control plane/,
       );
+      // A path the plane does NOT serve is the sharper case: string equality misses it, and the
+      // channel then goes dark against the plane's own 404 with nothing reported.
+      expect(() => mountSessionControl({ "GET /control/mine": () => new Response("x") }, control, stateRoot)).toThrow(
+        /collide with the session control plane/,
+      );
+      // BOTH mount points enforce it through one function — agentcore's lazy path loads its channels
+      // after the boot-time check ran against an empty base, so it must ask again, not re-implement.
+      expect(() =>
+        assertNoControlPlaneCollision({ "GET /control/mine": () => new Response("x") }, mounted.routes),
+      ).toThrow(/collide with the session control plane/);
+      expect(() =>
+        assertNoControlPlaneCollision({ "POST /telegram": () => new Response("x") }, mounted.routes),
+      ).not.toThrow();
       mounted.announce(12345);
       const file = JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as {
         url: string;

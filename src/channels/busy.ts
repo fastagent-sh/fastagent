@@ -1,6 +1,6 @@
 /**
  * SHARED process-wide in-flight work signal. Channels ACK a webhook fast and run the turn
- * fire-and-forget on this process's event loop (host/node.ts) — so "is this process busy?" is not
+ * fire-and-forget on this process's event loop (serve.ts) — so "is this process busy?" is not
  * derivable from open HTTP requests. The two shared execution primitives (turn-queue chains,
  * task-tracker side tasks) report here; a serving surface that must stay alive while background
  * work runs (the AgentCore adapter's /ping → HealthyBusy) reads it.

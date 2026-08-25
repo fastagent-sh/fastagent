@@ -93,6 +93,33 @@ export async function routesFor(
  * (routesFor): `sessionControl` is an explicit opt-in, so declaring both is a configuration error,
  * and silently shadowing either side would serve a surface the author didn't write.
  */
+/**
+ * Refuse channel routes the control plane would shadow.
+ *
+ * The plane OWNS its prefix, so a channel landing anywhere beneath it is unreachable — including on
+ * a path the plane does not itself serve, where the request meets the plane's own 404 instead of the
+ * channel. It is a configuration error, and one that is otherwise completely silent.
+ *
+ * A function rather than an inline check because there are TWO mount points — the boot-time merge
+ * below and agentcore's lazy one (cli/commands/start.ts), whose channels load after this ran against
+ * an empty base. Two sites re-implementing "the same rule" is how they stop being the same rule:
+ * this one already drifted once, one side comparing paths for equality while the other asked
+ * {@link routePathsOverlap}.
+ */
+export function assertNoControlPlaneCollision(channelRoutes: Routes, controlPlaneRoutes: Routes): void {
+  const collisions = Object.keys(channelRoutes).filter((key) =>
+    Object.keys(controlPlaneRoutes).some((mountKey) =>
+      routePathsOverlap(parseRouteKey(key).path, parseRouteKey(mountKey).path),
+    ),
+  );
+  if (collisions.length > 0) {
+    throw new Error(
+      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
+        `rename the channel route or disable sessionControl in fastagent.config`,
+    );
+  }
+}
+
 export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
@@ -102,19 +129,7 @@ export function mountSessionControl(
   if (!control) return { routes, announce: () => {} };
   const token = crypto.randomUUID();
   const mounted = controlRoutes(control, { token, agent: options.agent });
-  // PREFIX-level collision: the plane owns everything under CONTROL_PREFIX, so any channel route
-  // landing there is shadowed — including one the plane does not itself serve, which would
-  // otherwise reach the plane's own 404 instead of the channel. Wider than the old exact-path
-  // check, and for the same reason: the failure it prevents is silent.
-  const collisions = Object.keys(routes).filter((key) =>
-    Object.keys(mounted).some((mountKey) => routePathsOverlap(parseRouteKey(key).path, parseRouteKey(mountKey).path)),
-  );
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
-        `rename the channel route or disable sessionControl in fastagent.config`,
-    );
-  }
+  assertNoControlPlaneCollision(routes, mounted);
   return {
     routes: { ...routes, ...mounted },
     announce: (boundPort) => {
