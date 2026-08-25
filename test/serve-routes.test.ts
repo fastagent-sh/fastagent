@@ -75,6 +75,8 @@ describe("serve: the route path language", () => {
     expect(check("BAD@ /x")).toThrow(/not a valid HTTP method/);
     // The matcher's own word for any-method — which we already spell `"/x"`. One meaning, one way.
     expect(check("ALL /x")).toThrow(/write "\/path" for any method/);
+    // Forbidden by the Fetch standard — verified: `new Request(..., { method })` throws for these.
+    for (const m of ["CONNECT", "TRACE", "TRACK"]) expect(check(`${m} /x`)).toThrow(/forbidden by the Fetch standard/);
     expect(check("PATCH /x")).not.toThrow();
     expect(check("PROPFIND /x")).not.toThrow(); // extension methods are legal tokens
   });

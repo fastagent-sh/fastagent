@@ -57,10 +57,14 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   // "ALL" is the matcher's own word for any-method, which we already spell `"/path"`. Two spellings
   // for one meaning is what the leading-space case above was; keep one.
   if (method === "ALL") throw new Error(describe('write "/path" for any method, not "ALL /path"'));
-  // A method is an HTTP token (RFC 9110). Anything else cannot arrive: `fetch` refuses to construct
-  // the request, so the route would sit there unreachable rather than doing something surprising.
+  // A method is an HTTP token (RFC 9110), and not one the Fetch standard forbids — `fetch` refuses
+  // to construct a request with CONNECT/TRACE/TRACK, so those routes could only sit unreachable.
+  // Same test as HEAD, applied to the other end: can a request bearing this method ever arrive?
   if (method !== undefined && !/^[A-Z0-9!#$%&'*+\-.^_`|~]+$/.test(method)) {
     throw new Error(describe(`"${method}" is not a valid HTTP method`));
+  }
+  if (method !== undefined && ["CONNECT", "TRACE", "TRACK"].includes(method)) {
+    throw new Error(describe(`"${method}" is forbidden by the Fetch standard — no request can carry it`));
   }
   // HEAD is not a method you can route here: the matcher answers HEAD from the GET route (RFC 9110)
   // and never reaches an explicitly registered HEAD handler — verified in both registration orders,
