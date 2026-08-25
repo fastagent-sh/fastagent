@@ -50,6 +50,12 @@ describe("serve: the route path language", () => {
     expect(check("GET /x?y=1")).toThrow(/not part of a path/);
     expect(check("/x#frag")).toThrow(/not part of a path/);
     expect(check("files")).toThrow(/must start/);
+    // Spellings a URL normalises away: the request arrives as something else, so the route never
+    // runs — and the two spellings compare as different strings, slipping past every conflict check.
+    expect(check("/a/../x")).toThrow(/segments are not allowed/);
+    expect(check("/a/./y")).toThrow(/segments are not allowed/);
+    expect(check("GET /a\\b")).toThrow(/path separator/);
+    expect(check("/a..b")).not.toThrow(); // dots inside a segment are ordinary characters
     expect(check("/files")).not.toThrow();
     expect(check("POST /a/b/c")).not.toThrow();
   });

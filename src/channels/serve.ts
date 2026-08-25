@@ -95,6 +95,15 @@ function assertLiteralPath(path: string, describe: (problem: string) => string):
   if (pattern) {
     throw new Error(describe(`"${pattern}" is not allowed — this must be a literal path`));
   }
+  // Anything a URL normalises away is the percent-encoding problem in another spelling: the request
+  // arrives under the normalised path, so the route is unreachable, AND the two spellings compare as
+  // different strings, so it slips past every conflict check. `/a/../x` is the sharp one — it is a
+  // second, invisible way to write `/x`. (Verified: it never receives a request, and `/x` gets them.)
+  if (path.includes("\\")) throw new Error(describe('"\\" is not allowed — a path separator is "/"'));
+  const dotSegment = path.split("/").find((seg) => seg === "." || seg === "..");
+  if (dotSegment !== undefined) {
+    throw new Error(describe(`"${dotSegment}" segments are not allowed — write the path they resolve to`));
+  }
 }
 
 /**
