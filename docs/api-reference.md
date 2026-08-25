@@ -101,7 +101,11 @@ type ChannelHandler = (req: Request) => Response | Promise<Response>;
 type Routes = Record<string, ChannelHandler>;
 ```
 
-Route keys are `"/path"` or `"METHOD /path"`.
+Route keys are `"/path"` or `"METHOD /path"`. The path is a literal, or a `/*` **prefix mount**
+owning everything beneath it (the session control plane is one). Nothing richer: two channels must
+never silently shadow each other, so route overlap has to stay decidable — a `:param` pattern is
+rejected at load with the reason. A path that exists under another method answers 405, an unknown
+path 404; remote clients read that 404 as version skew rather than as a fault.
 
 ## pi assembly
 

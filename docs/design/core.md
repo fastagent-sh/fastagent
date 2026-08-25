@@ -362,9 +362,9 @@ enabled channel files.
 
 The serving CLI composition adds `GET /health`. A long-connection channel counts as declared (so the
 fallback `/invoke` does not appear) and keeps that health route for deployment probes. Built-in health
-returns 503 until every long connection first becomes ready. The Node host serves route channels through
-`node:http`; the CLI opens long-connection channels, aborts them on shutdown, and fails visibly when one
-closes unexpectedly. SIGINT/SIGTERM does not drain Agent turns: it aborts long connections, stops the
+returns 503 until every long connection first becomes ready. Route channels are served through `node:http`
+(`channels/serve.ts`, shared by every deploy target rather than being one of them); the CLI opens
+long-connection channels, aborts them on shutdown, and fails visibly when one closes unexpectedly. SIGINT/SIGTERM does not drain Agent turns: it aborts long connections, stops the
 listener, force-closes active HTTP streams, and has a bounded exit fallback so shutdown cannot hang.
 
 ### GitHub

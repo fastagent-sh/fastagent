@@ -12,7 +12,7 @@ import {
 } from "../src/channels/agentcore.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { StateSync } from "../src/channels/agentcore-state.ts";
-import type { Routes } from "../src/host/node.ts";
+import type { Routes } from "../src/channel.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../src/schedule/scheduler.ts";
 

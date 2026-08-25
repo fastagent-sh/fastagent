@@ -22,7 +22,8 @@ import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type Se
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import { Hono } from "hono";
-import { type ChannelHandler, type Routes, parseRouteKey } from "../host/node.ts";
+import type { ChannelHandler, Routes } from "../channel.ts";
+import { parseRouteKey } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";

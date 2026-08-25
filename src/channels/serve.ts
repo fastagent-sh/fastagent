@@ -1,67 +1,34 @@
 /**
- * Node host (K-axis): mount a route table of Fetch handlers on a node:http server. Post-ACK work
- * (e.g. a webhook channel's fire-and-forget turns) runs on this process's event loop and is lost on
- * shutdown (the accepted tradeoff until durable execution exists).
+ * How a {@link Routes} table becomes a running server: the route path language, the matcher, the
+ * totality boundary, and the node:http binding.
+ *
+ * This is shared ground, not a deployment target. Every host in `src/deploy/` — docker, fly,
+ * railway, agentcore — ships the same container running the same Node process serving the same
+ * route table; what differs between them is process, storage, credentials and deployment
+ * (core.md §1), none of which is here. So this file sits with the channels it serves, next to
+ * `body.ts`/`respond.ts`/`state.ts`, rather than pretending to be one runtime among several.
  *
  * Hono is the routing/adapter mechanism INSIDE this file and never leaves it. The types a channel
- * author or an embedder writes stay pure Fetch (`ChannelHandler`, `Routes`) — SPEC §11 fixes the
- * gateway contract as `(Request) => Response`, a channel directory ships hand-written modules with
- * that signature, and an app embedding fastagent may already run Express/Fastify/its own Hono. What
- * we must not do is pick their framework for them.
+ * author or an embedder writes stay pure Fetch (`ChannelHandler`, `Routes` in `../channel.ts`) —
+ * SPEC §11 fixes the gateway contract as `(Request) => Response`, an agent directory ships
+ * hand-written modules with that signature, and an app embedding fastagent may already run
+ * Express/Fastify/its own Hono. What we must not do is pick their framework for them.
  *
  * `overrideGlobalObjects: false` is part of that containment, not a tuning knob. The adapter
  * otherwise swaps `globalThis.Request`/`Response` for its own, which reaches every line in the
  * embedding process — and breaks code here first: a channel holding a `Response` captured before
  * mount fails the `instanceof` check in {@link totalFetch} and is answered 500, the totality
  * boundary rejecting a CORRECT handler.
+ *
+ * Post-ACK work (a webhook channel's fire-and-forget turns) runs on this process's event loop and is
+ * lost on shutdown — the accepted tradeoff until durable execution (the K axis) exists.
  */
 import { serve, getRequestListener } from "@hono/node-server";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { Hono } from "hono";
-import type { Agent } from "../agent.ts";
-import type { SessionControl } from "../session.ts";
+import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
-import { text } from "../channels/respond.ts";
-
-/** A mounted request handler (a channel's fetch, or a plain route like health). */
-export type ChannelHandler = (req: Request) => Response | Promise<Response>;
-
-/** This deployment's HTTP surface: route key → handler. Key is `"/path"` or `"METHOD /path"`. */
-export type Routes = Record<string, ChannelHandler>;
-
-/**
- * What the framework hands a channel at mount time: the assembled agent plus the resolved state ROOT
- * (absolute; `FASTAGENT_STATE_DIR` > `<root>/.state`). Channels derive their OWN durable home from
- * it (`<stateRoot>/channels/<kind>/`) — they never anchor on `process.cwd()`. env is the OPERATOR
- * input plane; this context is how the resolved result reaches code (embedders without the agent
- * opener construct it explicitly).
- */
-export interface ChannelContext {
-  agent: Agent;
-  stateRoot: string;
-  /** The serving session-control hub, when the serve wires one (`config.sessionControl`). Channels
-   *  use it for DISPATCH only (the user-facing stop command); observation stays on the data plane. */
-  control?: SessionControl;
-}
-
-/** A `channels/<name>.ts` route channel: receives mount context and returns its HTTP routes. */
-export type ChannelModule = (ctx: ChannelContext) => Routes;
-
-/** One logical long connection's lifecycle. `ready` settles after its first usable connection — and
- * when `signal` aborts before one exists it must still settle: resolution then means cancellation, not
- * readiness (the server skips ready-side effects once the signal is aborted; it must never hang).
- * `closed` resolves after abort-driven shutdown and rejects on a terminal connection failure. */
-export interface LongConnection {
-  ready: Promise<void>;
-  closed: Promise<void>;
-}
-
-/** A long-connection channel is an explicit module object rather than an HTTP-route factory.
- * The adapter owns reconnects and treats `signal` as its sole shutdown command. */
-export interface LongConnectionChannelModule {
-  name: string;
-  connect(ctx: ChannelContext, signal: AbortSignal): LongConnection;
-}
+import { text } from "./respond.ts";
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {
@@ -116,7 +83,7 @@ export function routePathsOverlap(a: string, b: string): boolean {
  * The 404/405 split is load-bearing, not cosmetic: a remote client reads 404 as "this serve predates
  * the route" (version skew) and anything else as a fault, so collapsing them — which is what Hono
  * does on its own, answering 404 for a method mismatch — would misreport an old deployment as a
- * broken one. `notFound` restores it from the table, which knows every path it mounted.
+ * broken one.
  */
 export function router(routes: Routes): ChannelHandler {
   const app = new Hono();
@@ -156,7 +123,7 @@ function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response
       if (!(response instanceof Response)) throw new TypeError("handler did not return a Response");
       return response;
     } catch (error) {
-      log.error(`[host] request failed: ${String(error)}`);
+      log.error(`[serve] request failed: ${String(error)}`);
       return text("internal error\n", 500);
     }
   };

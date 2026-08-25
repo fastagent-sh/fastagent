@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { type Routes, assertRoutePath, routePathsOverlap, router, serveNode } from "../src/host/node.ts";
+import type { Routes } from "../src/channel.ts";
+import { assertRoutePath, routePathsOverlap, router, serveNode } from "../src/channels/serve.ts";
 
-describe("host/node: router", () => {
+describe("serve: router", () => {
   const routes: Routes = {
     "POST /webhook": () => new Response("hook", { status: 202 }),
     "GET /health": () => new Response("ok"),
@@ -41,7 +42,7 @@ describe("host/node: router", () => {
   });
 });
 
-describe("host/node: the route path language", () => {
+describe("serve: the route path language", () => {
   it("a prefix mount overlaps everything beneath it; literals only overlap when equal", () => {
     // The question every collision check asks. It has to be decidable, which is why the language is
     // literal paths + `/*` mounts and nothing else: a prefix mount answers for paths it does not
@@ -67,7 +68,7 @@ describe("host/node: the route path language", () => {
   });
 });
 
-describe("host/node: serveNode", () => {
+describe("serve: serveNode", () => {
   it("serving does not swap the process's global Request/Response", async () => {
     // fastagent is EMBEDDED: the host may not reshape the globals of the app it is mounted in. The
     // failure is not hypothetical either — a channel holding a Response captured before mount would

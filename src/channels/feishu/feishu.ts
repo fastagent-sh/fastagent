@@ -9,7 +9,7 @@
  * returns an explicit long-connection module. Both feed the same acceptance/turn engine. See docs/feishu.md.
  */
 import { isAbsolute, join } from "node:path";
-import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../host/node.ts";
+import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";

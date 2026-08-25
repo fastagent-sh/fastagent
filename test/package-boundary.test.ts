@@ -70,7 +70,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
   });
 });
 
-describe("engine neutrality: the core subpath + channel/host spine import no engine package", () => {
+describe("engine neutrality: the core subpath + channel spine import no engine package", () => {
   // The neutral layer (the contract and the N-side that consumes only the contract) must never pull
   // `@earendil-works/*` — that coupling belongs only in the pi reference implementation.
   const neutral = [
@@ -85,7 +85,8 @@ describe("engine neutrality: the core subpath + channel/host spine import no eng
     "channels/telegram/telegram.ts",
     "channels/feishu/feishu.ts",
     "channels/lark/lark.ts",
-    "host/node.ts",
+    "channel.ts",
+    "channels/serve.ts",
   ];
   for (const entry of neutral) {
     it(`${entry} pulls no @earendil-works/* package`, () => {
@@ -96,5 +97,22 @@ describe("engine neutrality: the core subpath + channel/host spine import no eng
 
   it("pi.ts is the explicit reference-runtime boundary (the guard has teeth)", () => {
     expect([...staticPackageGraph("pi.ts")].some((p) => p.startsWith("@earendil-works/"))).toBe(true);
+  });
+});
+
+describe("the contracts depend on nothing", () => {
+  // agent.ts (what an engine implements), channel.ts (what a trigger implements) and session.ts (the
+  // serving control plane) are the three product contracts — pure types, zero packages. The bar is
+  // ZERO rather than "no engine": an agent directory's hand-written channel imports ChannelModule,
+  // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
+  // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
+  for (const contract of ["agent.ts", "channel.ts", "session.ts"]) {
+    it(`${contract} pulls no package at all`, () => {
+      expect([...staticPackageGraph(contract)]).toEqual([]);
+    });
+  }
+
+  it("...and the mechanism that serves them does depend on one (the guard has teeth)", () => {
+    expect([...staticPackageGraph("channels/serve.ts")]).toContain("hono");
   });
 });

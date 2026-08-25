@@ -1,4 +1,4 @@
-import type { LongConnection } from "../../host/node.ts";
+import type { LongConnection } from "../../channel.ts";
 import { log } from "../../log.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import type { FeishuMessageEvent } from "./parse.ts";

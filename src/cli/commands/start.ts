@@ -19,7 +19,8 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
-import { type Routes, parseRouteKey } from "../../host/node.ts";
+import type { Routes } from "../../channel.ts";
+import { parseRouteKey } from "../../channels/serve.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
   assertTunnelBindable,

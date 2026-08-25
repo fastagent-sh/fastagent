@@ -20,17 +20,15 @@ export {
 } from "./session-remote.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
-export {
-  type ChannelContext,
-  type ChannelHandler,
-  type ChannelModule,
-  type LongConnection,
-  type LongConnectionChannelModule,
-  type Routes,
-  nodeListener,
-  router,
-  serveNode,
-} from "./host/node.ts";
+export type {
+  ChannelContext,
+  ChannelHandler,
+  ChannelModule,
+  LongConnection,
+  LongConnectionChannelModule,
+  Routes,
+} from "./channel.ts";
+export { nodeListener, router, serveNode } from "./channels/serve.ts";
 
 export { defineSchedule, type LoadedSchedule, type Schedule } from "./schedule/schedule.ts";
 export { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";

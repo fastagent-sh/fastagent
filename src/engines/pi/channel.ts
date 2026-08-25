@@ -4,16 +4,14 @@
  */
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import {
-  type ChannelContext,
-  type ChannelModule,
-  type LongConnection,
-  type LongConnectionChannelModule,
-  type Routes,
-  assertRoutePath,
-  parseRouteKey,
-  routePathsOverlap,
-} from "../../host/node.ts";
+import type {
+  ChannelContext,
+  ChannelModule,
+  LongConnection,
+  LongConnectionChannelModule,
+  Routes,
+} from "../../channel.ts";
+import { assertRoutePath, parseRouteKey, routePathsOverlap } from "../../channels/serve.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 

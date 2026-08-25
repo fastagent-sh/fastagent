@@ -23,6 +23,11 @@ Code truth is `src/`.
 ```
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
+├── channel.ts               # the Channel contract — the TRIGGER side of the product boundary
+│                           # (core.md §1), beside agent.ts and session.ts: ChannelModule / Routes /
+│                           # ChannelHandler / LongConnection*. Pure types, no host, no framework:
+│                           # a WebSocket ingress needs LongConnection and has no HTTP in it, and a
+│                           # channel author must not pull node:http in behind a type import.
 ├── collect.ts               # caller-side stream helpers: collect (buffered consumption) + abortFirstIterator (shared cancellation protocol)
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
@@ -55,14 +60,17 @@ src/
 │                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
 ├── version.ts              # package version (deploy pins it into the image)
-├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface).
-│                         # Hono is the routing + node-adapter MECHANISM here and never leaves this
-│                         # file — the types a channel author or embedder writes stay pure Fetch
-│                         # (SPEC §11), because an app embedding fastagent may run its own framework.
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Node's HTTP bridge
-│   │                     # is the HOST's job, not this channel's — see host/node.ts
+│   ├── serve.ts             # HOW a route table becomes a running server: the route path language
+│   │                     # (literal or `/*` prefix mount — narrow so overlap stays DECIDABLE, which
+│   │                     # is what stops one channel silently shadowing another), the matcher, the
+│   │                     # totality boundary, and the node:http binding. Shared ground, NOT a
+│   │                     # deployment target: every host in deploy/ runs this same process. Hono
+│   │                     # lives INSIDE this file (overrideGlobalObjects: false keeps it there — an
+│   │                     # embedder's globals are not ours to swap); the types stay pure Fetch.
+│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
+│   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── preview-kit.ts       # SHARED turn-view reducer (event → view state + line renderers) + preview policies (ChannelFailure, wording)
