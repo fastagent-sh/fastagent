@@ -59,6 +59,15 @@ Route keys are either:
 METHOD /path       # method-specific
 ```
 
+The path is a **literal** — no `:params`, no `*`, no percent-encoding, no `?`/`#`, and no `.`/`..`
+segments. Anything else is refused at startup with the reason. The rule is narrow so that "would
+these two routes fight over a request?" is string equality: two channels must never silently shadow
+each other, and a pattern would have to be predicted instead of compared.
+
+`HEAD` is not a key you write: it is answered from the `GET` route (RFC 9110). Methods `fetch`
+cannot send (`CONNECT`, `TRACE`, `TRACK`) are refused for the same reason — the handler could never
+run. Full rule: [API reference](api-reference.md#httphost-helpers).
+
 A path overlap is a collision: `/webhook` conflicts with `POST /webhook`; `GET /webhook` and `POST /webhook` can coexist.
 
 ## Public channel-authoring kit
