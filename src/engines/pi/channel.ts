@@ -11,7 +11,7 @@ import type {
   LongConnectionChannelModule,
   Routes,
 } from "../../channel.ts";
-import { assertRoutePath, parseRouteKey, routeKeysOverlap } from "../../channels/serve.ts";
+import { assertRouteKey, routeKeysOverlap } from "../../channels/serve.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 
@@ -105,10 +105,7 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
     if (typeof handler !== "function") {
       throw new Error(`${label}: route "${route}" must map to a handler function, got ${typeof handler}`);
     }
-    assertRoutePath(
-      parseRouteKey(route).path,
-      (problem) => `${label}: route "${route}" is not a valid route key — ${problem}`,
-    );
+    assertRouteKey(route, (problem) => `${label}: route "${route}" is not a valid route key — ${problem}`);
   }
   return routes;
 }

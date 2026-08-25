@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Routes } from "../src/channel.ts";
 import {
-  assertRoutePath,
+  assertRouteKey,
   parseRouteKey,
   routeKeysOverlap,
   routePathsOverlap,
@@ -98,6 +98,19 @@ describe("serve: the route path language", () => {
     expect(routeKeysOverlap("POST /a", "POST /b")).toBe(false);
   });
 
+  it("a HEAD route is refused outright — the matcher can never reach one", async () => {
+    // Verified against the matcher, not assumed: a HEAD request takes the GET route in EITHER
+    // registration order, and a HEAD-ONLY route 404s. So this is never a second method on a path,
+    // it is a handler that cannot run. Refusing it beats shipping dead code that looks mounted.
+    expect(() => router({ "HEAD /x": () => new Response("") })).toThrow(/never runs/);
+    expect(() => router({ "GET /x": () => new Response("g"), "HEAD /x": () => new Response("") })).toThrow(
+      /never runs/,
+    );
+    // GET keeps answering HEAD, which is what makes the refusal safe rather than a lost capability.
+    const handle = router({ "GET /x": () => new Response("body") });
+    expect((await handle(new Request("http://h/x", { method: "HEAD" }))).status).toBe(200);
+  });
+
   it("router() enforces the language too, not just the channel loader", () => {
     // Two doors lead to the matcher: channel files, and an embedder handing over `Routes`. A pattern
     // slipping through the second one would match at runtime while every collision check — which
@@ -108,7 +121,7 @@ describe("serve: the route path language", () => {
   });
 
   it("rejects the patterns that would make overlap undecidable", () => {
-    const check = (path: string) => () => assertRoutePath(path, (problem) => `bad: ${problem}`);
+    const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
     expect(check("/files/:id")).toThrow(/parameter patterns/);
     expect(check("/files/*/raw")).toThrow(/trailing/);
     expect(check("files")).toThrow(/must start/);

@@ -55,7 +55,15 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
  * other, so "do these two routes overlap?" has to be decidable — and for arbitrary patterns it is
  * not. Widening this language means answering that question first.
  */
-export function assertRoutePath(path: string, describe: (problem: string) => string): void {
+export function assertRouteKey(key: string, describe: (problem: string) => string): void {
+  const { method, path } = parseRouteKey(key);
+  // HEAD is not a method you can route here: the matcher answers HEAD from the GET route (RFC 9110)
+  // and never reaches an explicitly registered HEAD handler — verified in both registration orders,
+  // and a HEAD-only route 404s outright. Refusing it says so at mount instead of leaving an author
+  // with a handler that silently never runs.
+  if (method === "HEAD") {
+    throw new Error(describe("HEAD is served by the GET route (RFC 9110); an explicit HEAD route never runs"));
+  }
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
   if (path.includes(":")) throw new Error(describe("parameter patterns (:id) are not supported"));
   const star = path.indexOf("*");
@@ -118,7 +126,7 @@ export function router(routes: Routes): ChannelHandler {
     // router, and an embedder passing `Routes` directly would otherwise reach the matcher's full
     // pattern syntax. A `:param` route would still MATCH, while routePathsOverlap — which every
     // collision check depends on — reads it as a literal string and silently answers wrong.
-    assertRoutePath(path, (problem) => `route "${key}" is not a valid route key — ${problem}`);
+    assertRouteKey(key, (problem) => `route "${key}" is not a valid route key — ${problem}`);
     // Same door, same reason: a table where two keys fight over a request resolves by registration
     // order, so one of them simply never runs. `loadChannels` reports that across FILES (naming the
     // loser); within a single table it is a plain configuration error, and refusing it here is what
