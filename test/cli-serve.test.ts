@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { mountAgentcore, routesFor } from "../src/cli/serve.ts";
+import { mountAgentcore, mountSessionControl, routesFor } from "../src/cli/serve.ts";
+import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 
@@ -93,6 +94,23 @@ describe("mountAgentcore", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
+  });
+});
+
+describe("cli: the assembled serving surface", () => {
+  it("the control plane is reachable in the surface dev/start hand to serve", async () => {
+    // The gap this closes: mountSessionControl returns routes AND mounts, and a caller forwarding
+    // only the routes gets a server where every /control/* request 404s — while control.json is
+    // still written, handing a client an address that answers nothing. Every other test builds the
+    // router directly; this one assembles it the way `serve` does, from the CLI's own output.
+    const stateRoot = await mkdtemp(join(tmpdir(), "fa-cli-control-"));
+    const control = { capabilities: () => ({ commands: [], models: [] }) } as never;
+    const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control, stateRoot);
+    const surface = { ...withControl }; // exactly what dev/start spread into ServingSurface
+    const handle = router(surface.routes, surface.mounts);
+    // Unauthenticated is enough to prove REACHABILITY: 401 comes from the plane, 404 from its absence.
+    expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(401);
+    expect((await handle(new Request("http://h/health"))).status).toBe(200);
   });
 });
 

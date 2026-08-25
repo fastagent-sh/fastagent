@@ -90,10 +90,16 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     host,
   });
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
-  serve({ ...routed, routes: withControl.routes }, { port: portFlag ?? a.config.http?.port ?? 8787, host }, (p) => {
-    withControl.announce(p);
-    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
-  });
+  serve(
+    // Spread WHOLE: forwarding `routes` without `mounts` yields a server where /control/*
+    // 404s while control.json still advertises it. Taking the object entire removes the choice.
+    { ...routed, ...withControl },
+    { port: portFlag ?? a.config.http?.port ?? 8787, host },
+    (p) => {
+      withControl.announce(p);
+      maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
+    },
+  );
 }
 
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromDir>>;

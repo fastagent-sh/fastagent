@@ -209,6 +209,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   serve(
     {
       ...(routed ?? { longConnections: [], routeChannels: [], builtinInvoke: false, markReady() {} }),
+      // Spread WHOLE (see dev.ts): `routes` is re-bound below because agentcore rewraps it, but
+      // `mounts` must ride along or the control plane 404s while control.json advertises it.
+      ...withControl,
       routes,
     },
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
