@@ -74,32 +74,20 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(failures[0]!.message).toMatch(/TELEGRAM_SECRET_TOKEN/);
   });
 
-  it("a prefix mount collides with a literal path beneath it, not just with an identical key", async () => {
-    // Shadowing does not require the same string. `a` owns everything under /files, so `b`'s route
-    // would never run — it would meet a's own 404 instead. Reported for the same reason an exact
-    // duplicate is: the channel is gone, and nothing else would say so.
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "a.mjs"), `export default () => ({ "/files/*": () => new Response("a") });`);
-    await writeFile(
-      join(dir, "channels", "b.mjs"),
-      `export default () => ({ "GET /files/report": () => new Response("b") });`,
-    );
-    const { routes, collisions } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["/files/*"]);
-    expect(collisions).toEqual([{ route: "GET /files/report", source: "channels/b.mjs" }]);
-  });
-
-  it("refuses a route pattern that would make collision undecidable", async () => {
+  it("refuses a route key that is not a literal path", async () => {
+    // A channel author writes literal paths. Patterns would have to be predicted by every collision
+    // check, so they are refused at load with the reason rather than mounted and mispredicted.
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(
       join(dir, "channels", "p.mjs"),
       `export default () => ({ "GET /f/:id": () => new Response("x") });`,
     );
+    await writeFile(join(dir, "channels", "w.mjs"), `export default () => ({ "GET /f/*": () => new Response("x") });`);
     const { routes, failures } = await loadChannels(dir, fakeCtx);
     expect(routes).toEqual({});
-    expect(failures[0]?.message).toMatch(/parameter patterns/);
+    expect(failures.map((f) => f.message).join("\n")).toMatch(/literal path/);
+    expect(failures).toHaveLength(2);
   });
 
   it("surfaces a route collision (first file wins; the duplicate is dropped, never silent)", async () => {

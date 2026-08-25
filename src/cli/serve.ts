@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import type { Agent } from "../agent.ts";
 import { createStateSync } from "../channels/agentcore-state.ts";
-import { agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
+import { type RouteSurface, agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
 import { controlRoutes } from "../channels/control.ts";
 import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
@@ -15,7 +15,14 @@ import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/ch
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { Routes } from "../channel.ts";
-import { parseRouteKey, routeKeysOverlap, routePathsOverlap, router, serveNode } from "../channels/serve.ts";
+import {
+  type PrefixMount,
+  parseRouteKey,
+  pathUnderPrefix,
+  routeKeysConflict,
+  router,
+  serveNode,
+} from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { loadSchedules } from "../schedule/discover.ts";
@@ -27,6 +34,8 @@ import { failStartup, failUsage } from "./fail.ts";
 
 export interface ServingSurface {
   routes: Routes;
+  /** Prefix-owning handlers mounted beside the routes (the session control plane). */
+  mounts?: readonly PrefixMount[];
   longConnections: LoadedLongConnectionChannel[];
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
@@ -66,11 +75,9 @@ export async function routesFor(
   const builtinInvoke =
     options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
   const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
-  // Asked as an OVERLAP, not as equality: a channel mounting `/health/*` owns `/health` too, and
-  // adding the built-in beside it would shadow the channel on its own path.
   const healthCovered = Object.keys(channels).some((key) => {
     const entry = parseRouteKey(key);
-    return routePathsOverlap(entry.path, "/health") && (entry.method === undefined || entry.method === "GET");
+    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
   });
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
@@ -96,38 +103,24 @@ export async function routesFor(
  * and silently shadowing either side would serve a surface the author didn't write.
  */
 /**
- * Refuse channel routes that a framework-mounted surface would shadow — the ONE place that answers
- * it, for every surface that mounts alongside channels.
+ * Refuse channel routes the control plane would swallow.
  *
- * Shadowing is silent by construction: the merge just wins, and the channel is simply never reached.
- * With prefix mounts it does not even need the same path — a plane owning `/control/*` swallows
- * `/control/mine`, which it does not serve, into its own 404.
+ * `router` refuses this too, and would catch it a moment later; this exists for the sentence, not
+ * the check — an author who lands a route under `/control` needs to hear about `sessionControl`,
+ * which the host has no way to mention. Both ask {@link pathUnderPrefix}, so there is one rule with
+ * two wordings, not two rules.
  *
- * One function because there are FOUR askers (the control plane at boot, the control plane on
- * agentcore's lazy path, the agentcore adapter itself, and channel-vs-channel in `loadChannels`),
- * and re-implementing "the same rule" is how they stop being the same rule — this drifted twice
- * already, each site comparing path strings while {@link routePathsOverlap} was right there.
+ * Called from BOTH mount points: here at boot, and again on agentcore's lazy path, whose channels
+ * load after this ran against an empty base.
  */
-function assertNoRouteOverlap(
-  channelRoutes: Routes,
-  mountedRoutes: Routes,
-  conflict: (routes: string) => string,
-): void {
-  const collisions = Object.keys(channelRoutes).filter((key) =>
-    Object.keys(mountedRoutes).some((mountKey) => routeKeysOverlap(key, mountKey)),
-  );
-  if (collisions.length > 0) throw new Error(conflict(collisions.map((key) => `"${key}"`).join(", ")));
-}
-
-/** The control plane's wording for {@link assertNoRouteOverlap}; both of its mount points use it. */
-export function assertNoControlPlaneCollision(channelRoutes: Routes, controlPlaneRoutes: Routes): void {
-  assertNoRouteOverlap(
-    channelRoutes,
-    controlPlaneRoutes,
-    (rs) =>
-      `channel route(s) ${rs} collide with the session control plane — ` +
-      `rename the channel route or disable sessionControl in fastagent.config`,
-  );
+export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: PrefixMount): void {
+  const collisions = Object.keys(channelRoutes).filter((key) => pathUnderPrefix(parseRouteKey(key).path, plane.prefix));
+  if (collisions.length > 0) {
+    throw new Error(
+      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
+        `rename the channel route or disable sessionControl in fastagent.config`,
+    );
+  }
 }
 
 export function mountSessionControl(
@@ -135,13 +128,14 @@ export function mountSessionControl(
   control: SessionControl | undefined,
   stateRoot: string,
   options: { tunnel?: boolean; agent?: Agent; host?: string } = {},
-): { routes: Routes; announce: (boundPort: number) => void } {
-  if (!control) return { routes, announce: () => {} };
+): { routes: Routes; mounts: PrefixMount[]; announce: (boundPort: number) => void } {
+  if (!control) return { routes, mounts: [], announce: () => {} };
   const token = crypto.randomUUID();
-  const mounted = controlRoutes(control, { token, agent: options.agent });
-  assertNoControlPlaneCollision(routes, mounted);
+  const plane = controlRoutes(control, { token, agent: options.agent });
+  assertNoControlPlaneCollision(routes, plane);
   return {
-    routes: { ...routes, ...mounted },
+    routes,
+    mounts: [plane],
     announce: (boundPort) => {
       // The state root normally exists (the opener mkdirs the sessions dir under it), but an
       // external --sessions-dir leaves it uncreated — and announce runs inside serve's listening
@@ -224,12 +218,12 @@ export function mountAgentcore(
     /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
      *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
      *  `routes` is the dispatch target — for wirings whose state root is already authoritative. */
-    lazyChannels?: () => Promise<Routes>;
+    lazyChannels?: () => Promise<RouteSurface>;
   },
 ): Routes {
   const { agent, stateRoot, schedules, onStateReady, lazyChannels } = options;
   const mounted = agentcoreRoutes({
-    routes: lazyChannels ?? routes,
+    routes: lazyChannels ?? { routes },
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
@@ -251,12 +245,15 @@ export function mountAgentcore(
             return fireScheduleOnce({ agent, stateRoot, schedule, slot });
           },
   });
-  assertNoRouteOverlap(
-    routes,
-    mounted,
-    (rs) =>
-      `channel route(s) ${rs} collide with the AgentCore adapter (/invocations, /ping) — rename the channel route`,
+  const collisions = Object.keys(routes).filter((key) =>
+    Object.keys(mounted).some((adapterKey) => routeKeysConflict(key, adapterKey)),
   );
+  if (collisions.length > 0) {
+    throw new Error(
+      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the AgentCore adapter ` +
+        `(/invocations, /ping) — rename the channel route`,
+    );
+  }
   return { ...routes, ...mounted };
 }
 
@@ -315,7 +312,7 @@ export function serve(
   onListening?: (boundPort: number) => void,
 ): void {
   const { port, host } = bind;
-  const hosted = serveNode(router(surface.routes), { port, host });
+  const hosted = serveNode(router(surface.routes, surface.mounts ?? []), { port, host });
   const abort = new AbortController();
   let stopping = false;
 

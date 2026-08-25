@@ -63,8 +63,9 @@ src/
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
 │   ├── serve.ts             # HOW a route table becomes a running server: the route path language
-│   │                     # (literal or `/*` prefix mount — narrow so overlap stays DECIDABLE, which
-│   │                     # is what stops one channel silently shadowing another), the matcher, the
+│   │                     # (LITERAL paths only, so "do these two fight over a request?" is string
+│   │                     # equality rather than a prediction about the matcher — prefix-owning
+│   │                     # handlers are a separate PrefixMount argument, not a key spelling), the
 │   │                     # totality boundary, and the node:http binding. Shared ground, NOT a
 │   │                     # deployment target: every host in deploy/ runs this same process. Hono
 │   │                     # lives INSIDE this file (overrideGlobalObjects: false keeps it there — an

@@ -31,7 +31,7 @@ import type { Agent } from "../agent.ts";
 import type { StateSync, StateUrls } from "./agentcore-state.ts";
 import { beginWork, onIdle } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
-import { router } from "../channels/serve.ts";
+import { type PrefixMount, router } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
@@ -104,6 +104,13 @@ export interface WebhookReply {
   bodyB64: string;
 }
 
+/** What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control
+ *  plane), so the adapter's INNER dispatch is assembled exactly like a direct host's. */
+export interface RouteSurface {
+  routes: Routes;
+  mounts?: readonly PrefixMount[];
+}
+
 export interface AgentcoreAdapterOptions {
   /** The serving routes a direct deployment would mount (channels or the builtin invoke + health).
    *  The serving path passes a LAZY factory: channel construction loads channel state and replays
@@ -111,7 +118,7 @@ export interface AgentcoreAdapterOptions {
    *  which happens at the first envelope's `stateSync.ready()` (the restore URLs only an envelope
    *  carries), never at boot, where the mount is pre-restore (empty after every version update).
    *  An eager `Routes` value remains supported for wirings whose state root is already durable. */
-  routes: Routes | (() => Promise<Routes> | Routes);
+  routes: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
   agent: Agent;
   /** Where the forwarder URL from envelopes is persisted for the wake-alarm sink (the state root). */
   stateRoot: string;
@@ -173,7 +180,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       // not escape before `dispatchP` is assigned (which would silently re-run the activation).
       dispatchP = Promise.resolve()
         .then(() => (typeof routes === "function" ? routes() : routes))
-        .then(router);
+        .then((surface) => router(surface.routes, surface.mounts));
       dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
     }
     return dispatchP;

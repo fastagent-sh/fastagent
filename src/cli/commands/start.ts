@@ -19,7 +19,7 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
-import type { Routes } from "../../channel.ts";
+import type { RouteSurface } from "../../channels/agentcore.ts";
 
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
@@ -186,7 +186,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     // channels cannot serve here — scale-to-zero severs a resident connection and nothing
     // re-establishes it — so their presence is a configuration error, surfaced per envelope and by
     // the deploy driver's health probe (there is no boot to fail on this host).
-    const lazyChannels = async (): Promise<Routes> => {
+    const lazyChannels = async (): Promise<RouteSurface> => {
       const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
       if (surface.longConnections.length > 0) {
         throw new Error(
@@ -196,8 +196,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       }
       // The SAME rule mountSessionControl applies, through the same function: with no channels at
       // boot its check ran against an empty base, and a spread merge would silently let control win.
-      assertNoControlPlaneCollision(surface.routes, withControl.routes);
-      return { ...surface.routes, ...withControl.routes };
+      for (const plane of withControl.mounts) assertNoControlPlaneCollision(surface.routes, plane);
+      return { routes: { ...surface.routes, ...withControl.routes }, mounts: withControl.mounts };
     };
     try {
       routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules, onStateReady, lazyChannels });

@@ -47,13 +47,14 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
 }
 
 /**
- * The path language a {@link Routes} key speaks: a LITERAL path, or a PREFIX mount ending in `/*`
- * that owns everything beneath it (the session control plane is one).
+ * The path language a {@link Routes} key speaks: a LITERAL path. Nothing else.
  *
- * Deliberately narrower than the matcher underneath, which would also accept parameter patterns
- * (`/x/:id`). The reason is {@link routePathsOverlap}: two channels must never silently shadow each
- * other, so "do these two routes overlap?" has to be decidable — and for arbitrary patterns it is
- * not. Widening this language means answering that question first.
+ * Narrower than the matcher underneath on purpose. Two channels must never silently shadow each
+ * other, so "would these two routes fight over a request?" has to be answerable — and for literal
+ * paths the answer is string equality, a fact about the keys rather than a prediction about the
+ * matcher. Every pattern admitted here would have to be predicted instead, by this check and by
+ * every other one, which is a model that drifts from the thing it models. Prefix mounting lives in
+ * {@link PrefixMount}, outside the key language, for exactly that reason.
  */
 export function assertRouteKey(key: string, describe: (problem: string) => string): void {
   const { method, path } = parseRouteKey(key);
@@ -78,46 +79,41 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   if (marker) {
     throw new Error(describe(`"${marker}" is not part of a path — a route key is a path, without query or fragment`));
   }
-  if (path.includes(":")) throw new Error(describe("parameter patterns (:id) are not supported"));
-  const star = path.indexOf("*");
-  if (star !== -1 && path !== `${path.slice(0, star - 1)}/*`) {
-    throw new Error(describe('"*" is only allowed as a trailing "/*" prefix mount'));
+  // Everything above is one rule wearing four hats: a route key is a LITERAL path. Patterns (`:id`,
+  // `*`) are refused not because they are hard to support — the matcher underneath does support
+  // them — but because supporting them means predicting how it resolves them, and every collision
+  // check would have to predict the same way. A literal path collides with another when the strings
+  // are equal, which is a fact rather than a model. Prefix mounting still exists; it is a separate
+  // argument to `router` (see PrefixMount), not a spelling of a route key.
+  const pattern = [":", "*"].find((ch) => path.includes(ch));
+  if (pattern) {
+    throw new Error(describe(`"${pattern}" is not allowed — a route key is a literal path`));
   }
 }
 
-/** The prefix a `/*` mount owns, or undefined for a literal path. */
-function mountPrefix(path: string): string | undefined {
-  return path.endsWith("/*") ? path.slice(0, -2) : undefined;
-}
-
 /**
- * Would these two route KEYS fight over the same request? The complete question — paths overlap AND
- * methods are compatible — asked in one place because it has one answer, and because the half of it
- * that lived in callers is exactly the half that drifted.
- *
- * A key with no method answers every method, so it is compatible with all of them.
+ * Do these two keys fight over the same request? With literal paths this is a comparison, not a
+ * prediction: equal paths, and a method each answers. A key with no method answers all of them.
  */
-export function routeKeysOverlap(a: string, b: string): boolean {
+export function routeKeysConflict(a: string, b: string): boolean {
   const ka = parseRouteKey(a);
   const kb = parseRouteKey(b);
-  if (!routePathsOverlap(ka.path, kb.path)) return false;
+  if (ka.path !== kb.path) return false;
   return ka.method === undefined || kb.method === undefined || ka.method === kb.method;
 }
 
-/**
- * Would these two route paths answer the same request? A literal pair collides when equal; a prefix
- * mount collides with anything beneath it, including a path it does not itself serve — the request
- * would still reach the mount's own 404 instead of the other channel. Method-blind: {@link
- * routeKeysOverlap} is what callers comparing whole keys should ask.
- */
-export function routePathsOverlap(a: string, b: string): boolean {
-  const pa = mountPrefix(a);
-  const pb = mountPrefix(b);
-  const under = (prefix: string, path: string) => path === prefix || path.startsWith(`${prefix}/`);
-  if (pa !== undefined && pb !== undefined) return under(pa, pb) || under(pb, pa);
-  if (pa !== undefined) return under(pa, b);
-  if (pb !== undefined) return under(pb, a);
-  return a === b;
+/** A handler owning a path prefix and everything beneath it — the session control plane is the one
+ *  user. Kept OUT of {@link Routes}: mixing "a literal path" and "a prefix I own" in one dictionary
+ *  is what forced every collision check to parse keys and predict the matcher's behaviour. */
+export interface PrefixMount {
+  /** Absolute, no trailing slash (`/control`). Owns `/control` and everything below it. */
+  prefix: string;
+  handler: ChannelHandler;
+}
+
+/** Is `path` inside `prefix`? Segment-wise, so `/controlled` is not inside `/control`. */
+export function pathUnderPrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}/`);
 }
 
 /**
@@ -129,25 +125,25 @@ export function routePathsOverlap(a: string, b: string): boolean {
  * does on its own, answering 404 for a method mismatch — would misreport an old deployment as a
  * broken one.
  */
-export function router(routes: Routes): ChannelHandler {
+export function router(routes: Routes, mounts: readonly PrefixMount[] = []): ChannelHandler {
   const app = new Hono();
   const paths: string[] = [];
   const registered: string[] = [];
   for (const [key, handler] of Object.entries(routes)) {
     const { method, path } = parseRouteKey(key);
-    // Enforced HERE, not only where channel files are loaded: this is the other door into the
-    // router, and an embedder passing `Routes` directly would otherwise reach the matcher's full
-    // pattern syntax. A `:param` route would still MATCH, while routePathsOverlap — which every
-    // collision check depends on — reads it as a literal string and silently answers wrong.
+    // Enforced HERE, not only where channel files are loaded: an embedder passing `Routes` directly
+    // is the other door in, and both must admit the same language.
     assertRouteKey(key, (problem) => `route "${key}" is not a valid route key — ${problem}`);
-    // Same door, same reason: a table where two keys fight over a request resolves by registration
-    // order, so one of them simply never runs. `loadChannels` reports that across FILES (naming the
-    // loser); within a single table it is a plain configuration error, and refusing it here is what
-    // makes "a prefix mount owns everything beneath it" true for every caller, not just for channel
-    // directories.
-    const shadowed = registered.find((other) => routeKeysOverlap(other, key));
+    for (const mount of mounts) {
+      if (pathUnderPrefix(path, mount.prefix)) {
+        throw new Error(`route "${key}" is inside the mount "${mount.prefix}/*" — it would never receive a request`);
+      }
+    }
+    // Two keys can differ and still name the same route (`"/x"` and `"GET /x"`); the object's own
+    // key uniqueness does not catch that, and registration order would silently pick a winner.
+    const shadowed = registered.find((other) => routeKeysConflict(other, key));
     if (shadowed) {
-      throw new Error(`route "${key}" overlaps "${shadowed}" — one of them would never receive a request`);
+      throw new Error(`route "${key}" conflicts with "${shadowed}" — one of them would never receive a request`);
     }
     registered.push(key);
     if (!paths.includes(path)) paths.push(path);
@@ -161,6 +157,10 @@ export function router(routes: Routes): ChannelHandler {
   // which a remote client reads as version skew rather than as its own mistake. Registered after
   // the method-qualified routes, so it is only reached when the path matched and the method did not.
   for (const path of paths) app.all(path, () => text("method not allowed\n", 405));
+  // Mounts last: a mount owns everything under its prefix, including paths it does not serve, so it
+  // must not intercept a literal route — the loop above already refused any that would collide.
+  for (const mount of mounts) app.all(`${mount.prefix}/*`, (c) => mount.handler(c.req.raw));
+  for (const mount of mounts) app.all(mount.prefix, (c) => mount.handler(c.req.raw));
   app.notFound(() => text("not found\n", 404));
   return (req) => app.fetch(req);
 }

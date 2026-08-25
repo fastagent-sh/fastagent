@@ -22,8 +22,8 @@ import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type Se
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import { Hono } from "hono";
-import type { ChannelHandler, Routes } from "../channel.ts";
-import { parseRouteKey } from "../channels/serve.ts";
+import type { ChannelHandler } from "../channel.ts";
+import { type PrefixMount, parseRouteKey } from "./serve.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
@@ -220,15 +220,16 @@ export interface ControlRoutesOptions {
  * The plane OWNS {@link CONTROL_PREFIX}: it is mounted as one sub-application, answers its own
  * 404/405/preflight, and puts CORS headers on every reply — see {@link planeApp}.
  */
-export function controlRoutes(control: SessionControl, options: ControlRoutesOptions): Routes {
+export function controlRoutes(control: SessionControl, options: ControlRoutesOptions): PrefixMount {
   return mountControlPlane(controlPlaneRoutes(control, options));
 }
 
-/** Mount a plane route table under {@link CONTROL_PREFIX} as ONE wildcard entry: the host sees a
- *  prefix, and everything beneath it — routes, preflight, 404, 405, 500 — is the plane's own answer. */
-export function mountControlPlane(routes: Record<string, ChannelHandler>): Routes {
+/** Mount a plane route table as a {@link PrefixMount}. NOT a `Routes` entry: the plane owns a
+ *  PREFIX, and a route table is a set of literal paths — conflating the two is what made every
+ *  collision check parse keys and guess at the matcher's behaviour. */
+export function mountControlPlane(routes: Record<string, ChannelHandler>): PrefixMount {
   const app = planeApp(routes);
-  return { [`${CONTROL_PREFIX}/*`]: (req) => app.fetch(req) };
+  return { prefix: CONTROL_PREFIX, handler: (req) => app.fetch(req) };
 }
 
 /** The plane's route table. Exported so the conformance sweeps derive their route list from what is

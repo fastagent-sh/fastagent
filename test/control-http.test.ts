@@ -16,7 +16,6 @@ import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import type { ChannelHandler } from "../src/channel.ts";
 import { router, serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
@@ -49,13 +48,12 @@ async function serveControl() {
     // like capabilities (the definition it answers for is live).
     commands: async () => [...commandList],
   });
-  const mounted = controlRoutes(control, { token: TOKEN, agent });
-  const server = serveNode(router(mounted), { port: 0 });
+  const plane = controlRoutes(control, { token: TOKEN, agent });
+  const server = serveNode(router({}, [plane]), { port: 0 });
   const port = await server.listening;
   return {
     agent,
     commandList,
-    mountKeys: Object.keys(mounted),
     // The plane's OWN routes: the mount point is one wildcard key, so sweeps derive from here.
     routeKeys: Object.keys(controlPlaneRoutes(control, { token: TOKEN, agent })),
     localControl: control,
@@ -175,7 +173,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const { control } = await fauxControlledAgent([]);
       // Through the PLANE, not the bare handler: CORS is a property of the plane's exit now, so
       // reaching past it would assert nothing about what a browser receives.
-      const plane = mountControlPlane(controlPlaneRoutes(control, { token: TOKEN }))["/control/*"] as ChannelHandler;
+      const plane = mountControlPlane(controlPlaneRoutes(control, { token: TOKEN })).handler;
       const sse = await plane(new Request("http://x/control/events?session=s", { headers: auth }));
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
       expect(origin(sse)).toBe("*");
@@ -227,7 +225,7 @@ describe("session control over HTTP (Phase 3)", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
@@ -290,7 +288,7 @@ describe("session control over HTTP (Phase 3)", () => {
         ([key]) => !key.endsWith(" /control/commands"),
       ),
     );
-    const server = serveNode(router(mountControlPlane(withoutCommands)), { port: 0 });
+    const server = serveNode(router({}, [mountControlPlane(withoutCommands)]), { port: 0 });
     const port = await server.listening;
     try {
       const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
@@ -383,7 +381,7 @@ describe("session control over HTTP (Phase 3)", () => {
         abort: async () => {},
       },
     );
-    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     try {
       const post = (command: unknown) =>
@@ -431,7 +429,7 @@ describe("session control over HTTP (Phase 3)", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
@@ -500,7 +498,7 @@ describe("session control over HTTP (Phase 3)", () => {
 
   it("without an agent, /control/invoke is not mounted", async () => {
     const { control } = await fauxControlledAgent([], { boundary: false });
-    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, {
@@ -717,9 +715,11 @@ describe("session control over HTTP (Phase 3)", () => {
       const { control } = await fauxControlledAgent([]);
       const base = { "GET /health": () => new Response("ok") };
       const mounted = mountSessionControl(base, control, stateRoot);
-      // The plane mounts as ONE prefix entry, not as N routes — that is what lets it own its own
-      // 404/405/preflight instead of leaving them to the host.
-      expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "/control/*"]));
+      // The plane is a MOUNT, not a route entry: routes stay the channel's literal paths, and the
+      // plane arrives beside them owning a prefix. That separation is what keeps every collision
+      // check a comparison instead of a prediction about the matcher.
+      expect(Object.keys(mounted.routes)).toEqual(["GET /health"]);
+      expect(mounted.mounts.map((m) => m.prefix)).toEqual(["/control"]);
       // Collision is PREFIX-level: the plane owns everything under it, so a channel route landing
       // anywhere beneath is shadowed — including a path the plane does not itself serve.
       expect(() => mountSessionControl({ "/control/dispatch": () => new Response("x") }, control, stateRoot)).toThrow(
@@ -733,10 +733,10 @@ describe("session control over HTTP (Phase 3)", () => {
       // BOTH mount points enforce it through one function — agentcore's lazy path loads its channels
       // after the boot-time check ran against an empty base, so it must ask again, not re-implement.
       expect(() =>
-        assertNoControlPlaneCollision({ "GET /control/mine": () => new Response("x") }, mounted.routes),
+        assertNoControlPlaneCollision({ "GET /control/mine": () => new Response("x") }, mounted.mounts[0]!),
       ).toThrow(/collide with the session control plane/);
       expect(() =>
-        assertNoControlPlaneCollision({ "POST /telegram": () => new Response("x") }, mounted.routes),
+        assertNoControlPlaneCollision({ "POST /telegram": () => new Response("x") }, mounted.mounts[0]!),
       ).not.toThrow();
       mounted.announce(12345);
       const file = JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as {
@@ -1112,7 +1112,7 @@ async function serveRemoteAgent(opts: {
   const agent = opts.sessionFactory
     ? createPiAgentFromSession({ observer, lease, sessionFactory: opts.sessionFactory })
     : fauxAgent(opts.responses ?? [], { sessions, lease, observer, tools: opts.tools ?? [] }).agent;
-  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
+  const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN, agent })]), { port: 0 });
   const port = await server.listening;
   conformanceServers.push(() => server.close());
   return connectAgent({ url: `http://127.0.0.1:${port}`, token: TOKEN });
