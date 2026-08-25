@@ -99,6 +99,14 @@ describe("serve: the route path language", () => {
     expect(await (await handle(new Request("http://h/telegram"))).text()).toBe("tg");
   });
 
+  it("two mounts may not claim the same ground", () => {
+    const at = (prefix: string) => ({ prefix, handler: () => new Response(prefix) });
+    expect(() => router({}, [at("/control"), at("/control/admin")])).toThrow(/overlaps/);
+    expect(() => router({}, [at("/control"), at("/control")])).toThrow(/overlaps/);
+    expect(() => router({}, [at("/control"), at("/controlled")])).not.toThrow();
+    expect(() => router({}, [at("/a"), at("/b")])).not.toThrow();
+  });
+
   it("a HEAD route is refused outright — the matcher can never reach one", async () => {
     // Verified against the matcher, not assumed: a HEAD request takes the GET route in EITHER
     // registration order, and a HEAD-ONLY route 404s. So this is never a second method on a path,

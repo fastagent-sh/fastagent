@@ -123,6 +123,17 @@ export function pathUnderPrefix(path: string, prefix: string): boolean {
  */
 export function router(routes: Routes, mounts: readonly PrefixMount[] = []): ChannelHandler {
   const app = new Hono();
+  // Mounts against each other, by the same rule they apply to routes: `/control` and
+  // `/control/admin` both claim `/control/admin/*`, and registration order would pick a winner in
+  // silence. "Owns everything beneath it" has to mean the same thing in every direction.
+  for (const [i, mount] of mounts.entries()) {
+    const clash = mounts
+      .slice(0, i)
+      .find((other) => pathUnderPrefix(mount.prefix, other.prefix) || pathUnderPrefix(other.prefix, mount.prefix));
+    if (clash) {
+      throw new Error(`mount "${mount.prefix}" overlaps "${clash.prefix}" — one of them would never receive a request`);
+    }
+  }
   const paths: string[] = [];
   const registered: string[] = [];
   for (const [key, handler] of Object.entries(routes)) {

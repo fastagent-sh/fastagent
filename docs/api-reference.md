@@ -102,15 +102,30 @@ type ChannelHandler = (req: Request) => Response | Promise<Response>;
 type Routes = Record<string, ChannelHandler>;
 ```
 
-Route keys are `"/path"` (any method) or `"METHOD /path"`. The path is a literal, or a `/*`
-**prefix mount** owning everything beneath it (the session control plane is one). Nothing richer:
-two channels must never silently shadow each other, so route overlap has to stay decidable — a
-`:param` pattern is rejected with the reason, as are two routes that would fight over the same
-request and percent-encoded paths (requests are decoded before matching, so an encoded key is
-unreachable and invisible to the overlap check). `HEAD` is not routable: it is answered from the `GET` route (RFC 9110), so declaring one
-is refused rather than left as a handler that never runs. A path that exists under another method
-answers 405, an unknown path 404; remote clients read that 404 as version skew rather than as a
-fault.
+Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **literal**.
+
+Nothing richer, on purpose: two channels must never silently shadow each other, and for literal
+paths "would these two fight over a request?" is string equality — a fact about the keys, not a
+prediction about the matcher. Patterns (`:id`, `*`), percent-encoding, `?`/`#`, and a leading space
+are refused with the reason, as are two keys naming the same route (`"/x"` and `"GET /x"`). `HEAD`
+is not routable either: it is answered from the `GET` route (RFC 9110), so declaring one is refused
+rather than left as a handler that never runs.
+
+A path that exists under another method answers 405, an unknown path 404; remote clients read that
+404 as version skew rather than as a fault.
+
+A handler that owns a whole prefix is a **mount**, passed beside the routes rather than spelled as a
+key — keeping the two apart is what lets every collision check stay a comparison:
+
+```ts
+interface PrefixMount {
+  prefix: string; // absolute, no trailing slash: "/control" owns /control and everything below
+  handler: ChannelHandler;
+}
+```
+
+A route landing inside a mount is refused at assembly, as is a mount overlapping another — in both
+cases the mount would answer requests aimed at the other, including on paths it does not serve.
 
 ## pi assembly
 
