@@ -85,7 +85,8 @@ JSON.
 
 ```ts
 function nodeListener(handler: ChannelHandler): (req, res) => void;
-function router(routes: Routes): ChannelHandler;
+// `mounts` are prefix-owning handlers (the session control plane); see below.
+function router(routes: Routes, mounts?: readonly PrefixMount[]): ChannelHandler;
 // `host` is the bind address; unset binds all interfaces (what containers need).
 function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
   listening: Promise<number>;
@@ -579,9 +580,10 @@ side, mount the bearer-authenticated routes (dev/start do this automatically whe
 ```ts
 import { controlRoutes, connectSessionControl } from "@fastagent-sh/fastagent/core";
 
-// One mount point: the plane OWNS the /control prefix and answers everything under it — routes,
+// The plane is a MOUNT: it owns the /control prefix and answers everything under it — routes,
 // preflight, 404/405, and a failing handler — so a browser client can read every reply.
-const routes = controlRoutes(sessionControl, { token }); // GET/POST /control/*, SSE at /control/events
+const plane = controlRoutes(sessionControl, { token }); // PrefixMount over /control
+const handler = router(channelRoutes, [plane]); // SSE at /control/events
 
 // Client side — the SAME SessionControl interface, isomorphic to local:
 const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });

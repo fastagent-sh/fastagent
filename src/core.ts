@@ -28,7 +28,7 @@ export type {
   LongConnectionChannelModule,
   Routes,
 } from "./channel.ts";
-export { nodeListener, router, serveNode } from "./channels/serve.ts";
+export { type PrefixMount, nodeListener, router, serveNode } from "./channels/serve.ts";
 
 export { defineSchedule, type LoadedSchedule, type Schedule } from "./schedule/schedule.ts";
 export { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
