@@ -30,20 +30,11 @@ import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
-/**
- * Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method).
- *
- * An empty method normalises to `undefined` rather than `""`. A leading space (`" /x"`) is the way
- * to produce one, and the two values are not interchangeable to every reader: `""` is falsy, so the
- * router treated it as any-method, while the collision check compared it as a method and found no
- * clash with `"GET /x"` — letting the pair coexist, then shadow each other at runtime. One
- * representation for one meaning, decided here so no caller has to know the difference.
- */
+/** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method).
+ *  An empty method (`" /x"`) parses as `""`, which {@link assertRouteKey} refuses — see there. */
 export function parseRouteKey(key: string): { method?: string; path: string } {
   const sp = key.indexOf(" ");
-  if (sp === -1) return { path: key };
-  const method = key.slice(0, sp).toUpperCase();
-  return method ? { method, path: key.slice(sp + 1) } : { path: key.slice(sp + 1) };
+  return sp === -1 ? { path: key } : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1) };
 }
 
 /**
@@ -58,6 +49,11 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
  */
 export function assertRouteKey(key: string, describe: (problem: string) => string): void {
   const { method, path } = parseRouteKey(key);
+  // `" /x"` — a leading space — is a third spelling the contract does not define, and normalising it
+  // to "any method" would define it here instead, in one reader's head. Refused: an author who wrote
+  // it meant `"/x"`, and the ONE thing worse than an unsupported spelling is a supported one nobody
+  // documented.
+  if (method === "") throw new Error(describe('a leading space is not a method — write "/path" for any method'));
   // HEAD is not a method you can route here: the matcher answers HEAD from the GET route (RFC 9110)
   // and never reaches an explicitly registered HEAD handler — verified in both registration orders,
   // and a HEAD-only route 404s outright. Refusing it says so at mount instead of leaving an author

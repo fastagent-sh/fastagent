@@ -62,14 +62,13 @@ describe("serve: the route path language", () => {
     expect(pathUnderPrefix("/other", "/control")).toBe(false);
   });
 
-  it("an empty method means any method, to every reader of the key", async () => {
-    // `" /x"` yields an empty method. As `""` it was falsy to the router (any method) but a real
-    // method to the collision check, so `" /x"` and `"GET /x"` passed as distinct and then fought
-    // over the same requests. Both questions must get the same answer.
-    expect(parseRouteKey(" /x")).toEqual({ path: "/x" });
+  it("a leading space is refused, not quietly read as 'any method'", async () => {
+    // Normalising `" /x"` would define a spelling the contract does not have — and define it only
+    // in the parser's head. The author meant `"/x"`, which is the documented way to say any method.
+    expect(() => router({ " /x": () => new Response("x") })).toThrow(/leading space is not a method/);
     expect(parseRouteKey("/x")).toEqual({ path: "/x" });
     expect(parseRouteKey("GET /x")).toEqual({ method: "GET", path: "/x" });
-    const handle = router({ " /any": () => new Response("any-method") });
+    const handle = router({ "/any": () => new Response("any-method") });
     expect((await handle(new Request("http://h/any", { method: "DELETE" }))).status).toBe(200);
   });
 

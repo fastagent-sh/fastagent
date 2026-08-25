@@ -27,10 +27,12 @@ export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 /**
  * This deployment's HTTP surface: route key → handler.
  *
- * A key is `"/path"` (any method) or `"METHOD /path"`. The path is a literal, or a `/*` PREFIX
- * mount owning everything beneath it. That language is deliberately small — `assertRoutePath` and
- * `routePathsOverlap` in `channels/serve.ts` enforce it — because two channels must never silently
- * shadow each other, and answering "do these overlap?" for richer patterns is not decidable.
+ * A key is `"/path"` (any method) or `"METHOD /path"`, and the path is a LITERAL one. That language
+ * is deliberately small: two channels must never silently shadow each other, and for literal paths
+ * "would these two fight over a request?" is string equality — a fact about the keys rather than a
+ * prediction about whatever matcher serves them. `assertRouteKey` in `channels/serve.ts` enforces
+ * it; a handler that owns a prefix is a `PrefixMount`, passed beside these routes, never spelled as
+ * a key.
  */
 export type Routes = Record<string, ChannelHandler>;
 
