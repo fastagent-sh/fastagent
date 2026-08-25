@@ -333,6 +333,29 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
     }
   });
 
+  it("an EMPTY post behind middleware is not mistaken for an eaten one", async () => {
+    // `content-length: 0` plus a drained stream looks identical to the eaten case on the two signals
+    // the guard reads — but nothing was lost, and rejecting it would make the guard the outage.
+    const listener = nodeListener(async (req) => new Response(`ok:[${await req.text()}]`));
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((r) => {
+        req.resume();
+        req.on("end", r);
+      });
+      listener(req, res);
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("ok:[]");
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it("a client that disconnects mid-handler leaves the server serving the next request", async () => {
     // The dead-socket case: the client is gone before the handler resolves. Writing to that socket
     // throws inside the bridge, and an escaped throw would take the process down — so the proof is

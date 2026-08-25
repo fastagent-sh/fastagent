@@ -139,11 +139,15 @@ function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response
  * symptom and neither the cause (something read it first) nor the fix (mount order). For a webhook
  * channel that surfaces as "the integration is broken, and the platform keeps retrying".
  *
- * `readableEnded` alone would be wrong — it is false for a GET with no body at all, so the headers
- * have to say a body was SENT before its absence means anything.
+ * `readableEnded` alone would be wrong: it is also true once anything upstream has touched a request
+ * that never carried a body, so the headers must say a body was actually SENT. And "sent" means a
+ * NON-ZERO length — an empty POST carries `content-length: 0`, is drained by any middleware it
+ * passes through, and has nothing to lose; treating it as eaten would reject a perfectly good
+ * request, the guard becoming the failure it exists to explain.
  */
 function bodyAlreadyRead(req: IncomingMessage): boolean {
-  const sentBody = req.headers["content-length"] !== undefined || req.headers["transfer-encoding"] !== undefined;
+  const length = req.headers["content-length"];
+  const sentBody = (length !== undefined && Number(length) > 0) || req.headers["transfer-encoding"] !== undefined;
   return sentBody && req.readableEnded;
 }
 
