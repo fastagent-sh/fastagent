@@ -87,20 +87,26 @@ function planeApp(routes: Record<string, ChannelHandler>): Hono {
   };
 
   // THE single exit. Every reply below — route, preflight, 404, 405, 500 — leaves through here.
+  //
+  // `c.req.path`, never `new URL(c.req.url).pathname`: the matcher DECODES a request path before
+  // matching, so the raw pathname is a DIFFERENT string for the same route (`/control/%73tate`
+  // reaches `/control/state`). Looking the table up with the undecoded one answered "unknown path"
+  // about a route that was being served — no CORS headers on the reply, and a 404 preflight for a
+  // request the server would then accept.
   app.use("*", async (c, next) => {
     await next();
     c.res.headers.set("access-control-allow-origin", "*");
     c.res.headers.set("access-control-allow-headers", "authorization, content-type");
-    c.res.headers.set("access-control-allow-methods", allowMethods(new URL(c.req.url).pathname));
+    c.res.headers.set("access-control-allow-methods", allowMethods(c.req.path));
   });
   // The plane's own totality boundary: a rejecting handler (`commands()` on an unreadable
   // definition) must still answer with the headers, and the message stays internal.
   app.onError((error, c) => {
-    log.error(`[control] ${c.req.method} ${new URL(c.req.url).pathname} failed: ${String(error)}`);
+    log.error(`[control] ${c.req.method} ${c.req.path} failed: ${String(error)}`);
     return text("internal error\n", 500);
   });
   app.notFound((c) => {
-    const known = methodsByPath.has(new URL(c.req.url).pathname);
+    const known = methodsByPath.has(c.req.path);
     // A preflight carries no token — that is its entire purpose — so it is answered before any
     // auth, and it is answered HERE because no route registers OPTIONS.
     if (known && c.req.method === "OPTIONS") return new Response(null, { status: 204 });

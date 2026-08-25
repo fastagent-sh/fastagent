@@ -123,6 +123,10 @@ describe("serve: the route path language", () => {
   it("rejects the patterns that would make overlap undecidable", () => {
     const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
     expect(check("/files/:id")).toThrow(/parameter patterns/);
+    // Request paths are decoded before matching, so an encoded route key is both unreachable and a
+    // way to spell a path the overlap check would not recognise as the same one.
+    expect(check("/%63ontrol/mine")).toThrow(/percent-encoding/);
+    expect(check("GET /a%2Fb")).toThrow(/percent-encoding/);
     expect(check("/files/*/raw")).toThrow(/trailing/);
     expect(check("files")).toThrow(/must start/);
     expect(check("/files/*")).not.toThrow();

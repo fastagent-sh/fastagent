@@ -65,6 +65,13 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
     throw new Error(describe("HEAD is served by the GET route (RFC 9110); an explicit HEAD route never runs"));
   }
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
+  // Percent-encoding is refused for the same reason HEAD is — it does not do what it looks like it
+  // does. Request paths are DECODED before matching, so a `/%63ontrol` route is unreachable by any
+  // ordinary request, while overlap checks (which compare the raw strings) would read it as a
+  // distinct path and let it past the collision rule that keeps channels from shadowing each other.
+  if (path.includes("%")) {
+    throw new Error(describe("percent-encoding is not allowed in a route path — write the decoded path"));
+  }
   if (path.includes(":")) throw new Error(describe("parameter patterns (:id) are not supported"));
   const star = path.indexOf("*");
   if (star !== -1 && path !== `${path.slice(0, star - 1)}/*`) {

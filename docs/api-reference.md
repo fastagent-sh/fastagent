@@ -105,7 +105,8 @@ Route keys are `"/path"` (any method) or `"METHOD /path"`. The path is a literal
 **prefix mount** owning everything beneath it (the session control plane is one). Nothing richer:
 two channels must never silently shadow each other, so route overlap has to stay decidable — a
 `:param` pattern is rejected with the reason, as are two routes that would fight over the same
-request. `HEAD` is not routable: it is answered from the `GET` route (RFC 9110), so declaring one
+request and percent-encoded paths (requests are decoded before matching, so an encoded key is
+unreachable and invisible to the overlap check). `HEAD` is not routable: it is answered from the `GET` route (RFC 9110), so declaring one
 is refused rather than left as a handler that never runs. A path that exists under another method
 answers 405, an unknown path 404; remote clients read that 404 as version skew rather than as a
 fault.
