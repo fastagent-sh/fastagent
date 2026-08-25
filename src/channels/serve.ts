@@ -157,10 +157,13 @@ function bodyAlreadyRead(req: IncomingMessage): boolean {
 }
 
 /** The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting
- *  fastagent on its OWN node:http server can too. */
-export function nodeListener(
-  handler: (req: Request) => Promise<Response>,
-): (req: IncomingMessage, res: ServerResponse) => void {
+ *  fastagent on its OWN node:http server can too.
+ *
+ *  Takes the same {@link ChannelHandler} `serveNode` does, so both doors accept the same thing: a
+ *  handler may answer synchronously, and `router()` returns exactly that. Requiring a Promise here
+ *  made the most natural mount — `nodeListener(router(routes))`, the whole agent on the app's own
+ *  server — a type error. */
+export function nodeListener(handler: ChannelHandler): (req: IncomingMessage, res: ServerResponse) => void {
   const listener = getRequestListener(totalFetch(handler), { overrideGlobalObjects: false });
   return (req, res) => {
     if (bodyAlreadyRead(req)) {

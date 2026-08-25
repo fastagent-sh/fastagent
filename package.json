@@ -120,7 +120,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
+    "@types/express": "^5.0.6",
     "@types/proper-lockfile": "^4.1.4",
+    "express": "^5.2.1",
+    "fastify": "^5.12.1",
     "knip": "^6.29.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9"

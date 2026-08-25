@@ -163,7 +163,11 @@ src/
     │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
     ├── report.ts            # startup report (auth/model/skills/tools surface)
     └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
-test/                        # vitest; faux models by default + reusable SPEC conformance
+test/                        # vitest; faux models by default + reusable SPEC conformance.
+└── embedding.test.ts         # the docs/embedding.md snippets, run against REAL express/fastify (the
+                             # only reason they are devDeps): that path crosses the Node/Fetch seam
+                             # through code we do not own, so a swap underneath can keep every unit
+                             # test green while breaking the paste-this-in promise
 docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 

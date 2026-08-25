@@ -84,7 +84,7 @@ a dead connection — parse per the SSE spec (only `data:` lines carry events), 
 JSON.
 
 ```ts
-function nodeListener(handler: (req: Request) => Promise<Response>): (req, res) => void;
+function nodeListener(handler: ChannelHandler): (req, res) => void;
 function router(routes: Routes): ChannelHandler;
 // `host` is the bind address; unset binds all interfaces (what containers need).
 function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
