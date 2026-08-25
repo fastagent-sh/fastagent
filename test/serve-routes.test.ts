@@ -58,6 +58,15 @@ describe("serve: the route path language", () => {
     expect(routePathsOverlap("/a/*", "/a/b/*")).toBe(true);
   });
 
+  it("router() enforces the language too, not just the channel loader", () => {
+    // Two doors lead to the matcher: channel files, and an embedder handing over `Routes`. A pattern
+    // slipping through the second one would match at runtime while every collision check — which
+    // reads paths as literals — quietly answers the wrong question about it.
+    expect(() => router({ "GET /users/:id": () => new Response("x") })).toThrow(/parameter patterns/);
+    expect(() => router({ "GET /files/*/raw": () => new Response("x") })).toThrow(/trailing/);
+    expect(() => router({ "GET /files/*": () => new Response("x") })).not.toThrow();
+  });
+
   it("rejects the patterns that would make overlap undecidable", () => {
     const check = (path: string) => () => assertRoutePath(path, (problem) => `bad: ${problem}`);
     expect(check("/files/:id")).toThrow(/parameter patterns/);

@@ -90,6 +90,11 @@ export function router(routes: Routes): ChannelHandler {
   const paths: string[] = [];
   for (const [key, handler] of Object.entries(routes)) {
     const { method, path } = parseRouteKey(key);
+    // Enforced HERE, not only where channel files are loaded: this is the other door into the
+    // router, and an embedder passing `Routes` directly would otherwise reach the matcher's full
+    // pattern syntax. A `:param` route would still MATCH, while routePathsOverlap — which every
+    // collision check depends on — reads it as a literal string and silently answers wrong.
+    assertRoutePath(path, (problem) => `route "${key}" is not a valid route key — ${problem}`);
     if (!paths.includes(path)) paths.push(path);
     const bound = (c: { req: { raw: Request } }) => handler(c.req.raw);
     if (method) app.on(method, path, bound);
