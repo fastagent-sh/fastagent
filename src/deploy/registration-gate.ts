@@ -11,7 +11,7 @@
  * The runners attempt ALL channels first (one failure doesn't skip the rest), then apply this policy
  * once. Only the retry remediation differs per host (`retryHint`).
  */
-import type { RegistrationOutcome } from "../channels/kit/registration.ts";
+import type { RegistrationOutcome } from "../channels/registration.ts";
 
 export function registrationGate(
   log: (msg: string) => void,

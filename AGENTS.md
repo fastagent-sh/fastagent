@@ -97,6 +97,8 @@ src/
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   ├── wait-health.ts       # SHARED readiness probe — channels AND deploy use it, so NOT in kit/
+│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) — same reason
 │   ├── kit/                 # WRITING a channel — the parts every chat platform needs and none should
 │   │   │                     # reinvent. The split from the mechanism beside it is a FACT about
 │   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
@@ -111,9 +113,7 @@ src/
 │   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
 │   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
 │   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
-│   │   ├── stop-command.ts  # the shared /stop parsing every chat channel accepts
-│   │   ├── wait-health.ts   # readiness probe for the webhook registrars
-│   │   └── registration.ts  # registrar outcome type (registered|manual|failed)
+│   │   └── stop-command.ts  # the shared /stop parsing every chat channel accepts
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)

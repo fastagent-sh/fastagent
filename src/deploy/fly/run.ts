@@ -17,7 +17,7 @@
  * (one machine, the single-machine tier). Secrets go in via `secrets import` over stdin, so values
  * never land in argv/process listings.
  */
-import type { RegistrationOutcome } from "../../channels/kit/registration.ts";
+import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RegistrationOutcome } from "../src/channels/kit/registration.ts";
+import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { AUTH_SEED_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
   type AgentcoreRunPlan,

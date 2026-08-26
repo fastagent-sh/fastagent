@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { type FlyRunPlan, authSeedBytes, collectAuthSeed, deployFlyRun } from "../src/deploy/fly/run.ts";
-import type { RegistrationOutcome } from "../src/channels/kit/registration.ts";
+import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { assembleSecrets } from "../src/deploy/secrets.ts";
 
