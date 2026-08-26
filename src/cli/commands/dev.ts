@@ -10,7 +10,7 @@ import { loadDotEnv } from "../../env.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { mountAgentSurface } from "../../surface.ts";
+import { mountAgentService } from "../../service.ts";
 import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -83,10 +83,10 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   const configured = a.config.http?.host;
   const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
-  // The SAME assembly an embedder gets from `openAgentSurface` — channels, control plane,
+  // The SAME assembly an embedder gets from `createAgentService` — channels, control plane,
   // schedules, long connections. `dev` opens the directory itself only because its startup report
   // prints the opened values before anything mounts.
-  const surface = await mountAgentSurface(a, {
+  const service = await mountAgentService(a, {
     // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev,
     // gated out in start (level info), keeping end-user content out of production logs.
     wrapAgent: logAgentLoop,
@@ -95,16 +95,16 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
   }).catch(failStartup);
   serve(
-    surface.handler,
+    service.handler,
     { port: portFlag ?? a.config.http?.port ?? 8787, host },
     {
-      ready: surface.ready,
+      ready: service.ready,
       onListening: (p) => {
-        reportServing(surface, host, p);
-        surface.announce(p);
-        maybeTunnel(a.agentDir, surface.channels.routes, p, opts.tunnel ?? false, a.stateRoot);
+        reportServing(service, host, p);
+        service.announce(p);
+        maybeTunnel(a.agentDir, service.channels.routes, p, opts.tunnel ?? false, a.stateRoot);
       },
-      onShutdown: () => surface.close(),
+      onShutdown: () => service.close(),
     },
   );
 }

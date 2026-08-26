@@ -12,7 +12,7 @@ import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { mountAgentSurface } from "../../surface.ts";
+import { mountAgentService } from "../../service.ts";
 import { router } from "../../channels/serve.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
@@ -147,11 +147,11 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const control = { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) };
   // AgentCore assembles DIFFERENTLY, not accidentally: its channels load lazily (below), so it
-  // cannot take the shared `mountAgentSurface`, which discovers them eagerly. Every other
+  // cannot take the shared `mountAgentService`, which discovers them eagerly. Every other
   // deployment — and every embedder — takes the one assembly.
   const mounted = agentcore
     ? undefined
-    : await mountAgentSurface(opened, {
+    : await mountAgentService(opened, {
         wrapAgent: () => traced,
         control,
         onChannelClosed: (name, error) =>
@@ -162,7 +162,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     ? mountSessionControl({}, sessionControl, stateRoot, { ...control, agent: traced })
     : undefined;
   const planeMounts = mounted?.mounts ?? withControl?.mounts ?? [];
-  // AgentCore has no AgentSurface to own the discovery file, so its cleanup is held here and wired
+  // AgentCore has no AgentService to own the discovery file, so its cleanup is held here and wired
   // into the same shutdown hook — a stale control.json points `attach` at a stopped service.
   let unannounce: (() => void) | undefined;
   const announce = mounted

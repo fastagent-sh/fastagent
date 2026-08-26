@@ -1,12 +1,11 @@
 /**
- * The product, as one call: an agent directory becomes a mounted HTTP surface.
+ * The product, as one call: an agent directory becomes a live service.
  *
- * fastagent's promise is "turn a file-defined agent into a live service INSIDE AN APP" — and until
- * this existed, only the CLI could keep it. Everything else was parts: assemble the agent, discover
- * channels, mount the control plane, start schedules, open long connections, compose a router. An
- * embedder had to know that list and get its order right; getting it wrong is silent (a plane that
- * 404s while advertising itself, a schedule that never fires), and this repo has made that exact
- * mistake in its own CLI.
+ * That phrase is the promise on the README, and until this existed only the CLI could keep it.
+ * Everything else was parts: assemble the agent, discover channels, mount the control plane, start
+ * schedules, open long connections, compose a router. An embedder had to know that list and get its
+ * order right; getting it wrong is silent (a plane that 404s while advertising itself, a schedule
+ * that never fires), and this repo has made that exact mistake in its own CLI.
  *
  * So the assembly lives here, and `dev`/`start` are callers. AgentCore is the one exception, and a
  * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
@@ -20,7 +19,7 @@ import { log } from "./log.ts";
 import { mountSessionControl, routesFor, startSchedules } from "./cli/serve.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
-export interface AgentSurface {
+export interface AgentService {
   /** The assembled Fetch handler: channel routes, the control plane, and health. Mount it wherever
    *  your host speaks `(Request) => Response`; `nodeListener` bridges it to Node's `(req, res)`. */
   handler: ChannelHandler;
@@ -39,7 +38,7 @@ export interface AgentSurface {
   channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. REJECTS if one
-   *  fails to come up, after closing the surface: a host must not report itself serving while a
+   *  fails to come up, after closing the service: a host must not report itself serving while a
    *  declared channel is dead, and health answers 503 until this resolves. */
   ready: Promise<void>;
   /** The control plane's bearer token and prefix, when `sessionControl` is on — how an embedder
@@ -47,7 +46,7 @@ export interface AgentSurface {
   control?: { token: string; prefix: string };
   /** Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the plane,
    *  once the port is known. Optional: an embedder mounted inside a larger app has no port of its
-   *  own to describe and uses {@link AgentSurface.control} instead.
+   *  own to describe and uses {@link AgentService.control} instead.
    *
    *  Removed by `close()`. Not by an `exit` handler: installing one is a decision about the whole
    *  process, which a mounted library does not get to make. A hard exit therefore leaves the file
@@ -57,8 +56,8 @@ export interface AgentSurface {
   close(): Promise<void>;
 }
 
-/** What {@link mountAgentSurface} needs beyond an opened directory. */
-export interface MountAgentSurfaceOptions {
+/** What {@link mountAgentService} needs beyond an opened directory. */
+export interface MountAgentServiceOptions {
   /** Wrap the agent before anything consumes it — every consumer (routes, control plane, schedules)
    *  must get the SAME one, which is why this is a hook rather than the caller's own call. `dev`
    *  passes `logAgentLoop`. */
@@ -66,35 +65,35 @@ export interface MountAgentSurfaceOptions {
   /** Passed through to the control plane mount: `--tunnel` widens its warning, `host` names the
    *  bind address in the discovery file. */
   control?: { tunnel?: boolean; host?: string };
-  /** Aborting this closes the surface, exactly like calling {@link AgentSurface.close}. */
+  /** Aborting this closes the service, exactly like calling {@link AgentService.close}. */
   signal?: AbortSignal;
   /** Called when a long connection ends on its own — a dropped socket-mode channel, say. The CLI
    *  exits; an embedded host may prefer to log. Default: log an error. */
   onChannelClosed?: (name: string, error?: unknown) => void;
 }
 
-export interface OpenAgentSurfaceOptions extends MountAgentSurfaceOptions {
+export interface CreateAgentServiceOptions extends MountAgentServiceOptions {
   model?: string;
   authPath?: string;
   sessionsDir?: string;
 }
 
 /**
- * Open an agent directory as an HTTP surface.
+ * Open an agent directory as a live service: one handler, mounted wherever you serve.
  *
  * ```ts
- * const surface = await openAgentSurface("./my-agent");
- * app.use("/agent", nodeListener(surface.handler));
+ * const service = await createAgentService("./my-agent");
+ * app.use("/agent", nodeListener(service.handler));
  * ```
  */
-export async function openAgentSurface(dir: string, options: OpenAgentSurfaceOptions = {}): Promise<AgentSurface> {
+export async function createAgentService(dir: string, options: CreateAgentServiceOptions = {}): Promise<AgentService> {
   const opened = await createPiAgentFromDir(dir, {
     ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.authPath !== undefined ? { authPath: options.authPath } : {}),
     ...(options.sessionsDir !== undefined ? { sessionsDir: options.sessionsDir } : {}),
-    serving: true, // a mounted surface is long-running: the scheduler poller runs
+    serving: true, // a mounted service is long-running: the scheduler poller runs
   });
-  return mountAgentSurface(opened, options);
+  return mountAgentService(opened, options);
 }
 
 /** An already-opened directory — `createPiAgentFromDir`'s result. The CLI opens first so it can
@@ -105,14 +104,14 @@ export type OpenedAgentDir = Awaited<ReturnType<typeof createPiAgentFromDir>>;
  * The assembly itself, over an already-opened directory: channels, the control plane, schedules and
  * long connections, composed into one handler.
  *
- * {@link openAgentSurface} is this plus opening the directory. `dev`/`start` open separately — their
+ * {@link createAgentService} is this plus opening the directory. `dev`/`start` open separately — their
  * startup report needs the opened values before anything mounts — and then arrive here, so there is
  * one assembly rather than one per caller.
  */
-export async function mountAgentSurface(
+export async function mountAgentService(
   opened: OpenedAgentDir,
-  options: MountAgentSurfaceOptions = {},
-): Promise<AgentSurface> {
+  options: MountAgentServiceOptions = {},
+): Promise<AgentService> {
   const { agentDir, workspace, stateRoot, config, sessionControl } = opened;
   // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the
   // same agent, so this is a hook rather than something a caller applies afterwards.
@@ -127,14 +126,14 @@ export async function mountAgentSurface(
   // Composed BEFORE anything starts. `router` re-validates what `loadChannels` and the control
   // mount already checked, so on THIS path it should not fail — but "should not" is not an ordering
   // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
-  // with no surface for the caller to close. Free to order correctly; expensive to discover later.
+  // with no service for the caller to close. Free to order correctly; expensive to discover later.
   const handler = router(withControl.routes, withControl.mounts);
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false);
 
   const abort = new AbortController();
   let unannounce: (() => void) | undefined;
   // A connection that drops while others are still dialling must not be undone by their later
-  // readiness: the surface is missing a declared channel from that moment on, whatever else arrives.
+  // readiness: the service is missing a declared channel from that moment on, whatever else arrives.
   let dropped = false;
   const onClosed =
     options.onChannelClosed ??
@@ -169,7 +168,7 @@ export async function mountAgentSurface(
     void run.closed.then(
       () => {
         if (abort.signal.aborted) return;
-        // A channel that dies leaves the surface serving something it no longer has.
+        // A channel that dies leaves the service serving something it no longer has.
         dropped = true;
         routed.setReady(false);
         onClosed(connection.name);
@@ -186,7 +185,7 @@ export async function mountAgentSurface(
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
-    // and a caller tearing down a test or a request-scoped surface needs that to be true on return.
+    // and a caller tearing down a test or a request-scoped service needs that to be true on return.
     closing ??= (async () => {
       abort.abort();
       scheduled.stop();
@@ -203,18 +202,18 @@ export async function mountAgentSurface(
     })();
     return closing;
   };
-  // Detached by `close()`: a caller that closes surfaces itself while holding one long-lived signal
-  // would otherwise accumulate listeners, each pinning a whole surface through its closure.
+  // Detached by `close()`: a caller that closes services itself while holding one long-lived signal
+  // would otherwise accumulate listeners, each pinning a whole service through its closure.
   // The signal path has no caller awaiting the promise, so a failure to stop would be an unhandled
   // rejection — in an embedded library, potentially the host's exit. Reported instead.
   const onAbort = () =>
-    void close().catch((error: unknown) => log.error(`[fastagent] surface close failed: ${String(error)}`));
+    void close().catch((error: unknown) => log.error(`[fastagent] service close failed: ${String(error)}`));
   if (options.signal?.aborted) await close();
   else options.signal?.addEventListener("abort", onAbort, { once: true });
 
   // Health answers 503 until EVERY long connection is up, so a load balancer does not route into a
-  // surface whose socket-mode channels are still dialling. An abort before that settles `ready` as
-  // cancellation, not readiness — a surface being torn down must not report itself healthy.
+  // service whose socket-mode channels are still dialling. An abort before that settles `ready` as
+  // cancellation, not readiness — a service being torn down must not report itself healthy.
   const ready = (async () => {
     try {
       await Promise.all(
@@ -234,7 +233,7 @@ export async function mountAgentSurface(
         }),
       );
     } catch (error) {
-      // A connection that cannot come up is a startup failure, not a degraded surface: tear the rest
+      // A connection that cannot come up is a startup failure, not a degraded service: tear the rest
       // down before rejecting, so nothing is left running behind a caller that saw an error. A
       // cleanup that ALSO fails is logged, never rethrown — it would replace the reason the caller
       // actually needs with the aftermath of it.
@@ -243,10 +242,10 @@ export async function mountAgentSurface(
       );
       throw error;
     }
-    // A `ready` that settles because the surface was CLOSED is cancellation, not readiness — the
+    // A `ready` that settles because the service was CLOSED is cancellation, not readiness — the
     // contract lets a connection resolve it on abort. Returning normally would tell a caller its
-    // channels are up while the surface is shut and health says 503.
-    if (abort.signal.aborted) throw new Error("surface closed before it became ready");
+    // channels are up while the service is shut and health says 503.
+    if (abort.signal.aborted) throw new Error("service closed before it became ready");
     // A drop DURING startup fails it. `dropped` is only reachable here from the startup window —
     // after this line `ready` has settled — and resolving while health is permanently 503 would
     // hand the caller two contradictory answers about the same surface.

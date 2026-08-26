@@ -88,30 +88,30 @@ import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
 ```
 
-### The whole agent, in one call
+### The whole agent, as a service
 
 The handler above serves `invoke` only. To mount the **whole** agent — every channel it declares,
 its control plane, health — open the directory as a surface:
 
 ```ts
-import { nodeListener, openAgentSurface } from "@fastagent-sh/fastagent";
+import { nodeListener, createAgentService } from "@fastagent-sh/fastagent";
 
-const surface = await openAgentSurface("./my-agent");
-app.use("/agent", nodeListener(surface.handler));   // channels + control plane + health
-await surface.ready;      // long connections up; rejects if one cannot come up
+const service = await createAgentService("./my-agent");
+app.use("/agent", nodeListener(service.handler));   // channels + control plane + health
+await service.ready;      // long connections up; rejects if one cannot come up
 // ...
-await surface.close();    // stops long connections and schedules
+await service.close();    // stops long connections and schedules
 ```
 
-`openAgentSurface` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
+`createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
 bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
-`surface.control` carries the plane's bearer token so you can hand a client access without the
+`service.control` carries the plane's bearer token so you can hand a client access without the
 CLI's `control.json` discovery file. Composing the same thing by hand
 means assembling routes, mounts, schedules and long connections in the right order — and getting it
 wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
 fires).
 
-Pass `{ signal }` to bind its lifetime to something you already own; `surface.routes`/`surface.mounts`
+Pass `{ signal }` to bind its lifetime to something you already own; `service.routes`/`service.mounts`
 are there for a host that must re-wrap them before serving.
 
 ### Mounting a single handler

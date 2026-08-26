@@ -15,7 +15,7 @@ import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/ch
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
-import type { AgentSurface } from "../surface.ts";
+import type { AgentService } from "../service.ts";
 import { type PrefixMount, parseRouteKey, pathUnderPrefix, routeKeysConflict, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -276,12 +276,12 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
  * what mounted. One function because both commands must say the same thing at the same moment —
  * after readiness, never at socket bind.
  */
-export function reportServing(surface: AgentSurface, host: string | undefined, boundPort: number): void {
-  process.send?.({ type: "ready", port: boundPort, routeChannels: surface.channels.routes });
-  for (const line of readyAddressLines(host, boundPort, surface.channels.builtinInvoke)) log.info(line);
-  log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
-  if (surface.channels.longConnections.length > 0) {
-    log.info(`[fastagent] long connections: ${surface.channels.longConnections.join(", ")}`);
+export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
+  process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
+  for (const line of readyAddressLines(host, boundPort, service.channels.builtinInvoke)) log.info(line);
+  log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
+  if (service.channels.longConnections.length > 0) {
+    log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
   }
 }
 

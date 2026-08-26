@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
-import { openAgentSurface } from "../src/surface.ts";
+import { createAgentService } from "../src/service.ts";
 
 async function agentDir(files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
@@ -22,34 +22,34 @@ async function agentDir(files: Record<string, string> = {}): Promise<string> {
   return dir;
 }
 
-describe("openAgentSurface", () => {
+describe("createAgentService", () => {
   it("mounts channel routes on a handler, with health beside them", async () => {
     const dir = await agentDir({
       "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("from-channel") });`,
     });
-    const surface = await openAgentSurface(dir);
+    const service = await createAgentService(dir);
     try {
-      expect(await (await surface.handler(new Request("http://h/hook", { method: "POST" }))).text()).toBe(
+      expect(await (await service.handler(new Request("http://h/hook", { method: "POST" }))).text()).toBe(
         "from-channel",
       );
-      expect((await surface.handler(new Request("http://h/health"))).status).toBe(200);
-      expect(surface.channels.routes).toEqual(["hook"]);
+      expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
+      expect(service.channels.routes).toEqual(["hook"]);
       // A declared channel replaces the built-in /invoke — the fallback exists only when there is none.
-      expect((await surface.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(404);
-      expect(surface.channels.builtinInvoke).toBe(false);
+      expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(404);
+      expect(service.channels.builtinInvoke).toBe(false);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
   it("falls back to POST /invoke when the directory declares no channel", async () => {
     const dir = await agentDir();
-    const surface = await openAgentSurface(dir);
+    const service = await createAgentService(dir);
     try {
       // 400 rather than 404: the route is mounted and rejecting an empty body.
-      expect((await surface.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(400);
+      expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(400);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
@@ -62,13 +62,13 @@ describe("openAgentSurface", () => {
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
-    const surface = await openAgentSurface(dir);
+    const service = await createAgentService(dir);
     try {
       // 401, not 404: the plane is mounted and asking for the token it minted.
-      expect((await surface.handler(new Request("http://h/control/capabilities"))).status).toBe(401);
-      expect(surface.mounts.map((m) => m.prefix)).toEqual(["/control"]);
+      expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(401);
+      expect(service.mounts.map((m) => m.prefix)).toEqual(["/control"]);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
@@ -82,19 +82,19 @@ describe("openAgentSurface", () => {
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
-    const surface = await openAgentSurface(dir);
-    expect(surface.control?.prefix).toBe("/control");
-    expect(surface.control?.token).toMatch(/[0-9a-f-]{36}/);
+    const service = await createAgentService(dir);
+    expect(service.control?.prefix).toBe("/control");
+    expect(service.control?.token).toMatch(/[0-9a-f-]{36}/);
     // The token actually opens the plane it came from.
-    const res = await surface.handler(
-      new Request("http://h/control/capabilities", { headers: { authorization: `Bearer ${surface.control?.token}` } }),
+    const res = await service.handler(
+      new Request("http://h/control/capabilities", { headers: { authorization: `Bearer ${service.control?.token}` } }),
     );
     expect(res.status).toBe(200);
 
-    surface.announce(8787);
-    const discovery = join(surface.agentDir, ".state", "control.json");
-    expect(JSON.parse(await readFile(discovery, "utf8"))).toMatchObject({ token: surface.control?.token });
-    await surface.close();
+    service.announce(8787);
+    const discovery = join(service.agentDir, ".state", "control.json");
+    expect(JSON.parse(await readFile(discovery, "utf8"))).toMatchObject({ token: service.control?.token });
+    await service.close();
     await expect(readFile(discovery, "utf8")).rejects.toThrow(/ENOENT/);
   });
 
@@ -110,15 +110,15 @@ describe("openAgentSurface", () => {
         }),
       };`,
     });
-    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
     try {
-      await surface.ready;
-      expect((await surface.handler(new Request("http://h/health"))).status).toBe(200);
+      await service.ready;
+      expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
       (globalThis as unknown as { __faDropSock?: () => void }).__faDropSock?.(); // the channel drops
       await new Promise((r) => setTimeout(r, 20));
-      expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
+      expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
@@ -134,24 +134,24 @@ describe("openAgentSurface", () => {
         closed: new Promise((r) => signal.addEventListener("abort", () => r(), { once: true })),
       }) };`,
     });
-    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
     try {
       await new Promise((r) => setTimeout(r, 20)); // let "dies" report closed
       (globalThis as unknown as { __faSlowReady?: () => void }).__faSlowReady?.();
-      await expect(surface.ready).rejects.toThrow(/closed before startup completed/);
-      expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
+      await expect(service.ready).rejects.toThrow(/closed before startup completed/);
+      expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
   it("does not mount a control plane the config did not ask for", async () => {
-    const surface = await openAgentSurface(await agentDir());
+    const service = await createAgentService(await agentDir());
     try {
-      expect(surface.mounts).toEqual([]);
-      expect((await surface.handler(new Request("http://h/control/capabilities"))).status).toBe(404);
+      expect(service.mounts).toEqual([]);
+      expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(404);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
@@ -172,11 +172,11 @@ describe("openAgentSurface", () => {
         }),
       };`,
     });
-    const surface = await openAgentSurface(dir);
-    expect(surface.channels.longConnections).toEqual(["sock"]);
-    await surface.close();
+    const service = await createAgentService(dir);
+    expect(service.channels.longConnections).toEqual(["sock"]);
+    await service.close();
     expect((globalThis as Record<string, unknown>).__faSockClosed).toBe(true);
-    await expect(surface.close()).resolves.toBeUndefined(); // idempotent
+    await expect(service.close()).resolves.toBeUndefined(); // idempotent
   });
 
   it("close() detaches from the caller's signal", async () => {
@@ -184,9 +184,9 @@ describe("openAgentSurface", () => {
     // accumulate listeners, each pinning a whole closed surface through its closure.
     const controller = new AbortController();
     const before = getEventListeners(controller.signal, "abort").length;
-    const surface = await openAgentSurface(await agentDir(), { signal: controller.signal });
+    const service = await createAgentService(await agentDir(), { signal: controller.signal });
     expect(getEventListeners(controller.signal, "abort").length).toBe(before + 1);
-    await surface.close();
+    await service.close();
     expect(getEventListeners(controller.signal, "abort").length).toBe(before);
   });
 
@@ -205,17 +205,17 @@ describe("openAgentSurface", () => {
     });
     // A listener added to an already-aborted signal never fires, so the surface would stay open with
     // its connections and scheduler running behind a caller who believes it is shut.
-    const surface = await openAgentSurface(dir, { signal: AbortSignal.abort() });
+    const service = await createAgentService(dir, { signal: AbortSignal.abort() });
     expect((globalThis as Record<string, unknown>).__faAbortedClosed).toBe(true);
-    await surface.close();
+    await service.close();
   });
 
   it("closes on its own signal, and close() is idempotent", async () => {
     const controller = new AbortController();
-    const surface = await openAgentSurface(await agentDir(), { signal: controller.signal });
+    const service = await createAgentService(await agentDir(), { signal: controller.signal });
     controller.abort();
-    await expect(surface.close()).resolves.toBeUndefined();
-    await expect(surface.close()).resolves.toBeUndefined();
+    await expect(service.close()).resolves.toBeUndefined();
+    await expect(service.close()).resolves.toBeUndefined();
   });
 
   it("a long connection that cannot come up rejects `ready` and tears the surface down", async () => {
@@ -234,11 +234,11 @@ describe("openAgentSurface", () => {
         }),
       };`,
     });
-    const surface = await openAgentSurface(dir);
-    await expect(surface.ready).rejects.toThrow(/dial refused/);
+    const service = await createAgentService(dir);
+    await expect(service.ready).rejects.toThrow(/dial refused/);
     expect((globalThis as Record<string, unknown>).__faFailClosed).toBe(true); // torn down, not left up
     // Health never flipped to 200: the surface must not advertise itself as serving.
-    expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
+    expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
   });
 
   it("a connection that dies while dialling fails startup instead of hanging it", async () => {
@@ -250,8 +250,8 @@ describe("openAgentSurface", () => {
         closed: Promise.reject(new Error("dial refused")),
       }) };`,
     });
-    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
-    await expect(surface.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
+    await expect(service.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
   });
 
   it("a failed start reports the start failure, not the cleanup's", async () => {
@@ -263,8 +263,8 @@ describe("openAgentSurface", () => {
         closed: Promise.reject(new Error("and could not stop either")),
       }) };`,
     });
-    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
-    await expect(surface.ready).rejects.toThrow(/dial refused/);
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
+    await expect(service.ready).rejects.toThrow(/dial refused/);
   });
 
   it("close() reports a connection that failed to stop", async () => {
@@ -277,9 +277,9 @@ describe("openAgentSurface", () => {
           signal.addEventListener("abort", () => reject(new Error("shutdown failed")), { once: true })),
       }) };`,
     });
-    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
-    await surface.ready;
-    await expect(surface.close()).rejects.toThrow(/shutdown failed/);
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
+    await service.ready;
+    await expect(service.close()).rejects.toThrow(/shutdown failed/);
   });
 
   it("closing while a connection is still dialling rejects `ready` rather than claiming success", async () => {
@@ -291,18 +291,18 @@ describe("openAgentSurface", () => {
         closed: new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
       }) };`,
     });
-    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
-    await surface.close(); // while it is still dialling
-    await expect(surface.ready).rejects.toThrow(/closed before it became ready/);
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
+    await service.close(); // while it is still dialling
+    await expect(service.ready).rejects.toThrow(/closed before it became ready/);
   });
 
   it("`ready` resolves immediately when there are no long connections", async () => {
-    const surface = await openAgentSurface(await agentDir());
+    const service = await createAgentService(await agentDir());
     try {
-      await expect(surface.ready).resolves.toBeUndefined();
-      expect((await surface.handler(new Request("http://h/health"))).status).toBe(200);
+      await expect(service.ready).resolves.toBeUndefined();
+      expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
     } finally {
-      await surface.close();
+      await service.close();
     }
   });
 
@@ -316,7 +316,7 @@ describe("openAgentSurface", () => {
         ready: Promise.resolve(), closed: new Promise(() => {}) }; } };`,
     });
     (globalThis as Record<string, unknown>).__faConnected = false;
-    await expect(openAgentSurface(dir)).rejects.toThrow(/channel setup is invalid|literal path/);
+    await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|literal path/);
     expect((globalThis as unknown as { __faConnected?: boolean }).__faConnected).toBe(false);
   });
 
@@ -326,11 +326,11 @@ describe("openAgentSurface", () => {
     // schedule FILE is isolated on purpose (G2); this is the whole-load fault that is not.
     const dir = await agentDir();
     await writeFile(join(dir, "schedules"), "not a directory\n"); // readdir fails on it
-    await expect(openAgentSurface(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
+    await expect(createAgentService(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
   });
 
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
-    await expect(openAgentSurface(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);
+    await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);
   });
 });

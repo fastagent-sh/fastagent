@@ -24,7 +24,7 @@ Code truth is `src/`.
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
 ├── surface.ts               # THE PRODUCT AS ONE CALL: a directory becomes a mounted HTTP handler
-│                           # (openAgentSurface). Before it, only the CLI could keep fastagent's
+│                           # (createAgentService). Before it, only the CLI could keep fastagent's
 │                           # "into a live service inside an app" promise — everything else was
 │                           # parts an embedder had to assemble in the right order, and getting it
 │                           # wrong is silent (a plane that 404s while advertising itself). The

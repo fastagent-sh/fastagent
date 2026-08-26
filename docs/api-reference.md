@@ -174,10 +174,10 @@ Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi promp
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
-### `openAgentSurface`
+### `createAgentService`
 
 ```ts
-function openAgentSurface(
+function createAgentService(
   dir: string,
   options?: { model?: string; authPath?: string; sessionsDir?: string; signal?: AbortSignal;
               onChannelClosed?: (name: string, error?: unknown) => void },
