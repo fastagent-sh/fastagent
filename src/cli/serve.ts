@@ -1,23 +1,17 @@
 /**
  * What `dev` (its worker) and `start` need beyond the service itself: binding a port, the shutdown
- * order, the startup report, the AgentCore mount, and the optional Cloudflare quick tunnel.
+ * order, the startup report, and the optional Cloudflare quick tunnel.
  *
  * The ASSEMBLY is not here — it lives in `src/service.ts`, which a public entry may import and this
  * directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
  */
-import type { Agent } from "../agent.ts";
-import { createStateSync } from "../channels/agentcore-state.ts";
-import { type RouteSurface, agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
-import { activeWork } from "../channels/busy.ts";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import type { ChannelHandler, Routes } from "../channel.ts";
+import type { ChannelHandler } from "../channel.ts";
 import type { AgentService } from "../service.ts";
-import { routeKeysConflict, serveNode } from "../channels/serve.ts";
+import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
-import type { LoadedSchedule } from "../schedule/schedule.ts";
-import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
@@ -31,62 +25,6 @@ import { failStartup, failUsage } from "./fail.ts";
  * (routesFor): `sessionControl` is an explicit opt-in, so declaring both is a configuration error,
  * and silently shadowing either side would serve a surface the author didn't write.
  */
-
-/**
- * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) over the serving routes —
- * the deployed container's ONLY reachable surface (channels/agentcore.ts). Wired by `start` when
- * `FASTAGENT_AGENTCORE=1` (set by the generated deploy artifacts, never by hand). A channel colliding
- * on either path fails startup, same disposition as the control-plane mount: the adapter's paths are
- * the platform's contract, so a channel shadowing them would silently unserve the whole deployment.
- */
-export function mountAgentcore(
-  routes: Routes,
-  options: {
-    agent: Agent;
-    stateRoot: string;
-    schedules: readonly LoadedSchedule[];
-    onStateReady?: () => void;
-    /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
-     *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
-     *  `routes` is the dispatch target — for wirings whose state root is already authoritative. */
-    lazyChannels?: () => Promise<RouteSurface>;
-  },
-): Routes {
-  const { agent, stateRoot, schedules, onStateReady, lazyChannels } = options;
-  const mounted = agentcoreRoutes({
-    routes: lazyChannels ?? { routes },
-    agent,
-    stateRoot,
-    isBusy: () => activeWork() > 0,
-    // Cross-deploy durability: AgentCore wipes the state mount on every runtime version update, so
-    // the state root is restored from (and pushed to) an S3 snapshot through presigned URLs the
-    // forwarder mints per envelope. Always wired on this path — the platform gives no other way to
-    // keep an agent's memory across a deploy.
-    stateSync: createStateSync({ stateRoot }),
-    // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call. Absent =
-    // no forwarder in this topology, so only the public `invoke` kind is servable.
-    ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
-    onStateReady,
-    fire:
-      schedules.length === 0
-        ? undefined
-        : (name, slot) => {
-            const schedule = schedules.find((s) => s.name === name);
-            if (!schedule) throw new UnknownScheduleError(name);
-            return fireScheduleOnce({ agent, stateRoot, schedule, slot });
-          },
-  });
-  const collisions = Object.keys(routes).filter((key) =>
-    Object.keys(mounted).some((adapterKey) => routeKeysConflict(key, adapterKey)),
-  );
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the AgentCore adapter ` +
-        `(/invocations, /ping) — rename the channel route`,
-    );
-  }
-  return { ...routes, ...mounted };
-}
 
 /**
  * Refuse `--tunnel` with a bind that cloudflared cannot reach: it dials the NAME `localhost:<port>`
