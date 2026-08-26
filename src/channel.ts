@@ -1,38 +1,29 @@
 /**
- * The Channel contract — the trigger side of the product boundary (design/core.md §1: "Trigger:
- * HTTP, channel, schedule → calls an `Agent`"), beside `agent.ts` (what an engine implements) and
- * `session.ts` (the serving control plane). Pure types with no runtime dependency; importing a
- * host, a framework, or an engine here is forbidden, exactly like in those two.
+ * The Channel contract — the trigger side of the product boundary (core.md §1), beside `agent.ts`
+ * (what an engine implements) and `session.ts` (the serving control plane). Pure types, no runtime
+ * dependency; importing a host, a framework, or an engine here is forbidden, as in those two.
  *
- * §7 fixes two module forms and nothing else — a function is a route channel, an object with
- * `connect` is a long connection. That is a PRODUCT concept, not an implementation detail: an agent
- * directory ships hand-written `channels/*.ts` against it. Which is also why these types live away
- * from the code that serves them: a Feishu WebSocket ingress needs `LongConnection` and has no HTTP
- * in it at all, and a channel author reaching for `ChannelModule` should not pull `node:http` and an
- * HTTP framework in behind it.
+ * §7 fixes two module forms: a function is a route channel, an object with `connect` is a long
+ * connection. An agent directory ships hand-written `channels/*.ts` against them, which is why they
+ * live away from the code that serves them — a WebSocket ingress needs `LongConnection` and has no
+ * HTTP in it, and a `ChannelModule` import must not drag `node:http` in behind it.
  *
- * How a route table becomes a running server is a separate question with a separate answer —
- * `channels/serve.ts`.
+ * How a route table becomes a running server: `channels/serve.ts`.
  */
 import type { Agent } from "./agent.ts";
 import type { SessionControl } from "./session.ts";
 
-/** A mounted request handler (a channel's fetch, or a plain route like health).
- *
- *  Fetch-shaped by contract (SPEC §11 names `(Request) => Response` as the gateway form): it is the
- *  one signature every runtime and every embedding app already speaks, so a channel written against
- *  it mounts anywhere without adopting our framework choices. */
+/** A mounted request handler (a channel's fetch, or a plain route like health). Fetch-shaped by
+ *  contract (SPEC §11): the one signature every runtime and embedding app already speaks. */
 export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 
 /**
  * This deployment's HTTP surface: route key → handler.
  *
- * A key is `"/path"` (any method) or `"METHOD /path"`, and the path is a LITERAL one. That language
- * is deliberately small: two channels must never silently shadow each other, and for literal paths
- * "would these two fight over a request?" is string equality — a fact about the keys rather than a
- * prediction about whatever matcher serves them. `assertRouteKey` in `channels/serve.ts` enforces
- * it; a handler that owns a prefix is a `PrefixMount`, passed beside these routes, never spelled as
- * a key.
+ * A key is `"/path"` (any method) or `"METHOD /path"`, with a LITERAL path — small on purpose, so
+ * that "would these two fight over a request?" is string equality rather than a prediction about a
+ * matcher, and no channel silently shadows another. `assertRouteKey` in `channels/serve.ts`
+ * enforces it; a handler owning a prefix is a `PrefixMount`, never a key.
  */
 export type Routes = Record<string, ChannelHandler>;
 
