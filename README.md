@@ -160,7 +160,7 @@ The root export intentionally contains the supported surface only.
 | Area | Examples | Stability |
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
-| The whole agent | `createAgentService`, `AgentService` | The supported way to mount a directory in an app |
+| Directory → service | `createAgentService`, `AgentService` | The supported way to mount an agent directory in an app |
 | Mounting | `createInvokeHandler`, `nodeListener`, `serveNode`, `Routes` | Reference implementation, pre-1.0 |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
