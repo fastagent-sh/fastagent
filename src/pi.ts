@@ -8,7 +8,6 @@ export {
 
 export {
   defineTool,
-  loadTools,
   type DefineToolOptions,
   type FastagentTool,
   type MountedTool,
@@ -25,7 +24,6 @@ export type { AgentTool, ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-
  */
 export type { SessionManager, SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 
-export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 export {
   createPiAgentFromDir,
   type CreatePiAgentFromDirOptions,
@@ -54,7 +52,10 @@ export type { SessionInheritance } from "./engines/pi/session-inheritance.ts";
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";
 export { createPiModels, probeAuthSource, type CreatePiModelsOptions } from "./engines/pi/models.ts";
 export type { Models } from "@earendil-works/pi-ai";
-export { createProvider, type Provider, type ProviderAuth } from "@earendil-works/pi-ai";
+// Types only: they appear in our signatures, so a caller must be able to name them. `createProvider`
+// is pi-ai's own runtime function — forwarding it would make us answerable for its API without
+// adding anything; import it from `@earendil-works/pi-ai` directly.
+export type { Provider, ProviderAuth } from "@earendil-works/pi-ai";
 export type { Model } from "@earendil-works/pi-ai";
 
 // The product's one-call assembly: a directory becomes a live service. On the pi surface because

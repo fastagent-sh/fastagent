@@ -157,15 +157,19 @@ const agent = createPiAgent({
 
 The root export intentionally contains the supported surface only.
 
+`Provider` and `ProviderAuth` are exported as types because our options name them; the factory that
+builds one, `createProvider`, comes from `@earendil-works/pi-ai` — add it as a direct dependency when
+you register a custom provider.
+
 | Area | Examples | Stability |
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
 | Directory → service | `createAgentService`, `AgentService` | The supported way to mount an agent directory in an app |
 | Mounting | `createInvokeHandler`, `nodeListener`, `serveNode`, `Routes` | Reference implementation, pre-1.0 |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
-| Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
-| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
-| Not exported | Assembly parts (`router`, `createControlPlane`), prompt/config internals | Internal modules; no compatibility promise |
+| Tool/channel authoring | `defineTool`, `z`, `defineSchedule`, `ChannelModule` | Usable now, may tighten before 1.0 |
+| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider` | Public because options reference them |
+| Not exported | The assembly's parts — `router`, `createControlPlane`, `loadTools`/`loadChannels`/`loadSchedules`, `createScheduler` — and prompt/config internals | `createAgentService` does this; no compatibility promise |
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 

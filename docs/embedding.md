@@ -214,8 +214,9 @@ Static keys belong in the login file or the environment, not in code — there i
 When your model source needs per-request logic — minting or rotating a token, calling an auth service — register it as a provider; a `model` spec then selects it by id. This is the one case that touches the engine's provider layer — built-in providers cover everything else.
 
 ```ts
-import { createPiAgent, createProvider } from "@fastagent-sh/fastagent";
-// the wire-protocol impl comes from pi-ai's api subpath (reuse, don't reimplement)
+import { createPiAgent } from "@fastagent-sh/fastagent";
+// Both come from pi-ai: the provider factory and the wire-protocol impl (reuse, don't reimplement).
+import { createProvider } from "@earendil-works/pi-ai";
 import { /* the matching api impl */ } from "@earendil-works/pi-ai/api/openai-responses";
 
 const myGateway = createProvider({

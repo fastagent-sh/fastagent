@@ -128,6 +128,68 @@ describe("the public subpaths do not reach into the CLI", () => {
   }
 });
 
+describe("the assembly's parts stay out of the public surface", () => {
+  // Each of these was public once. They are how `createAgentService` builds a service, not something
+  // a caller reproduces — and every one re-exported is a promise we then have to keep.
+  const PARTS = [
+    "router",
+    "createControlPlane",
+    "loadTools",
+    "loadChannels",
+    "loadSchedules",
+    "discoverScheduleFiles",
+    "createScheduler",
+    "scheduleSession",
+    // pi-ai's own runtime function: forwarding it makes us answerable for an API we do not own.
+    "createProvider",
+  ];
+
+  // Types the parts drag along: nothing public references them once their producer is internal, so
+  // exporting one is a promise with no caller. This list guards against RE-EXPORTING them, which is
+  // how each left. It does not — and is not meant to — stop someone declaring a fresh type of the
+  // same name at an entry: the wildcard check above already removes every path by which something
+  // arrives here unnoticed, and what remains is a line somebody wrote on purpose.
+  const ORPHAN_TYPES = ["ChannelCollision", "Scheduler", "SchedulerOptions"];
+
+  it("the curated entries name every export, so nothing rides in behind a wildcard", () => {
+    // This is what makes the two checks below sufficient. A `export *` — or `export type *`, which
+    // leaves no runtime trace at all — would re-export whatever its target grows next, and neither a
+    // name list nor a module import can see that coming.
+    for (const entry of ["core.ts", "pi.ts", "session.ts"]) {
+      expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
+    }
+    // The root is the all-in-one, and may forward the curated three — but only those.
+    const index = readFileSync(resolve(srcDir, "index.ts"), "utf8");
+    const targets = [...index.matchAll(/export\s+(?:type\s+)?\*\s+from\s+"([^"]+)"/g)].map((m) => m[1]);
+    expect(targets.sort()).toEqual(["./core.ts", "./pi.ts", "./session.ts"]);
+  });
+
+  for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
+    it(`${entry} exports no assembly part`, async () => {
+      // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
+      const mod = (await import(resolve(srcDir, entry))) as Record<string, unknown>;
+      expect(PARTS.filter((p) => p in mod)).toEqual([]);
+    });
+
+    it(`${entry} exports no orphaned type`, () => {
+      // The SOURCE, because a type export leaves no runtime trace for the check above to see.
+      const source = readFileSync(resolve(srcDir, entry), "utf8");
+      const named = [...source.matchAll(/export (?:type )?\{([^}]*)\}/g)]
+        .flatMap((m) => m[1]!.split(","))
+        .map((raw) =>
+          raw
+            .trim()
+            .replace(/^type\s+/, "")
+            .split(/\s+as\s+/)
+            .pop()!
+            .trim(),
+        )
+        .filter(Boolean);
+      expect(named.filter((n) => ORPHAN_TYPES.includes(n))).toEqual([]);
+    });
+  }
+});
+
 describe("the contracts depend on nothing", () => {
   // agent.ts (what an engine implements), channel.ts (what a trigger implements) and session.ts (the
   // serving control plane) are the three product contracts — pure types, zero packages. The bar is

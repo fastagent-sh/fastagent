@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineTool, loadTools, z } from "../src/index.ts";
+import { defineTool, z } from "../src/index.ts";
+import { loadTools } from "../src/engines/pi/tool.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../src/engines/pi/create.ts";
 
 describe("defineTool", () => {
