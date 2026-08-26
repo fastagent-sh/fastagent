@@ -141,7 +141,14 @@ export async function mountAgentSurface(
   const rollback = async (error: unknown): Promise<never> => {
     abort.abort();
     scheduled.stop();
-    await Promise.allSettled(runs.map((run) => run.closed));
+    // Settled, not all: the original error is what the caller needs, and a connection that also
+    // failed to stop must not replace it.
+    const outcomes = await Promise.allSettled(runs.map((run) => run.closed));
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") {
+        log.error(`[fastagent] cleanup after a failed start also failed: ${String(outcome.reason)}`);
+      }
+    }
     throw error;
   };
   for (const connection of routed.longConnections) {
@@ -193,7 +200,10 @@ export async function mountAgentSurface(
   };
   // Detached by `close()`: a caller that closes surfaces itself while holding one long-lived signal
   // would otherwise accumulate listeners, each pinning a whole surface through its closure.
-  const onAbort = () => void close();
+  // The signal path has no caller awaiting the promise, so a failure to stop would be an unhandled
+  // rejection — in an embedded library, potentially the host's exit. Reported instead.
+  const onAbort = () =>
+    void close().catch((error: unknown) => log.error(`[fastagent] surface close failed: ${String(error)}`));
   if (options.signal?.aborted) await close();
   else options.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -220,8 +230,12 @@ export async function mountAgentSurface(
       );
     } catch (error) {
       // A connection that cannot come up is a startup failure, not a degraded surface: tear the rest
-      // down before rejecting, so nothing is left running behind a caller that saw an error.
-      await close();
+      // down before rejecting, so nothing is left running behind a caller that saw an error. A
+      // cleanup that ALSO fails is logged, never rethrown — it would replace the reason the caller
+      // actually needs with the aftermath of it.
+      await close().catch((closeError: unknown) =>
+        log.error(`[fastagent] cleanup after a failed start also failed: ${String(closeError)}`),
+      );
       throw error;
     }
     // A `ready` that settles because the surface was CLOSED is cancellation, not readiness — the

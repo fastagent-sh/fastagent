@@ -254,6 +254,19 @@ describe("openAgentSurface", () => {
     await expect(surface.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
   });
 
+  it("a failed start reports the start failure, not the cleanup's", async () => {
+    // Both fail here: the connection cannot come up AND cannot stop. The caller needs the first —
+    // the second is the aftermath, and replacing one with the other hides the actual cause.
+    const dir = await agentDir({
+      "channels/doomed.mjs": `export default { name: "doomed", connect: () => ({
+        ready: Promise.reject(new Error("dial refused")),
+        closed: Promise.reject(new Error("and could not stop either")),
+      }) };`,
+    });
+    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    await expect(surface.ready).rejects.toThrow(/dial refused/);
+  });
+
   it("close() reports a connection that failed to stop", async () => {
     // `closed` carries a terminal failure by contract. Swallowing it would let `close()` claim the
     // surface is stopped over a channel that did not stop, and the caller could never tell.
