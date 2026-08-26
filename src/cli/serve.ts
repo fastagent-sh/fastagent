@@ -8,7 +8,7 @@ import type { Agent } from "../agent.ts";
 import { createStateSync } from "../channels/agentcore-state.ts";
 import { type RouteSurface, agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
-import { controlRoutes } from "../channels/control.ts";
+import { createControlPlane } from "../channels/control.ts";
 import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
@@ -134,7 +134,7 @@ export function mountSessionControl(
 } {
   if (!control) return { routes, mounts: [], announce: () => () => {} };
   const token = crypto.randomUUID();
-  const plane = controlRoutes(control, { token, agent: options.agent });
+  const plane = createControlPlane(control, { token, agent: options.agent });
   assertNoControlPlaneCollision(routes, plane);
   return {
     routes,

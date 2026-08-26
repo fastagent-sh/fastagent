@@ -34,7 +34,7 @@ const CONTROL_PREFIX = "/control";
 /** The SSE payload: one control-plane event in its transport envelope. */
 export interface WireEvent {
   sessionId: string;
-  /** Serving-process incarnation (per `controlRoutes` call). A change means the server restarted:
+  /** Serving-process incarnation (per `createControlPlane` call). A change means the server restarted:
    *  live continuity is gone — run the reconnect steps (entries cursor + state). */
   epoch: string;
   /** Per-connection monotonic counter. A gap means events were lost in transit on THIS connection. */
@@ -218,12 +218,13 @@ export interface ControlRoutesOptions {
 }
 
 /**
- * Mount the control plane: `GET /control/capabilities|commands|state|entries|events` + `POST
- * /control/dispatch`, all bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
+ * Create the control plane as a mountable prefix owner: `GET
+ * /control/capabilities|commands|state|entries|events` + `POST /control/dispatch`, all
+ * bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
  * The plane OWNS {@link CONTROL_PREFIX}: it is mounted as one sub-application, answers its own
  * 404/405/preflight, and puts CORS headers on every reply — see {@link planeApp}.
  */
-export function controlRoutes(control: SessionControl, options: ControlRoutesOptions): PrefixMount {
+export function createControlPlane(control: SessionControl, options: ControlRoutesOptions): PrefixMount {
   return mountControlPlane(controlPlaneRoutes(control, options));
 }
 
@@ -240,7 +241,7 @@ export function controlPlaneRoutes(
   options: ControlRoutesOptions,
 ): Record<string, ChannelHandler> {
   const { token } = options;
-  if (!token) throw new Error("controlRoutes: a bearer token is required (empty tokens are not a mode)");
+  if (!token) throw new Error("createControlPlane: a bearer token is required (empty tokens are not a mode)");
   const epoch = crypto.randomUUID();
 
   // Timing-safe: the bearer token is this surface's ONLY auth (and the --tunnel warning names it

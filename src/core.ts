@@ -3,7 +3,7 @@
 // Session-control layering (design §1): the CONTRACT (SessionControl types, error codes) lives
 // behind the `/session` subpath so interactive serving does not grow the minimal handler contract,
 // and the pi hub (`createPiSessionControl`) lives under `/pi`. The engine-neutral TRANSPORT —
-// `controlRoutes` server-side, `connectSessionControl`/`connectAgent` client-side — belongs here
+// `createControlPlane` server-side, `connectSessionControl`/`connectAgent` client-side — belongs here
 // with the rest of the channel kit: fetch-shaped routes and contract-consuming clients, no pi
 // import anywhere in their closure.
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
@@ -11,7 +11,7 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 
 export { createInvokeHandler } from "./channels/http.ts";
-export { controlRoutes, type ControlRoutesOptions, type WireEvent } from "./channels/control.ts";
+export { createControlPlane, type ControlRoutesOptions, type WireEvent } from "./channels/control.ts";
 export {
   ControlRequestError,
   connectAgent,

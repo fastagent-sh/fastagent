@@ -1,6 +1,6 @@
 /**
  * Phase 3 transport conformance — docs/design/session-control.md §13: the HTTP+SSE wire protocol
- * (`controlRoutes`) and the remote client (`connectSessionControl`) are exercised TOGETHER over a
+ * (`createControlPlane`) and the remote client (`connectSessionControl`) are exercised TOGETHER over a
  * real node:http server against a real hub + faux agent: local and remote `SessionControl` must be
  * isomorphic (same interface, same answers), the envelope must be consumed internally (epoch/seq
  * never reach the consumer), and auth must fail closed.
@@ -9,7 +9,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { controlPlaneRoutes, controlRoutes, mountControlPlane } from "../src/channels/control.ts";
+import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
 import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
@@ -48,7 +48,7 @@ async function serveControl() {
     // like capabilities (the definition it answers for is live).
     commands: async () => [...commandList],
   });
-  const plane = controlRoutes(control, { token: TOKEN, agent });
+  const plane = createControlPlane(control, { token: TOKEN, agent });
   const server = serveNode(router({}, [plane]), { port: 0 });
   const port = await server.listening;
   return {
@@ -74,7 +74,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const served = await serveControl();
     try {
       // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
-      // controlRoutes() call that could drift from it: "every control route requires the token" has
+      // createControlPlane() call that could drift from it: "every control route requires the token" has
       // to fail when a NEW route forgets `guard`, which a literal array cannot do.
       expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
       for (const key of served.routeKeys) {
@@ -257,7 +257,7 @@ describe("session control over HTTP (Phase 3)", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
@@ -413,7 +413,7 @@ describe("session control over HTTP (Phase 3)", () => {
         abort: async () => {},
       },
     );
-    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     try {
       const post = (command: unknown) =>
@@ -461,7 +461,7 @@ describe("session control over HTTP (Phase 3)", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
@@ -530,7 +530,7 @@ describe("session control over HTTP (Phase 3)", () => {
 
   it("without an agent, /control/invoke is not mounted", async () => {
     const { control } = await fauxControlledAgent([], { boundary: false });
-    const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
     const port = await server.listening;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, {
@@ -1114,9 +1114,9 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(returned2).toBe(true);
   });
 
-  it("controlRoutes refuses to mount without a token", async () => {
+  it("createControlPlane refuses to mount without a token", async () => {
     const { control } = await fauxControlledAgent([]);
-    expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);
+    expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);
   });
 });
 
@@ -1144,7 +1144,7 @@ async function serveRemoteAgent(opts: {
   const agent = opts.sessionFactory
     ? createPiAgentFromSession({ observer, lease, sessionFactory: opts.sessionFactory })
     : fauxAgent(opts.responses ?? [], { sessions, lease, observer, tools: opts.tools ?? [] }).agent;
-  const server = serveNode(router({}, [controlRoutes(control, { token: TOKEN, agent })]), { port: 0 });
+  const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN, agent })]), { port: 0 });
   const port = await server.listening;
   conformanceServers.push(() => server.close());
   return connectAgent({ url: `http://127.0.0.1:${port}`, token: TOKEN });
