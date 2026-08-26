@@ -267,6 +267,18 @@ describe("createAgentService", () => {
     await expect(service.ready).rejects.toThrow(/dial refused/);
   });
 
+  it("a channel that ignores its abort signal cannot hang teardown", async () => {
+    // `closed` never settles here. Without a deadline `close()` waits forever — and during a failed
+    // START, the original error would never reach the caller at all.
+    const dir = await agentDir({
+      "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
+        ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
+    });
+    const service = await createAgentService(dir, { onChannelClosed: () => {} });
+    await service.ready;
+    await expect(service.close()).rejects.toThrow(/deaf.*did not stop within|did not stop within.*deaf/);
+  }, 20_000);
+
   it("close() reports a connection that failed to stop", async () => {
     // `closed` carries a terminal failure by contract. Swallowing it would let `close()` claim the
     // surface is stopped over a channel that did not stop, and the caller could never tell.

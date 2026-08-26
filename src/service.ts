@@ -19,6 +19,38 @@ import { log } from "./log.ts";
 import { mountSessionControl, routesFor, startSchedules } from "./cli/serve.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
+/** How long shutdown waits for a channel's `closed` before reporting it stuck. A channel that
+ *  ignores its abort signal must not be able to hang a caller's teardown — or, during a failed
+ *  start, keep the original error from ever arriving. */
+const CLOSE_DEADLINE_MS = 5_000;
+
+/** Settle when every connection has closed, or when the deadline passes. Returns the ones that did
+ *  not close, so the caller can say which channel is stuck rather than just that something is. */
+async function closeWithin(
+  runs: readonly LongConnection[],
+  names: readonly string[],
+): Promise<{ stuck: string[]; failures: unknown[] }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcomes = await Promise.race([
+      Promise.allSettled(runs.map((run) => run.closed)),
+      // NOT unref'd: this timer is the thing being awaited, and an unref'd one lets the loop go
+      // idle with nothing left to advance it. Cleared below so a prompt close does not hold the
+      // process for the rest of the deadline.
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CLOSE_DEADLINE_MS);
+      }),
+    ]);
+    if (!outcomes) return { stuck: [...names], failures: [] };
+    return {
+      stuck: [],
+      failures: outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : [])),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface AgentService {
   /** The assembled Fetch handler: channel routes, the control plane, and health. Mount it wherever
    *  your host speaks `(Request) => Response`; `nodeListener` bridges it to Node's `(req, res)`. */
@@ -145,14 +177,16 @@ export async function mountAgentService(
   const rollback = async (error: unknown): Promise<never> => {
     abort.abort();
     scheduled.stop();
-    // Settled, not all: the original error is what the caller needs, and a connection that also
-    // failed to stop must not replace it.
-    const outcomes = await Promise.allSettled(runs.map((run) => run.closed));
-    for (const outcome of outcomes) {
-      if (outcome.status === "rejected") {
-        log.error(`[fastagent] cleanup after a failed start also failed: ${String(outcome.reason)}`);
-      }
+    // Bounded and non-throwing: the original error is what the caller needs, so neither a connection
+    // that failed to stop nor one that never stops may replace it or delay it forever.
+    const { stuck, failures } = await closeWithin(
+      runs,
+      routed.longConnections.map((c) => c.name),
+    );
+    for (const failure of failures) {
+      log.error(`[fastagent] cleanup after a failed start also failed: ${String(failure)}`);
     }
+    if (stuck.length > 0) log.error(`[fastagent] did not stop within ${CLOSE_DEADLINE_MS}ms: ${stuck.join(", ")}`);
     throw error;
   };
   for (const connection of routed.longConnections) {
@@ -191,11 +225,16 @@ export async function mountAgentService(
       scheduled.stop();
       options.signal?.removeEventListener("abort", onAbort);
       unannounce?.(); // a stale discovery file would point a client at a dead port
-      // `Promise.all`, not `allSettled`: the contract puts a terminal failure on `closed`, and
-      // swallowing it would let `close()` report success over a channel that did not stop. The
-      // caller decides what an unclean shutdown means; this only refuses to hide it.
-      const outcomes = await Promise.allSettled(runs.map((run) => run.closed));
-      const failures = outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : []));
+      // A failure to stop is the caller's to know about — swallowing it would let `close()` report
+      // success over a channel still holding on. Bounded, because a channel that ignores its abort
+      // signal must not hang the teardown either.
+      const { stuck, failures } = await closeWithin(
+        runs,
+        routed.longConnections.map((c) => c.name),
+      );
+      if (stuck.length > 0) {
+        throw new Error(`long connection(s) did not stop within ${CLOSE_DEADLINE_MS}ms: ${stuck.join(", ")}`);
+      }
       if (failures.length > 0) {
         throw failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close");
       }
