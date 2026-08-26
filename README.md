@@ -165,14 +165,16 @@ The root export intentionally contains the supported surface only.
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
 | Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
-| Not exported | Assembly parts (`router`, the control plane), prompt/config internals | Internal modules; no compatibility promise |
+| Not exported | Assembly parts (`router`, `createControlPlane`), prompt/config internals | Internal modules; no compatibility promise |
 
 Subpath exports:
 
-- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel/host kit, schedules;
+- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules;
+- `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract and its remote clients;
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
+- `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
 - `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);
 - `@fastagent-sh/fastagent/lark` — Lark-international compatibility profile over the Feishu engine.
 
