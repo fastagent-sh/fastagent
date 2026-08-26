@@ -1,6 +1,10 @@
 /**
- * One spelling of "a reader sees the whole file or none of it", after four copies of it drifted
- * apart: two identical, two with different temp names and different permission handling.
+ * One spelling of "a reader sees the whole file or none of it" for SYNCHRONOUS writes, after four
+ * copies of it drifted apart: two identical, two with different temp names and different permission
+ * handling.
+ *
+ * Slack's onboarding state stays on its own async path — this is deliberately not an async API, and
+ * converting that caller is a separate question from de-duplicating these four.
  */
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";

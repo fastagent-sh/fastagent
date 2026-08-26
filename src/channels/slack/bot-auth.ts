@@ -1,6 +1,6 @@
 /** Rotating Slack bot-token provider backed by owner-only channel state. */
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { writeFileAtomic } from "../../atomic-write.ts";
 
 const REFRESH_EARLY_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -44,17 +44,7 @@ function load(path: string): SlackBotAuthState | undefined {
 }
 
 function save(path: string, state: SlackBotAuthState): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
-    chmodSync(temp, 0o600);
-    renameSync(temp, path);
-    chmodSync(path, 0o600);
-  } catch (error) {
-    rmSync(temp, { force: true });
-    throw error;
-  }
+  writeFileAtomic(path, JSON.stringify(state), 0o600);
 }
 
 async function refreshSlackBotToken(input: {
