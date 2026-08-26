@@ -160,11 +160,12 @@ The root export intentionally contains the supported surface only.
 | Area | Examples | Stability |
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
-| Channels/host | `createInvokeHandler`, `nodeListener`, `serveNode`, `router`, `Routes` | Reference implementation, pre-1.0 |
+| The whole agent | `createAgentService`, `AgentService` | The supported way to mount a directory in an app |
+| Mounting | `createInvokeHandler`, `nodeListener`, `serveNode`, `Routes` | Reference implementation, pre-1.0 |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
-| Injection ports | `PiSessionStore`, `inMemorySessionStore`, `jsonlSessionStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
-| Not exported | L0 harness adapter, pi harness factory, prompt/config internals | Internal modules; no compatibility promise |
+| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
+| Not exported | Assembly parts (`router`, the control plane), prompt/config internals | Internal modules; no compatibility promise |
 
 Subpath exports:
 
