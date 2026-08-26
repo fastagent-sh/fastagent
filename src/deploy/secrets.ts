@@ -5,6 +5,10 @@
  */
 import { type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
 
+/** The `/control/*` bearer token, when the definition serves the plane. Injected rather than minted in
+ *  the container, where nobody outside could read it — {@link mountSessionControl} honours it. */
+export const CONTROL_TOKEN_ENV = "FASTAGENT_CONTROL_TOKEN";
+
 /**
  * Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none?
  * Positive match on the UPPER_SNAKE env-var naming shape, NOT a negative exclude of today's sentinel
@@ -38,7 +42,14 @@ export function deploymentSecrets(
   // Dedup: a name already covered by the model key / a channel secret must not appear twice in the runbook.
   for (const name of extraSecrets) {
     if (!secrets.some((s) => s.name === name)) {
-      secrets.push({ name, hint: "declared in fastagent.config deploy.secrets", required: true });
+      secrets.push({
+        name,
+        hint:
+          name === CONTROL_TOKEN_ENV
+            ? "the /control/* bearer token — mint one (uuidgen) and give the same value to callers"
+            : "declared in fastagent.config deploy.secrets",
+        required: true,
+      });
     }
   }
   return secrets;

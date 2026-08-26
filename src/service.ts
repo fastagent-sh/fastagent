@@ -172,7 +172,11 @@ export function mountSessionControl(
   announce: (boundPort: number) => () => void;
 } {
   if (!control) return { routes, mounts: [], announce: () => () => {} };
-  const token = crypto.randomUUID();
+  // WHO OWNS the secret. Per-boot mint is right locally: discovery is `control.json` and its file
+  // permissions, which works because both holders share a filesystem. A deployment removes that
+  // premise — a token minted in the container is unreadable from outside and replaced every restart —
+  // so there the deployer mints it and injects it here, like the wake/ingress secrets.
+  const token = process.env.FASTAGENT_CONTROL_TOKEN || crypto.randomUUID();
   const plane = createControlPlane(control, { token, agent: options.agent });
   assertNoControlPlaneCollision(routes, plane);
   return {

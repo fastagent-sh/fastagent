@@ -467,4 +467,21 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(pre.ok).toBe(true);
     if (pre.ok) expect(pre.modelKeyInDefinition).toBe(true);
   });
+
+  it("sessionControl carries the plane's token as a deploy secret — a minted one is unreadable off-box", async () => {
+    const dir = await workspace();
+    const off = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(off.ok && off.extraSecrets).toEqual([]); // no plane, no secret
+
+    const on = await call(dir, {
+      model: "openai/gpt-4o-mini",
+      sessionControl: true,
+      deploy: { secrets: ["GH_TOKEN"] },
+    });
+    expect(on.ok).toBe(true);
+    if (on.ok) {
+      expect(on.extraSecrets).toEqual(["GH_TOKEN", "FASTAGENT_CONTROL_TOKEN"]);
+      expect(on.messages.some((m) => m.level === "warn" && /FASTAGENT_CONTROL_TOKEN/.test(m.text))).toBe(true);
+    }
+  });
 });

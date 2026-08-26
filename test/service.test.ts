@@ -106,6 +106,30 @@ describe("createAgentService", () => {
     await expect(readFile(discovery, "utf8")).rejects.toThrow(/ENOENT/);
   });
 
+  it("honours an injected control token — the deployed case, where a minted one is unreadable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-surface-injected-"));
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
+    );
+    await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
+    process.env.FASTAGENT_CONTROL_TOKEN = "deployer-minted";
+    try {
+      const service = await createAgentService(dir);
+      try {
+        expect(service.control?.token).toBe("deployer-minted");
+        const res = await service.handler(
+          new Request("http://h/control/capabilities", { headers: { authorization: "Bearer deployer-minted" } }),
+        );
+        expect(res.status).toBe(200);
+      } finally {
+        await service.close();
+      }
+    } finally {
+      delete process.env.FASTAGENT_CONTROL_TOKEN;
+    }
+  });
+
   it("a connection that dies after coming up makes health say so again", async () => {
     // Readiness is two-way: the surface would otherwise keep telling a load balancer it serves a
     // channel it no longer has.
