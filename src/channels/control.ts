@@ -206,7 +206,7 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
   }
 }
 
-export interface ControlRoutesOptions {
+export interface ControlPlaneOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
    *  remote-control endpoint must not be constructible by omission. */
   token: string;
@@ -224,7 +224,7 @@ export interface ControlRoutesOptions {
  * The plane OWNS {@link CONTROL_PREFIX}: it is mounted as one sub-application, answers its own
  * 404/405/preflight, and puts CORS headers on every reply — see {@link planeApp}.
  */
-export function createControlPlane(control: SessionControl, options: ControlRoutesOptions): PrefixMount {
+export function createControlPlane(control: SessionControl, options: ControlPlaneOptions): PrefixMount {
   return mountControlPlane(controlPlaneRoutes(control, options));
 }
 
@@ -238,7 +238,7 @@ export function mountControlPlane(routes: Record<string, ChannelHandler>): Prefi
  *  actually mounted, rather than from a hand-kept copy that cannot notice a new route. */
 export function controlPlaneRoutes(
   control: SessionControl,
-  options: ControlRoutesOptions,
+  options: ControlPlaneOptions,
 ): Record<string, ChannelHandler> {
   const { token } = options;
   if (!token) throw new Error("createControlPlane: a bearer token is required (empty tokens are not a mode)");

@@ -11,7 +11,7 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 
 export { createInvokeHandler } from "./channels/http.ts";
-export { createControlPlane, type ControlRoutesOptions, type WireEvent } from "./channels/control.ts";
+export { createControlPlane, type ControlPlaneOptions, type WireEvent } from "./channels/control.ts";
 export {
   ControlRequestError,
   connectAgent,
