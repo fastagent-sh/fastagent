@@ -193,7 +193,7 @@ function openAgentSurface(
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   control?: { token: string; prefix: string };  // the plane's bearer token, when sessionControl is on
   announce(boundPort: number): void;     // write <stateRoot>/control.json for local discovery
-  close(): Promise<void>;                // stop long connections and schedules
+  close(): Promise<void>;                // stop long connections and schedules; rejects if one fails to stop
 }>;
 ```
 

@@ -254,6 +254,21 @@ describe("openAgentSurface", () => {
     await expect(surface.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
   });
 
+  it("close() reports a connection that failed to stop", async () => {
+    // `closed` carries a terminal failure by contract. Swallowing it would let `close()` claim the
+    // surface is stopped over a channel that did not stop, and the caller could never tell.
+    const dir = await agentDir({
+      "channels/stubborn.mjs": `export default { name: "stubborn", connect: (ctx, signal) => ({
+        ready: Promise.resolve(),
+        closed: new Promise((_, reject) =>
+          signal.addEventListener("abort", () => reject(new Error("shutdown failed")), { once: true })),
+      }) };`,
+    });
+    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    await surface.ready;
+    await expect(surface.close()).rejects.toThrow(/shutdown failed/);
+  });
+
   it("closing while a connection is still dialling rejects `ready` rather than claiming success", async () => {
     // The contract lets a connection settle `ready` as CANCELLATION on abort. Resolving normally
     // would tell the caller its channels are up while the surface is shut and health says 503.

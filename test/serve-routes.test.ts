@@ -42,8 +42,11 @@ describe("serve: the route path language", () => {
     const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
     // Patterns from other frameworks, and a URL where a path belongs. Dispatch is a Map lookup, so
     // an unmatched key is simply never found — validation only buys telling the author so.
-    expect(check("/files/*")).toThrow(/literal path/);
-    expect(check("/files/:id")).toThrow(/literal path/);
+    // These two ARE reachable literally — a request for `/files/*` carries exactly that path. They
+    // are refused as a judgement, not a fact: nobody writes them meaning a literal path, and a
+    // mounted route that then never matches `/files/a.txt` is worse than being told at startup.
+    expect(check("/files/*")).toThrow(/literal path, matched exactly/);
+    expect(check("/files/:id")).toThrow(/literal path, matched exactly/);
     // Anything `URL` rewrites: the request arrives under the rewritten path, so the key is both
     // unreachable AND invisible to the conflict check (`/a/../x` and `/x` are one route).
     expect(check("GET /x?y=1")).toThrow(/arrives as "\/x"/);

@@ -180,7 +180,14 @@ export async function mountAgentSurface(
       scheduled.stop();
       options.signal?.removeEventListener("abort", onAbort);
       unannounce?.(); // a stale discovery file would point a client at a dead port
-      await Promise.allSettled(runs.map((run) => run.closed));
+      // `Promise.all`, not `allSettled`: the contract puts a terminal failure on `closed`, and
+      // swallowing it would let `close()` report success over a channel that did not stop. The
+      // caller decides what an unclean shutdown means; this only refuses to hide it.
+      const outcomes = await Promise.allSettled(runs.map((run) => run.closed));
+      const failures = outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : []));
+      if (failures.length > 0) {
+        throw failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close");
+      }
     })();
     return closing;
   };

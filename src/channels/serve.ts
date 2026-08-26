@@ -36,9 +36,12 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
 /**
  * A route key is `"METHOD /path"` or `"/path"`, with a literal path.
  *
- * Dispatch is a Map lookup, so an unmatched key is simply never found — validation only buys telling
- * an author their handler will not run, and covers the spellings someone plausibly writes believing
- * they work.
+ * Dispatch is a Map lookup, so most of what validation buys is telling an author their handler will
+ * not run. Two of the rules are a different judgement: `:id` and `*` ARE reachable literally (a
+ * request for `/files/*` carries exactly that path), but nobody writes them meaning that — they
+ * write them meaning a pattern, from a framework that has one. Refusing with the reason beats
+ * mounting a route that then never matches `/files/a.txt` and leaving them to work out why. The
+ * cost is a literal path we will not serve; it is a trade, not a fact.
  *
  * Unusual METHODS are deliberately not on the list, including the ones `fetch` refuses to send.
  * That refusal is a client-side rule: a `TRACE` route is reachable over a raw socket and its
@@ -58,7 +61,7 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
   const pattern = [":", "*"].find((ch) => path.includes(ch));
   if (pattern) {
-    throw new Error(describe(`"${pattern}" is not a pattern here — a route key is a literal path`));
+    throw new Error(describe(`"${pattern}" is not a pattern here — a route key is a literal path, matched exactly`));
   }
   // Asked of `URL` rather than by listing what it rewrites (`?`/`#`, `.`/`..`, `\`, `%2e`). A key it
   // rewrites is unreachable AND compares as a different string, hiding that `/a/../x` and `/x` are
