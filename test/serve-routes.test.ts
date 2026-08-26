@@ -80,6 +80,11 @@ describe("serve: the route path language", () => {
     // `fetch` refuses to CONSTRUCT a TRACE request, which is a client-side rule. A server still
     // receives one over a raw socket, so refusing the route here would remove a working capability
     // to describe someone else's limitation.
+    const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
+    // A non-token is a different case: no client can send it, so that route really is unreachable.
+    expect(check("G@T /x")).toThrow(/not a valid HTTP method/);
+    expect(check("GET,POST /x")).toThrow(/not a valid HTTP method/);
+    expect(check("PROPFIND /x")).not.toThrow(); // legal extension methods stay legal
     const handle = router({ "TRACE /x": () => new Response("traced") });
     expect(await (await handle(new Request("http://h/x", { method: "GET" }))).status).toBe(405);
     const raw = new Request("http://h/x");
@@ -140,6 +145,15 @@ describe("serve: the route path language", () => {
     expect(() => router({}, [at("/control"), at("/control")])).toThrow(/overlaps/);
     expect(() => router({}, [at("/control"), at("/controlled")])).not.toThrow();
     expect(() => router({}, [at("/a"), at("/b")])).not.toThrow();
+  });
+
+  it("HEAD carries no content whichever route answers it", async () => {
+    // Not only the GET fallback: an explicit HEAD route and a method-less one are HEAD responses too.
+    const explicit = router({ "HEAD /x": () => new Response("should not ship") });
+    expect(await (await explicit(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
+    const anyMethod = router({ "/x": () => new Response("should not ship") });
+    expect(await (await anyMethod(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
+    expect(await (await anyMethod(new Request("http://h/x"))).text()).toBe("should not ship"); // GET unaffected
   });
 
   it("HEAD is answered from GET, without the content — and an explicit HEAD wins", async () => {

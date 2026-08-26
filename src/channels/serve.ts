@@ -48,6 +48,11 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
 export function assertRouteKey(key: string, describe: (problem: string) => string): void {
   const { method, path } = parseRouteKey(key);
   if (method === "") throw new Error(describe('a leading space is not a method — write "/path" for any method'));
+  // A method is an HTTP token (RFC 9110). A non-token cannot arrive from any client, unlike the
+  // merely unusual ones above.
+  if (method !== undefined && !/^[A-Z0-9!#$%&'*+\-.^_`|~]+$/.test(method)) {
+    throw new Error(describe(`"${method}" is not a valid HTTP method`));
+  }
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
   const pattern = [":", "*"].find((ch) => path.includes(ch));
   if (pattern) {
@@ -146,16 +151,16 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
     const path = new URL(req.url).pathname;
     for (const mount of mounts) if (pathUnderPrefix(path, mount.prefix)) return mount.handler(req);
+    // HEAD carries no content (RFC 9110) whichever route answers it — an explicit `HEAD` one, a
+    // method-less one, or the `GET` fallback. Dropped here, not left to the HTTP layer: this handler
+    // is public surface and a direct caller must see the same answer as the socket.
+    const head = req.method === "HEAD";
+    const strip = (r: Response | Promise<Response>) => (r instanceof Promise ? r.then(withoutBody) : withoutBody(r));
     const exact = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
-    if (exact) return exact(req);
-    // HEAD is GET without the content (RFC 9110). Dropped here, not left to the HTTP layer: this
-    // handler is public surface and a direct caller must see the same answer as the socket.
-    if (req.method === "HEAD") {
+    if (exact) return head ? strip(exact(req)) : exact(req);
+    if (head) {
       const get = byKey.get(`GET ${path}`);
-      if (get) {
-        const answer = get(req);
-        return answer instanceof Promise ? answer.then(withoutBody) : withoutBody(answer);
-      }
+      if (get) return strip(get(req));
     }
     return paths.has(path) ? text("method not allowed\n", 405) : text("not found\n", 404);
   };
