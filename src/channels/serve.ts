@@ -36,33 +36,19 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
 /**
  * A route key is `"METHOD /path"` or `"/path"`, with a literal path.
  *
- * Dispatch is a Map lookup, so most of what validation buys is telling an author their handler will
- * not run. Two of the rules are a different judgement: `:id` and `*` ARE reachable literally (a
- * request for `/files/*` carries exactly that path), but nobody writes them meaning that — they
- * write them meaning a pattern, from a framework that has one. Refusing with the reason beats
- * mounting a route that then never matches `/files/a.txt` and leaving them to work out why. The
- * cost is a literal path we will not serve; it is a trade, not a fact.
+ * Every rule here exists because breaking it costs SOMEONE ELSE. Two keys naming one route, a route
+ * under a mount, a path a URL rewrites (`/a/../x` and `/x` are one route spelled two ways, while
+ * the conflict check compares strings) — in each case a channel goes dark and its author did
+ * nothing wrong.
  *
- * Unusual METHODS are deliberately not on the list, including the ones `fetch` refuses to send.
- * That refusal is a client-side rule: a `TRACE` route is reachable over a raw socket and its
- * handler runs (verified). Rejecting those here would remove a working capability to describe a
- * limitation that lives somewhere else.
+ * Mistakes that only cost their own author a debugging session are NOT policed: `:id` and `*` are
+ * literal path characters here, so such a key simply never matches, and an unusual method is the
+ * same. Refusing those would trade a working capability for a lecture.
  */
 export function assertRouteKey(key: string, describe: (problem: string) => string): void {
   const { method, path } = parseRouteKey(key);
   if (method === "") throw new Error(describe('a leading space is not a method — write "/path" for any method'));
-  // A method is an HTTP token (RFC 9110). A non-token cannot arrive from any client, unlike the
-  // merely unusual ones above. Checked on what the author WROTE: upper-casing first would let `ß`
-  // through as `SS`, a token no client can send under the name the key declares.
-  const written = key.includes(" ") ? key.slice(0, key.indexOf(" ")) : undefined;
-  if (written !== undefined && written !== "" && !/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(written)) {
-    throw new Error(describe(`"${written}" is not a valid HTTP method`));
-  }
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
-  const pattern = [":", "*"].find((ch) => path.includes(ch));
-  if (pattern) {
-    throw new Error(describe(`"${pattern}" is not a pattern here — a route key is a literal path, matched exactly`));
-  }
   // Asked of `URL` rather than by listing what it rewrites (`?`/`#`, `.`/`..`, `\`, `%2e`). A key it
   // rewrites is unreachable AND compares as a different string, hiding that `/a/../x` and `/x` are
   // one route.

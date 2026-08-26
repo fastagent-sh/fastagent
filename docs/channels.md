@@ -91,10 +91,13 @@ Route keys are either:
 METHOD /path       # method-specific
 ```
 
-The path is a **literal** — no `:params`, no `*`, and nothing a URL rewrites (`?`/`#`, `.`/`..`).
-Dispatch is a map lookup, so those cannot match anything; they are refused at startup with the
-reason rather than left as a handler that never runs. Two keys naming the same route (`/webhook` and `POST /webhook`) are refused too:
-one of them would silently never receive a request.
+The path is matched **literally** — `:id` and `*` are ordinary characters, not patterns, so a key
+containing them simply never matches.
+
+Startup refuses only what would cost ANOTHER channel: two keys naming the same route (`/webhook` and
+`POST /webhook`), a route inside a mounted prefix, and a path a URL rewrites (`/a/../x` is `/x`
+spelled differently, so a collision check comparing strings would not see it). In each of those a
+channel goes dark without its author having done anything wrong.
 
 `HEAD` is answered from your `GET` route without the content (RFC 9110); write an explicit one only
 if it should differ. Full rule: [API reference](api-reference.md#httphost-helpers).

@@ -38,15 +38,12 @@ describe("serve: router", () => {
 });
 
 describe("serve: the route path language", () => {
-  it("refuses the spellings an author writes believing they work", () => {
+  it("refuses only what would cost another channel", () => {
     const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
-    // Patterns from other frameworks, and a URL where a path belongs. Dispatch is a Map lookup, so
-    // an unmatched key is simply never found — validation only buys telling the author so.
-    // These two ARE reachable literally — a request for `/files/*` carries exactly that path. They
-    // are refused as a judgement, not a fact: nobody writes them meaning a literal path, and a
-    // mounted route that then never matches `/files/a.txt` is worse than being told at startup.
-    expect(check("/files/*")).toThrow(/literal path, matched exactly/);
-    expect(check("/files/:id")).toThrow(/literal path, matched exactly/);
+    // A pattern character is a literal here, so such a key just never matches — its author's
+    // problem, not another channel's. Not policed.
+    expect(check("/files/*")).not.toThrow();
+    expect(check("/files/:id")).not.toThrow();
     // Anything `URL` rewrites: the request arrives under the rewritten path, so the key is both
     // unreachable AND invisible to the conflict check (`/a/../x` and `/x` are one route).
     expect(check("GET /x?y=1")).toThrow(/arrives as "\/x"/);
@@ -84,12 +81,7 @@ describe("serve: the route path language", () => {
     // receives one over a raw socket, so refusing the route here would remove a working capability
     // to describe someone else's limitation.
     const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
-    // A non-token is a different case: no client can send it, so that route really is unreachable.
-    expect(check("G@T /x")).toThrow(/not a valid HTTP method/);
-    expect(check("GET,POST /x")).toThrow(/not a valid HTTP method/);
-    // Checked on what was WRITTEN: `"ß".toUpperCase()` is `"SS"`, a token no client sends as `ß`.
-    expect(check("ß /x")).toThrow(/not a valid HTTP method/);
-    expect(check("PROPFIND /x")).not.toThrow(); // legal extension methods stay legal
+    expect(check("PROPFIND /x")).not.toThrow(); // extension methods are ordinary
     const handle = router({ "TRACE /x": () => new Response("traced") });
     expect(await (await handle(new Request("http://h/x", { method: "GET" }))).status).toBe(405);
     const raw = new Request("http://h/x");
@@ -136,8 +128,6 @@ describe("serve: the route path language", () => {
     // A prefix IS a path. Unchecked, `/files/:id` would be resolved by the matcher its own way while
     // pathUnderPrefix compared it as a literal — the exact split this language exists to close.
     const mount = (prefix: string) => () => router({}, [{ prefix, handler: () => new Response("m") }]);
-    expect(mount("/files/:id")).toThrow(/literal path/);
-    expect(mount("/files/*")).toThrow(/literal path/);
     expect(mount("control")).toThrow(/must start/);
     expect(mount("/control/")).toThrow(/no trailing slash/);
     expect(mount("/")).toThrow(/owning every path IS that handler/); // the root is not a mount
@@ -203,8 +193,8 @@ describe("serve: the route path language", () => {
     // Two doors lead to the matcher: channel files, and an embedder handing over `Routes`. A pattern
     // slipping through the second one would match at runtime while every collision check — which
     // reads paths as literals — quietly answers the wrong question about it.
-    expect(() => router({ "GET /users/:id": () => new Response("x") })).toThrow(/literal path/);
-    expect(() => router({ "GET /files/*": () => new Response("x") })).toThrow(/literal path/);
+    expect(() => router({ "GET /x?y=1": () => new Response("x") })).toThrow(/arrives as/);
+    expect(() => router({ " /x": () => new Response("x") })).toThrow(/leading space/);
   });
 });
 

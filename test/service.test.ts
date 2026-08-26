@@ -362,12 +362,12 @@ describe("createAgentService", () => {
     // to close at that point. (The route language happens to be enforced earlier still, at channel
     // load — this asserts the property, not which check catches it.)
     const dir = await agentDir({
-      "channels/bad.mjs": `export default () => ({ "GET /files/:id": () => new Response("x") });`,
+      "channels/bad.mjs": `export default () => ({ "GET /a/../x": () => new Response("x") });`,
       "channels/sock.mjs": `export default { name: "sock", connect: () => { globalThis.__faConnected = true; return {
         ready: Promise.resolve(), closed: new Promise(() => {}) }; } };`,
     });
     (globalThis as Record<string, unknown>).__faConnected = false;
-    await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|literal path/);
+    await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|arrives as/);
     expect((globalThis as unknown as { __faConnected?: boolean }).__faConnected).toBe(false);
   });
 

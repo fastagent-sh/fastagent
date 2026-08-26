@@ -74,20 +74,24 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(failures[0]!.message).toMatch(/TELEGRAM_SECRET_TOKEN/);
   });
 
-  it("refuses a route key that is not a literal path", async () => {
-    // A channel author writes literal paths. Patterns would have to be predicted by every collision
-    // check, so they are refused at load with the reason rather than mounted and mispredicted.
+  it("refuses a route key another channel would pay for", async () => {
+    // Only that: a key a URL rewrites is one route spelled two ways, so the conflict check compares
+    // it as distinct and whatever it collides with goes dark. A `:id` key merely never matches,
+    // which costs its own author and nobody else — allowed.
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(
       join(dir, "channels", "p.mjs"),
       `export default () => ({ "GET /f/:id": () => new Response("x") });`,
     );
-    await writeFile(join(dir, "channels", "w.mjs"), `export default () => ({ "GET /f/*": () => new Response("x") });`);
+    await writeFile(
+      join(dir, "channels", "w.mjs"),
+      `export default () => ({ "GET /a/../f": () => new Response("x") });`,
+    );
     const { routes, failures } = await loadChannels(dir, fakeCtx);
-    expect(routes).toEqual({});
-    expect(failures.map((f) => f.message).join("\n")).toMatch(/literal path/);
-    expect(failures).toHaveLength(2);
+    expect(Object.keys(routes)).toEqual(["GET /f/:id"]);
+    expect(failures.map((f) => f.message).join("\n")).toMatch(/arrives as/);
+    expect(failures).toHaveLength(1);
   });
 
   it("surfaces a route collision (first file wins; the duplicate is dropped, never silent)", async () => {
