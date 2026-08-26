@@ -32,8 +32,11 @@ export interface AgentSurface {
   mounts: readonly PrefixMount[];
   agentDir: string;
   workspace: string;
-  /** What actually mounted, for a startup line: channel files serving routes, and long connections. */
-  channels: { routes: string[]; longConnections: string[] };
+  /** What actually mounted, for a startup line: channel files serving routes, long connections, and
+   *  whether the built-in `POST /invoke` fallback is one of the routes. That last one is a FACT of
+   *  the assembly, not something to re-infer from a path — a channel may legally author
+   *  `POST /invoke` with a protocol of its own. */
+  channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. REJECTS if one
    *  fails to come up, after closing the surface: a host must not report itself serving while a
@@ -225,6 +228,7 @@ export async function mountAgentSurface(
     channels: {
       routes: routed.routeChannels,
       longConnections: routed.longConnections.map((c) => c.name),
+      builtinInvoke: routed.builtinInvoke,
     },
     schedules: scheduled.schedules,
     ready,

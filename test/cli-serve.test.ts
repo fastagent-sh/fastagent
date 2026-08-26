@@ -6,6 +6,7 @@ import type { Agent } from "../src/agent.ts";
 import { mountAgentcore, mountSessionControl, reportServing, routesFor } from "../src/cli/serve.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
+import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 
 describe("serving surface", () => {
@@ -112,7 +113,7 @@ describe("cli: the serving report", () => {
       reportServing(
         {
           routes: { "POST /telegram": () => new Response("x") },
-          channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
+          channels: { routes: ["telegram"], longConnections: ["feishu-ws"], builtinInvoke: false },
         } as never,
         "127.0.0.1",
         8787,
@@ -121,6 +122,32 @@ describe("cli: the serving report", () => {
       (process as { send?: unknown }).send = original;
     }
     expect(sent).toEqual([{ type: "ready", port: 8787, routeChannels: ["telegram"] }]);
+  });
+
+  it("does not advertise the built-in invoke example for a channel that owns that path", () => {
+    // `POST /invoke` in the table does NOT mean the built-in fallback: a channel may author it with
+    // a protocol of its own, and printing the built-in curl example would document a request that
+    // handler does not accept. The assembly knows which it is; inferring from the path does not.
+    const lines: string[] = [];
+    const original = process.send;
+    (process as { send?: unknown }).send = () => true;
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      lines.push(String(m));
+    });
+    try {
+      reportServing(
+        {
+          routes: { "POST /invoke": () => new Response("a channel's own protocol") },
+          channels: { routes: ["custom"], longConnections: [], builtinInvoke: false },
+        } as never,
+        "127.0.0.1",
+        8787,
+      );
+    } finally {
+      spy.mockRestore();
+      (process as { send?: unknown }).send = original;
+    }
+    expect(lines.join("\n")).not.toContain(INVOKE_EXAMPLE_BODY);
   });
 });
 

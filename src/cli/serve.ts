@@ -278,8 +278,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
  */
 export function reportServing(surface: AgentSurface, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: surface.channels.routes });
-  const builtinInvoke = Object.keys(surface.routes).some((key) => key === "POST /invoke");
-  for (const line of readyAddressLines(host, boundPort, builtinInvoke)) log.info(line);
+  for (const line of readyAddressLines(host, boundPort, surface.channels.builtinInvoke)) log.info(line);
   log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
   if (surface.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${surface.channels.longConnections.join(", ")}`);
@@ -323,14 +322,15 @@ export function serve(
     // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires
     // regardless. No drain — an in-flight turn is cut, which is the existing contract.
     const deadline = setTimeout(() => process.exit(exitCode), 1_000);
-    void Promise.resolve(hooks.onShutdown?.())
-      .catch(() => {})
-      .then(() => hosted.close().catch(() => {}))
-      .finally(() => {
-        clearTimeout(deadline);
-        process.exit(exitCode);
-      });
+    // Stop accepting FIRST, before anything is awaited. `onShutdown` waits for long connections to
+    // close, and a socket still listening through that wait would dispatch new work into channels
+    // and a scheduler that are already shutting down.
+    const closingServer = hosted.close().catch(() => {});
     hosted.closeAllConnections();
+    void Promise.all([closingServer, Promise.resolve(hooks.onShutdown?.()).catch(() => {})]).finally(() => {
+      clearTimeout(deadline);
+      process.exit(exitCode);
+    });
   };
   process.once("SIGINT", () => stop(0));
   process.once("SIGTERM", () => stop(0));

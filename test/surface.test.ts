@@ -35,6 +35,7 @@ describe("openAgentSurface", () => {
       expect(surface.channels.routes).toEqual(["hook"]);
       // A declared channel replaces the built-in /invoke — the fallback exists only when there is none.
       expect((await surface.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(404);
+      expect(surface.channels.builtinInvoke).toBe(false);
     } finally {
       await surface.close();
     }
