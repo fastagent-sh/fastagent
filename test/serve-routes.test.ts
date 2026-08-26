@@ -76,6 +76,14 @@ describe("serve: the route path language", () => {
     expect((await handle(new Request("http://h/any", { method: "DELETE" }))).status).toBe(200);
   });
 
+  it("a lower-case method is the same route, and reaches its handler", async () => {
+    // The method is upper-cased when the key is parsed, so validation and conflict-checking already
+    // agree that `"get /x"` is `GET /x`. Dispatch has to agree too, or the route starts and never runs.
+    const handle = router({ "get /x": () => new Response("hit") });
+    expect(await (await handle(new Request("http://h/x"))).text()).toBe("hit");
+    expect(() => router({ "get /x": () => new Response("a"), "GET /x": () => new Response("b") })).toThrow(/conflicts/);
+  });
+
   it("router() refuses two keys that name the same route", () => {
     // The object's own key uniqueness does not catch this: `"/x"` and `"GET /x"` are different keys
     // for the same request, and registration order would silently pick a winner.

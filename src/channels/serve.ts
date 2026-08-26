@@ -142,7 +142,11 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
     if (shadowed) {
       throw new Error(`route "${key}" conflicts with "${shadowed}" — one of them would never receive a request`);
     }
-    byKey.set(key, handler);
+    // Stored NORMALISED, not as written: `parseRouteKey` upper-cases the method, so a `"get /x"`
+    // key passes validation and conflict-checking under `GET` and would then be looked up under a
+    // name nothing stores. Lower-case is a reasonable thing to write; it just has one meaning.
+    const { method } = parseRouteKey(key);
+    byKey.set(method ? `${method} ${path}` : path, handler);
     paths.add(path);
   }
 

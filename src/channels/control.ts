@@ -65,7 +65,14 @@ const json = (value: unknown, status = 200): Response =>
  * allowing just `authorization` leaves precisely the WRITE routes unreachable while reads work.
  */
 function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
-  const byKey = new Map(Object.entries(routes));
+  // Normalised keys, for the reason serve.ts gives: the method is upper-cased when parsed, so a
+  // key written lower-case would be looked up under a name nothing stores.
+  const byKey = new Map(
+    Object.entries(routes).map(([key, handler]) => {
+      const { method, path } = parseRouteKey(key);
+      return [method ? `${method} ${path}` : path, handler] as const;
+    }),
+  );
   const methodsByPath = new Map<string, Set<string>>();
   for (const key of Object.keys(routes)) {
     const { method, path } = parseRouteKey(key);
