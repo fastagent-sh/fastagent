@@ -62,6 +62,11 @@ function references(node: unknown, path = "$"): { path: string; target: string; 
     if (key === "Ref" && typeof value === "string") found.push({ path, target: value, kind: "Ref" });
     else if (key === "Fn::GetAtt" && typeof value === "string") {
       found.push({ path, target: value.split(".")[0]!, kind: "GetAtt" });
+    } else if (key === "Fn::Sub" && typeof value === "string") {
+      // `!Sub` hides references inside a string; a typo there is invisible to the other two branches.
+      for (const m of value.matchAll(/\$\{([^}!][^}]*)\}/g)) {
+        found.push({ path, target: m[1]!.split(".")[0]!.trim(), kind: "Sub" });
+      }
     } else found.push(...references(value, `${path}.${key}`));
   }
   return found;
@@ -150,11 +155,17 @@ describe("the agentcore template (parsed)", () => {
     expect(names).toContain(scheduleResourceName("my-agent", "digest"));
   });
 
-  it("declares secrets as NoEcho parameters and wires them into the runtime", () => {
+  it("declares secrets as NoEcho parameters AND wires them into the runtime", () => {
     const t = parseTemplate({ ...WEBHOOK_CHANNELS, secrets: ["TELEGRAM_BOT_TOKEN"] } as Partial<AgentcorePlanInput>);
-    const params = t.Parameters ?? {};
-    const secretParams = Object.entries(params).filter(([, p]) => p.NoEcho === true);
+    const secretParams = Object.entries(t.Parameters ?? {}).filter(([, p]) => p.NoEcho === true);
     expect(secretParams.length).toBeGreaterThan(0);
     for (const [, p] of secretParams) expect(p.Type).toBe("String");
+
+    // Declaring the parameter is half the wiring: unless the runtime READS it, the deployment takes
+    // the secret and the agent never sees it.
+    const runtime = Object.values(t.Resources).find((r) => r.Type === "AWS::BedrockAgentCore::Runtime")!;
+    const env = (runtime.Properties as { EnvironmentVariables: Record<string, unknown> }).EnvironmentVariables;
+    const [paramName] = secretParams.find(([n]) => n.toLowerCase().includes("telegram"))!;
+    expect(env.TELEGRAM_BOT_TOKEN).toEqual({ Ref: paramName });
   });
 });
