@@ -274,10 +274,28 @@ describe("createAgentService", () => {
       "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
         ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
     });
-    const service = await createAgentService(dir, { onChannelClosed: () => {} });
+    const service = await createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 });
     await service.ready;
-    await expect(service.close()).rejects.toThrow(/deaf.*did not stop within|did not stop within.*deaf/);
-  }, 20_000);
+    await expect(service.close()).rejects.toThrow(/did not stop within 200ms: deaf/);
+  });
+
+  it("names only the connection that is stuck, not the ones that stopped", async () => {
+    // A shutdown message that blames every channel because one hung sends the reader to the wrong
+    // file. The deadline reports what did not settle, individually.
+    const dir = await agentDir({
+      "channels/quick.mjs": `export default { name: "quick", connect: (ctx, signal) => ({
+        ready: Promise.resolve(),
+        closed: new Promise((r) => signal.addEventListener("abort", () => r(), { once: true })),
+      }) };`,
+      "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
+        ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
+    });
+    const service = await createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 });
+    await service.ready;
+    const error = await service.close().catch((e: Error) => e);
+    expect(String(error)).toMatch(/deaf/);
+    expect(String(error)).not.toMatch(/quick/);
+  });
 
   it("close() reports a connection that failed to stop", async () => {
     // `closed` carries a terminal failure by contract. Swallowing it would let `close()` claim the

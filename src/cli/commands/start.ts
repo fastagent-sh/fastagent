@@ -25,6 +25,7 @@ import type { RouteSurface } from "../../channels/agentcore.ts";
 
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
+  SHUTDOWN_GRACE_MS,
   assertNoControlPlaneCollision,
   assertTunnelBindable,
   maybeTunnel,
@@ -153,6 +154,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     ? undefined
     : await mountAgentService(opened, {
         wrapAgent: () => traced,
+        closeTimeoutMs: SHUTDOWN_GRACE_MS,
         control,
         onChannelClosed: (name, error) =>
           failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),

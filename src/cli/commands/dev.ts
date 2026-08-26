@@ -17,7 +17,7 @@ import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
+import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface DevOptions {
@@ -90,6 +90,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev,
     // gated out in start (level info), keeping end-user content out of production logs.
     wrapAgent: logAgentLoop,
+    closeTimeoutMs: SHUTDOWN_GRACE_MS,
     control: { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) },
     onChannelClosed: (name, error) =>
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),

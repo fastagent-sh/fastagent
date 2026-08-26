@@ -303,6 +303,11 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
  * adapter owns reconnects; a terminal close rejects `closed` and fails the process visibly. Abort is
  * the sole clean-shutdown command. `host` unset binds all interfaces.
  */
+/** What the CLI gives a service to stop in, and the hard exit that follows it. The order matters:
+ *  a forced exit before the service answers would report a clean shutdown over a stuck channel. */
+export const SHUTDOWN_GRACE_MS = 800;
+const FORCED_EXIT_MS = 1_500;
+
 export function serve(
   handler: ChannelHandler,
   bind: { port: number; host?: string },
@@ -321,7 +326,12 @@ export function serve(
     stopping = true;
     // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires
     // regardless. No drain — an in-flight turn is cut, which is the existing contract.
-    const deadline = setTimeout(() => process.exit(exitCode), 1_000);
+    // Later than the service's own close deadline (SHUTDOWN_GRACE_MS below), or the process leaves
+    // at 0 before `close()` has said a channel would not stop.
+    const deadline = setTimeout(() => {
+      log.error(`[fastagent] shutdown did not finish within ${FORCED_EXIT_MS}ms; exiting`);
+      process.exit(1);
+    }, FORCED_EXIT_MS);
     // Stop accepting FIRST, before anything is awaited. `onShutdown` waits for long connections to
     // close, and a socket still listening through that wait would dispatch new work into channels
     // and a scheduler that are already shutting down.

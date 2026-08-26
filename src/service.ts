@@ -19,36 +19,47 @@ import { log } from "./log.ts";
 import { mountSessionControl, routesFor, startSchedules } from "./cli/serve.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
-/** How long shutdown waits for a channel's `closed` before reporting it stuck. A channel that
- *  ignores its abort signal must not be able to hang a caller's teardown — or, during a failed
- *  start, keep the original error from ever arriving. */
+/** Default wait for a channel's `closed` before reporting it stuck. A channel that ignores its
+ *  abort signal must not hang a caller's teardown — or, during a failed start, keep the original
+ *  error from arriving. The CLI passes a shorter one: its own forced exit must come AFTER this, or
+ *  the process leaves at 0 before the failure is known. */
 const CLOSE_DEADLINE_MS = 5_000;
 
-/** Settle when every connection has closed, or when the deadline passes. Returns the ones that did
- *  not close, so the caller can say which channel is stuck rather than just that something is. */
+/** Settle when every connection has closed, or when the deadline passes. Reports the ones that did
+ *  NOT settle — named individually, so a single stuck channel is not reported as all of them. */
 async function closeWithin(
   runs: readonly LongConnection[],
   names: readonly string[],
+  deadlineMs: number,
 ): Promise<{ stuck: string[]; failures: unknown[] }> {
+  const pending = new Set(runs.map((_, i) => i));
+  const failures: unknown[] = [];
+  const tracked = runs.map((run, i) =>
+    run.closed.then(
+      () => {
+        pending.delete(i);
+      },
+      (error: unknown) => {
+        pending.delete(i);
+        failures.push(error);
+      },
+    ),
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const outcomes = await Promise.race([
-      Promise.allSettled(runs.map((run) => run.closed)),
+    await Promise.race([
+      Promise.all(tracked),
       // NOT unref'd: this timer is the thing being awaited, and an unref'd one lets the loop go
       // idle with nothing left to advance it. Cleared below so a prompt close does not hold the
       // process for the rest of the deadline.
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), CLOSE_DEADLINE_MS);
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, deadlineMs);
       }),
     ]);
-    if (!outcomes) return { stuck: [...names], failures: [] };
-    return {
-      stuck: [],
-      failures: outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : [])),
-    };
   } finally {
     clearTimeout(timer);
   }
+  return { stuck: [...pending].map((i) => names[i] ?? "channel"), failures };
 }
 
 export interface AgentService {
@@ -102,6 +113,9 @@ export interface MountAgentServiceOptions {
   /** Called when a long connection ends on its own — a dropped socket-mode channel, say. The CLI
    *  exits; an embedded host may prefer to log. Default: log an error. */
   onChannelClosed?: (name: string, error?: unknown) => void;
+  /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). The CLI
+   *  shortens it so its own forced exit lands after this answer, not before it. */
+  closeTimeoutMs?: number;
 }
 
 export interface CreateAgentServiceOptions extends MountAgentServiceOptions {
@@ -148,6 +162,7 @@ export async function mountAgentService(
   // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the
   // same agent, so this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
+  const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
   const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
@@ -182,11 +197,12 @@ export async function mountAgentService(
     const { stuck, failures } = await closeWithin(
       runs,
       routed.longConnections.map((c) => c.name),
+      closeTimeoutMs,
     );
     for (const failure of failures) {
       log.error(`[fastagent] cleanup after a failed start also failed: ${String(failure)}`);
     }
-    if (stuck.length > 0) log.error(`[fastagent] did not stop within ${CLOSE_DEADLINE_MS}ms: ${stuck.join(", ")}`);
+    if (stuck.length > 0) log.error(`[fastagent] did not stop within ${closeTimeoutMs}ms: ${stuck.join(", ")}`);
     throw error;
   };
   for (const connection of routed.longConnections) {
@@ -231,9 +247,10 @@ export async function mountAgentService(
       const { stuck, failures } = await closeWithin(
         runs,
         routed.longConnections.map((c) => c.name),
+        closeTimeoutMs,
       );
       if (stuck.length > 0) {
-        throw new Error(`long connection(s) did not stop within ${CLOSE_DEADLINE_MS}ms: ${stuck.join(", ")}`);
+        throw new Error(`long connection(s) did not stop within ${closeTimeoutMs}ms: ${stuck.join(", ")}`);
       }
       if (failures.length > 0) {
         throw failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close");
