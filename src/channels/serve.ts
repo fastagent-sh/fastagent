@@ -49,9 +49,11 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   const { method, path } = parseRouteKey(key);
   if (method === "") throw new Error(describe('a leading space is not a method — write "/path" for any method'));
   // A method is an HTTP token (RFC 9110). A non-token cannot arrive from any client, unlike the
-  // merely unusual ones above.
-  if (method !== undefined && !/^[A-Z0-9!#$%&'*+\-.^_`|~]+$/.test(method)) {
-    throw new Error(describe(`"${method}" is not a valid HTTP method`));
+  // merely unusual ones above. Checked on what the author WROTE: upper-casing first would let `ß`
+  // through as `SS`, a token no client can send under the name the key declares.
+  const written = key.includes(" ") ? key.slice(0, key.indexOf(" ")) : undefined;
+  if (written !== undefined && written !== "" && !/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(written)) {
+    throw new Error(describe(`"${written}" is not a valid HTTP method`));
   }
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
   const pattern = [":", "*"].find((ch) => path.includes(ch));

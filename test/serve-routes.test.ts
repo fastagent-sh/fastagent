@@ -84,6 +84,8 @@ describe("serve: the route path language", () => {
     // A non-token is a different case: no client can send it, so that route really is unreachable.
     expect(check("G@T /x")).toThrow(/not a valid HTTP method/);
     expect(check("GET,POST /x")).toThrow(/not a valid HTTP method/);
+    // Checked on what was WRITTEN: `"ß".toUpperCase()` is `"SS"`, a token no client sends as `ß`.
+    expect(check("ß /x")).toThrow(/not a valid HTTP method/);
     expect(check("PROPFIND /x")).not.toThrow(); // legal extension methods stay legal
     const handle = router({ "TRACE /x": () => new Response("traced") });
     expect(await (await handle(new Request("http://h/x", { method: "GET" }))).status).toBe(405);
