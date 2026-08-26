@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { mountAgentcore, reportServing } from "../src/cli/serve.ts";
+import { reportServing } from "../src/cli/serve.ts";
+import { mountAgentcore } from "../src/channels/agentcore-service.ts";
+import { agentcoreRoutes } from "../src/channels/agentcore.ts";
+import { beginWork } from "../src/channels/busy.ts";
 import { mountSessionControl, routesFor } from "../src/service.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
@@ -44,6 +47,37 @@ describe("serving surface", () => {
 });
 
 describe("mountAgentcore", () => {
+  it("stops saving state once its service is closed", async () => {
+    // The adapter registers a PROCESS-global idle listener. Discarding its unsubscribe left a closed
+    // adapter saving on every later idle edge — including work belonging to whatever mounted next.
+    const saves: string[] = [];
+    const stateSync = {
+      use: () => {},
+      ready: async () => {},
+      save: () => {
+        saves.push("put");
+      },
+    } as unknown as Parameters<typeof agentcoreRoutes>[0]["stateSync"];
+
+    const closed = new AbortController();
+    agentcoreRoutes({
+      routes: { routes: {}, mounts: [] },
+      agent,
+      stateRoot: "/tmp",
+      isBusy: () => false,
+      stateSync,
+      signal: closed.signal,
+    });
+
+    // An idle edge while mounted: the snapshot must go out.
+    beginWork()();
+    expect(saves).toHaveLength(1);
+
+    closed.abort();
+    beginWork()();
+    expect(saves).toHaveLength(1); // nothing after close
+  });
+
   const agent: Agent = {
     async *invoke() {
       yield { type: "completed" as const };

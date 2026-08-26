@@ -12,32 +12,18 @@ import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import {
-  assertNoControlPlaneCollision,
-  mountAgentService,
-  mountSessionControl,
-  routesFor,
-  startSchedules,
-} from "../../service.ts";
-import { router } from "../../channels/serve.ts";
+import { mountAgentService } from "../../service.ts";
 import { log, setLogLevel } from "../../log.ts";
-import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
-import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
-import type { RouteSurface } from "../../channels/agentcore.ts";
 
+import { isAgentcoreRuntime, mountAgentcoreService } from "../../channels/agentcore-service.ts";
+import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
+import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import {
-  SHUTDOWN_GRACE_MS,
-  assertTunnelBindable,
-  maybeTunnel,
-  mountAgentcore,
-  reportServing,
-  serve,
-} from "../serve.ts";
+import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface StartOptions {
@@ -85,7 +71,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     deferredToolNames,
     toolCollisions,
     toolFailures,
-    sessionControl,
   } = opened;
 
   reportLine("agent", agentDir);
@@ -129,125 +114,42 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   }
   reportFindingsIfChanged(definition.dir, definition);
 
-  // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
-  // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
-  // slots arrive from the external clock through it — so no resident cron timers. In particular,
-  // do NOT mount the ordinary unauthenticated POST /invoke fallback: a selfSchedule-only topology
-  // needs a public Function URL for wake callbacks, and its forwarder can relay arbitrary paths.
-  const agentcore = process.env.FASTAGENT_AGENTCORE === "1";
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
-  // On AgentCore the channels are constructed LAZILY (mountAgentcore's lazyChannels, resolved on the
-  // first envelope after the state-snapshot restore): construction loads channel state and replays
-  // turn intent, and at boot the state mount is PRE-RESTORE — empty after every version update — so
-  // an eager build would cache that emptiness (thread participation, delivery dedup, pending turns)
-  // and then clobber the restored files with it. Everywhere else the state root is durable at boot,
-  // so channels mount eagerly and a broken channel fails startup.
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
   const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const control = { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) };
-  // AgentCore assembles DIFFERENTLY, not accidentally: its channels load lazily (below), so it
-  // cannot take the shared `mountAgentService`, which discovers them eagerly. Every other
-  // deployment — and every embedder — takes the one assembly.
-  const mounted = agentcore
-    ? undefined
-    : await mountAgentService(opened, {
+  // ONE branch for the whole posture. AgentCore assembles differently — lazy channels over a
+  // pre-restore state mount, an external clock, no resident connections — but it yields the same
+  // AgentService, so everything below this point is common.
+  // The wake-alarm sink is a PROCESS-global (schedule/wakeups.ts) — this process IS the AgentCore
+  // deployment, so the process entry installs it. A service can be closed; a global cannot be
+  // handed to something that can, without inventing an ownership the singleton does not have.
+  const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  const service = await (isAgentcoreRuntime()
+    ? mountAgentcoreService(opened, { wrapAgent: () => traced, control, onStateReady })
+    : mountAgentService(opened, {
         wrapAgent: () => traced,
         closeTimeoutMs: SHUTDOWN_GRACE_MS,
         control,
         onChannelClosed: (name, error) =>
           failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
-      }).catch(failStartup);
-  // AgentCore's own control mount, over the empty boot surface its lazy channels join later.
-  const withControl = agentcore
-    ? mountSessionControl({}, sessionControl, stateRoot, { ...control, agent: traced })
-    : undefined;
-  const planeMounts = withControl?.mounts ?? []; // only the agentcore branch composes its own router
-  // AgentCore has no AgentService to own the discovery file, so its cleanup is held here and wired
-  // into the same shutdown hook — a stale control.json points `attach` at a stopped service.
-  let unannounce: (() => void) | undefined;
-  const announce = mounted
-    ? (port: number) => mounted.announce(port)
-    : (port: number) => {
-        unannounce = withControl?.announce(port);
-      };
-  // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
-  // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
-  // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment
-  // degrades to awake-only wakes — warned, never silent.
-  let onStateReady: (() => void) | undefined;
-  if (agentcore && config.selfSchedule) {
-    const wakeSecret = process.env.FASTAGENT_WAKE_SECRET;
-    if (wakeSecret) {
-      const sink = createWakeAlarmSink({ secret: wakeSecret });
-      setWakeupsSink(sink);
-      // NOT here: at boot the state mount is whatever the platform just provisioned — after a runtime
-      // version update that is EMPTY, so a reconcile now would see no pending wake-ups and conclude
-      // there is nothing to re-arm. It runs once the snapshot has been restored (mountAgentcore).
-      onStateReady = () => reconcileWakeAlarms(stateRoot, sink);
-      log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
-    } else {
-      log.warn(
-        `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
-          `(redeploy with the current template to fix)`,
-      );
-    }
-  }
-  // Only AgentCore starts its own: the shared assembly did it for every other deployment.
-  const scheduled = agentcore
-    ? await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
-        externalClock: true,
-      }).catch(failStartup)
-    : undefined;
-  if (scheduled) {
-    process.once("SIGINT", scheduled.stop);
-    process.once("SIGTERM", scheduled.stop);
-  }
-  const schedules = scheduled?.schedules ?? mounted?.schedules ?? [];
-  let handler = mounted?.handler;
-  if (agentcore) {
-    // The lazy channel surface the adapter resolves post-restore. Control routes ride along so a
-    // forwarder-relayed /control/* request dispatches the same as on a direct host. Long-connection
-    // channels cannot serve here — scale-to-zero severs a resident connection and nothing
-    // re-establishes it — so their presence is a configuration error, surfaced per envelope and by
-    // the deploy driver's health probe (there is no boot to fail on this host).
-    const lazyChannels = async (): Promise<RouteSurface> => {
-      const lazy = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
-      if (lazy.longConnections.length > 0) {
-        throw new Error(
-          `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
-            `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
-        );
-      }
-      // The SAME rule mountSessionControl applies, through the same function: with no channels at
-      // boot its check ran against an empty base, and a spread merge would silently let control win.
-      for (const plane of planeMounts) assertNoControlPlaneCollision(lazy.routes, plane);
-      return { routes: lazy.routes, mounts: planeMounts };
-    };
-    try {
-      handler = router(
-        mountAgentcore({}, { agent: traced, stateRoot, schedules, onStateReady, lazyChannels }),
-        planeMounts,
-      );
-    } catch (e) {
-      failStartup(e);
-    }
-    log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
-  }
+      })
+  ).catch(failStartup);
   serve(
-    handler ?? router({}, planeMounts),
+    service.handler,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
     {
-      ...(mounted ? { ready: mounted.ready } : {}),
+      ready: service.ready,
       onListening: (p) => {
-        if (mounted) reportServing(mounted, host, p);
-        announce(p);
-        maybeTunnel(agentDir, mounted?.channels.routes ?? [], p, opts.tunnel ?? false, stateRoot);
+        reportServing(service, host, p);
+        service.announce(p);
+        maybeTunnel(agentDir, service.channels.routes, p, opts.tunnel ?? false, stateRoot);
       },
-      onShutdown: () => (mounted ? mounted.close() : unannounce?.()),
+      onShutdown: () => service.close(),
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
@@ -280,4 +182,25 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
   await mkdir(dirname(authPath), { recursive: true });
   await writeFile(authPath, bytes);
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
+}
+
+/**
+ * Install the wake-ALARM sink before the scheduler starts — the boot wake pump may advance a
+ * recurring entry, and that save must already re-arm its alarm. Returns the post-restore reconcile:
+ * running it at boot would read the pre-restore state mount, see no pending wake-ups, and conclude
+ * there is nothing to re-arm.
+ */
+function armWakeAlarms(stateRoot: string): (() => void) | undefined {
+  const secret = process.env.FASTAGENT_WAKE_SECRET;
+  if (!secret) {
+    log.warn(
+      `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
+        `(redeploy with the current template to fix)`,
+    );
+    return undefined;
+  }
+  const sink = createWakeAlarmSink({ secret });
+  setWakeupsSink(sink);
+  log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
+  return () => reconcileWakeAlarms(stateRoot, sink);
 }
