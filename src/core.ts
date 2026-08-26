@@ -1,4 +1,5 @@
 // Engine-neutral Agent Handler contract, consumption helpers, channel kit, and time triggers.
+// ZERO third-party dependencies, enforced by test — the Node HTTP binding lives at `/node`.
 // Import this subpath from channel packages or contract-only integrations to avoid loading the pi runtime.
 // Session-control layering (design §1): the CONTRACT (SessionControl types, error codes) lives
 // behind the `/session` subpath so interactive serving does not grow the minimal handler contract,
@@ -32,7 +33,8 @@ export type {
 } from "./channel.ts";
 // Mounting only. Composing a route table (`router`) and owning a prefix (`PrefixMount`) are how
 // `createAgentService` assembles a service — not something a caller has to reproduce.
-export { nodeListener, serveNode } from "./channels/serve.ts";
+// Binding to a Node server lives at `/node`: it is the only runtime-specific piece here, and the
+// only one that costs a third-party package.
 
 // `defineSchedule` is what a `schedules/*.ts` file is written against. Discovering those files and
 // running the clock is what `createAgentService` does with them — parts a caller does not reproduce.

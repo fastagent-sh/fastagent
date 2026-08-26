@@ -165,7 +165,8 @@ you register a custom provider.
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
 | Directory → service | `createAgentService`, `AgentService` | The supported way to mount an agent directory in an app |
-| Mounting | `createInvokeHandler`, `nodeListener`, `serveNode`, `Routes` | Reference implementation, pre-1.0 |
+| Mounting | `createInvokeHandler`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
+| Node binding | `nodeListener`, `serveNode` (from `/node`) | The one runtime-specific piece; see below |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `defineSchedule`, `ChannelModule` | Usable now, may tighten before 1.0 |
 | Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider` | Public because options reference them |
@@ -173,7 +174,8 @@ you register a custom provider.
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`);
+- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`). **Zero third-party dependencies**, enforced by test;
+- `@fastagent-sh/fastagent/node` — `serveNode` / `nodeListener`, the `node:http` ↔ Fetch binding. Separate because it is the only runtime-specific piece, and the only one that costs a package;
 - `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;

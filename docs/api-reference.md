@@ -84,6 +84,8 @@ a dead connection — parse per the SSE spec (only `data:` lines carry events), 
 JSON.
 
 ```ts
+// From `@fastagent-sh/fastagent/node` — the only runtime-specific entry, and the only one that
+// costs a third-party package (the node:http ↔ Fetch bridge).
 function nodeListener(handler: ChannelHandler): (req, res) => void;
 // `host` is the bind address; unset binds all interfaces (what containers need).
 function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
