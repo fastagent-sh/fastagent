@@ -160,18 +160,21 @@ The root export intentionally contains the supported surface only.
 | Area | Examples | Stability |
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
-| Channels/host | `createInvokeHandler`, `nodeListener`, `serveNode`, `router`, `Routes` | Reference implementation, pre-1.0 |
+| Directory → service | `createAgentService`, `AgentService` | The supported way to mount an agent directory in an app |
+| Mounting | `createInvokeHandler`, `nodeListener`, `serveNode`, `Routes` | Reference implementation, pre-1.0 |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
-| Injection ports | `PiSessionStore`, `inMemorySessionStore`, `jsonlSessionStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
-| Not exported | L0 harness adapter, pi harness factory, prompt/config internals | Internal modules; no compatibility promise |
+| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
+| Not exported | Assembly parts (`router`, `createControlPlane`), prompt/config internals | Internal modules; no compatibility promise |
 
-Subpath exports:
+Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel/host kit, schedules;
+- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`);
+- `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
+- `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
 - `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);
 - `@fastagent-sh/fastagent/lark` — Lark-international compatibility profile over the Feishu engine.
 
