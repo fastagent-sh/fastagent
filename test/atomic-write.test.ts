@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeFileAtomic } from "../src/paths.ts";
+import { writeFileAtomic } from "../src/atomic-write.ts";
 
 const fresh = () => mkdtempSync(join(tmpdir(), "fa-atomic-"));
 

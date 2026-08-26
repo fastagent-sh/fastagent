@@ -4,13 +4,10 @@
  *  - `fires.json` — schedule name → last-fired ISO (durability for the cron catch-up-once);
  *  - `wakeups.json` — the agent's pending self-scheduled one-shot wake-ups (wakeups.ts).
  * No .gitignore is written here: the agent's own (scaffolded by `init`) excludes `.state/`.
- *
- * ponytail: this atomic read/write duplicates channels/telegram/state.ts's primitive (both KB-JSON
- * tmp+rename). Extract a neutral src/state.ts and have both import it when a third consumer appears.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "../paths.ts";
+import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
 
 /** Path of a JSON file under `<stateRoot>/schedule/`. */

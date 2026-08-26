@@ -15,7 +15,7 @@
  * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
  */
 import { mkdirSync, rmSync } from "node:fs";
-import { writeFileAtomic } from "./paths.ts";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { join } from "node:path";
 import type { Agent } from "./agent.ts";
 import { classifyBind, clientHost } from "./bind.ts";
