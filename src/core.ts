@@ -11,7 +11,9 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 
 export { createInvokeHandler } from "./channels/http.ts";
-export { createControlPlane, type ControlPlaneOptions, type WireEvent } from "./channels/control.ts";
+// The control plane MOUNTS itself: `createAgentService` wires it when the config asks for it. Only
+// the wire envelope is public here — a remote consumer needs to read it.
+export type { WireEvent } from "./channels/control.ts";
 export {
   ControlRequestError,
   connectAgent,
@@ -28,7 +30,9 @@ export type {
   LongConnectionChannelModule,
   Routes,
 } from "./channel.ts";
-export { type PrefixMount, nodeListener, router, serveNode } from "./channels/serve.ts";
+// Mounting only. Composing a route table (`router`) and owning a prefix (`PrefixMount`) are how
+// `createAgentService` assembles a service — not something a caller has to reproduce.
+export { nodeListener, serveNode } from "./channels/serve.ts";
 
 export { defineSchedule, type LoadedSchedule, type Schedule } from "./schedule/schedule.ts";
 export { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";

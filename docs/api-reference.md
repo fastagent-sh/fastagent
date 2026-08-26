@@ -85,8 +85,6 @@ JSON.
 
 ```ts
 function nodeListener(handler: ChannelHandler): (req, res) => void;
-// `mounts` are prefix-owning handlers (the session control plane); see below.
-function router(routes: Routes, mounts?: readonly PrefixMount[]): ChannelHandler;
 // `host` is the bind address; unset binds all interfaces (what containers need).
 function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
   listening: Promise<number>;
@@ -117,18 +115,9 @@ the content (RFC 9110); writing an explicit `HEAD` route is allowed and takes pr
 A path that exists under another method answers 405, an unknown path 404; remote clients read that
 404 as version skew rather than as a fault.
 
-A handler that owns a whole prefix is a **mount**, passed beside the routes rather than spelled as a
-key — keeping the two apart is what lets every collision check stay a comparison:
-
-```ts
-interface PrefixMount {
-  prefix: string; // absolute, no trailing slash: "/control" owns /control and everything below
-  handler: ChannelHandler;
-}
-```
-
-A route landing inside a mount is refused at assembly, as is a mount overlapping another — in both
-cases the mount would answer requests aimed at the other, including on paths it does not serve.
+A handler owning a whole path prefix (the session control plane is the one) is mounted beside the
+routes rather than spelled as a key. `createAgentService` does that wiring; a route landing inside
+such a mount is refused at assembly, because the mount would answer requests aimed at it.
 
 ## pi assembly
 
@@ -185,7 +174,7 @@ function createAgentService(
   handler: ChannelHandler;              // channels + control plane + health, composed
   agent: Agent;
   routes: Routes;                        // the parts, for a host that must re-wrap them
-  mounts: readonly PrefixMount[];
+  mounts: readonly { prefix: string; handler: ChannelHandler }[];
   agentDir: string;
   workspace: string;
   channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
@@ -199,8 +188,8 @@ function createAgentService(
 ```
 
 The assembly `dev`/`start` perform, without the process: no port bound, no signal handlers, no
-`process.exit`. This is the supported way to mount a whole agent inside an app — the parts below
-(`router`, `serveNode`) are for hosts that need to compose something else.
+`process.exit`. This is the supported way to mount a whole agent inside an app; `nodeListener` and
+`serveNode` below are how you attach the handler it returns.
 
 ### `createPiAgentFromDir`
 
@@ -624,12 +613,14 @@ side, mount the bearer-authenticated routes (dev/start do this automatically whe
 `sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json`):
 
 ```ts
-import { createControlPlane, connectSessionControl, router } from "@fastagent-sh/fastagent/core";
+import { createAgentService } from "@fastagent-sh/fastagent";
+import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 
-// The plane is a MOUNT: it owns the /control prefix and answers everything under it — routes,
-// preflight, 404/405, and a failing handler — so a browser client can read every reply.
-const plane = createControlPlane(sessionControl, { token }); // PrefixMount over /control
-const handler = router(channelRoutes, [plane]); // SSE at /control/events
+// Set `sessionControl: true` in fastagent.config.*; the plane is then mounted on the service's
+// handler, owning the /control prefix — routes, preflight, 404/405 and a failing handler all carry
+// CORS headers, so a browser client can read every reply. SSE at /control/events.
+const service = await createAgentService("./my-agent");
+// service.control?.token is how you hand a client access
 
 // Client side — the SAME SessionControl interface, isomorphic to local:
 const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });

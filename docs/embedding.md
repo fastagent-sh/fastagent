@@ -157,8 +157,10 @@ Bun.serve({ port: 8787, fetch: (req) =>
   new URL(req.url).pathname === "/chat" ? handler(req) : new Response("not found", { status: 404 }) });
 
 // Plain Node (no native Fetch routing) — the built-in server
-import { serveNode, router } from "@fastagent-sh/fastagent";
-serveNode(router({ "POST /chat": handler }), { port: 8787 });
+import { createAgentService, serveNode } from "@fastagent-sh/fastagent";
+serveNode(handler, { port: 8787 });                    // just the invoke route
+// ...or the whole agent, channels and all:
+serveNode((await createAgentService("./my-agent")).handler, { port: 8787 });
 ```
 
 Cancellation, backpressure, and a body cap are native to the web-stream primitives: a client disconnect cancels the underlying invoke. Concurrent requests on the **same** session fail fast — the second receives `failed{session busy}`.
