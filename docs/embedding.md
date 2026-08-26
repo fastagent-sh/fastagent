@@ -88,6 +88,31 @@ import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
 ```
 
+### The whole agent, in one call
+
+The handler above serves `invoke` only. To mount the **whole** agent — every channel it declares,
+its control plane, health — open the directory as a surface:
+
+```ts
+import { openAgentSurface } from "@fastagent-sh/fastagent";
+
+const surface = await openAgentSurface("./my-agent");
+app.use("/agent", nodeListener(surface.handler));   // channels + control plane + health
+// ...
+await surface.close();   // stops long connections and schedules
+```
+
+`openAgentSurface` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
+bound, no signals are installed, nothing calls `process.exit`. Composing the same thing by hand
+means assembling routes, mounts, schedules and long connections in the right order — and getting it
+wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
+fires).
+
+Pass `{ signal }` to bind its lifetime to something you already own; `surface.routes`/`surface.mounts`
+are there for a host that must re-wrap them before serving.
+
+### Mounting a single handler
+
 The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it.
 
 > **Mount before your body parser.** Node's request is a one-shot stream, so `app.use(express.json())`

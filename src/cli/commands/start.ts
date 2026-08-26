@@ -176,9 +176,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       );
     }
   }
-  const schedules = await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
+  const scheduled = await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
     externalClock: agentcore,
   });
+  process.once("SIGINT", scheduled.stop);
+  process.once("SIGTERM", scheduled.stop);
+  const schedules = scheduled.schedules;
   let routes = withControl.routes;
   if (agentcore) {
     // The lazy channel surface the adapter resolves post-restore. Control routes ride along so a

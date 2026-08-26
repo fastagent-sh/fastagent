@@ -436,10 +436,10 @@ export async function startSchedules(
   stateRoot: string,
   selfSchedule: boolean,
   options: { externalClock?: boolean } = {},
-): Promise<LoadedSchedule[]> {
+): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
   const { schedules, failures } = await loadSchedules(agentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
-  if (schedules.length === 0 && !selfSchedule) return schedules;
+  if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
   const scheduler = createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock });
   scheduler.start();
   if (schedules.length > 0) {
@@ -447,8 +447,8 @@ export async function startSchedules(
       `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
     );
   }
-  const stop = (): void => scheduler.stop();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
-  return schedules;
+  // Returned rather than bound to process signals here: this runs inside an embedder's app as well
+  // as the CLI, and a library that installs SIGINT handlers is deciding something that is not its
+  // to decide. `runStart`/`runDev` wire it to their own shutdown.
+  return { schedules, stop: () => scheduler.stop() };
 }

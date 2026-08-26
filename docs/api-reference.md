@@ -174,6 +174,31 @@ Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi promp
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
+### `openAgentSurface`
+
+```ts
+function openAgentSurface(
+  dir: string,
+  options?: { model?: string; authPath?: string; sessionsDir?: string; signal?: AbortSignal;
+              onChannelClosed?: (name: string, error?: unknown) => void },
+): Promise<{
+  handler: ChannelHandler;              // channels + control plane + health, composed
+  agent: Agent;
+  routes: Routes;                        // the parts, for a host that must re-wrap them
+  mounts: readonly PrefixMount[];
+  agentDir: string;
+  workspace: string;
+  channels: { routes: string[]; longConnections: string[] };
+  schedules: readonly LoadedSchedule[];
+  announce(boundPort: number): void;     // write <stateRoot>/control.json for local discovery
+  close(): Promise<void>;                // stop long connections and schedules
+}>;
+```
+
+The assembly `dev`/`start` perform, without the process: no port bound, no signal handlers, no
+`process.exit`. This is the supported way to mount a whole agent inside an app — the parts below
+(`router`, `serveNode`) are for hosts that need to compose something else.
+
 ### `createPiAgentFromDir`
 
 ```ts

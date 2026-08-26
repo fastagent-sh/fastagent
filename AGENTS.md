@@ -23,6 +23,12 @@ Code truth is `src/`.
 ```
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
+├── surface.ts               # THE PRODUCT AS ONE CALL: a directory becomes a mounted HTTP handler
+│                           # (openAgentSurface). Before it, only the CLI could keep fastagent's
+│                           # "into a live service inside an app" promise — everything else was
+│                           # parts an embedder had to assemble in the right order, and getting it
+│                           # wrong is silent (a plane that 404s while advertising itself). The
+│                           # assembly lives here once; dev/start are callers, not the only path.
 ├── channel.ts               # the Channel contract — the TRIGGER side of the product boundary
 │                           # (core.md §1), beside agent.ts and session.ts: ChannelModule / Routes /
 │                           # ChannelHandler / LongConnection*. Pure types, no host, no framework:

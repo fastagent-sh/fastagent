@@ -89,7 +89,9 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent
     host,
   });
-  await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
+  const scheduled = await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
+  process.once("SIGINT", scheduled.stop);
+  process.once("SIGTERM", scheduled.stop);
   serve(
     // Spread WHOLE: forwarding `routes` without `mounts` yields a server where /control/*
     // 404s while control.json still advertises it. Taking the object entire removes the choice.
