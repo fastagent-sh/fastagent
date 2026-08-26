@@ -261,6 +261,8 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("- read:");
     // Every directory agent gets pi's complete coding set. Custom tools stay an explicit `tools:`
     // injection, with no second discovery mechanism.
+    // What the MODEL is handed. pi 0.84.3 keeps a `powershell` in the session registry that never
+    // reaches this list — if it ever does, this line is where it shows.
     expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 });
@@ -599,7 +601,7 @@ describe("create L2: the workspace roots the tools, the env reads the definition
 });
 
 describe("create L2: explicit tools replace the coding defaults", () => {
-  it("keeps omitted built-ins out of the runtime registry", async () => {
+  it("keeps omitted built-ins inactive — the model is never offered one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
     const { faux } = makeFaux();
@@ -614,8 +616,15 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     });
 
     const session = await assembly.sessionFactory("s");
-    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["read"]);
-    session.setActiveToolsByName(["read", "bash", "write"]);
+    // ACTIVE is the property that matters: what the model is offered and may call. The registry may
+    // hold more than we passed — pi 0.84.3 keeps its own `powershell` there — but nothing we omitted
+    // is ever ACTIVATED, and that is the guarantee. What the model actually receives is asserted in
+    // the systemPrompt test above.
+    expect(session.getActiveToolNames()).toEqual(["read"]);
+    // Reactivation is the attack: a later loader — `search_tools` uses exactly this call — must not
+    // be able to hand back something the caller left out. `powershell` is in the list because pi
+    // registers it whatever we pass (0.84.3), which is precisely why it has to be excluded too.
+    session.setActiveToolsByName(["read", "bash", "write", "powershell"]);
     expect(session.getActiveToolNames()).toEqual(["read"]);
   });
 
@@ -645,5 +654,24 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     expect(prompt).not.toContain("- bash:");
     // ...and the identity is the capability-neutral one, not pi's "executing commands, editing code".
     expect(prompt).not.toContain("executing commands");
+  });
+});
+
+describe("skills/: a plain note is not a broken skill", () => {
+  it("ignores a root .md without skill frontmatter, and still loads the real one", async () => {
+    // Our own scaffold ships one (writing-great-skills/GLOSSARY.md). Before pi 0.84.3 every such file
+    // produced an `invalid_metadata` diagnostic on every start — a warning the author could not act on.
+    const dir = await mkdtemp(join(tmpdir(), "fa-skills-note-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await mkdir(join(dir, "skills", "demo"), { recursive: true });
+    await writeFile(
+      join(dir, "skills", "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: A demo skill.\n---\nBody.\n",
+    );
+    await writeFile(join(dir, "skills", "NOTES.md"), "Just notes, no frontmatter.\n");
+
+    const definition = await loadAgentDefinition(dir);
+    expect(definition.skills.map((s) => s.name)).toEqual(["demo"]);
+    expect(definition.diagnostics).toEqual([]);
   });
 });

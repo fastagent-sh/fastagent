@@ -13,7 +13,7 @@
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createPowerShellTool, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
@@ -63,17 +63,32 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
  * read/grep/find/ls. `read` is in both; a directory agent mounts their union.
  */
 export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
-type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 
 export function piAllCodingTools(cwd: string): MountedTool[] {
   const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
   return [...createReadOnlyTools(cwd), ...mutating];
 }
 
+/**
+ * Every tool an `AgentSession` registers on its own, whether or not a directory agent mounts it.
+ *
+ * Wider than {@link CODING_TOOL_NAMES} on purpose: pi 0.84.3 added `powershell`, which the session
+ * registers regardless of the tools we pass. A name absent from THIS list is a name never excluded,
+ * and an excluded name is the only thing that cannot be activated — so leaving it out would let
+ * `tools: [read]` keep a reachable shell.
+ */
+function piRegisteredToolNames(cwd: string): string[] {
+  return [
+    ...createReadOnlyTools(cwd).map((tool) => tool.name),
+    ...createCodingTools(cwd).map((tool) => tool.name),
+    createPowerShellTool(cwd).name,
+  ];
+}
+
 /** Built-ins omitted by an explicit lower-level tool list. A reused name stays mounted. */
-function omittedBuiltinNames(mounted: readonly MountedTool[]): CodingToolName[] {
+function omittedBuiltinNames(mounted: readonly MountedTool[], cwd: string): string[] {
   const mountedNames = new Set(mounted.map((tool) => tool.name));
-  return CODING_TOOL_NAMES.filter((name) => !mountedNames.has(name));
+  return [...new Set(piRegisteredToolNames(cwd))].filter((name) => !mountedNames.has(name));
 }
 
 /**
@@ -302,7 +317,7 @@ function buildPiAgent(opts: {
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     // `noTools: "builtin"` leaves pi's built-ins in the registry; a lower-level replacement must also
     // deny every omitted coding name so a loader cannot reactivate one later.
-    excludedToolNames: omittedBuiltinNames(opts.tools ?? []),
+    excludedToolNames: omittedBuiltinNames(opts.tools ?? [], cwd),
     env,
   });
   opts.onAssembly?.({
