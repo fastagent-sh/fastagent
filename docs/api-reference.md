@@ -103,10 +103,13 @@ type Routes = Record<string, ChannelHandler>;
 Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **literal**.
 
 Dispatch is a map lookup on the literal path, so "would these two fight over a request?" is string
-equality — a fact about the keys, not a prediction about a matcher. Two keys naming the same route
-(`"/x"` and `"GET /x"`) are refused, as are patterns (`:id`, `*`) and any path a URL rewrites
-(`?`/`#`, `.`/`..`): the request would arrive under a different path, so the key could never match
-— and would compare as a different string, hiding the conflict.
+equality — a fact about the keys, not a prediction about a matcher. `:id` and `*` carry no pattern
+meaning here; they are ordinary characters, so a key containing one simply never matches.
+
+Startup refuses only what would cost ANOTHER route: two keys naming the same one (`"/x"` and
+`"GET /x"`), a route inside a mounted prefix, and any path a URL rewrites (`?`/`#`, `.`/`..`) —
+that request arrives under a different path, so the key never matches AND compares as distinct,
+hiding the collision.
 
 Paths are matched as they arrive, without percent-decoding — decoding would undo the normalisation
 `URL` performs, turning `%2F..%2F` back into `/../`. `HEAD` is answered from the `GET` route without
