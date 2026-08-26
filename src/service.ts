@@ -322,8 +322,10 @@ export interface MountableAgent {
   stateRoot: string;
   /** Present iff this agent published a control plane. */
   sessionControl?: SessionControl;
-  /** Mount the built-in `wake` tool's clock — the agent schedules its own follow-up turns. */
-  selfSchedule?: boolean;
+  /** Whether the agent schedules its own follow-up turns. REQUIRED, not optional-with-a-default:
+   *  an engine that forgot it would turn self-scheduling off silently, which is exactly the bug
+   *  this type was introduced with. */
+  selfSchedule: boolean;
 }
 
 /**
@@ -355,7 +357,7 @@ export async function mountAgentService(
   // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
   // with no service for the caller to close. Free to order correctly; expensive to discover later.
   const handler = router(withControl.routes, withControl.mounts);
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule ?? false);
+  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule);
 
   const abort = new AbortController();
   let unannounce: (() => void) | undefined;

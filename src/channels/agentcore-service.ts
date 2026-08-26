@@ -57,7 +57,7 @@ export async function mountAgentcoreService(
   // collision rule runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, stateRoot, { ...options.control, agent });
 
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule ?? false, {
+  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
     externalClock: true,
   });
 
