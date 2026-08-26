@@ -145,7 +145,10 @@ describe("the assembly's parts stay out of the public surface", () => {
   ];
 
   // Types the parts drag along: nothing public references them once their producer is internal, so
-  // exporting one is a promise with no caller.
+  // exporting one is a promise with no caller. This list guards against RE-EXPORTING them, which is
+  // how each left. It does not — and is not meant to — stop someone declaring a fresh type of the
+  // same name at an entry: the wildcard check above already removes every path by which something
+  // arrives here unnoticed, and what remains is a line somebody wrote on purpose.
   const ORPHAN_TYPES = ["ChannelCollision", "Scheduler", "SchedulerOptions"];
 
   it("the curated entries name every export, so nothing rides in behind a wildcard", () => {
