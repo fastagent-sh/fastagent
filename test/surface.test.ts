@@ -7,6 +7,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
 import { openAgentSurface } from "../src/surface.ts";
 
@@ -176,6 +177,17 @@ describe("openAgentSurface", () => {
     await surface.close();
     expect((globalThis as Record<string, unknown>).__faSockClosed).toBe(true);
     await expect(surface.close()).resolves.toBeUndefined(); // idempotent
+  });
+
+  it("close() detaches from the caller's signal", async () => {
+    // A host that opens and closes surfaces while holding one long-lived signal would otherwise
+    // accumulate listeners, each pinning a whole closed surface through its closure.
+    const controller = new AbortController();
+    const before = getEventListeners(controller.signal, "abort").length;
+    const surface = await openAgentSurface(await agentDir(), { signal: controller.signal });
+    expect(getEventListeners(controller.signal, "abort").length).toBe(before + 1);
+    await surface.close();
+    expect(getEventListeners(controller.signal, "abort").length).toBe(before);
   });
 
   it("an already-aborted signal closes the surface before open() returns", async () => {

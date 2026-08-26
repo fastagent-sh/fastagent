@@ -178,13 +178,17 @@ export async function mountAgentSurface(
     closing ??= (async () => {
       abort.abort();
       scheduled.stop();
+      options.signal?.removeEventListener("abort", onAbort);
       unannounce?.(); // a stale discovery file would point a client at a dead port
       await Promise.allSettled(runs.map((run) => run.closed));
     })();
     return closing;
   };
+  // Detached by `close()`: a caller that closes surfaces itself while holding one long-lived signal
+  // would otherwise accumulate listeners, each pinning a whole surface through its closure.
+  const onAbort = () => void close();
   if (options.signal?.aborted) await close();
-  else options.signal?.addEventListener("abort", () => void close(), { once: true });
+  else options.signal?.addEventListener("abort", onAbort, { once: true });
 
   // Health answers 503 until EVERY long connection is up, so a load balancer does not route into a
   // surface whose socket-mode channels are still dialling. An abort before that settles `ready` as
