@@ -109,7 +109,8 @@ describe("the agentcore template (parsed)", () => {
       "AWS::URLSuffix",
       "AWS::NoValue",
     ]);
-    const dangling = references(t.Resources).filter((r) => !known.has(r.target));
+    // The WHOLE template: an Outputs block referencing a renamed resource fails at deploy too.
+    const dangling = references(t).filter((r) => !known.has(r.target));
     expect(dangling).toEqual([]);
   });
 
