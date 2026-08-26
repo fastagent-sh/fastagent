@@ -8,8 +8,9 @@
  * ponytail: this atomic read/write duplicates channels/telegram/state.ts's primitive (both KB-JSON
  * tmp+rename). Extract a neutral src/state.ts and have both import it when a third consumer appears.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "../paths.ts";
 import { log } from "../log.ts";
 
 /** Path of a JSON file under `<stateRoot>/schedule/`. */
@@ -42,10 +43,7 @@ export function readScheduleFile(path: string): unknown {
 }
 
 export function writeScheduleFile(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value));
-  renameSync(tmp, path);
+  writeFileAtomic(path, JSON.stringify(value));
 }
 
 // ── fires.json: schedule name → last-fired ISO (cron catch-up-once durability) ──

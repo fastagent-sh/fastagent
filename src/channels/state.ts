@@ -12,8 +12,8 @@
  * is an ENVIRONMENT error the operator must fix: it throws, and construction fails loudly — booting
  * with silently-empty state would hide real data behind a config mistake.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync } from "node:fs";
+import { writeFileAtomic } from "../paths.ts";
 import { log } from "../log.ts";
 
 /** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
@@ -43,8 +43,5 @@ export function loadStateFile(path: string): unknown {
 }
 
 export function saveStateFile(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value));
-  renameSync(tmp, path);
+  writeFileAtomic(path, JSON.stringify(value));
 }
