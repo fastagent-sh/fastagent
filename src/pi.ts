@@ -24,9 +24,6 @@ export type { AgentTool, ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-
  */
 export type { SessionManager, SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 
-// The collision TYPES surface in a service's diagnostics; the loaders that produce them are the
-// assembly's, not a caller's.
-export type { ChannelCollision } from "./engines/pi/channel.ts";
 export {
   createPiAgentFromDir,
   type CreatePiAgentFromDirOptions,

@@ -144,12 +144,32 @@ describe("the assembly's parts stay out of the public surface", () => {
     "createProvider",
   ];
 
+  // Types the parts drag along: nothing public references them once their producer is internal, so
+  // exporting one is a promise with no caller.
+  const ORPHAN_TYPES = ["ChannelCollision", "Scheduler", "SchedulerOptions"];
+
   for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
     it(`${entry} exports no assembly part`, async () => {
-      // The MODULE, not its source: a `export *` added later would satisfy a regex over the text
-      // while re-exporting everything behind it.
+      // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
       const mod = (await import(resolve(srcDir, entry))) as Record<string, unknown>;
       expect(PARTS.filter((p) => p in mod)).toEqual([]);
+    });
+
+    it(`${entry} exports no orphaned type`, () => {
+      // The SOURCE, because a type export leaves no runtime trace for the check above to see.
+      const source = readFileSync(resolve(srcDir, entry), "utf8");
+      const named = [...source.matchAll(/export (?:type )?\{([^}]*)\}/g)]
+        .flatMap((m) => m[1]!.split(","))
+        .map((raw) =>
+          raw
+            .trim()
+            .replace(/^type\s+/, "")
+            .split(/\s+as\s+/)
+            .pop()!
+            .trim(),
+        )
+        .filter(Boolean);
+      expect(named.filter((n) => ORPHAN_TYPES.includes(n))).toEqual([]);
     });
   }
 });
