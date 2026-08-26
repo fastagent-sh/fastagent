@@ -14,7 +14,7 @@
  * (bad skill files, name collisions) are returned as data. An unreadable ② context file only warns (pi).
  */
 import { realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -251,17 +251,6 @@ export async function loadAgentSkills(
   // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}: readers key per-definition state
   // (the findings memo) on it, and "./agent" vs an absolute path must not become two definitions.
   return { ...(await readSkills(e, rootResult.value)), dir: rootResult.value };
-}
-
-/**
- * Whether `targetPath` lives inside `baseDir` (same path counts). Used to ask "did an override move
- * this OUT of the agent?" — the startup report's redeploy notes, `add`'s printed `.env` label, and the
- * dev watcher's "your .env is not watched" warning all turn on that fact. Reporting only: fastagent
- * does not act on where a user's paths point.
- */
-export function isUnderDir(targetPath: string, baseDir: string): boolean {
-  const rel = relative(baseDir, targetPath);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath.

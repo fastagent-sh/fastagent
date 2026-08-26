@@ -8,7 +8,7 @@ import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
-import { isUnderDir } from "../../engines/pi/definition.ts";
+import { isUnderDir } from "../../paths.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
 import { reportModuleLoadFailures } from "../../log.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";

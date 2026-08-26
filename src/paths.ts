@@ -369,3 +369,14 @@ export async function assertInsideAgentDir(agentDir: string, name: string): Prom
     );
   }
 }
+
+/**
+ * Whether `targetPath` lives inside `baseDir` (same path counts). Used to ask "did an override move
+ * this OUT of the agent?" — the startup report's redeploy notes, `add`'s printed `.env` label, and the
+ * dev watcher's "your .env is not watched" warning all turn on that fact. Reporting only: fastagent
+ * does not act on where a user's paths point.
+ */
+export function isUnderDir(targetPath: string, baseDir: string): boolean {
+  const rel = relative(baseDir, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
