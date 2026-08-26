@@ -169,8 +169,8 @@ The root export intentionally contains the supported surface only.
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules;
-- `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract and its remote clients;
+- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`);
+- `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
