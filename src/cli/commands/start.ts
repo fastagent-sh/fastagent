@@ -165,7 +165,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const withControl = agentcore
     ? mountSessionControl({}, sessionControl, stateRoot, { ...control, agent: traced })
     : undefined;
-  const planeMounts = mounted?.mounts ?? withControl?.mounts ?? [];
+  const planeMounts = withControl?.mounts ?? []; // only the agentcore branch composes its own router
   // AgentCore has no AgentService to own the discovery file, so its cleanup is held here and wired
   // into the same shutdown hook — a stale control.json points `attach` at a stopped service.
   let unannounce: (() => void) | undefined;

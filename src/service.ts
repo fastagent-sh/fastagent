@@ -262,10 +262,10 @@ export interface AgentService {
   handler: ChannelHandler;
   /** The agent behind it — invoke it directly when you also want a programmatic path. */
   agent: Agent;
-  /** The literal routes and prefix mounts `handler` was composed from. Present for a host that must
-   *  re-wrap them (the AgentCore adapter does); an ordinary embedder wants `handler`. */
+  /** The literal routes `handler` was composed from — for a startup line naming what is served.
+   *  Mounted prefixes are not here: nothing outside the assembly needed them, and a field kept for a
+   *  hypothetical caller is a field nobody maintains. */
   routes: Routes;
-  mounts: readonly PrefixMount[];
   agentDir: string;
   workspace: string;
   /** What actually mounted, for a startup line: channel files serving routes, long connections, and
@@ -513,7 +513,6 @@ export async function mountAgentService(
     handler,
     agent,
     routes: withControl.routes,
-    mounts: withControl.mounts,
     agentDir,
     workspace,
     channels: {

@@ -66,7 +66,8 @@ describe("createAgentService", () => {
     try {
       // 401, not 404: the plane is mounted and asking for the token it minted.
       expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(401);
-      expect(service.mounts.map((m) => m.prefix)).toEqual(["/control"]);
+      // A path the plane does NOT serve still belongs to it — that is what owning the prefix means.
+      expect((await service.handler(new Request("http://h/control/anything"))).status).toBe(404);
     } finally {
       await service.close();
     }
@@ -148,7 +149,6 @@ describe("createAgentService", () => {
   it("does not mount a control plane the config did not ask for", async () => {
     const service = await createAgentService(await agentDir());
     try {
-      expect(service.mounts).toEqual([]);
       expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(404);
     } finally {
       await service.close();

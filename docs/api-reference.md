@@ -173,8 +173,7 @@ function createAgentService(
 ): Promise<{
   handler: ChannelHandler;              // channels + control plane + health, composed
   agent: Agent;
-  routes: Routes;                        // the parts, for a host that must re-wrap them
-  mounts: readonly { prefix: string; handler: ChannelHandler }[];
+  routes: Routes;                        // what is served, for a startup line
   agentDir: string;
   workspace: string;
   channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };

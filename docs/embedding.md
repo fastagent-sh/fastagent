@@ -111,8 +111,7 @@ means assembling routes, mounts, schedules and long connections in the right ord
 wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
 fires).
 
-Pass `{ signal }` to bind its lifetime to something you already own; `service.routes`/`service.mounts`
-are there for a host that must re-wrap them before serving.
+Pass `{ signal }` to bind its lifetime to something you already own.
 
 ### Mounting a single handler
 
