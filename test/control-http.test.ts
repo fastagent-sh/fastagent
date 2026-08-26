@@ -183,6 +183,36 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("a browser can actually GET to the 404/405 — preflight does not veto them first", async () => {
+    // The failure this closes: CORS headers on a 404 are useless if the browser never sends the
+    // request. Preflight runs BEFORE it, and a preflight that answers 404 (unknown path) or omits
+    // the requested method (unsupported method) stops the real request — leaving the client with the
+    // opaque network error this plane exists to remove. Node's fetch does not enforce that gate, so
+    // asserting through it proves nothing; this models the gate explicitly.
+    const served = await serveControl();
+    const browserWouldSend = async (method: string, path: string) => {
+      const pre = await fetch(`${served.url}${path}`, {
+        method: "OPTIONS",
+        headers: { origin: "http://localhost:5173", "access-control-request-method": method },
+      });
+      const allowed = (pre.headers.get("access-control-allow-methods") ?? "")
+        .split(",")
+        .map((m) => m.trim().toUpperCase());
+      return pre.status === 204 && pre.headers.get("access-control-allow-origin") === "*" && allowed.includes(method);
+    };
+    try {
+      // An unknown path under the prefix, and a known path under a method it does not serve.
+      expect(await browserWouldSend("GET", "/control/nonexistent")).toBe(true);
+      expect(await browserWouldSend("GET", "/control/dispatch")).toBe(true);
+      // ...and only because the gate opens do the plane's own answers become readable.
+      const auth = { authorization: `Bearer ${TOKEN}` };
+      expect((await fetch(`${served.url}/control/nonexistent`, { headers: auth })).status).toBe(404);
+      expect((await fetch(`${served.url}/control/dispatch`, { headers: auth })).status).toBe(405);
+    } finally {
+      served.close();
+    }
+  });
+
   it("the replies no route produces are the plane's own, and a browser can read all of them", async () => {
     // THE reason the plane owns its prefix. Each of these is generated where no route runs, so
     // while the plane was a flat route dictionary they came from the HOST — bare, unreadable to a

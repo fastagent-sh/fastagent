@@ -455,9 +455,12 @@ authorization, content-type`, and allowed METHODS **per path**. Each value is fo
 - `content-type` because only three values are safelisted and `application/json` is not among them:
   a browser POSTing to `dispatch`/`invoke` names it in the preflight, so allowing just
   `authorization` leaves precisely the WRITE routes unreachable while every read works.
-- Per-path methods because advertising a method a path does not serve invites the browser to send
-  it, only to meet a rejection it cannot read. Advertising the truth stops that request at the
-  browser, with an accurate diagnosis.
+- Per-path methods, PLUS whatever the preflight asks for. The advertised set describes what the
+  path serves, but a preflight is a gate applied before the request exists: refusing there means the
+  real request is never sent and the client sees an opaque network error — the failure this exists
+  to remove. So every preflight under the prefix is answered `204`, and the requested method is
+  allowed even where the path does not serve it. The plane owns this prefix; saying what it does not
+  serve is its own reply's job, as a `404`/`405` carrying these headers and an explanation.
 
 `OPTIONS` is answered before any auth — a preflight carries no token, which is its entire purpose —
 and 404 stays distinct from 405, because a remote client reads 404 as "this serve predates the

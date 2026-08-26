@@ -84,9 +84,15 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
   // method the path does not serve invites a request that meets a rejection the browser cannot
   // read, and omitting one it does serve has the browser refuse a call that would have worked.
   // `HEAD` is the second kind — every GET route answers it.
-  const allowMethods = (path: string) => {
+  const allowMethods = (path: string, requested: string | null) => {
     const methods = new Set(methodsByPath.get(path) ?? []);
     if (methods.has("GET")) methods.add("HEAD");
+    // The requested method is always allowed, even when this path does not serve it. Preflight is a
+    // gate the browser applies BEFORE the request exists, so a refusal there means the real request
+    // is never sent and the client sees an opaque network error — the precise failure this plane
+    // exists to remove. Answering "go ahead" lets our own 404/405 arrive, carrying these headers and
+    // an explanation. The plane owns this prefix; deciding what it does not serve is its own job.
+    if (requested) methods.add(requested.toUpperCase());
     return [...methods, "OPTIONS"].join(", ");
   };
 
@@ -94,8 +100,10 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
     const path = new URL(req.url).pathname;
     const known = methodsByPath.has(path);
     const answer = async (): Promise<Response> => {
-      // A preflight carries no token — that is its entire purpose — so it is answered before auth.
-      if (known && req.method === "OPTIONS") return new Response(null, { status: 204 });
+      // A preflight carries no token — that is its entire purpose — so it is answered before auth,
+      // and for ANY path under the prefix: gating it on a known path would stop the browser from
+      // ever sending the request our 404 is waiting to answer.
+      if (req.method === "OPTIONS") return new Response(null, { status: 204 });
       const handler = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
       if (handler) return await handler(req);
       if (known && req.method === "HEAD") {
@@ -119,7 +127,10 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
     // THE single exit. Every reply above — route, preflight, 404, 405, 500 — leaves through here.
     res.headers.set("access-control-allow-origin", "*");
     res.headers.set("access-control-allow-headers", "authorization, content-type");
-    res.headers.set("access-control-allow-methods", allowMethods(path));
+    res.headers.set(
+      "access-control-allow-methods",
+      allowMethods(path, req.headers.get("access-control-request-method")),
+    );
     return res;
   };
 }
