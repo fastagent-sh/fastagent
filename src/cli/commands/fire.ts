@@ -7,7 +7,7 @@
 import { join, resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { displayPath } from "../../paths.ts";
-import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
+import { reportModuleLoadFailures } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";

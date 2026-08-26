@@ -5,7 +5,6 @@
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { log } from "../../log.ts";
 import type { SkillCollision } from "./definition.ts";
-import type { ModuleLoadFailure } from "../../loader.ts";
 import type { ToolCollision } from "./tool.ts";
 
 type Findings = { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] };
@@ -54,13 +53,5 @@ export function reportDefinitionWarnings(collisions: SkillCollision[], diagnosti
 export function reportToolCollisions(collisions: ToolCollision[]): void {
   for (const c of collisions) {
     log.warn(`[fastagent] tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`);
-  }
-}
-
-/** Report per-file module failures. The caller decides whether they are degradations (tools/schedules)
- *  or fatal (declared channels on the serving path). */
-export function reportModuleLoadFailures(failures: ModuleLoadFailure[]): void {
-  for (const f of failures) {
-    log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
   }
 }

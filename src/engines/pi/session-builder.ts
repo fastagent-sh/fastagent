@@ -54,7 +54,8 @@ import {
   agentSessionManager,
   turnContext,
 } from "./tool-context.ts";
-import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
+import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
+import { reportModuleLoadFailures } from "../../log.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
 export interface BuildSessionRuntimeOptions {
