@@ -112,16 +112,35 @@ describe("mountAgentcoreService", () => {
     process.env.FASTAGENT_WAKE_SECRET = "s";
     try {
       const service = await mountAgentcoreService(await open(dir));
+      // Whoever registers AFTER us owns the sink; closing must not take theirs down with ours.
       const caught: string[] = [];
-      setWakeupsSink((root) => caught.push(root));
+      const later = (root: string) => caught.push(root);
+      setWakeupsSink(later);
       await service.close();
 
-      // A wake-up written after close must reach nobody — the service's sink is gone, and the one
-      // installed above is what close() must NOT have left in place either.
       const other = await agentDir();
       const added = addWakeup(other, { session: "s1", prompt: "later", fireAt: new Date(Date.now() + 3_600_000) });
-      expect(added.ok).toBe(true); // the write happened — so an un-disarmed sink WOULD have fired
-      expect(caught).toEqual([]);
+      expect(added.ok).toBe(true);
+      expect(caught).toEqual([other]); // still installed — close() cleared only its own
+    } finally {
+      delete process.env.FASTAGENT_WAKE_SECRET;
+      setWakeupsSink(undefined);
+    }
+  });
+
+  it("does not strand the global sink when the mount fails", async () => {
+    // The sink is installed before the schedules load. A failure after that point returns no
+    // service, so nobody is left holding a close() that could take it down.
+    const dir = await agentDir(
+      { schedules: "not a directory\n" },
+      `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`,
+    );
+    process.env.FASTAGENT_WAKE_SECRET = "s";
+    try {
+      await expect(mountAgentcoreService(await open(dir))).rejects.toThrow();
+      // Read what is installed WITHOUT overwriting first — installing a sink here would mask the
+      // leak instead of detecting it.
+      expect(setWakeupsSink(undefined)).toBeUndefined();
     } finally {
       delete process.env.FASTAGENT_WAKE_SECRET;
       setWakeupsSink(undefined);

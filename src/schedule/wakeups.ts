@@ -79,8 +79,18 @@ function isWakeup(e: unknown): e is Wakeup {
  * must own its errors; a throw is caught here so a broken alarm never corrupts a store write.
  */
 let wakeupsSink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined;
-export function setWakeupsSink(sink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined): void {
+/** Install the sink, returning whatever it replaced — how a caller sees a leftover registration. */
+export function setWakeupsSink(
+  sink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined,
+): ((stateRoot: string, pending: Wakeup[]) => void) | undefined {
+  const previous = wakeupsSink;
   wakeupsSink = sink;
+  return previous;
+}
+
+/** Remove `sink` only if it is still the installed one — a later registration must survive. */
+export function clearWakeupsSink(sink: (stateRoot: string, pending: Wakeup[]) => void): void {
+  if (wakeupsSink === sink) wakeupsSink = undefined;
 }
 
 function load(stateRoot: string): Wakeup[] {

@@ -20,7 +20,7 @@ import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { reconcileWakeAlarms, createWakeAlarmSink } from "../schedule/wake-alarm.ts";
-import { setWakeupsSink } from "../schedule/wakeups.ts";
+import { clearWakeupsSink, setWakeupsSink } from "../schedule/wakeups.ts";
 import {
   type AgentService,
   type OpenedAgentDir,
@@ -57,8 +57,13 @@ export async function mountAgentcoreService(
   const withControl = mountSessionControl({}, sessionControl, stateRoot, { ...options.control, agent });
 
   const wake = config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  // The sink is already installed, and it is PROCESS-global — a mount that throws here would leave
+  // it behind with no service to own it or take it down.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false, {
     externalClock: true,
+  }).catch((error: unknown) => {
+    wake?.disarm();
+    throw error;
   });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
@@ -136,7 +141,12 @@ function armWakeAlarms(stateRoot: string): { reconcile: () => void; disarm: () =
   const sink = createWakeAlarmSink({ secret });
   setWakeupsSink(sink);
   log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
-  return { reconcile: () => reconcileWakeAlarms(stateRoot, sink), disarm: () => setWakeupsSink(undefined) };
+  return {
+    reconcile: () => reconcileWakeAlarms(stateRoot, sink),
+    // Clear only what WE installed. The sink is a process-wide singleton while a service is an
+    // instance, so an unconditional clear would take down whoever registered after us.
+    disarm: () => clearWakeupsSink(sink),
+  };
 }
 
 /**
