@@ -38,8 +38,12 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
  *
  * Dispatch is a Map lookup, so an unmatched key is simply never found — validation only buys telling
  * an author their handler will not run, and covers the spellings someone plausibly writes believing
- * they work. Unreachable keys nobody writes by accident (exotic methods, backslashes) are left
- * alone: a rule that never fires still has to be understood.
+ * they work.
+ *
+ * Unusual METHODS are deliberately not on the list, including the ones `fetch` refuses to send.
+ * That refusal is a client-side rule: a `TRACE` route is reachable over a raw socket and its
+ * handler runs (verified). Rejecting those here would remove a working capability to describe a
+ * limitation that lives somewhere else.
  */
 export function assertRouteKey(key: string, describe: (problem: string) => string): void {
   const { method, path } = parseRouteKey(key);

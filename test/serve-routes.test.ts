@@ -76,6 +76,17 @@ describe("serve: the route path language", () => {
     expect((await handle(new Request("http://h/any", { method: "DELETE" }))).status).toBe(200);
   });
 
+  it("an unusual method is a route like any other — the client's limits are not ours", async () => {
+    // `fetch` refuses to CONSTRUCT a TRACE request, which is a client-side rule. A server still
+    // receives one over a raw socket, so refusing the route here would remove a working capability
+    // to describe someone else's limitation.
+    const handle = router({ "TRACE /x": () => new Response("traced") });
+    expect(await (await handle(new Request("http://h/x", { method: "GET" }))).status).toBe(405);
+    const raw = new Request("http://h/x");
+    Object.defineProperty(raw, "method", { value: "TRACE" });
+    expect(await (await handle(raw)).text()).toBe("traced");
+  });
+
   it("a lower-case method is the same route, and reaches its handler", async () => {
     // The method is upper-cased when the key is parsed, so validation and conflict-checking already
     // agree that `"get /x"` is `GET /x`. Dispatch has to agree too, or the route starts and never runs.
