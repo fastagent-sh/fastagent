@@ -1,23 +1,21 @@
 /**
- * The serving spine shared by `dev` (its worker) and `start`: channel assembly, Node HTTP binding,
- * long-connection lifecycle, scheduler lifecycle, and the optional Cloudflare quick tunnel.
+ * What `dev` (its worker) and `start` need beyond the service itself: binding a port, the shutdown
+ * order, the startup report, the AgentCore mount, and the optional Cloudflare quick tunnel.
+ *
+ * The ASSEMBLY is not here — it lives in `src/service.ts`, which a public entry may import and this
+ * directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
  */
-import {} from "node:path";
 import type { Agent } from "../agent.ts";
 import { createStateSync } from "../channels/agentcore-state.ts";
 import { type RouteSurface, agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
-import {} from "../channels/control.ts";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
-import {} from "../channels/respond.ts";
-import {} from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import type { AgentService } from "../service.ts";
 import { routeKeysConflict, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
-import {} from "../schedule/discover.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
