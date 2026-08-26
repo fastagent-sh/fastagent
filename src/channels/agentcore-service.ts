@@ -56,7 +56,7 @@ export async function mountAgentcoreService(
   // collision rule runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, stateRoot, { ...options.control, agent });
 
-  const onStateReady = config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  const wake = config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false, {
     externalClock: true,
   });
@@ -75,17 +75,26 @@ export async function mountAgentcoreService(
     return { routes: lazy.routes, mounts: withControl.mounts };
   };
 
-  const handler = router(
-    mountAgentcore({}, { agent, stateRoot, schedules: scheduled.schedules, onStateReady, lazyChannels }),
-    withControl.mounts,
+  const adapterRoutes = mountAgentcore(
+    {},
+    {
+      agent,
+      stateRoot,
+      schedules: scheduled.schedules,
+      onStateReady: wake?.reconcile,
+      lazyChannels,
+    },
   );
+  const handler = router(adapterRoutes, withControl.mounts);
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   let unannounce: (() => void) | undefined;
   return {
     handler,
     agent,
-    routes: {}, // the adapter IS the surface; channel routes live behind it and arrive lazily
+    // The adapter IS the surface here; the channel routes arrive lazily BEHIND it. Reporting `{}`
+    // would make the startup line claim nothing is served.
+    routes: adapterRoutes,
     agentDir,
     workspace,
     // Unknown at boot by design — a channel list here would be the pre-restore emptiness.
@@ -101,6 +110,9 @@ export async function mountAgentcoreService(
       // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
       // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
+      // The sink is process-global. A service that outlived its close would keep catching wake-ups
+      // written by whatever runs next.
+      wake?.disarm();
       unannounce?.(); // a stale discovery file would point `attach` at a stopped service
     },
   };
@@ -112,7 +124,7 @@ export async function mountAgentcoreService(
  * running it at boot would read the pre-restore mount, see no pending wake-ups, and conclude there
  * is nothing to re-arm.
  */
-function armWakeAlarms(stateRoot: string): (() => void) | undefined {
+function armWakeAlarms(stateRoot: string): { reconcile: () => void; disarm: () => void } | undefined {
   const secret = process.env.FASTAGENT_WAKE_SECRET;
   if (!secret) {
     log.warn(
@@ -124,7 +136,7 @@ function armWakeAlarms(stateRoot: string): (() => void) | undefined {
   const sink = createWakeAlarmSink({ secret });
   setWakeupsSink(sink);
   log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
-  return () => reconcileWakeAlarms(stateRoot, sink);
+  return { reconcile: () => reconcileWakeAlarms(stateRoot, sink), disarm: () => setWakeupsSink(undefined) };
 }
 
 /**

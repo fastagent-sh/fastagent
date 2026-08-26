@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { addWakeup, setWakeupsSink } from "../src/schedule/wakeups.ts";
 import { mountAgentcoreService } from "../src/channels/agentcore-service.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
@@ -37,7 +38,8 @@ describe("mountAgentcoreService", () => {
     try {
       expect((await service.handler(new Request("http://h/ping"))).status).toBe(200);
       expect((await service.handler(new Request("http://h/hook", { method: "POST" }))).status).toBe(404);
-      expect(service.routes).toEqual({});
+      // What the startup line reports must be what is served — the adapter paths, not nothing.
+      expect(Object.keys(service.routes).sort()).toEqual(["GET /ping", "POST /invocations"]);
     } finally {
       await service.close();
     }
@@ -101,5 +103,28 @@ describe("mountAgentcoreService", () => {
     // NOT asserted: that the scheduler's timers are gone. Fake timers would have to be installed
     // before the assembly, which deadlocks its filesystem IO, so the stop is unobservable from here
     // — see the note on close() in agentcore-service.ts.
+  });
+
+  it("releases the process-global wake sink on close", async () => {
+    // The sink is a module-level singleton. Before close() disarmed it, a stopped service kept
+    // catching the wake-ups of whatever ran next — in-process, that is the following test.
+    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`);
+    process.env.FASTAGENT_WAKE_SECRET = "s";
+    try {
+      const service = await mountAgentcoreService(await open(dir));
+      const caught: string[] = [];
+      setWakeupsSink((root) => caught.push(root));
+      await service.close();
+
+      // A wake-up written after close must reach nobody — the service's sink is gone, and the one
+      // installed above is what close() must NOT have left in place either.
+      const other = await agentDir();
+      const added = addWakeup(other, { session: "s1", prompt: "later", fireAt: new Date(Date.now() + 3_600_000) });
+      expect(added.ok).toBe(true); // the write happened — so an un-disarmed sink WOULD have fired
+      expect(caught).toEqual([]);
+    } finally {
+      delete process.env.FASTAGENT_WAKE_SECRET;
+      setWakeupsSink(undefined);
+    }
   });
 });
