@@ -41,7 +41,7 @@ src/
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
-├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel, agentcore mount — the ASSEMBLY moved to service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command)
+├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel — the ASSEMBLY lives in service.ts and the agentcore one in channels/agentcore-service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── bind.ts                  # THE reading of a bind address, as the six DIFFERENT questions it is:
 │                           # bindable (isBindAddress) / an address not a name (bindAddress, applied
@@ -68,6 +68,10 @@ src/
 │                           # (.secrets/.state + env overrides), the containment guard, and the neutral
 │                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
+├── atomic-write.ts         # writeFileAtomic: the ONE synchronous "whole file or none of it" write
+│                           # (temp + rename + mode), after four copies drifted apart. The fixed
+│                           # `<path>.tmp` rests on a stated assumption — no two processes write one
+│                           # state root — and is the seam channel tests use to inject a write failure.
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
@@ -76,11 +80,18 @@ src/
 │   │                     # health, plus the plane's prefix), and a routing library would answer the
 │   │                     # same question through a pattern language we do not use, whose extra
 │   │                     # semantics every collision check would then have to PREDICT. Prefix
-│   │                     # owners are a separate PrefixMount argument, not a key spelling. Plus the
+│   │                     # owners are a separate mount argument, not a key spelling. Plus the
 │   │                     # totality boundary and the node:http binding. Shared ground, NOT a
 │   │                     # deployment target: every host in deploy/ runs this same process. Hono
 │   │                     # lives INSIDE this file (overrideGlobalObjects: false keeps it there — an
 │   │                     # embedder's globals are not ours to swap); the types stay pure Fetch.
+│   ├── agentcore-service.ts # the AgentCore SERVING assembly — same product as service.ts, built
+│   │                     # differently because the host is: the adapter is the surface, channels are
+│   │                     # discovered LAZILY (the state mount at boot is pre-restore, so eager
+│   │                     # discovery would cache that emptiness and clobber the restore), the clock
+│   │                     # is external, resident connections cannot survive scale-to-zero. Returns an
+│   │                     # AgentService, so `start` picks an assembly once and everything after is
+│   │                     # common. Owns nothing process-global: the wake sink stays with the entry.
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
