@@ -167,7 +167,7 @@ The root export intentionally contains the supported surface only.
 | Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
 | Not exported | Assembly parts (`router`, `createControlPlane`), prompt/config internals | Internal modules; no compatibility promise |
 
-Subpath exports:
+Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
 - `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules;
 - `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract and its remote clients;
