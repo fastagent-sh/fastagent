@@ -14,7 +14,8 @@
  * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
  * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
  */
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { join } from "node:path";
 import type { Agent } from "./agent.ts";
 import { classifyBind, clientHost } from "./bind.ts";
@@ -186,12 +187,8 @@ export function mountSessionControl(
     announce: (boundPort) => {
       mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
       const path = join(stateRoot, "control.json");
-      const tmp = `${path}.${process.pid}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify({ url: `http://${clientHost(options.host)}:${boundPort}`, token })}\n`, {
-        mode: 0o600,
-      });
-      renameSync(tmp, path);
-      chmodSync(path, 0o600);
+      const url = `http://${clientHost(options.host)}:${boundPort}`;
+      writeFileAtomic(path, `${JSON.stringify({ url, token })}\n`, 0o600);
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
       // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths
       // warn loudly, and the LAN path must not be the silent third way past the local trust story.

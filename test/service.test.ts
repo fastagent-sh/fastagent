@@ -4,7 +4,7 @@
  * These are the properties an embedder gets for free by calling one function instead of composing
  * the parts. Each was, at some point, composed wrong — inside this repo's own CLI.
  */
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
@@ -95,6 +95,9 @@ describe("createAgentService", () => {
     service.announce(8787);
     const discovery = join(service.agentDir, ".state", "control.json");
     expect(JSON.parse(await readFile(discovery, "utf8"))).toMatchObject({ token: service.control?.token });
+    // The file IS the credential: anything readable by other users on the box is a handover of the
+    // plane. `writeFileSync`'s mode is umask-masked, so this is what proves the explicit chmod ran.
+    expect((await stat(discovery)).mode & 0o777).toBe(0o600);
     await service.close();
     await expect(readFile(discovery, "utf8")).rejects.toThrow(/ENOENT/);
   });
