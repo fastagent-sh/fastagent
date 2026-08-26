@@ -44,8 +44,14 @@ describe("serve: the route path language", () => {
     // an unmatched key is simply never found — validation only buys telling the author so.
     expect(check("/files/*")).toThrow(/literal path/);
     expect(check("/files/:id")).toThrow(/literal path/);
-    expect(check("GET /x?y=1")).toThrow(/not part of a path/);
-    expect(check("/x#frag")).toThrow(/not part of a path/);
+    // Anything `URL` rewrites: the request arrives under the rewritten path, so the key is both
+    // unreachable AND invisible to the conflict check (`/a/../x` and `/x` are one route).
+    expect(check("GET /x?y=1")).toThrow(/arrives as "\/x"/);
+    expect(check("/x#frag")).toThrow(/arrives as "\/x"/);
+    expect(check("/a/../x")).toThrow(/arrives as "\/x"/);
+    expect(check("/a/./y")).toThrow(/arrives as "\/a\/y"/);
+    expect(check("/%2e%2e/x")).toThrow(/arrives as "\/x"/);
+    expect(check("GET /a\\b")).toThrow(/arrives as/);
     expect(check("files")).toThrow(/must start/);
     expect(check(" /x")).toThrow(/leading space is not a method/);
     expect(check("/files")).not.toThrow();

@@ -60,9 +60,13 @@ export function assertRouteKey(key: string, describe: (problem: string) => strin
   if (pattern) {
     throw new Error(describe(`"${pattern}" is not a pattern here — a route key is a literal path`));
   }
-  const urlPart = ["?", "#"].find((ch) => path.includes(ch));
-  if (urlPart) {
-    throw new Error(describe(`"${urlPart}" is not part of a path — a request's path never contains it`));
+  // Asked of `URL`, which is the authority on what a request's path becomes, rather than by listing
+  // the spellings it rewrites (`?`/`#`, `.`/`..`, backslashes, `%2e`). A key it rewrites can never
+  // be matched — the request arrives under the rewritten path — and worse, it compares as a
+  // different string, so the conflict check would not notice `/a/../x` and `/x` are one route.
+  const arrives = new URL(path, "http://x").pathname;
+  if (arrives !== path) {
+    throw new Error(describe(`is not the path a request would carry — that request arrives as "${arrives}"`));
   }
 }
 

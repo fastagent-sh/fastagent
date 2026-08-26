@@ -59,9 +59,9 @@ Route keys are either:
 METHOD /path       # method-specific
 ```
 
-The path is a **literal** — no `:params`, no `*`, no `?`/`#`. Dispatch is a map lookup, so those
-cannot match anything; they are refused at startup with the reason rather than left as a handler
-that never runs. Two keys naming the same route (`/webhook` and `POST /webhook`) are refused too:
+The path is a **literal** — no `:params`, no `*`, and nothing a URL rewrites (`?`/`#`, `.`/`..`).
+Dispatch is a map lookup, so those cannot match anything; they are refused at startup with the
+reason rather than left as a handler that never runs. Two keys naming the same route (`/webhook` and `POST /webhook`) are refused too:
 one of them would silently never receive a request.
 
 `HEAD` is answered from your `GET` route without the content (RFC 9110); write an explicit one only

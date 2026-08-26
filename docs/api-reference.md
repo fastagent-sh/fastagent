@@ -106,8 +106,9 @@ Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **l
 
 Dispatch is a map lookup on the literal path, so "would these two fight over a request?" is string
 equality — a fact about the keys, not a prediction about a matcher. Two keys naming the same route
-(`"/x"` and `"GET /x"`) are refused, as are patterns (`:id`, `*`) and `?`/`#`: they cannot match
-anything, and an author writing one means it to work.
+(`"/x"` and `"GET /x"`) are refused, as are patterns (`:id`, `*`) and any path a URL rewrites
+(`?`/`#`, `.`/`..`): the request would arrive under a different path, so the key could never match
+— and would compare as a different string, hiding the conflict.
 
 Paths are matched as they arrive, without percent-decoding — decoding would undo the normalisation
 `URL` performs, turning `%2F..%2F` back into `/../`. `HEAD` is answered from the `GET` route without
