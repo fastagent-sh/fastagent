@@ -104,12 +104,14 @@ type Routes = Record<string, ChannelHandler>;
 
 Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **literal**.
 
-Nothing richer, on purpose: two channels must never silently shadow each other, and for literal
-paths "would these two fight over a request?" is string equality — a fact about the keys, not a
-prediction about the matcher. Patterns (`:id`, `*`), percent-encoding, `?`/`#`, and a leading space
-are refused with the reason, as are two keys naming the same route (`"/x"` and `"GET /x"`). `HEAD`
-is not routable either: it is answered from the `GET` route (RFC 9110), so declaring one is refused
-rather than left as a handler that never runs.
+Dispatch is a map lookup on the literal path, so "would these two fight over a request?" is string
+equality — a fact about the keys, not a prediction about a matcher. Two keys naming the same route
+(`"/x"` and `"GET /x"`) are refused, as are patterns (`:id`, `*`) and `?`/`#`: they cannot match
+anything, and an author writing one means it to work.
+
+Paths are matched as they arrive, without percent-decoding — decoding would undo the normalisation
+`URL` performs, turning `%2F..%2F` back into `/../`. `HEAD` is answered from the `GET` route without
+the content (RFC 9110); writing an explicit `HEAD` route is allowed and takes precedence.
 
 A path that exists under another method answers 405, an unknown path 404; remote clients read that
 404 as version skew rather than as a fault.

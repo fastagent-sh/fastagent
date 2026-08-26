@@ -91,14 +91,13 @@ Route keys are either:
 METHOD /path       # method-specific
 ```
 
-The path is a **literal** — no `:params`, no `*`, no percent-encoding, no `?`/`#`, and no `.`/`..`
-segments. Anything else is refused at startup with the reason. The rule is narrow so that "would
-these two routes fight over a request?" is string equality: two channels must never silently shadow
-each other, and a pattern would have to be predicted instead of compared.
+The path is a **literal** — no `:params`, no `*`, no `?`/`#`. Dispatch is a map lookup, so those
+cannot match anything; they are refused at startup with the reason rather than left as a handler
+that never runs. Two keys naming the same route (`/webhook` and `POST /webhook`) are refused too:
+one of them would silently never receive a request.
 
-`HEAD` is not a key you write: it is answered from the `GET` route (RFC 9110). Methods `fetch`
-cannot send (`CONNECT`, `TRACE`, `TRACK`) are refused for the same reason — the handler could never
-run. Full rule: [API reference](api-reference.md#httphost-helpers).
+`HEAD` is answered from your `GET` route without the content (RFC 9110); write an explicit one only
+if it should differ. Full rule: [API reference](api-reference.md#httphost-helpers).
 
 Examples:
 

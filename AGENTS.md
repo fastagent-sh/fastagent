@@ -62,11 +62,13 @@ src/
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── serve.ts             # HOW a route table becomes a running server: the route path language
-│   │                     # (LITERAL paths only, so "do these two fight over a request?" is string
-│   │                     # equality rather than a prediction about the matcher — prefix-owning
-│   │                     # handlers are a separate PrefixMount argument, not a key spelling), the
-│   │                     # totality boundary, and the node:http binding. Shared ground, NOT a
+│   ├── serve.ts             # HOW a route table becomes a running server. Dispatch is a MAP LOOKUP
+│   │                     # on literal paths — a deployment mounts a handful (one per channel, plus
+│   │                     # health, plus the plane's prefix), and a routing library would answer the
+│   │                     # same question through a pattern language we do not use, whose extra
+│   │                     # semantics every collision check would then have to PREDICT. Prefix
+│   │                     # owners are a separate PrefixMount argument, not a key spelling. Plus the
+│   │                     # totality boundary and the node:http binding. Shared ground, NOT a
 │   │                     # deployment target: every host in deploy/ runs this same process. Hono
 │   │                     # lives INSIDE this file (overrideGlobalObjects: false keeps it there — an
 │   │                     # embedder's globals are not ours to swap); the types stay pure Fetch.

@@ -112,7 +112,11 @@ describe("the contracts depend on nothing", () => {
     });
   }
 
-  it("...and the mechanism that serves them does depend on one (the guard has teeth)", () => {
-    expect([...staticPackageGraph("channels/serve.ts")]).toContain("hono");
+  it("...and the mechanism that serves them depends on one, for the node bridge only", () => {
+    // The guard has teeth: serving pulls a package, contracts pull none. What it pulls is the
+    // node:http↔Fetch adapter — dispatch itself is a Map lookup over literal paths, so no routing
+    // library is in the graph.
+    const pkgs = [...staticPackageGraph("channels/serve.ts")];
+    expect(pkgs).toEqual(["@hono/node-server"]);
   });
 });

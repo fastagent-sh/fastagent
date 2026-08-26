@@ -38,24 +38,16 @@ describe("serve: router", () => {
 });
 
 describe("serve: the route path language", () => {
-  it("a route key is a literal path — every pattern is refused", () => {
+  it("refuses the spellings an author writes believing they work", () => {
     const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
-    // The language is small so that "would these two fight over a request?" is a COMPARISON rather
-    // than a prediction about the matcher. Every pattern admitted here would have to be predicted
-    // instead — by this check and by every other one — which is a model that drifts from what it
-    // models. That drift is what this narrowing removes.
+    // Patterns from other frameworks, and a URL where a path belongs. Dispatch is a Map lookup, so
+    // an unmatched key is simply never found — validation only buys telling the author so.
     expect(check("/files/*")).toThrow(/literal path/);
     expect(check("/files/:id")).toThrow(/literal path/);
-    expect(check("/%63ontrol/mine")).toThrow(/percent-encoding/);
     expect(check("GET /x?y=1")).toThrow(/not part of a path/);
     expect(check("/x#frag")).toThrow(/not part of a path/);
     expect(check("files")).toThrow(/must start/);
-    // Spellings a URL normalises away: the request arrives as something else, so the route never
-    // runs — and the two spellings compare as different strings, slipping past every conflict check.
-    expect(check("/a/../x")).toThrow(/segments are not allowed/);
-    expect(check("/a/./y")).toThrow(/segments are not allowed/);
-    expect(check("GET /a\\b")).toThrow(/path separator/);
-    expect(check("/a..b")).not.toThrow(); // dots inside a segment are ordinary characters
+    expect(check(" /x")).toThrow(/leading space is not a method/);
     expect(check("/files")).not.toThrow();
     expect(check("POST /a/b/c")).not.toThrow();
   });
@@ -66,19 +58,6 @@ describe("serve: the route path language", () => {
     expect(pathUnderPrefix("/control/a/b", "/control")).toBe(true);
     expect(pathUnderPrefix("/controlled", "/control")).toBe(false); // NOT a prefix match on characters
     expect(pathUnderPrefix("/other", "/control")).toBe(false);
-  });
-
-  it("a method must be one that can actually arrive", () => {
-    const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
-    // `fetch` refuses to construct a request with this method, so the route could only ever sit
-    // there unreachable.
-    expect(check("BAD@ /x")).toThrow(/not a valid HTTP method/);
-    // The matcher's own word for any-method — which we already spell `"/x"`. One meaning, one way.
-    expect(check("ALL /x")).toThrow(/write "\/path" for any method/);
-    // Forbidden by the Fetch standard — verified: `new Request(..., { method })` throws for these.
-    for (const m of ["CONNECT", "TRACE", "TRACK"]) expect(check(`${m} /x`)).toThrow(/forbidden by the Fetch standard/);
-    expect(check("PATCH /x")).not.toThrow();
-    expect(check("PROPFIND /x")).not.toThrow(); // extension methods are legal tokens
   });
 
   it("a leading space is refused, not quietly read as 'any method'", async () => {
@@ -124,7 +103,6 @@ describe("serve: the route path language", () => {
     const mount = (prefix: string) => () => router({}, [{ prefix, handler: () => new Response("m") }]);
     expect(mount("/files/:id")).toThrow(/literal path/);
     expect(mount("/files/*")).toThrow(/literal path/);
-    expect(mount("/%63ontrol")).toThrow(/percent-encoding/);
     expect(mount("control")).toThrow(/must start/);
     expect(mount("/control/")).toThrow(/no trailing slash/);
     expect(mount("/control")).not.toThrow();
@@ -138,17 +116,20 @@ describe("serve: the route path language", () => {
     expect(() => router({}, [at("/a"), at("/b")])).not.toThrow();
   });
 
-  it("a HEAD route is refused outright — the matcher can never reach one", async () => {
-    // Verified against the matcher, not assumed: a HEAD request takes the GET route in EITHER
-    // registration order, and a HEAD-ONLY route 404s. So this is never a second method on a path,
-    // it is a handler that cannot run. Refusing it beats shipping dead code that looks mounted.
-    expect(() => router({ "HEAD /x": () => new Response("") })).toThrow(/never runs/);
-    expect(() => router({ "GET /x": () => new Response("g"), "HEAD /x": () => new Response("") })).toThrow(
-      /never runs/,
-    );
-    // GET keeps answering HEAD, which is what makes the refusal safe rather than a lost capability.
-    const handle = router({ "GET /x": () => new Response("body") });
-    expect((await handle(new Request("http://h/x", { method: "HEAD" }))).status).toBe(200);
+  it("HEAD is answered from GET, without the content — and an explicit HEAD wins", async () => {
+    // RFC 9110. Dropped here rather than left to the HTTP layer, because this handler is public
+    // surface: a caller invoking it directly must get the same answer the socket would carry.
+    const fromGet = router({ "GET /x": () => new Response("body", { headers: { "x-mark": "1" } }) });
+    const head = await fromGet(new Request("http://h/x", { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(head.headers.get("x-mark")).toBe("1"); // headers survive; only the content goes
+    expect(await head.text()).toBe("");
+    // Writing one explicitly is allowed, and takes precedence — nothing here is unreachable.
+    const explicit = router({
+      "GET /x": () => new Response("get"),
+      "HEAD /x": () => new Response("", { headers: { "x-who": "head" } }),
+    });
+    expect((await explicit(new Request("http://h/x", { method: "HEAD" }))).headers.get("x-who")).toBe("head");
   });
 
   it("router() enforces the language too, not just the channel loader", () => {

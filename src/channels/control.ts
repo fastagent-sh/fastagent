@@ -21,7 +21,6 @@ import type { ImageRef, Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
-import { Hono } from "hono";
 import type { ChannelHandler } from "../channel.ts";
 import { type PrefixMount, parseRouteKey } from "./serve.ts";
 import { log } from "../log.ts";
@@ -65,8 +64,8 @@ const json = (value: unknown, status = 200): Response =>
  * `application/json` is not among them — so a browser POSTing to dispatch/invoke names it too;
  * allowing just `authorization` leaves precisely the WRITE routes unreachable while reads work.
  */
-function planeApp(routes: Record<string, ChannelHandler>): Hono {
-  const app = new Hono();
+function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
+  const byKey = new Map(Object.entries(routes));
   const methodsByPath = new Map<string, Set<string>>();
   for (const key of Object.keys(routes)) {
     const { method, path } = parseRouteKey(key);
@@ -74,54 +73,48 @@ function planeApp(routes: Record<string, ChannelHandler>): Hono {
     if (method) methods.add(method);
     methodsByPath.set(path, methods);
   }
-  // Per PATH, never plane-wide, and it must state what the path ACTUALLY serves — in both
-  // directions. Advertising a method the path does not serve invites a request that meets a
-  // rejection the browser cannot read; omitting one it DOES serve has the browser refuse a request
-  // that would have worked. `HEAD` is the second kind: the router answers it from the `GET` route
-  // (RFC 9110 — HEAD is GET without content), so leaving it unlisted would deny a call the plane
-  // is willing to serve.
+  // Per PATH, and it must state what the path ACTUALLY serves in both directions: advertising a
+  // method the path does not serve invites a request that meets a rejection the browser cannot
+  // read, and omitting one it does serve has the browser refuse a call that would have worked.
+  // `HEAD` is the second kind — every GET route answers it.
   const allowMethods = (path: string) => {
     const methods = new Set(methodsByPath.get(path) ?? []);
     if (methods.has("GET")) methods.add("HEAD");
     return [...methods, "OPTIONS"].join(", ");
   };
 
-  // THE single exit. Every reply below — route, preflight, 404, 405, 500 — leaves through here.
-  //
-  // `c.req.path`, never `new URL(c.req.url).pathname`: the matcher DECODES a request path before
-  // matching, so the raw pathname is a DIFFERENT string for the same route (`/control/%73tate`
-  // reaches `/control/state`). Looking the table up with the undecoded one answered "unknown path"
-  // about a route that was being served — no CORS headers on the reply, and a 404 preflight for a
-  // request the server would then accept.
-  app.use("*", async (c, next) => {
-    await next();
-    c.res.headers.set("access-control-allow-origin", "*");
-    c.res.headers.set("access-control-allow-headers", "authorization, content-type");
-    c.res.headers.set("access-control-allow-methods", allowMethods(c.req.path));
-  });
-  // The plane's own totality boundary: a rejecting handler (`commands()` on an unreadable
-  // definition) must still answer with the headers, and the message stays internal.
-  app.onError((error, c) => {
-    log.error(`[control] ${c.req.method} ${c.req.path} failed: ${String(error)}`);
-    return text("internal error\n", 500);
-  });
-  app.notFound((c) => {
-    const known = methodsByPath.has(c.req.path);
-    // A preflight carries no token — that is its entire purpose — so it is answered before any
-    // auth, and it is answered HERE because no route registers OPTIONS.
-    if (known && c.req.method === "OPTIONS") return new Response(null, { status: 204 });
-    // 404 vs 405 stays meaningful for the same reason it does in the host router: a remote client
-    // reads 404 as "this serve predates the route", not as a fault.
-    return known ? text("method not allowed\n", 405) : text("not found\n", 404);
-  });
-
-  for (const [key, handler] of Object.entries(routes)) {
-    const { method, path } = parseRouteKey(key);
-    const bound = (c: { req: { raw: Request } }) => handler(c.req.raw);
-    if (method) app.on(method, path, bound);
-    else app.all(path, bound);
-  }
-  return app;
+  return async (req) => {
+    const path = new URL(req.url).pathname;
+    const known = methodsByPath.has(path);
+    const answer = async (): Promise<Response> => {
+      // A preflight carries no token — that is its entire purpose — so it is answered before auth.
+      if (known && req.method === "OPTIONS") return new Response(null, { status: 204 });
+      const handler = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
+      if (handler) return await handler(req);
+      if (known && req.method === "HEAD") {
+        const get = byKey.get(`GET ${path}`);
+        if (get) return new Response(null, { status: (await get(req)).status });
+      }
+      // 404 vs 405 stays meaningful for the same reason it does in the host router: a remote client
+      // reads 404 as "this serve predates the route", not as a fault.
+      if (known) return text("method not allowed\n", 405);
+      return text("not found\n", 404);
+    };
+    let res: Response;
+    try {
+      res = await answer();
+    } catch (error) {
+      // The plane's own totality boundary: a rejecting handler (`commands()` on an unreadable
+      // definition) must still answer WITH the headers, and the message stays internal.
+      log.error(`[control] ${req.method} ${path} failed: ${String(error)}`);
+      res = text("internal error\n", 500);
+    }
+    // THE single exit. Every reply above — route, preflight, 404, 405, 500 — leaves through here.
+    res.headers.set("access-control-allow-origin", "*");
+    res.headers.set("access-control-allow-headers", "authorization, content-type");
+    res.headers.set("access-control-allow-methods", allowMethods(path));
+    return res;
+  };
 }
 
 // ONE constant for every Prompt-bearing wire surface (imported from the invoke channel — the two
@@ -228,8 +221,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
  *  PREFIX, and a route table is a set of literal paths — conflating the two is what made every
  *  collision check parse keys and guess at the matcher's behaviour. */
 export function mountControlPlane(routes: Record<string, ChannelHandler>): PrefixMount {
-  const app = planeApp(routes);
-  return { prefix: CONTROL_PREFIX, handler: (req) => app.fetch(req) };
+  return { prefix: CONTROL_PREFIX, handler: planeApp(routes) };
 }
 
 /** The plane's route table. Exported so the conformance sweeps derive their route list from what is

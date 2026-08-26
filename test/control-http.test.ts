@@ -201,13 +201,12 @@ describe("session control over HTTP (Phase 3)", () => {
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
       expect((await fetch(`${served.url}/not-control`)).status).toBe(404);
-      // 4. A percent-encoded spelling of a real path. The matcher decodes before matching, so this
-      //    IS /control/capabilities — and the plane must describe it as the route it just served,
-      //    not as an unknown path (which would mean no CORS headers and a 404 preflight).
+      // 4. A percent-encoded spelling is a DIFFERENT path, answered like any other unknown one —
+      //    and still readably. Paths are matched as they arrive: decoding them first would undo the
+      //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client
+      //    sends these (the remote client percent-encodes session ids, which travel in the query).
       const encoded = await fetch(`${served.url}/control/%63apabilities`, { headers: auth });
-      expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 200, cors: "*" });
-      const encodedPreflight = await fetch(`${served.url}/control/%63apabilities`, { method: "OPTIONS" });
-      expect({ status: encodedPreflight.status, cors: cors(encodedPreflight) }).toEqual({ status: 204, cors: "*" });
+      expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: "*" });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
       const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD", headers: auth });
       expect(headable.status).toBe(200);
