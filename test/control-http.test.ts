@@ -231,6 +231,13 @@ describe("session control over HTTP (Phase 3)", () => {
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
       expect((await fetch(`${served.url}/not-control`)).status).toBe(404);
+      // 3b. The plane's own 404 carries no content for HEAD. Asserted at the handler: over a socket
+      //     Node suppresses a HEAD body itself, so going through fetch would prove nothing.
+      const { control: quiet } = await fauxControlledAgent([]);
+      const plane = mountControlPlane(controlPlaneRoutes(quiet, { token: TOKEN })).handler;
+      const headMissing = await plane(new Request("http://x/control/nope", { headers: auth, method: "HEAD" }));
+      expect(headMissing.status).toBe(404);
+      expect(await headMissing.text()).toBe("");
       // 4. A percent-encoded spelling is a DIFFERENT path, answered like any other unknown one —
       //    and still readably. Paths are matched as they arrive: decoding them first would undo the
       //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client

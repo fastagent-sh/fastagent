@@ -101,7 +101,7 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
       if (handler) return await handler(req);
       if (known && req.method === "HEAD") {
         const get = byKey.get(`GET ${path}`);
-        if (get) return withoutBody(await get(req));
+        if (get) return await get(req);
       }
       // 404 vs 405 as in the host router: a client reads 404 as "this serve predates the route".
       if (known) return text("method not allowed\n", 405);
@@ -109,7 +109,9 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
     };
     let res: Response;
     try {
-      res = await answer();
+      // HEAD carries no content, whichever branch answered — including this plane's own 404/405.
+      const answered = await answer();
+      res = req.method === "HEAD" ? withoutBody(answered) : answered;
     } catch (error) {
       // The plane's own totality boundary: a rejecting handler (`commands()` on an unreadable
       // definition) must still answer with the headers; the message stays internal.

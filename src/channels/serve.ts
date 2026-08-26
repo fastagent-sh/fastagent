@@ -155,21 +155,21 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
     const path = new URL(req.url).pathname;
-    // HEAD carries no content (RFC 9110) whichever route answers it — a mount, an explicit `HEAD`
-    // route, a method-less one, or the `GET` fallback. Dropped here, not left to the HTTP layer:
-    // this handler is public surface and a direct caller must see the same answer as the socket.
-    const head = req.method === "HEAD";
-    const strip = (r: Response | Promise<Response>) => (r instanceof Promise ? r.then(withoutBody) : withoutBody(r));
-    for (const mount of mounts) {
-      if (pathUnderPrefix(path, mount.prefix)) return head ? strip(mount.handler(req)) : mount.handler(req);
-    }
-    const exact = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
-    if (exact) return head ? strip(exact(req)) : exact(req);
-    if (head) {
-      const get = byKey.get(`GET ${path}`);
-      if (get) return strip(get(req));
-    }
-    return paths.has(path) ? text("method not allowed\n", 405) : text("not found\n", 404);
+    const answer = (): Response | Promise<Response> => {
+      for (const mount of mounts) if (pathUnderPrefix(path, mount.prefix)) return mount.handler(req);
+      const exact = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
+      if (exact) return exact(req);
+      if (req.method === "HEAD") {
+        const get = byKey.get(`GET ${path}`);
+        if (get) return get(req);
+      }
+      return paths.has(path) ? text("method not allowed\n", 405) : text("not found\n", 404);
+    };
+    // ONE exit, so the HEAD rule holds for every reply — a mount's, a route's, the GET fallback's,
+    // and the 404/405 this router writes itself. RFC 9110: HEAD is GET without the content.
+    const res = answer();
+    if (req.method !== "HEAD") return res;
+    return res instanceof Promise ? res.then(withoutBody) : withoutBody(res);
   };
 }
 

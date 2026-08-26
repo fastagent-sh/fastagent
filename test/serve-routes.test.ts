@@ -144,6 +144,18 @@ describe("serve: the route path language", () => {
     expect(mount("/control")).not.toThrow();
   });
 
+  it("even the router's own 404 and 405 carry no content for HEAD", async () => {
+    // These are written by the router, not by a handler — the earlier version stripped only handler
+    // replies, so the one function had two HEAD semantics depending on who answered.
+    const handle = router({ "POST /x": () => new Response("x") });
+    const missing = await handle(new Request("http://h/nope", { method: "HEAD" }));
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toBe("");
+    const wrongMethod = await handle(new Request("http://h/x", { method: "HEAD" }));
+    expect(wrongMethod.status).toBe(405);
+    expect(await wrongMethod.text()).toBe("");
+  });
+
   it("a mount answers HEAD under the same rule as a route", async () => {
     // The mount branch returns before the route dispatch, so it needs the rule applied to it too —
     // otherwise the one handler has two HEAD semantics depending on which side answered.
