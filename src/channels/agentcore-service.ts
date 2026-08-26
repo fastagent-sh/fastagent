@@ -75,9 +75,12 @@ export async function mountAgentcoreService(
     return { routes: lazy.routes, mounts: withControl.mounts };
   };
 
+  // The adapter registers process-global listeners; this is what takes them down on close.
+  const closed = new AbortController();
   const adapterRoutes = mountAgentcore(
     {},
     {
+      signal: closed.signal,
       agent,
       stateRoot,
       schedules: scheduled.schedules,
@@ -110,6 +113,7 @@ export async function mountAgentcoreService(
       // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
       // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
+      closed.abort();
       unannounce?.(); // a stale discovery file would point `attach` at a stopped service
     },
   };
@@ -129,13 +133,15 @@ export function mountAgentcore(
     stateRoot: string;
     schedules: readonly LoadedSchedule[];
     onStateReady?: () => void;
+    /** Cancels the adapter's process-global registrations on close. */
+    signal?: AbortSignal;
     /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
      *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
      *  `routes` is the dispatch target — for wirings whose state root is already authoritative. */
     lazyChannels?: () => Promise<RouteSurface>;
   },
 ): Routes {
-  const { agent, stateRoot, schedules, onStateReady, lazyChannels } = options;
+  const { agent, stateRoot, schedules, onStateReady, lazyChannels, signal } = options;
   const mounted = agentcoreRoutes({
     routes: lazyChannels ?? { routes },
     agent,
@@ -150,6 +156,7 @@ export function mountAgentcore(
     // no forwarder in this topology, so only the public `invoke` kind is servable.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
+    ...(signal ? { signal } : {}),
     fire:
       schedules.length === 0
         ? undefined

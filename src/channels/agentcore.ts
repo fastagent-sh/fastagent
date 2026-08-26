@@ -134,6 +134,9 @@ export interface AgentcoreAdapterOptions {
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's.
    *  Undefined = nothing can be trusted, so only the public `invoke` kind is served. */
   ingressSecret?: string;
+  /** Cancels the adapter's process-global registrations. Without it a closed adapter keeps saving
+   *  state on every later idle edge — including work belonging to whatever mounted after it. */
+  signal?: AbortSignal;
   /** Runs ONCE, after the state root is authoritative (post-restore) — the wake-alarm reconcile, which
    *  at boot would see the mount the platform just wiped and conclude there is nothing pending. */
   onStateReady?: () => void;
@@ -188,7 +191,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
   const invokeHandler = createInvokeHandler(agent);
   // Snapshot on the 0-in-flight edge: webhook channels ACK fast and finish the turn in the
   // background, so "the request returned" is NOT when the state root settles.
-  if (stateSync) onIdle(() => stateSync.save());
+  if (stateSync) {
+    const off = onIdle(() => stateSync.save());
+    options.signal?.addEventListener("abort", off, { once: true });
+  }
   let warnedUnsnapshotted = false;
   let stateReadyFired = false;
 
