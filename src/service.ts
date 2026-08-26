@@ -382,6 +382,18 @@ export async function mountAgentService(
       log.error(`[fastagent] long connection ${name} ${error === undefined ? "closed" : `failed: ${String(error)}`}`));
   const runs: LongConnection[] = [];
 
+  // A FUNCTION declaration, not a const: `close()` detaches this listener, and a rollback can call
+  // `close()` before this point is reached — a `const` would be in its temporal dead zone there, so
+  // the cleanup would throw a ReferenceError and silently skip everything after it.
+  //
+  // Detached because a caller that closes services itself while holding one long-lived signal would
+  // otherwise accumulate listeners, each pinning a whole service through its closure. The signal
+  // path has no caller awaiting the promise, so a failure to stop is reported rather than left as an
+  // unhandled rejection — in an embedded library, potentially the host's exit.
+  function onAbort(): void {
+    void close().catch((error: unknown) => log.error(`[fastagent] service close failed: ${String(error)}`));
+  }
+
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
@@ -446,12 +458,7 @@ export async function mountAgentService(
     );
     runs.push(run);
   }
-  // Detached by `close()`: a caller that closes services itself while holding one long-lived signal
-  // would otherwise accumulate listeners, each pinning a whole service through its closure.
-  // The signal path has no caller awaiting the promise, so a failure to stop would be an unhandled
-  // rejection — in an embedded library, potentially the host's exit. Reported instead.
-  const onAbort = () =>
-    void close().catch((error: unknown) => log.error(`[fastagent] service close failed: ${String(error)}`));
+
   if (options.signal?.aborted) await close();
   else options.signal?.addEventListener("abort", onAbort, { once: true });
 

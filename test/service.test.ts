@@ -257,17 +257,22 @@ describe("createAgentService", () => {
   it("a connect() that throws rolls back the connections already open", async () => {
     // The rollback path (a synchronous throw from `connect`), where the cleanup can ALSO fail: the
     // caller must still get the reason the start failed, not the aftermath of tearing it down.
+    (globalThis as Record<string, unknown>).__faRolledBack = false;
     const dir = await agentDir({
       "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
         ready: Promise.resolve(),
-        closed: new Promise((_, reject) =>
-          signal.addEventListener("abort", () => reject(new Error("and cleanup failed too")), { once: true })),
+        closed: new Promise((resolve) => signal.addEventListener("abort", () => {
+          globalThis.__faRolledBack = true; resolve();
+        }, { once: true })),
       }) };`,
       "channels/b-throws.mjs": `export default { name: "b-throws", connect: () => { throw new Error("cannot dial"); } };`,
     });
     await expect(createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 })).rejects.toThrow(
       /cannot dial/,
     );
+    // Asserted, not assumed: rollback catches everything, so a cleanup that threw its way out would
+    // still surface the right message while having done nothing.
+    expect((globalThis as unknown as { __faRolledBack?: boolean }).__faRolledBack).toBe(true);
   });
 
   it("a failed start reports the start failure, not the cleanup's", async () => {
