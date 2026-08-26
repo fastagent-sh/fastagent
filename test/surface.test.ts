@@ -242,6 +242,20 @@ describe("openAgentSurface", () => {
     await expect(surface.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
   });
 
+  it("closing while a connection is still dialling rejects `ready` rather than claiming success", async () => {
+    // The contract lets a connection settle `ready` as CANCELLATION on abort. Resolving normally
+    // would tell the caller its channels are up while the surface is shut and health says 503.
+    const dir = await agentDir({
+      "channels/slow.mjs": `export default { name: "slow", connect: (ctx, signal) => ({
+        ready: new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
+        closed: new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
+      }) };`,
+    });
+    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    await surface.close(); // while it is still dialling
+    await expect(surface.ready).rejects.toThrow(/closed before it became ready/);
+  });
+
   it("`ready` resolves immediately when there are no long connections", async () => {
     const surface = await openAgentSurface(await agentDir());
     try {

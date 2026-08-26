@@ -188,7 +188,7 @@ function openAgentSurface(
   mounts: readonly PrefixMount[];
   agentDir: string;
   workspace: string;
-  channels: { routes: string[]; longConnections: string[] };
+  channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
   schedules: readonly LoadedSchedule[];
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   control?: { token: string; prefix: string };  // the plane's bearer token, when sessionControl is on

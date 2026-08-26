@@ -213,7 +213,11 @@ export async function mountAgentSurface(
       await close();
       throw error;
     }
-    if (!abort.signal.aborted && !dropped) routed.setReady(true);
+    // A `ready` that settles because the surface was CLOSED is cancellation, not readiness — the
+    // contract lets a connection resolve it on abort. Returning normally would tell a caller its
+    // channels are up while the surface is shut and health says 503.
+    if (abort.signal.aborted) throw new Error("surface closed before it became ready");
+    if (!dropped) routed.setReady(true);
   })();
   // Observed here so a rejection is never unhandled; every caller still sees it through `ready`.
   ready.catch(() => {});
