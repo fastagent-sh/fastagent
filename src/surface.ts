@@ -124,6 +124,11 @@ export async function mountAgentSurface(
     ...(options.control?.tunnel !== undefined ? { tunnel: options.control.tunnel } : {}),
     ...(options.control?.host !== undefined ? { host: options.control.host } : {}),
   });
+  // Composed BEFORE anything starts. `router` re-validates what `loadChannels` and the control
+  // mount already checked, so on THIS path it should not fail — but "should not" is not an ordering
+  // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
+  // with no surface for the caller to close. Free to order correctly; expensive to discover later.
+  const handler = router(withControl.routes, withControl.mounts);
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false);
 
   const abort = new AbortController();
@@ -255,7 +260,7 @@ export async function mountAgentSurface(
   ready.catch(() => {});
 
   return {
-    handler: router(withControl.routes, withControl.mounts),
+    handler,
     agent,
     routes: withControl.routes,
     mounts: withControl.mounts,

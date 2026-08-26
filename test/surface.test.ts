@@ -306,6 +306,20 @@ describe("openAgentSurface", () => {
     }
   });
 
+  it("an invalid route is refused before any resource starts", async () => {
+    // A configuration error must not arrive after channels are dialling: the caller has no surface
+    // to close at that point. (The route language happens to be enforced earlier still, at channel
+    // load — this asserts the property, not which check catches it.)
+    const dir = await agentDir({
+      "channels/bad.mjs": `export default () => ({ "GET /files/:id": () => new Response("x") });`,
+      "channels/sock.mjs": `export default { name: "sock", connect: () => { globalThis.__faConnected = true; return {
+        ready: Promise.resolve(), closed: new Promise(() => {}) }; } };`,
+    });
+    (globalThis as Record<string, unknown>).__faConnected = false;
+    await expect(openAgentSurface(dir)).rejects.toThrow(/channel setup is invalid|literal path/);
+    expect((globalThis as unknown as { __faConnected?: boolean }).__faConnected).toBe(false);
+  });
+
   it("a broken schedule rejects instead of killing the host process", async () => {
     // The library must not decide an embedder's app should die. `startSchedules` used to exit(1)
     // here, which for a mounted surface means taking down someone else's server. A single bad
