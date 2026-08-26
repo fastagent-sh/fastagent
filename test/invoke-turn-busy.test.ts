@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Agent, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
-import type { BusyRetry } from "../src/channels/invoke-turn-kit.ts";
+import type { BusyRetry } from "../src/channels/kit/invoke-turn-kit.ts";
 import { invokeTurn } from "../src/channels/telegram/invoke-turn.ts";
 
 /** A fake agent scripted per-invoke: call N yields script[N] (the last entry repeats). */

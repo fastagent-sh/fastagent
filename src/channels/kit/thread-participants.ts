@@ -19,7 +19,7 @@
  * - Keyed by `thread_id`, never a reply-chain root: Feishu's `root_id` moves with the chain, so it
  *   cannot identify a side conversation at all.
  */
-import { log } from "../log.ts";
+import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
 /** Cap on remembered threads. Losing one costs a mention to re-enter that thread, so an unbounded file

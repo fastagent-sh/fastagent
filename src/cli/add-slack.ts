@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
-import { waitForHealth } from "../channels/wait-health.ts";
+import { waitForHealth } from "../channels/kit/wait-health.ts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";

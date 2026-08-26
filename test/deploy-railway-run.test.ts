@@ -7,7 +7,7 @@ import {
   parseDomainUrl,
   parseHasVolume,
 } from "../src/deploy/railway/run.ts";
-import type { RegistrationOutcome } from "../src/channels/registration.ts";
+import type { RegistrationOutcome } from "../src/channels/kit/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 /** A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). */

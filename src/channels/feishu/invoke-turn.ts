@@ -22,12 +22,12 @@ import {
   backgroundImagesManifest,
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
-} from "../invoke-turn-kit.ts";
-import { BUFFER_ATTACH_MAX } from "../context-buffer.ts";
+} from "../kit/invoke-turn-kit.ts";
+import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
-import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../text.ts";
+import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
 
 /** The per-turn REPLY CONTRACT, appended to the prompt (not the system prompt). Two halves, one
  *  concept — what happens to the reply: its FORMAT (rendered in a card whose markdown element is the

@@ -6,8 +6,8 @@
  * at-least-once floor; and the hub stays gated by `config.sessionControl`, so without it the command
  * degrades to a visible "not enabled" notice, never a silent ignore.
  */
-import { log } from "../log.ts";
-import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../session.ts";
+import { log } from "../../log.ts";
+import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../../session.ts";
 
 /** Bare stop word for summon-body matching (Slack/Feishu); Telegram uses its native `/stop` command. */
 export function isStopText(text: string): boolean {

@@ -44,7 +44,7 @@ The first consequence, and the one most bot designs miss:
 > A participant hears everything said in the room, and speaks only when addressed.
 
 The two capabilities are independent, and FastAgent implements them separately: everything heard but
-not addressed to the agent is buffered as context (`channels/context-buffer.ts`) and folded into the
+not addressed to the agent is buffered as context (`channels/kit/context-buffer.ts`) and folded into the
 next answered turn in that place; speaking is governed by rule 1 below.
 
 This is also what the platform's sensitive group-message scope actually buys. It does not grant the
@@ -209,7 +209,7 @@ compromise — it is the same social rule:
 - one conversation is sequential: people take turns, and an answer may depend on the previous one;
 - separate conversations are parallel: threads proceed independently.
 
-Two turns in one place must therefore serialize (`channels/turn-queue.ts` FIFO, and the engine's
+Two turns in one place must therefore serialize (`channels/kit/turn-queue.ts` FIFO, and the engine's
 single-writer lease in `engines/pi/invoke.ts`). Two turns in different places run concurrently
 because they are different sessions.
 

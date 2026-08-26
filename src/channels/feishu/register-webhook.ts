@@ -20,8 +20,8 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
-import type { RegistrationOutcome } from "../registration.ts";
-import { waitForHealth } from "../wait-health.ts";
+import type { RegistrationOutcome } from "../kit/registration.ts";
+import { waitForHealth } from "../kit/wait-health.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistrationError } from "./feishu-api.ts";
 

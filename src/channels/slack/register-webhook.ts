@@ -1,5 +1,5 @@
-import type { RegistrationOutcome } from "../registration.ts";
-import { waitForHealth } from "../wait-health.ts";
+import type { RegistrationOutcome } from "../kit/registration.ts";
+import { waitForHealth } from "../kit/wait-health.ts";
 import { updateSlackAppManifest } from "./config-api.ts";
 import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";

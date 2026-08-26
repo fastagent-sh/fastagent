@@ -14,8 +14,8 @@
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.
  */
-import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../agent.ts";
-import { log } from "../log.ts";
+import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
+import { log } from "../../log.ts";
 
 /** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
  *  EXTERNAL turn (a self-scheduled wake, a concurrent embedder invoke), up to `maxWaitMs` total. The

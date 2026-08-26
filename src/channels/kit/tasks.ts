@@ -4,7 +4,7 @@
  * (`turnsIdle`) — otherwise a reply in flight when the process exits is silently dropped. Error
  * handling stays with the caller: track() only guarantees the drain sees the task settle.
  */
-import { beginWork } from "./busy.ts";
+import { beginWork } from "../busy.ts";
 
 export interface TaskTracker {
   /** Track one task. The caller keeps its own `.catch` — rejections must already be handled. */

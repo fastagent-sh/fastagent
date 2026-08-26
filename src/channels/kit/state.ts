@@ -13,8 +13,8 @@
  * with silently-empty state would hide real data behind a config mistake.
  */
 import { mkdirSync, readFileSync } from "node:fs";
-import { writeFileAtomic } from "../atomic-write.ts";
-import { log } from "../log.ts";
+import { writeFileAtomic } from "../../atomic-write.ts";
+import { log } from "../../log.ts";
 
 /** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
 export function ensureStateHome(dir: string): void {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -190,6 +190,29 @@ describe("the assembly's parts stay out of the public surface", () => {
       expect(named.filter((n) => ORPHAN_TYPES.includes(n))).toEqual([]);
     });
   }
+});
+
+describe("channels/ splits into a kit and a mechanism, and they do not cross", () => {
+  // The split is a fact about who imports what, not a filing preference: every file under kit/ has
+  // consumers only in channels/<platform>/, and the serving mechanism beside it has none there.
+  // Asserting it keeps the two from bleeding back together one import at a time.
+  const KIT = resolve(srcDir, "channels/kit");
+  const MECHANISM = ["serve.ts", "http.ts", "control.ts", "discover.ts"];
+
+  it("the kit never imports the serving mechanism", () => {
+    for (const file of readdirSync(KIT).filter((f) => f.endsWith(".ts"))) {
+      const src = readFileSync(join(KIT, file), "utf8");
+      const crossed = MECHANISM.filter((m) => src.includes(`../${m}"`));
+      expect(crossed, `${file} reaches for the mechanism`).toEqual([]);
+    }
+  });
+
+  it("the serving mechanism never imports the kit", () => {
+    for (const file of MECHANISM) {
+      const src = readFileSync(resolve(srcDir, "channels", file), "utf8");
+      expect(src.includes("./kit/"), `${file} reaches into the kit`).toBe(false);
+    }
+  });
 });
 
 describe("the contracts depend on nothing", () => {

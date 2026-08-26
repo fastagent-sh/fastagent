@@ -2,7 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
-import { codePointPrefix } from "../text.ts";
+import { codePointPrefix } from "../kit/text.ts";
 import type { SlackFile } from "./model.ts";
 
 const API_TIMEOUT_MS = 30_000;

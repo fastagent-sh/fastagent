@@ -14,7 +14,7 @@
  * a caller-provided temp parameters file (`file://…`, mode 0600, deleted by the caller) — the write
  * is injected to keep this module pure and the security-sensitive wiring testable.
  */
-import type { RegistrationOutcome } from "../../channels/registration.ts";
+import type { RegistrationOutcome } from "../../channels/kit/registration.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { registrationGate } from "../registration-gate.ts";
 import type { CliRunner } from "../runner.ts";

@@ -45,8 +45,8 @@ import {
   revealedAnswer,
   thinkingLine,
   toolLines,
-} from "../preview-kit.ts";
-import { truncateCodePointPrefix, truncateUtf8 } from "../text.ts";
+} from "../kit/preview-kit.ts";
+import { truncateCodePointPrefix, truncateUtf8 } from "../kit/text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type FeishuFailure = ChannelFailure;

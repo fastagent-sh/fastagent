@@ -442,10 +442,11 @@ Feishu is the second stateful chat-channel reference, shaped as a sibling of Tel
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`thread-participants.ts` thread-participation cache, shared `../seen.ts` bounded delivery dedup,
+`thread-participants.ts` thread-participation cache, shared `../kit/seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
-`invoke-turn-kit` / `state` / `wait-health`) remain one level up.
+`invoke-turn-kit` / `state` / `wait-health`) live in `channels/kit/`, whose defining property is that
+its consumers are only platform directories like this one.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
@@ -508,7 +509,7 @@ a stable hand-authored surface. What is platform-different:
     built and removed: a pre-ACK `listThreadSenders` bought a membership claim its own 50-message page
     cap made incomplete anyway, at the price of a failure taxonomy, an ACK budget, request aborts, a
     completeness flag, and a duplicate-delivery join — where nearly every defect in the feature lived.
-    See `src/channels/thread-participants.ts` and design/participant-model.md §3.
+    See `src/channels/kit/thread-participants.ts` and design/participant-model.md §3.
   - *Storage.* `thread-participants.json` records, per thread, the humans heard (capped at two — the
     rule only asks whether a second one exists) and whether this agent has spoken. Observations only
     ever accumulate: no platform emits an event when someone stops taking part, and the error

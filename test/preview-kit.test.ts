@@ -8,7 +8,7 @@ import {
   humanizeToolName,
   thinkingLine,
   toolLines,
-} from "../src/channels/preview-kit.ts";
+} from "../src/channels/kit/preview-kit.ts";
 
 describe("humanizeToolName", () => {
   it("splits an mcp identifier into server: tool", () => {

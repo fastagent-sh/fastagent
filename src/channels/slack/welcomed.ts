@@ -1,6 +1,6 @@
 /** Durable set of users who have already received the first-run DM welcome, so it is sent at most once. */
 import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "../state.ts";
+import { loadStateFile, saveStateFile } from "../kit/state.ts";
 
 export interface WelcomedUsers {
   has(teamId: string, userId: string): boolean;

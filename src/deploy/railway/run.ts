@@ -23,7 +23,7 @@
  * no bulk stdin import like Fly's `secrets import`). Auth needs an ACCOUNT credential (login or
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
-import type { RegistrationOutcome } from "../../channels/registration.ts";
+import type { RegistrationOutcome } from "../../channels/kit/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";

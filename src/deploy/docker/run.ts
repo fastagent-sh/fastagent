@@ -3,7 +3,7 @@
  * Compose owns container/network/volume lifecycle; this driver owns only actionable gates, secret/auth
  * carry through the child environment (never argv), and a readiness check on the published loopback port.
  */
-import { waitForHealth } from "../../channels/wait-health.ts";
+import { waitForHealth } from "../../channels/kit/wait-health.ts";
 import { parseTunnelUrl } from "../../tunnel.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import type { CliRunner } from "../runner.ts";

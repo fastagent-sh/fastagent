@@ -1,6 +1,6 @@
 /**
  * Feishu/Lark's half of the shared context buffer (mechanics + consume protocol:
- * ../context-buffer.ts): the entry shape, its fold-line rendering, place-key derivation, and
+ * ../kit/context-buffer.ts): the entry shape, its fold-line rendering, place-key derivation, and
  * buffered-resource selection. Entries are bucketed by conversation place (main chat, or one
  * concrete thread root) and folded into the next answered turn in that place.
  */
@@ -10,9 +10,9 @@ import {
   BUFFER_LINE_MAX_CHARS,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
-} from "../context-buffer.ts";
-import { loadStateFile, saveStateFile } from "../state.ts";
-import { truncateCodePointPrefix } from "../text.ts";
+} from "../kit/context-buffer.ts";
+import { loadStateFile, saveStateFile } from "../kit/state.ts";
+import { truncateCodePointPrefix } from "../kit/text.ts";
 import type { NormalizedFeishuMessage } from "./model.ts";
 
 export interface FeishuBufferedResource {

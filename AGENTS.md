@@ -97,17 +97,23 @@ src/
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
-│   ├── preview-kit.ts       # SHARED turn-view reducer (event → view state + line renderers) + preview policies (ChannelFailure, wording)
-│   ├── tasks.ts             # SHARED fire-and-forget side-task tracking — channels drain it in turnsIdle
-│   ├── text.ts              # SHARED Unicode-safe code-point slicing (cards, preview kit)
-│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + slack + feishu)
-│   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
-│   ├── context-buffer.ts    # SHARED: generic durable un-summoned-discussion buffer (peek→completed→commit) — entry shape/validator/line injected per channel
-│   ├── thread-participants.ts # SHARED: who the agent has HEARD in a thread (the participant model's summon rule) — observed per message, never read back from the platform
-│   ├── invoke-turn-kit.ts   # SHARED: busy-retry stream loop around agent.invoke (onCompleted commit point) + prompt-suffix wording (manifests/notes)
-│   ├── state.ts, seen.ts    # SHARED: atomic channel state + bounded durable delivery dedup
-│   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
-│   ├── registration.ts      # SHARED: registrar outcome type (registered|manual|failed) — registrars report facts, deploy owns gate policy
+│   ├── kit/                 # WRITING a channel — the parts every chat platform needs and none should
+│   │   │                     # reinvent. The split from the mechanism beside it is a FACT about
+│   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
+│   │   │                     # consumers only under channels/<platform>/, and serve/http/control/
+│   │   │                     # discover have none there. Neither side may reach for the other.
+│   │   ├── preview-kit.ts   # turn-view reducer (event → view state + line renderers) + preview policies
+│   │   ├── invoke-turn-kit.ts # busy-retry stream loop around agent.invoke (onCompleted commit point)
+│   │   ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; telegram + slack + feishu)
+│   │   ├── turn-store.ts    # generic durable turn intent (L1) — record shape/validator/order injected
+│   │   ├── context-buffer.ts# generic durable un-summoned-discussion buffer (peek→completed→commit)
+│   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
+│   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
+│   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
+│   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
+│   │   ├── stop-command.ts  # the shared /stop parsing every chat channel accepts
+│   │   ├── wait-health.ts   # readiness probe for the webhook registrars
+│   │   └── registration.ts  # registrar outcome type (registered|manual|failed)
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)

@@ -49,7 +49,7 @@
  * Single-process, single-writer: same durability model as state.ts (crash-safe via atomic rename;
  * power-loss is best-effort — no fsync, consistent with the rest of the channel's state).
  */
-import { log } from "../log.ts";
+import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
 /** What every persisted turn record carries regardless of channel: identity, the session whose FIFO

@@ -1,5 +1,5 @@
 /**
- * Telegram's half of the shared context buffer (mechanics + consume protocol: ../context-buffer.ts):
+ * Telegram's half of the shared context buffer (mechanics + consume protocol: ../kit/context-buffer.ts):
  * the entry shape, its fold-line rendering, and buffered-attachment selection. Bucketed by Telegram
  * "place" (chat[:thread]), not session: an un-summoned message has no route session, and the flush
  * feeds whatever turn answers that place.
@@ -8,7 +8,7 @@ import {
   BUFFER_ATTACH_MAX,
   type ContextBuffer as GenericContextBuffer,
   createContextBuffer as createGenericContextBuffer,
-} from "../context-buffer.ts";
+} from "../kit/context-buffer.ts";
 
 /** One buffered un-summoned message (object identity is the commit key). Besides the sender label and
  *  one-line body, it carries what a LATER summon needs to resolve references into the discussion:

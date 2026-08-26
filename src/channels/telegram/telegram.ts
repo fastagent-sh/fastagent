@@ -46,10 +46,10 @@ import {
   telegramEnvelope,
 } from "./parse.ts";
 import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
-import { ensureStateHome } from "../state.ts";
-import { dispatchStop } from "../stop-command.ts";
+import { ensureStateHome } from "../kit/state.ts";
+import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
-import { createTurnQueue } from "../turn-queue.ts";
+import { createTurnQueue } from "../kit/turn-queue.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
 // Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.

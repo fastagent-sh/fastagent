@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { activeWork, beginWork } from "../src/channels/busy.ts";
-import { createTaskTracker } from "../src/channels/tasks.ts";
-import { createTurnQueue } from "../src/channels/turn-queue.ts";
+import { createTaskTracker } from "../src/channels/kit/tasks.ts";
+import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
 
 /** Wait until `cond` holds (settlement callbacks run on the microtask queue). */
 const until = async (cond: () => boolean): Promise<void> => {
