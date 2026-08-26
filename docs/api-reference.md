@@ -250,7 +250,7 @@ export default defineTool({
 });
 ```
 
-`tools/<name>.ts` files are discovered with `loadTools(dir)`, and the filename becomes the tool name.
+`tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
 The second `execute` argument is a `ToolContext`:
 
@@ -332,17 +332,6 @@ interface LongConnectionChannelModule {
   name: string;
   connect(ctx: ChannelContext, signal: AbortSignal): LongConnection;
 }
-function loadChannels(
-  dir: string,
-  ctx: ChannelContext,
-): Promise<{
-  routes: Routes;
-  longConnections: LoadedLongConnectionChannel[];
-  routeChannels: string[];
-  longConnectionChannels: string[];
-  collisions: ChannelCollision[];
-  failures: ModuleLoadFailure[];
-}>;
 ```
 
 An agent channel default-exports either a route `ChannelModule` or a
@@ -373,11 +362,6 @@ interface Schedule {
   prompt: string; // the turn's text = the job's instruction
 }
 function defineSchedule(schedule: Schedule): Schedule;
-function loadSchedules(dir: string): Promise<{ schedules: LoadedSchedule[]; failures: ModuleLoadFailure[] }>;
-function discoverScheduleFiles(dir: string): Promise<string[]>; // existence probe: file basenames, no import
-// (deploy preflight's time-trigger detection; prefer loadSchedules to also surface broken files)
-function createScheduler(opts: SchedulerOptions): Scheduler; // { start(): void; stop(): void }
-function scheduleSession(name: string): string; // the derived stable session id
 ```
 
 An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
@@ -398,7 +382,7 @@ The scheduler is a time-trigger (the N axis, clock form): on each cron instant i
 with `prompt` — borrowing the same `Agent` contract as channels, adding none. It:
 
 - **carries no `session` field** — a session id is runtime conversational context, not a build-time
-  value. It derives a stable per-schedule session (`scheduleSession(name)` = `schedule:<name>`), so a
+  value. It derives a stable per-schedule session (`schedule:<name>`), so a
   schedule's turns share one continuing conversation persisted by the core session store (zero-touch on
   storage, like the telegram channel deriving a session from `chat.id`);
 - **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome;
@@ -406,7 +390,7 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   last fire; a run missed while the process was down fires once on the next start (not per missed slot),
   claimed before the invoke (at-most-once per slot).
 
-Single-process (like all state today). `createScheduler({ agent, stateRoot, schedules })` is started by
+Single-process (like all state today). The scheduler is started by
 the serve path (`dev`/`start`); `fastagent fire <name>` runs one schedule's turn immediately for authoring.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
@@ -445,11 +429,9 @@ to read the project's credential (the `createPiAgentFrom*` openers already do).
 
 Provider injection:
 
-```ts
-function createProvider(...): Provider;
-```
-
-`createProvider`, `Provider`, `ProviderAuth`, and `Model` are re-exported from pi's model layer so callers do not need to depend on FastAgent internals.
+`Provider`, `ProviderAuth` and `Model` are re-exported as TYPES because they appear in our options —
+a caller must be able to name them. The factory that builds one is pi's own: import `createProvider`
+from `@earendil-works/pi-ai` directly, so its API answers to its own package.
 
 ## Sessions and leases
 

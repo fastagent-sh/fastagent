@@ -1,4 +1,4 @@
-// Engine-neutral Agent Handler contract, consumption helpers, host/channel kit, and time triggers.
+// Engine-neutral Agent Handler contract, consumption helpers, channel kit, and time triggers.
 // Import this subpath from channel packages or contract-only integrations to avoid loading the pi runtime.
 // Session-control layering (design §1): the CONTRACT (SessionControl types, error codes) lives
 // behind the `/session` subpath so interactive serving does not grow the minimal handler contract,
@@ -34,6 +34,6 @@ export type {
 // `createAgentService` assembles a service — not something a caller has to reproduce.
 export { nodeListener, serveNode } from "./channels/serve.ts";
 
+// `defineSchedule` is what a `schedules/*.ts` file is written against. Discovering those files and
+// running the clock is what `createAgentService` does with them — parts a caller does not reproduce.
 export { defineSchedule, type LoadedSchedule, type Schedule } from "./schedule/schedule.ts";
-export { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
-export { createScheduler, scheduleSession, type Scheduler, type SchedulerOptions } from "./schedule/scheduler.ts";

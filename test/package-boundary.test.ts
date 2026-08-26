@@ -128,6 +128,41 @@ describe("the public subpaths do not reach into the CLI", () => {
   }
 });
 
+describe("the assembly's parts stay out of the public surface", () => {
+  // Each of these was public once. They are how `createAgentService` builds a service, not something
+  // a caller reproduces — and every one of them re-exported is a promise we then have to keep.
+  const PARTS = [
+    "router",
+    "createControlPlane",
+    "loadTools",
+    "loadChannels",
+    "loadSchedules",
+    "discoverScheduleFiles",
+    "createScheduler",
+    "scheduleSession",
+    // pi-ai's own runtime function: forwarding it makes us answerable for an API we do not own.
+    "createProvider",
+  ];
+
+  for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
+    it(`${entry} exports no assembly part`, () => {
+      const source = readFileSync(resolve(srcDir, entry), "utf8");
+      // Value exports only — a TYPE of the same name may legitimately surface in a signature.
+      const values = [...source.matchAll(/export \{([^}]*)\}/g)]
+        .flatMap((m) => m[1]!.split(","))
+        .map((raw) => raw.trim())
+        .filter((raw) => raw !== "" && !raw.startsWith("type "))
+        .map((raw) =>
+          raw
+            .split(/\s+as\s+/)
+            .pop()!
+            .trim(),
+        );
+      expect(values.filter((v) => PARTS.includes(v))).toEqual([]);
+    });
+  }
+});
+
 describe("the contracts depend on nothing", () => {
   // agent.ts (what an engine implements), channel.ts (what a trigger implements) and session.ts (the
   // serving control plane) are the three product contracts — pure types, zero packages. The bar is
