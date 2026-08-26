@@ -1,12 +1,19 @@
 ---
 title: API reference
-description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent contract, assembly functions, channel and host kit, typed tools, sessions, and providers."
+description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent contract, the service assembly, the channel kit, typed tools, sessions, and providers."
 status: current
 ---
 
 # API reference
 
-This is a compact reference for the all-in-one `@fastagent-sh/fastagent` surface. The same exports are grouped into `@fastagent-sh/fastagent/core` (engine-neutral) and `@fastagent-sh/fastagent/pi` (the pi reference implementation).
+This is a compact reference for the all-in-one `@fastagent-sh/fastagent` entry. The same exports are
+layered across subpaths by what each costs to import:
+
+| | engine-neutral | runtime-neutral | pulls |
+|---|---|---|---|
+| `/core`, `/session` | yes | yes | nothing |
+| `/node` | yes | no | the Node HTTP bridge and a cron |
+| `/pi` | no | no | the pi runtime |
 
 FastAgent is pre-1.0. The Agent Handler contract is the stable design center; implementation-specific APIs may still tighten before 1.0.
 
@@ -641,6 +648,6 @@ import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 import { larkChannel } from "@fastagent-sh/fastagent/lark";
 ```
 
-`core` avoids loading the pi reference runtime and is the preferred dependency for engine-neutral
-channels. The root entry remains the supported convenience surface. See [GitHub channel](github.md),
+`/core` loads no third-party package at all, which is what makes it the right dependency for a
+channel package or a second engine. The root entry remains the supported all-in-one. See [GitHub channel](github.md),
 [Telegram channel](telegram.md), [Slack channel](slack.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).
