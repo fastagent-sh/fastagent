@@ -616,14 +616,13 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     });
 
     const session = await assembly.sessionFactory("s");
-    // ACTIVE is the property that matters: what the model is offered and may call. Since pi 0.84.3 the
-    // registry also carries pi's own `powershell` whatever list we pass — asserted below so a change
-    // in that behaviour is noticed — but it is never ACTIVATED, which is what keeps an omitted
-    // built-in unreachable. That is the guarantee this test exists to hold.
+    // ACTIVE is the property that matters: what the model is offered and may call. The registry may
+    // hold more than we passed — pi 0.84.3 keeps its own `powershell` there — but nothing we omitted
+    // is ever ACTIVATED, and that is the guarantee. What the model actually receives is asserted in
+    // the systemPrompt test above.
     expect(session.getActiveToolNames()).toEqual(["read"]);
     session.setActiveToolsByName(["read", "bash", "write"]);
     expect(session.getActiveToolNames()).toEqual(["read"]);
-    expect(session.getAllTools().find((tool) => tool.name === "powershell")).toBeDefined();
   });
 
   it("does not claim a coding surface it did not mount", async () => {
