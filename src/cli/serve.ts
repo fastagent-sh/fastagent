@@ -325,11 +325,20 @@ export function serve(
     // Stop accepting FIRST, before anything is awaited. `onShutdown` waits for long connections to
     // close, and a socket still listening through that wait would dispatch new work into channels
     // and a scheduler that are already shutting down.
-    const closingServer = hosted.close().catch(() => {});
+    const closingServer = hosted.close();
     hosted.closeAllConnections();
-    void Promise.all([closingServer, Promise.resolve(hooks.onShutdown?.()).catch(() => {})]).finally(() => {
+    // A cleanup that failed is not a clean exit: `close()` reports a channel that would not stop,
+    // and swallowing it here would end the process at 0 over a resource still holding on.
+    void Promise.allSettled([closingServer, Promise.resolve(hooks.onShutdown?.())]).then((outcomes) => {
+      let code = exitCode;
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          log.error(`[fastagent] shutdown failed: ${String(outcome.reason)}`);
+          code = 1;
+        }
+      }
       clearTimeout(deadline);
-      process.exit(exitCode);
+      process.exit(code);
     });
   };
   process.once("SIGINT", () => stop(0));
