@@ -21,7 +21,7 @@ import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import {
   type AgentService,
-  type OpenedAgentDir,
+  type MountableAgent,
   assertNoControlPlaneCollision,
   mountSessionControl,
   routesFor,
@@ -47,17 +47,17 @@ export function isAgentcoreRuntime(): boolean {
 }
 
 export async function mountAgentcoreService(
-  opened: OpenedAgentDir,
+  opened: MountableAgent,
   options: MountAgentcoreServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, workspace, stateRoot, config, sessionControl } = opened;
+  const { agentDir, workspace, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
   // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the
   // collision rule runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, stateRoot, { ...options.control, agent });
 
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false, {
+  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule ?? false, {
     externalClock: true,
   });
 

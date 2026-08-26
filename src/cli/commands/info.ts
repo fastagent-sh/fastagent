@@ -1,7 +1,7 @@
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { discoverChannelFiles } from "../../engines/pi/channel.ts";
+import { discoverChannelFiles } from "../../channels/discover.ts";
 import {
   defaultSessionsDir,
   loadConfig,

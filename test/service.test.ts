@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createAgentService } from "../src/service.ts";
+import { createAgentService } from "../src/engines/pi/service.ts";
 
 async function agentDir(files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));

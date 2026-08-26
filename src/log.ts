@@ -63,4 +63,11 @@ const emit =
   };
 
 /** The process logger. Runtime code imports this and calls `log.info(...)` etc. */
+import type { ModuleLoadFailure } from "./loader.ts";
+
 export const log: Logger = { debug: emit("debug"), info: emit("info"), warn: emit("warn"), error: emit("error") };
+
+/** A module the loader skipped, said once, the same way for tools, channels and schedules. */
+export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[]): void {
+  for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
+}
