@@ -141,6 +141,16 @@ describe("serve: the route path language", () => {
     expect(mount("/control")).not.toThrow();
   });
 
+  it("a mount answers HEAD under the same rule as a route", async () => {
+    // The mount branch returns before the route dispatch, so it needs the rule applied to it too —
+    // otherwise the one handler has two HEAD semantics depending on which side answered.
+    const handle = router({}, [{ prefix: "/p", handler: () => new Response("mount-body") }]);
+    const head = await handle(new Request("http://h/p/x", { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(await (await handle(new Request("http://h/p/x"))).text()).toBe("mount-body");
+  });
+
   it("two mounts may not claim the same ground", () => {
     const at = (prefix: string) => ({ prefix, handler: () => new Response(prefix) });
     expect(() => router({}, [at("/control"), at("/control/admin")])).toThrow(/overlaps/);

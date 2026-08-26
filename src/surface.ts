@@ -125,6 +125,9 @@ export async function mountAgentSurface(
 
   const abort = new AbortController();
   let unannounce: (() => void) | undefined;
+  // A connection that drops while others are still dialling must not be undone by their later
+  // readiness: the surface is missing a declared channel from that moment on, whatever else arrives.
+  let dropped = false;
   const onClosed =
     options.onChannelClosed ??
     ((name, error) =>
@@ -151,12 +154,14 @@ export async function mountAgentSurface(
     void run.closed.then(
       () => {
         if (abort.signal.aborted) return;
-        // A channel that dies after coming up leaves the surface serving something it no longer has.
+        // A channel that dies leaves the surface serving something it no longer has.
+        dropped = true;
         routed.setReady(false);
         onClosed(connection.name);
       },
       (error: unknown) => {
         if (abort.signal.aborted) return;
+        dropped = true;
         routed.setReady(false);
         onClosed(connection.name, error);
       },
@@ -196,7 +201,7 @@ export async function mountAgentSurface(
       await close();
       throw error;
     }
-    if (!abort.signal.aborted) routed.setReady(true);
+    if (!abort.signal.aborted && !dropped) routed.setReady(true);
   })();
   // Observed here so a rejection is never unhandled; every caller still sees it through `ready`.
   ready.catch(() => {});

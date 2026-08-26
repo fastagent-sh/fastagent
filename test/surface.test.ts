@@ -120,6 +120,29 @@ describe("openAgentSurface", () => {
     }
   });
 
+  it("a drop during startup is not undone by a later connection coming up", async () => {
+    // Interleaving: one channel dies while another is still dialling. The late `ready` must not
+    // restore health — the surface is missing a declared channel from the drop onwards.
+    (globalThis as Record<string, unknown>).__faSlowReady = undefined;
+    const dir = await agentDir({
+      "channels/dies.mjs": `export default { name: "dies", connect: () => ({
+        ready: Promise.resolve(), closed: Promise.resolve() }) };`,
+      "channels/slow.mjs": `export default { name: "slow", connect: (ctx, signal) => ({
+        ready: new Promise((r) => { globalThis.__faSlowReady = r; }),
+        closed: new Promise((r) => signal.addEventListener("abort", () => r(), { once: true })),
+      }) };`,
+    });
+    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    try {
+      await new Promise((r) => setTimeout(r, 20)); // let "dies" report closed
+      (globalThis as unknown as { __faSlowReady?: () => void }).__faSlowReady?.();
+      await surface.ready;
+      expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
+    } finally {
+      await surface.close();
+    }
+  });
+
   it("does not mount a control plane the config did not ask for", async () => {
     const surface = await openAgentSurface(await agentDir());
     try {

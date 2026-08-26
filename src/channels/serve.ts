@@ -152,12 +152,14 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
     const path = new URL(req.url).pathname;
-    for (const mount of mounts) if (pathUnderPrefix(path, mount.prefix)) return mount.handler(req);
-    // HEAD carries no content (RFC 9110) whichever route answers it — an explicit `HEAD` one, a
-    // method-less one, or the `GET` fallback. Dropped here, not left to the HTTP layer: this handler
-    // is public surface and a direct caller must see the same answer as the socket.
+    // HEAD carries no content (RFC 9110) whichever route answers it — a mount, an explicit `HEAD`
+    // route, a method-less one, or the `GET` fallback. Dropped here, not left to the HTTP layer:
+    // this handler is public surface and a direct caller must see the same answer as the socket.
     const head = req.method === "HEAD";
     const strip = (r: Response | Promise<Response>) => (r instanceof Promise ? r.then(withoutBody) : withoutBody(r));
+    for (const mount of mounts) {
+      if (pathUnderPrefix(path, mount.prefix)) return head ? strip(mount.handler(req)) : mount.handler(req);
+    }
     const exact = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
     if (exact) return head ? strip(exact(req)) : exact(req);
     if (head) {
