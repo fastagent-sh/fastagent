@@ -66,7 +66,7 @@ const agent = createPiAgent({
 });
 ```
 
-Author tool schemas with the `z` re-exported from `@fastagent-sh/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
+Author tool schemas with the `z` re-exported from `@fastagent-sh/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type our signatures name (`AgentTool`, `Skill`, `Model`, `PiSessionEntry`, …) is re-exported too, so you rarely import from `@earendil-works/*`. Two things stay there on purpose: `createProvider` and a provider's wire-protocol `api` (see §5) — both are pi-ai's own runtime, and forwarding them would make us answerable for an API we do not own.
 
 `model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. The directory path instead assembles the pi base (optionally customized by `persona.md`), `AGENTS.md` project context, skills, and environment context. See [core design §2](design/core.md).
 
@@ -91,7 +91,7 @@ const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>;
 ### The whole agent, as a service
 
 The handler above serves `invoke` only. To mount the **whole** agent — every channel it declares,
-its control plane, health — open the directory as a surface:
+its control plane, health — open the directory as a service:
 
 ```ts
 import { nodeListener, createAgentService } from "@fastagent-sh/fastagent";
@@ -244,8 +244,11 @@ An "auth service" is modeled as a provider — its per-request credential logic 
 
 `fastagent dev` / `start` wrap the pi reference implementation's `createPiAgentFromDir` plus process side effects (`.env`, proxy, watch, serve). The agent the CLI serves is the **same** one `createPiAgentFromDefinition` hands you when embedding — single assembly source. What you iterate under `dev`, what `start` serves, and what you embed are identical.
 
-For contract-only or channel code, import `@fastagent-sh/fastagent/core`; it does not load the pi
-reference runtime. Pi-specific assembly is also available explicitly from `@fastagent-sh/fastagent/pi`.
+For contract-only or channel code, import `@fastagent-sh/fastagent/core` — it loads no third-party
+package at all. `@fastagent-sh/fastagent/node` adds what needs a Node runtime (`mountAgentService`,
+`serveNode`, `nodeListener`); `@fastagent-sh/fastagent/session` is the control-plane contract; and
+`@fastagent-sh/fastagent/pi` is the engine-specific assembly. The root entry re-exports every one of
+them, which is what every example above uses.
 
 ## Where next
 

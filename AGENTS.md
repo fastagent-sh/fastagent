@@ -38,11 +38,16 @@ src/
 │                           # a WebSocket ingress needs LongConnection and has no HTTP in it, and a
 │                           # channel author must not pull node:http in behind a type import.
 ├── collect.ts               # caller-side stream helpers: collect (buffered consumption) + abortFirstIterator (shared cancellation protocol)
-├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
-├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
+├── core.ts, node.ts,        # THE THREE LAYERS, split by what each costs to import: core (+session)
+│   pi.ts                    # is engine- AND runtime-neutral with ZERO packages; node adds what needs
+│                           # a Node runtime (the assembly, the http binding); pi names an engine.
+│                           # Every layer's dependency list is asserted in package-boundary.test.ts.
+├── index.ts                 # supported all-in-one entry (re-exports core + node + session + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel — the ASSEMBLY lives in service.ts and the agentcore one in channels/agentcore-service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command)
-├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
+├── telegram.ts, github.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
+│   slack.ts, feishu.ts,
+│   lark.ts
 ├── bind.ts                  # THE reading of a bind address, as the six DIFFERENT questions it is:
 │                           # bindable (isBindAddress) / an address not a name (bindAddress, applied
 │                           # where a value enters) / reach (classifyBind) / dialable by the NAME
@@ -96,6 +101,8 @@ src/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
+│   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
+│   │                     # so it lives here and not under engines/ (#365)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── wait-health.ts       # SHARED readiness probe — channels AND deploy use it, so NOT in kit/
 │   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) — same reason
@@ -185,16 +192,14 @@ src/
     ├── tool-context.ts      # ToolContext.session + tool-activation bridge via AsyncLocalStorage (set around the turn; read in execute — the wake/search_tools seam)
     ├── search-tools.ts      # built-in search_tools loader for deferred tools (auto-mounted when any tool is deferred; author's wins)
     ├── wake-tool.ts         # the built-in `wake` tool (pi-coupled: defineTool): writes a wake-up into ToolContext.session; withWakeTool mounts it (serving path only)
-    ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
     ├── definition.ts        # AGENTS.md + skills loading and bundling
     ├── config.ts            # fastagent.config.ts loading + model/precedence (placement lives in paths.ts)
     ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
     ├── models.ts            # Models collection wiring + the agent's OWN models.json (custom endpoints:
     │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
-    ├── report.ts            # startup report (auth/model/skills/tools surface)
-    └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
+    └── report.ts            # startup report (auth/model/skills/tools surface)
 test/                        # vitest; faux models by default + reusable SPEC conformance.
-└── embedding.test.ts         # the docs/embedding.md snippets, run against REAL express/fastify (the
+└── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
                              # only reason they are devDeps): that path crosses the Node/Fetch seam
                              # through code we do not own, so a swap underneath can keep every unit
                              # test green while breaking the paste-this-in promise
@@ -209,14 +214,14 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 2. **Incremental migration.** Both directions. For users: adoption is incremental (existing definition → service, a few rough edges acceptable if the path forward is viable). For us: migrate systems in place; a full rewrite pauses maintenance and usually loses. If you *must* rewrite, say so explicitly and own the risk.
 3. **Clarity.** Surface the *right* level of complexity at the best interaction point — do not mask it in the name of "getting out of the way." The `docs/SPEC.md` contract is the narrative; keep plans, APIs, and names plain. It's never too early to share a draft (this is what the PR loop is for) — test changes with whoever has the most context before building.
 4. **Re-evaluate assumptions, constraints, trade-offs.** Engine-/model-/cloud-neutrality exists *because* these change. Old code wasn't bad — its constraints differed; gain that context before reshaping it. Be honest that most solutions carry negative trade-offs; refuse the ones that put us in a worse future position, and don't stack complex abstractions on complex systems.
-5. **Maximize option value.** Every change should unlock more future options, not fewer. This is the architecture's design center: a neutral contract, clear API boundaries, swappable implementations (the `PiSessionStore` port, `engines/pi/`), and carefully chosen dependencies. Prefer modular seams that let a piece be replaced over monoliths that must move as one.
+5. **Maximize option value.** Every change should unlock more future options, not fewer. This is the architecture's design center: a neutral contract, clear API boundaries, swappable implementations (the `PiSessionRecordStore` port, `engines/pi/`), and carefully chosen dependencies. Prefer modular seams that let a piece be replaced over monoliths that must move as one.
 
 ## Working rules specific to this repo
 
 - **The contract is engine-neutral.** `src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `src/engines/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
 - **Per-invoke state is the DEFAULT level, not an axiom.** The serving path binds a fresh `AgentSession` per invoke and disposes it; durable state lives behind `PiSessionRecordStore`. Do not introduce in-process session state *into that path* — it is what satisfies SPEC MUST 6 (no location dependence), which AgentCore and every horizontally-scaled channel host require. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
-- **Public surface is scoped on purpose.** `src/core.ts` is engine-neutral, `src/pi.ts` is the pi reference surface, and `src/index.ts` combines them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/core.ts` is engine- and runtime-neutral (zero packages), `src/node.ts` is engine-neutral but needs a Node runtime, `src/pi.ts` names the engine, and `src/index.ts` combines all of them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The artifact is the truth.** Deployment behavior must come from the bundled definition, not the builder machine's global state. Engines have their own opinion about this: pi reads its settings (retry budget, compaction thresholds, default thinking level) from `~/.pi/agent` unless pointed elsewhere, so the binding points it at a definition-scoped path. Any new engine surface that reads "the user's config" gets the same treatment.
 - **A session id belongs to the Caller.** `scope.session` is opaque and arbitrary — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`. What an engine needs to store it (pi rejects all of those as record names, so they are encoded) is storage detail and must not leak back out: a tool asking which conversation it is in gets the id the channel minted, not the record's name.
 - **The run plane and the observation plane read the same state, through the same function.** They answer different questions about one session — what will execute, and what to report — so deriving them separately is how they come to disagree. The concrete failures this rule is made of: a turn running on assembly defaults while `state()` reported the recorded override, and one plane refusing a record with a cut parent chain while the other silently ran on the truncated path.
