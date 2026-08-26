@@ -80,6 +80,50 @@ describe("openAgentSurface", () => {
     }
   });
 
+  it("close() waits for the connection to actually close, not just for the signal", async () => {
+    // The promise says "stopped", so a caller tearing down a surface needs that true on return. The
+    // channel takes 30ms after the abort — an implementation that only signals resolves too early,
+    // and the flag is still unset. Observed through a global because the channel module is loaded by
+    // the surface, not by this test.
+    (globalThis as Record<string, unknown>).__faSockClosed = false;
+    const dir = await agentDir({
+      "channels/sock.mjs": `export default {
+        name: "sock",
+        connect: (ctx, signal) => ({
+          ready: Promise.resolve(),
+          closed: new Promise((resolve) => signal.addEventListener("abort", () => {
+            setTimeout(() => { globalThis.__faSockClosed = true; resolve(); }, 30);
+          }, { once: true })),
+        }),
+      };`,
+    });
+    const surface = await openAgentSurface(dir);
+    expect(surface.channels.longConnections).toEqual(["sock"]);
+    await surface.close();
+    expect((globalThis as Record<string, unknown>).__faSockClosed).toBe(true);
+    await expect(surface.close()).resolves.toBeUndefined(); // idempotent
+  });
+
+  it("an already-aborted signal closes the surface before open() returns", async () => {
+    (globalThis as Record<string, unknown>).__faAbortedClosed = false;
+    const dir = await agentDir({
+      "channels/sock.mjs": `export default {
+        name: "sock",
+        connect: (ctx, signal) => ({
+          ready: Promise.resolve(),
+          closed: new Promise((resolve) => signal.addEventListener("abort", () => {
+            globalThis.__faAbortedClosed = true; resolve();
+          }, { once: true })),
+        }),
+      };`,
+    });
+    // A listener added to an already-aborted signal never fires, so the surface would stay open with
+    // its connections and scheduler running behind a caller who believes it is shut.
+    const surface = await openAgentSurface(dir, { signal: AbortSignal.abort() });
+    expect((globalThis as Record<string, unknown>).__faAbortedClosed).toBe(true);
+    await surface.close();
+  });
+
   it("closes on its own signal, and close() is idempotent", async () => {
     const controller = new AbortController();
     const surface = await openAgentSurface(await agentDir(), { signal: controller.signal });

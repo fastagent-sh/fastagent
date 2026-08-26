@@ -8,11 +8,12 @@
  * 404s while advertising itself, a schedule that never fires), and this repo has made that exact
  * mistake in its own CLI.
  *
- * So the assembly lives here, once, and `dev`/`start` are two of its callers rather than its only
- * implementation.
+ * So the assembly lives here, and `dev`/`start` are callers. AgentCore is the one exception, and a
+ * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
+ * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
  */
 import type { Agent } from "./agent.ts";
-import type { ChannelHandler, Routes } from "./channel.ts";
+import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { type PrefixMount, router } from "./channels/serve.ts";
 import { createPiAgentFromDir } from "./engines/pi/open.ts";
 import { log } from "./log.ts";
@@ -42,15 +43,26 @@ export interface AgentSurface {
   close(): Promise<void>;
 }
 
-export interface OpenAgentSurfaceOptions {
-  model?: string;
-  authPath?: string;
-  sessionsDir?: string;
+/** What {@link mountAgentSurface} needs beyond an opened directory. */
+export interface MountAgentSurfaceOptions {
+  /** Wrap the agent before anything consumes it — every consumer (routes, control plane, schedules)
+   *  must get the SAME one, which is why this is a hook rather than the caller's own call. `dev`
+   *  passes `logAgentLoop`. */
+  wrapAgent?: (agent: Agent) => Agent;
+  /** Passed through to the control plane mount: `--tunnel` widens its warning, `host` names the
+   *  bind address in the discovery file. */
+  control?: { tunnel?: boolean; host?: string };
   /** Aborting this closes the surface, exactly like calling {@link AgentSurface.close}. */
   signal?: AbortSignal;
   /** Called when a long connection ends on its own — a dropped socket-mode channel, say. The CLI
    *  exits; an embedded host may prefer to log. Default: log an error. */
   onChannelClosed?: (name: string, error?: unknown) => void;
+}
+
+export interface OpenAgentSurfaceOptions extends MountAgentSurfaceOptions {
+  model?: string;
+  authPath?: string;
+  sessionsDir?: string;
 }
 
 /**
@@ -68,10 +80,36 @@ export async function openAgentSurface(dir: string, options: OpenAgentSurfaceOpt
     ...(options.sessionsDir !== undefined ? { sessionsDir: options.sessionsDir } : {}),
     serving: true, // a mounted surface is long-running: the scheduler poller runs
   });
-  const { agent, agentDir, workspace, stateRoot, config, sessionControl } = opened;
+  return mountAgentSurface(opened, options);
+}
+
+/** An already-opened directory — `createPiAgentFromDir`'s result. The CLI opens first so it can
+ *  print its startup report, then mounts through the same assembly an embedder gets. */
+export type OpenedAgentDir = Awaited<ReturnType<typeof createPiAgentFromDir>>;
+
+/**
+ * The assembly itself, over an already-opened directory: channels, the control plane, schedules and
+ * long connections, composed into one handler.
+ *
+ * {@link openAgentSurface} is this plus opening the directory. `dev`/`start` open separately — their
+ * startup report needs the opened values before anything mounts — and then arrive here, so there is
+ * one assembly rather than one per caller.
+ */
+export async function mountAgentSurface(
+  opened: OpenedAgentDir,
+  options: MountAgentSurfaceOptions = {},
+): Promise<AgentSurface> {
+  const { agentDir, workspace, stateRoot, config, sessionControl } = opened;
+  // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the
+  // same agent, so this is a hook rather than something a caller applies afterwards.
+  const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
-  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, { agent });
+  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
+    agent,
+    ...(options.control?.tunnel !== undefined ? { tunnel: options.control.tunnel } : {}),
+    ...(options.control?.host !== undefined ? { host: options.control.host } : {}),
+  });
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false);
 
   const abort = new AbortController();
@@ -79,10 +117,24 @@ export async function openAgentSurface(dir: string, options: OpenAgentSurfaceOpt
     options.onChannelClosed ??
     ((name, error) =>
       log.error(`[fastagent] long connection ${name} ${error === undefined ? "closed" : `failed: ${String(error)}`}`));
-  const runs = routed.longConnections.map((connection) => {
-    const run = connection.connect(abort.signal);
+  const runs: LongConnection[] = [];
+  // Rolled back on failure: a connection that throws while the ones before it are open, and the
+  // scheduler already ticking, would otherwise leave both running behind a rejected open().
+  const rollback = async (error: unknown): Promise<never> => {
+    abort.abort();
+    scheduled.stop();
+    await Promise.allSettled(runs.map((run) => run.closed));
+    throw error;
+  };
+  for (const connection of routed.longConnections) {
+    let run: LongConnection;
+    try {
+      run = connection.connect(abort.signal);
+    } catch (error) {
+      return rollback(error);
+    }
     if (typeof run?.ready?.then !== "function" || typeof run?.closed?.then !== "function") {
-      throw new Error(`${connection.name} connect(signal) must return { ready: Promise, closed: Promise }`);
+      return rollback(new Error(`${connection.name} connect(signal) must return { ready: Promise, closed: Promise }`));
     }
     void run.closed.then(
       () => {
@@ -92,8 +144,8 @@ export async function openAgentSurface(dir: string, options: OpenAgentSurfaceOpt
         if (!abort.signal.aborted) onClosed(connection.name, error);
       },
     );
-    return run;
-  });
+    runs.push(run);
+  }
   // Health answers 503 until EVERY long connection is up, so a load balancer does not route into a
   // surface whose socket-mode channels are still dialling. An abort before that settles `ready` as
   // cancellation, not readiness — a surface being torn down must not report itself healthy.
@@ -101,15 +153,19 @@ export async function openAgentSurface(dir: string, options: OpenAgentSurfaceOpt
     if (!abort.signal.aborted) routed.markReady();
   });
 
-  let closed: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
-    closed ??= (async () => {
+    // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
+    // and a caller tearing down a test or a request-scoped surface needs that to be true on return.
+    closing ??= (async () => {
       abort.abort();
       scheduled.stop();
+      await Promise.allSettled(runs.map((run) => run.closed));
     })();
-    return closed;
+    return closing;
   };
-  options.signal?.addEventListener("abort", () => void close(), { once: true });
+  if (options.signal?.aborted) await close();
+  else options.signal?.addEventListener("abort", () => void close(), { once: true });
 
   return {
     handler: router(withControl.routes, withControl.mounts),

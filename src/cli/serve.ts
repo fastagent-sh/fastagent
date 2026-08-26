@@ -14,15 +14,8 @@ import { text } from "../channels/respond.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import type { Routes } from "../channel.ts";
-import {
-  type PrefixMount,
-  parseRouteKey,
-  pathUnderPrefix,
-  routeKeysConflict,
-  router,
-  serveNode,
-} from "../channels/serve.ts";
+import type { ChannelHandler, Routes } from "../channel.ts";
+import { type PrefixMount, parseRouteKey, pathUnderPrefix, routeKeysConflict, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { loadSchedules } from "../schedule/discover.ts";
@@ -213,7 +206,7 @@ export function mountAgentcore(
   options: {
     agent: Agent;
     stateRoot: string;
-    schedules: LoadedSchedule[];
+    schedules: readonly LoadedSchedule[];
     onStateReady?: () => void;
     /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
      *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
@@ -307,87 +300,32 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
  * the sole clean-shutdown command. `host` unset binds all interfaces.
  */
 export function serve(
-  surface: ServingSurface,
+  handler: ChannelHandler,
   bind: { port: number; host?: string },
-  onListening?: (boundPort: number) => void,
+  hooks: { onListening?: (boundPort: number) => void; onShutdown?: () => Promise<void> | void } = {},
 ): void {
   const { port, host } = bind;
-  const hosted = serveNode(router(surface.routes, surface.mounts ?? []), { port, host });
-  const abort = new AbortController();
+  const hosted = serveNode(handler, { port, host });
   let stopping = false;
-
   const stop = (exitCode: number): void => {
     if (stopping) return;
     stopping = true;
-    abort.abort();
+    // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires
+    // regardless. No drain — an in-flight turn is cut, which is the existing contract.
     const deadline = setTimeout(() => process.exit(exitCode), 1_000);
-    void hosted
-      .close()
+    void Promise.resolve(hooks.onShutdown?.())
       .catch(() => {})
+      .then(() => hosted.close().catch(() => {}))
       .finally(() => {
         clearTimeout(deadline);
         process.exit(exitCode);
       });
-    // Preserve the existing no-drain shutdown contract: stop accepting first, then cut active streams.
     hosted.closeAllConnections();
   };
   process.once("SIGINT", () => stop(0));
   process.once("SIGTERM", () => stop(0));
-
   hosted.listening.then(
-    async (boundPort) => {
-      try {
-        const runs = surface.longConnections.map((connection) => {
-          const run = connection.connect(abort.signal);
-          if (
-            run === null ||
-            typeof run !== "object" ||
-            typeof run.ready?.then !== "function" ||
-            typeof run.closed?.then !== "function"
-          ) {
-            throw new Error(`${connection.name} connect(signal) must return { ready: Promise, closed: Promise }`);
-          }
-          void run.closed.then(
-            () => {
-              if (!abort.signal.aborted) failStartup(new Error(`${connection.name} closed unexpectedly`));
-            },
-            (error) => {
-              if (!abort.signal.aborted) failStartup(new Error(`${connection.name} failed: ${String(error)}`));
-            },
-          );
-          return { connection, run };
-        });
-        await Promise.all(
-          runs.map(async ({ connection, run }) => {
-            await run.ready;
-            if (!abort.signal.aborted) log.info(`[fastagent] long connection ready: ${connection.name}`);
-          }),
-        );
-        // Shutdown raced startup: a pre-ready abort settles `ready` as cancellation, not readiness —
-        // stop() already owns the exit; don't mark ready or report a surface being torn down.
-        if (abort.signal.aborted) return;
-        surface.markReady();
-        process.send?.({
-          type: "ready",
-          port: boundPort,
-          routeChannels: surface.routeChannels,
-        });
-        for (const line of readyAddressLines(host, boundPort, surface.builtinInvoke)) log.info(line);
-        log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
-        if (surface.longConnections.length > 0) {
-          log.info(
-            `[fastagent] long connections: ${surface.longConnections.map((connection) => connection.name).join(", ")}`,
-          );
-        }
-        onListening?.(boundPort);
-      } catch (error) {
-        abort.abort();
-        const closing = hosted.close().catch(() => {});
-        hosted.closeAllConnections();
-        await closing;
-        failStartup(error);
-      }
-    },
+    (boundPort) => hooks.onListening?.(boundPort),
     (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
         // With a bind address the port is only taken ON THAT interface, so moving the bind is as valid
