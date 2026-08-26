@@ -148,6 +148,19 @@ describe("the assembly's parts stay out of the public surface", () => {
   // exporting one is a promise with no caller.
   const ORPHAN_TYPES = ["ChannelCollision", "Scheduler", "SchedulerOptions"];
 
+  it("the curated entries name every export, so nothing rides in behind a wildcard", () => {
+    // This is what makes the two checks below sufficient. A `export *` — or `export type *`, which
+    // leaves no runtime trace at all — would re-export whatever its target grows next, and neither a
+    // name list nor a module import can see that coming.
+    for (const entry of ["core.ts", "pi.ts", "session.ts"]) {
+      expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
+    }
+    // The root is the all-in-one, and may forward the curated three — but only those.
+    const index = readFileSync(resolve(srcDir, "index.ts"), "utf8");
+    const targets = [...index.matchAll(/export\s+(?:type\s+)?\*\s+from\s+"([^"]+)"/g)].map((m) => m[1]);
+    expect(targets.sort()).toEqual(["./core.ts", "./pi.ts", "./session.ts"]);
+  });
+
   for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
     it(`${entry} exports no assembly part`, async () => {
       // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
