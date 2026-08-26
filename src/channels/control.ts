@@ -22,7 +22,7 @@ import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type Se
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
-import { type PrefixMount, parseRouteKey } from "./serve.ts";
+import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
@@ -93,7 +93,7 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
       if (handler) return await handler(req);
       if (known && req.method === "HEAD") {
         const get = byKey.get(`GET ${path}`);
-        if (get) return new Response(null, { status: (await get(req)).status });
+        if (get) return withoutBody(await get(req));
       }
       // 404 vs 405 stays meaningful for the same reason it does in the host router: a remote client
       // reads 404 as "this serve predates the route", not as a fault.

@@ -86,9 +86,11 @@ export interface PrefixMount {
   handler: ChannelHandler;
 }
 
-/** Same status and headers, no content — and the discarded body is cancelled rather than left to
- *  its producer, which for a streaming handler would keep running with no reader. */
-function withoutBody(res: Response): Response {
+/** Same status and headers, no content (RFC 9110's HEAD) — and the discarded body is cancelled
+ *  rather than left to its producer, which for a streaming handler would keep running with no
+ *  reader. Exported because the control plane answers HEAD too, and one semantics needs one
+ *  implementation: the first copy of this dropped every header. */
+export function withoutBody(res: Response): Response {
   void res.body?.cancel().catch(() => {});
   return new Response(null, { status: res.status, statusText: res.statusText, headers: res.headers });
 }

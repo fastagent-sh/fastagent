@@ -209,8 +209,11 @@ describe("session control over HTTP (Phase 3)", () => {
       expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: "*" });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
       const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD", headers: auth });
-      expect(headable.status).toBe(200);
-      expect(await headable.text()).toBe(""); // HEAD carries no content (RFC 9110)
+      const getable = await fetch(`${served.url}/control/capabilities`, { headers: auth });
+      expect(headable.status).toBe(getable.status);
+      expect(await headable.text()).toBe(""); // HEAD carries no content (RFC 9110)...
+      expect(headable.headers.get("content-type")).toBe(getable.headers.get("content-type")); // ...but keeps headers
+      await getable.text();
     } finally {
       served.close();
     }
