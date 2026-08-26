@@ -1,7 +1,7 @@
 /** First-party Slack HTTP Events API channel: signed ingress, durable turns/context, files, and edited previews. */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isAbsolute, join } from "node:path";
-import type { ChannelModule } from "../../host/node.ts";
+import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";

@@ -56,3 +56,11 @@ export { createPiModels, probeAuthSource, type CreatePiModelsOptions } from "./e
 export type { Models } from "@earendil-works/pi-ai";
 export { createProvider, type Provider, type ProviderAuth } from "@earendil-works/pi-ai";
 export type { Model } from "@earendil-works/pi-ai";
+
+// The product's one-call assembly: a directory becomes a live service. On the pi surface because
+// it opens a directory the pi way (channels, schedules, the assembled agent).
+export {
+  createAgentService,
+  type AgentService,
+  type CreateAgentServiceOptions,
+} from "./service.ts";

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { EventEmitter } from "node:events";
+import { createServer } from "node:http";
+import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { createInvokeHandler, nodeListener, type Agent, type AgentEvent } from "../src/index.ts";
+import { createInvokeHandler, nodeListener, serveNode, type Agent, type AgentEvent } from "../src/index.ts";
 import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import { fauxAgent } from "./agent.ts";
 
@@ -271,114 +271,256 @@ describe("nodeListener (embedded server bridge)", () => {
   });
 });
 
-describe("nodeListener backpressure", () => {
+describe("nodeListener totality (the host must survive arbitrary channel code)", () => {
   afterEach(() => vi.restoreAllMocks());
-  /** Minimal IncomingMessage: GET (no body) so the bridge needs no request stream. */
-  function fakeReq(): IncomingMessage {
-    const req = new EventEmitter() as unknown as IncomingMessage & {
-      method: string;
-      url: string;
-      headers: Record<string, string>;
+
+  /** Serve `handler` on a real server and hand back the port. Black-box on purpose: these three
+   *  requirements (never crash, never leak, always surface) belong to the HOST CONTRACT, not to any
+   *  one bridge implementation — asserted through a real socket, they survive swapping the bridge. */
+  async function serving(handler: (req: Request) => Promise<Response>) {
+    const server = createServer(nodeListener(handler));
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    return {
+      port,
+      close: async () => {
+        server.closeAllConnections();
+        await new Promise<void>((r) => server.close(() => r()));
+      },
     };
-    req.method = "GET";
-    req.url = "/invoke";
-    req.headers = { host: "localhost" };
-    return req;
-  }
-  /** Minimal ServerResponse whose write() always signals backpressure (returns false). */
-  function fakeRes() {
-    const res = new EventEmitter() as unknown as ServerResponse & { ended: boolean; destroyed: boolean };
-    res.destroyed = false;
-    (res as { ended: boolean }).ended = false;
-    (res as unknown as { headersSent: boolean }).headersSent = false;
-    (res as unknown as { writeHead: () => ServerResponse }).writeHead = () => {
-      (res as { headersSent: boolean }).headersSent = true; // real ServerResponse flips this on writeHead
-      return res;
-    };
-    (res as unknown as { write: () => boolean }).write = () => false; // always backpressure
-    (res as unknown as { end: () => void }).end = () => {
-      (res as { ended: boolean }).ended = true;
-    };
-    (res as unknown as { destroy: () => void }).destroy = () => {
-      (res as { destroyed: boolean }).destroyed = true;
-    };
-    return res as ServerResponse & { ended: boolean; destroyed: boolean };
   }
 
-  it("catch never writes to an already-destroyed res (client disconnect during the handler await)", async () => {
-    // A client that disconnects while pump awaits the handler destroys res (headers not yet sent) and the
-    // handler throws (AbortError). The catch must NOT writeHead/end on the dead socket — Node can throw
-    // ERR_STREAM_DESTROYED there, which would make the catch itself throw → pump rejects → the very crash.
-    // The stub throws if writeHead/end is called on a destroyed res, so a regression re-appears as an
-    // unhandled rejection vitest surfaces.
-    let touchedDeadSocket = false;
-    const res = fakeRes();
-    (res as { destroyed: boolean }).destroyed = true; // client already disconnected
-    const boom = () => {
-      touchedDeadSocket = true;
-      throw new Error("ERR_STREAM_DESTROYED");
-    };
-    (res as unknown as { writeHead: () => ServerResponse }).writeHead = boom as never;
-    (res as unknown as { end: () => void }).end = boom as never;
-    const handler = (async () => {
-      throw new Error("aborted");
-    }) as unknown as (req: Request) => Promise<Response>;
-
-    nodeListener(handler)(fakeReq(), res);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(touchedDeadSocket).toBe(false); // early-returned; never touched the dead socket (so pump didn't reject)
-  });
-
-  it("a body stream that errors mid-flight is handled, not an unhandled rejection that crashes the server", async () => {
-    // pump is TOTAL: a mid-flight reader error must be caught, logged, and end the response — NEVER escape
-    // as an unhandled rejection (pump is void-called; the process has no unhandledRejection handler). If it
-    // escaped, vitest would surface the rejection and fail this test.
+  it("a drained body is diagnosed with its fix, not with 'Body is unusable'", async () => {
+    // The embedding trap: `app.use(express.json())` ahead of the mount eats the one-shot stream.
+    // Simulated without a framework — draining `req` first is exactly what a body parser does.
+    // What is asserted is the DIAGNOSIS: the adapter's native error names only the symptom, and a
+    // webhook channel failing this way looks like a broken integration with a retrying platform.
     const errs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
       errs.push(String(m));
     });
-    const handler = async (): Promise<Response> => {
-      let n = 0;
-      const stream = new ReadableStream<Uint8Array>({
-        pull(c) {
-          if (n++ === 0) c.enqueue(new TextEncoder().encode("data: x\n\n"));
-          else throw new Error("stream blew up mid-flight"); // 2nd pull errors the stream
-        },
+    const listener = nodeListener(async (req) => new Response(await req.text()));
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((r) => {
+        req.resume();
+        req.on("end", r);
       });
-      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
-    };
-    const req = fakeReq();
-    const res = fakeRes();
-    (res as unknown as { write: () => boolean }).write = () => true; // no backpressure — let pump loop to the 2nd (erroring) pull
-    nodeListener(handler)(req, res);
-
-    await new Promise((r) => setTimeout(r, 30)); // let pump write once, then hit the erroring pull
-    expect(res.destroyed).toBe(true); // destroyed on the stream error
-    expect(errs.some((e) => /request failed/.test(e))).toBe(true); // surfaced (rule 8)
+      listener(req, res);
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/hook`, { method: "POST", body: '{"a":1}' });
+      expect(res.status).toBe(500);
+      const logged = errs.join("\n");
+      expect(logged).toMatch(/already read by upstream middleware/);
+      expect(logged).toMatch(/mount fastagent BEFORE the body parser/); // the fix, not just the fault
+      expect(await res.text()).not.toMatch(/express|middleware/); // internals stay internal
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 
-  it("client close during backpressure ends pump (no leak; regression for drain-only wait)", async () => {
-    // An endless SSE stream so pump always has more to write and parks on backpressure.
-    const handler = async (): Promise<Response> => {
-      const stream = new ReadableStream<Uint8Array>({
-        pull(c) {
-          c.enqueue(new TextEncoder().encode("data: x\n\n"));
-        },
+  it("a body that was NOT read still reaches the handler (the check must not misfire)", async () => {
+    const host = await serving(async (req) => new Response(`got:${await req.text()}`));
+    try {
+      const res = await fetch(`http://127.0.0.1:${host.port}/hook`, { method: "POST", body: "payload" });
+      expect(await res.text()).toBe("got:payload");
+      // ...and a GET, whose body is absent rather than eaten, must not trip it either.
+      expect((await fetch(`http://127.0.0.1:${host.port}/plain`)).status).toBe(200);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("an empty CHUNKED post behind middleware is not mistaken for an eaten one", async () => {
+    // Chunked framing says nothing about content: an empty chunked body is legal, arrives already
+    // drained, and looks exactly like an eaten one. The guard must stay quiet rather than reject a
+    // valid request — being wrong here turns a diagnostic into the outage.
+    const listener = nodeListener(async (req) => new Response(`ok:[${await req.text()}]`));
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((r) => {
+        req.resume();
+        req.on("end", r);
       });
-      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
-    };
-    const req = fakeReq();
-    const res = fakeRes();
-    nodeListener(handler)(req, res);
+      listener(req, res);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const raw = await new Promise<string>((resolve) => {
+        const sock = connect(port, "127.0.0.1", () => {
+          sock.write("POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+        });
+        let out = "";
+        sock.on("data", (d) => {
+          out += String(d);
+        });
+        setTimeout(() => {
+          sock.destroy();
+          resolve(out);
+        }, 250);
+      });
+      expect(raw.split("\r\n")[0]).toMatch(/200 OK/);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
 
-    // Let pump start, write once (→ false), and suspend on the backpressure wait.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(res.ended).toBe(false);
+  it("an EMPTY post behind middleware is not mistaken for an eaten one", async () => {
+    // `content-length: 0` plus a drained stream looks identical to the eaten case on the two signals
+    // the guard reads — but nothing was lost, and rejecting it would make the guard the outage.
+    const listener = nodeListener(async (req) => new Response(`ok:[${await req.text()}]`));
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((r) => {
+        req.resume();
+        req.on("end", r);
+      });
+      listener(req, res);
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("ok:[]");
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
 
-    res.emit("close"); // client disconnects WHILE parked on backpressure (no 'drain' will ever come)
+  it("a client that disconnects mid-handler leaves the server serving the next request", async () => {
+    // The dead-socket case: the client is gone before the handler resolves. Writing to that socket
+    // throws inside the bridge, and an escaped throw would take the process down — so the proof is
+    // that the NEXT request still gets served.
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((r) => {
+      releaseSlow = r;
+    });
+    const host = await serving(async (req) => {
+      if (new URL(req.url).pathname === "/slow") {
+        await slow;
+        return new Response("too late");
+      }
+      return new Response("alive");
+    });
+    try {
+      const ac = new AbortController();
+      const dropped = fetch(`http://127.0.0.1:${host.port}/slow`, { signal: ac.signal }).catch(() => "aborted");
+      await new Promise((r) => setTimeout(r, 20));
+      ac.abort(); // client vanishes while the handler is still awaiting
+      expect(await dropped).toBe("aborted");
+      releaseSlow(); // handler now resolves into a socket nobody is reading
 
-    // With drain+close wait, pump resumes, the cancelled reader yields done, and finally runs end().
-    await new Promise((r) => setTimeout(r, 20));
-    expect(res.ended).toBe(true);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await (await fetch(`http://127.0.0.1:${host.port}/next`)).text()).toBe("alive");
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("the SERVING path has the same boundary: a throwing handler is logged, and says nothing else", async () => {
+    // Not a duplicate of the nodeListener case: `dev`/`start` reach the socket through serveNode, so
+    // wiring the boundary into only the exported listener would leave the path that actually serves
+    // users failing silently — which is how it was first written.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const host = serveNode(
+      async () => {
+        throw new Error("boom /etc/secret-path");
+      },
+      { port: 0 },
+    );
+    const port = await host.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/x`);
+      expect(res.status).toBe(500);
+      const body = await res.text();
+      expect(errs.some((e) => /request failed.*boom/.test(e))).toBe(true); // visible in the log
+      expect(body).not.toMatch(/etc\/secret-path/); // ...and nowhere else
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("a body stream that errors mid-flight surfaces and does not crash the server", async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const host = await serving(async (req) => {
+      if (new URL(req.url).pathname === "/boom") {
+        let n = 0;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(c) {
+              if (n++ === 0) c.enqueue(new TextEncoder().encode("data: x\n\n"));
+              else throw new Error("stream blew up mid-flight");
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("alive");
+    });
+    try {
+      // Reading is only the TRIGGER; a truncated body is the expected shape of this failure, so
+      // the read itself is allowed to throw. What is asserted is what happens on the SERVER.
+      let delivered = "";
+      await (async () => {
+        const res = await fetch(`http://127.0.0.1:${host.port}/boom`);
+        const reader = res.body!.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (value) delivered += new TextDecoder().decode(value);
+          if (done) return;
+        }
+      })().catch(() => undefined);
+      // Rule 8: the failure is visible...
+      await new Promise((r) => setTimeout(r, 30));
+      expect(errs.some((e) => /blew up mid-flight|request failed/.test(e))).toBe(true);
+      // ...and the server is still there.
+      expect(await (await fetch(`http://127.0.0.1:${host.port}/next`)).text()).toBe("alive");
+      // The failure must not be told to the CLIENT: once headers are out an adapter can only append
+      // to the body, and appending the exception text would publish whatever it names.
+      expect(delivered).not.toMatch(/blew up mid-flight/);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("a client that disconnects while an endless stream is backpressured does not leak the request", async () => {
+    // The leak shape this guards: a writer parked waiting for 'drain' on a socket that closed will
+    // never be woken, pinning the stream (and its invoke) forever. Proof is that cancel() runs.
+    let cancelled = false;
+    const host = await serving(async () => {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(c) {
+            c.enqueue(new TextEncoder().encode(`data: ${"x".repeat(8192)}\n\n`)); // outruns the client
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    try {
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${host.port}/endless`, { signal: ac.signal });
+      await res.body!.getReader().read(); // start it, then stop reading so the socket backs up
+      await new Promise((r) => setTimeout(r, 50));
+      ac.abort();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(cancelled).toBe(true); // the stream was told to stop — no parked writer left behind
+    } finally {
+      await host.close();
+    }
   });
 });

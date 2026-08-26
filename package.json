@@ -104,6 +104,7 @@
     "@earendil-works/pi-agent-core": "^0.84.2",
     "@earendil-works/pi-ai": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@hono/node-server": "^2.1.1",
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@octokit/webhooks-methods": "^6.0.0",
     "@octokit/webhooks-types": "^7.6.1",
@@ -118,7 +119,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
+    "@types/express": "^5.0.6",
     "@types/proper-lockfile": "^4.1.4",
+    "express": "^5.2.1",
+    "fastify": "^5.12.1",
     "knip": "^6.29.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9"

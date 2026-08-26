@@ -4,14 +4,14 @@
  */
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import {
-  type ChannelContext,
-  type ChannelModule,
-  type LongConnection,
-  type LongConnectionChannelModule,
-  parseRouteKey,
-  type Routes,
-} from "../../host/node.ts";
+import type {
+  ChannelContext,
+  ChannelModule,
+  LongConnection,
+  LongConnectionChannelModule,
+  Routes,
+} from "../../channel.ts";
+import { assertRouteKey, routeKeysConflict } from "../../channels/serve.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 
@@ -105,9 +105,7 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
     if (typeof handler !== "function") {
       throw new Error(`${label}: route "${route}" must map to a handler function, got ${typeof handler}`);
     }
-    if (!parseRouteKey(route).path.startsWith("/")) {
-      throw new Error(`${label}: route "${route}" is not a valid route key (expected "METHOD /path" or "/path")`);
-    }
+    assertRouteKey(route, (problem) => `${label}: route "${route}" is not a valid route key — ${problem}`);
   }
   return routes;
 }
@@ -161,14 +159,7 @@ export async function loadChannels(
       }
       const declaredRoutes = validateRoutes(declared, label);
       for (const [route, handler] of declaredRoutes) {
-        const parsed = parseRouteKey(route);
-        const clash = Object.keys(routes).some((key) => {
-          const existing = parseRouteKey(key);
-          return (
-            existing.path === parsed.path &&
-            (existing.method === undefined || parsed.method === undefined || existing.method === parsed.method)
-          );
-        });
+        const clash = Object.keys(routes).some((key) => routeKeysConflict(key, route));
         if (clash) {
           collisions.push({ route, source: label });
           continue;

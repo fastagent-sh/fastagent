@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { mountAgentcore, routesFor } from "../src/cli/serve.ts";
+import { mountAgentcore, reportServing } from "../src/cli/serve.ts";
+import { mountSessionControl, routesFor } from "../src/service.ts";
+import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
+import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 
 describe("serving surface", () => {
@@ -35,7 +38,7 @@ describe("serving surface", () => {
     expect(surface.routeChannels).toEqual([]);
     const health = surface.routes["GET /health"]!;
     expect((await health(new Request("http://x/health"))).status).toBe(503);
-    surface.markReady();
+    surface.setReady(true);
     expect((await health(new Request("http://x/health"))).status).toBe(200);
   });
 });
@@ -64,6 +67,10 @@ describe("mountAgentcore", () => {
     expect(() =>
       mountAgentcore({ "POST /invocations": () => text("mine\n", 200) }, { agent, stateRoot: "/tmp", schedules: [] }),
     ).toThrow(/collide with the AgentCore adapter/);
+    // An any-method key names the same route as the adapter's method-qualified one.
+    expect(() =>
+      mountAgentcore({ "/ping": () => text("mine\n", 200) }, { agent, stateRoot: "/tmp", schedules: [] }),
+    ).toThrow(/collide with the AgentCore adapter/);
   });
 
   it("binds schedule fires by name — an unknown name 404s through the adapter", async () => {
@@ -89,6 +96,76 @@ describe("mountAgentcore", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
+  });
+});
+
+describe("cli: the serving report", () => {
+  it("tells the dev supervisor it is ready, with the channels that mounted", () => {
+    // The watch supervisor waits for this message to mark a worker as having served; without it a
+    // restart loop never learns the previous boot worked, and --tunnel never starts. It has no other
+    // observer, which is how it was once deleted with every test still green.
+    const sent: unknown[] = [];
+    const original = process.send;
+    (process as { send?: unknown }).send = (m: unknown) => {
+      sent.push(m);
+      return true;
+    };
+    try {
+      reportServing(
+        {
+          routes: { "POST /telegram": () => new Response("x") },
+          channels: { routes: ["telegram"], longConnections: ["feishu-ws"], builtinInvoke: false },
+        } as never,
+        "127.0.0.1",
+        8787,
+      );
+    } finally {
+      (process as { send?: unknown }).send = original;
+    }
+    expect(sent).toEqual([{ type: "ready", port: 8787, routeChannels: ["telegram"] }]);
+  });
+
+  it("does not advertise the built-in invoke example for a channel that owns that path", () => {
+    // `POST /invoke` in the table does NOT mean the built-in fallback: a channel may author it with
+    // a protocol of its own, and printing the built-in curl example would document a request that
+    // handler does not accept. The assembly knows which it is; inferring from the path does not.
+    const lines: string[] = [];
+    const original = process.send;
+    (process as { send?: unknown }).send = () => true;
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      lines.push(String(m));
+    });
+    try {
+      reportServing(
+        {
+          routes: { "POST /invoke": () => new Response("a channel's own protocol") },
+          channels: { routes: ["custom"], longConnections: [], builtinInvoke: false },
+        } as never,
+        "127.0.0.1",
+        8787,
+      );
+    } finally {
+      spy.mockRestore();
+      (process as { send?: unknown }).send = original;
+    }
+    expect(lines.join("\n")).not.toContain(INVOKE_EXAMPLE_BODY);
+  });
+});
+
+describe("cli: the assembled serving surface", () => {
+  it("the control plane is reachable in the surface dev/start hand to serve", async () => {
+    // The gap this closes: mountSessionControl returns routes AND mounts, and a caller forwarding
+    // only the routes gets a server where every /control/* request 404s — while control.json is
+    // still written, handing a client an address that answers nothing. Every other test builds the
+    // router directly; this one assembles it the way `serve` does, from the CLI's own output.
+    const stateRoot = await mkdtemp(join(tmpdir(), "fa-cli-control-"));
+    const control = { capabilities: () => ({ commands: [], models: [] }) } as never;
+    const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control, stateRoot);
+    const surface = { ...withControl }; // exactly what dev/start spread into ServingSurface
+    const handle = router(surface.routes, surface.mounts);
+    // Unauthenticated is enough to prove REACHABILITY: 401 comes from the plane, 404 from its absence.
+    expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(401);
+    expect((await handle(new Request("http://h/health"))).status).toBe(200);
   });
 });
 

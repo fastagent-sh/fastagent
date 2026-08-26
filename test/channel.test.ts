@@ -74,6 +74,26 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(failures[0]!.message).toMatch(/TELEGRAM_SECRET_TOKEN/);
   });
 
+  it("refuses a route key another channel would pay for", async () => {
+    // Only that: a key a URL rewrites is one route spelled two ways, so the conflict check compares
+    // it as distinct and whatever it collides with goes dark. A `:id` key merely never matches,
+    // which costs its own author and nobody else — allowed.
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "p.mjs"),
+      `export default () => ({ "GET /f/:id": () => new Response("x") });`,
+    );
+    await writeFile(
+      join(dir, "channels", "w.mjs"),
+      `export default () => ({ "GET /a/../f": () => new Response("x") });`,
+    );
+    const { routes, failures } = await loadChannels(dir, fakeCtx);
+    expect(Object.keys(routes)).toEqual(["GET /f/:id"]);
+    expect(failures.map((f) => f.message).join("\n")).toMatch(/arrives as/);
+    expect(failures).toHaveLength(1);
+  });
+
   it("surfaces a route collision (first file wins; the duplicate is dropped, never silent)", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));

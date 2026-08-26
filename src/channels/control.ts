@@ -21,15 +21,20 @@ import type { ImageRef, Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
-import type { Routes } from "../host/node.ts";
+import type { ChannelHandler } from "../channel.ts";
+import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
+import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
 import { text } from "./respond.ts";
 
+/** The prefix this plane OWNS: everything under it is the plane's to answer. */
+const CONTROL_PREFIX = "/control";
+
 /** The SSE payload: one control-plane event in its transport envelope. */
 export interface WireEvent {
   sessionId: string;
-  /** Serving-process incarnation (per `controlRoutes` call). A change means the server restarted:
+  /** Serving-process incarnation (per `createControlPlane` call). A change means the server restarted:
    *  live continuity is gone — run the reconnect steps (entries cursor + state). */
   epoch: string;
   /** Per-connection monotonic counter. A gap means events were lost in transit on THIS connection. */
@@ -39,6 +44,90 @@ export interface WireEvent {
 
 const json = (value: unknown, status = 200): Response =>
   new Response(`${JSON.stringify(value)}\n`, { status, headers: { "content-type": "application/json" } });
+
+/**
+ * The plane as one mounted sub-application rather than routes sharing a prefix.
+ *
+ * CORS belongs to every reply that leaves the plane — including the ones no route produces (an
+ * unknown path, an unserved method, a throwing handler). As separate routes those came from the
+ * host, outside anything the plane could decorate. Owning the prefix makes them its own answers,
+ * headers applied at the single exit they share.
+ *
+ * `*` is the right origin: authorisation is the bearer token — never the origin, never a cookie —
+ * so an origin that cannot present it gets 401 either way, and a deployment cannot know the origins
+ * of the GUIs that will manage it (§14's asymmetry).
+ *
+ * `authorization` is not CORS-safelisted, so EVERY call preflights, including a plain GET.
+ * `content-type` is not either (only three values are, and `application/json` is not among them),
+ * so a browser POSTing to dispatch/invoke names it — allowing just `authorization` leaves precisely
+ * the WRITE routes unreachable while reads work.
+ */
+function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
+  // Normalised keys (see serve.ts): the method is upper-cased when parsed.
+  const byKey = new Map(
+    Object.entries(routes).map(([key, handler]) => {
+      const { method, path } = parseRouteKey(key);
+      return [method ? `${method} ${path}` : path, handler] as const;
+    }),
+  );
+  const methodsByPath = new Map<string, Set<string>>();
+  for (const key of Object.keys(routes)) {
+    const { method, path } = parseRouteKey(key);
+    const methods = methodsByPath.get(path) ?? new Set<string>();
+    if (method) methods.add(method);
+    methodsByPath.set(path, methods);
+  }
+  // Per PATH, stating what it actually serves — omitting a method it does serve has the browser
+  // refuse a call that would have worked. `HEAD` is that case: every GET route answers it.
+  const allowMethods = (path: string, requested: string | null) => {
+    const methods = new Set(methodsByPath.get(path) ?? []);
+    if (methods.has("GET")) methods.add("HEAD");
+    // The requested method is always allowed, even where this path does not serve it: preflight is a
+    // gate applied BEFORE the request exists, so refusing there means the real request is never sent
+    // and the client sees an opaque network error. Allowing it lets the plane's own 404/405 arrive,
+    // with these headers and an explanation.
+    if (requested) methods.add(requested.toUpperCase());
+    return [...methods, "OPTIONS"].join(", ");
+  };
+
+  return async (req) => {
+    const path = new URL(req.url).pathname;
+    const known = methodsByPath.has(path);
+    const answer = async (): Promise<Response> => {
+      // A preflight carries no token — that is its purpose — so it is answered before auth, and for
+      // ANY path under the prefix: gating it would stop the request the 404 below is waiting for.
+      if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+      const handler = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
+      if (handler) return await handler(req);
+      if (known && req.method === "HEAD") {
+        const get = byKey.get(`GET ${path}`);
+        if (get) return await get(req);
+      }
+      // 404 vs 405 as in the host router: a client reads 404 as "this serve predates the route".
+      if (known) return text("method not allowed\n", 405);
+      return text("not found\n", 404);
+    };
+    let res: Response;
+    try {
+      // HEAD carries no content, whichever branch answered — including this plane's own 404/405.
+      const answered = await answer();
+      res = req.method === "HEAD" ? withoutBody(answered) : answered;
+    } catch (error) {
+      // The plane's own totality boundary: a rejecting handler (`commands()` on an unreadable
+      // definition) must still answer with the headers; the message stays internal.
+      log.error(`[control] ${req.method} ${path} failed: ${String(error)}`);
+      res = text("internal error\n", 500);
+    }
+    // THE single exit. Every reply above — route, preflight, 404, 405, 500 — leaves through here.
+    res.headers.set("access-control-allow-origin", "*");
+    res.headers.set("access-control-allow-headers", "authorization, content-type");
+    res.headers.set(
+      "access-control-allow-methods",
+      allowMethods(path, req.headers.get("access-control-request-method")),
+    );
+    return res;
+  };
+}
 
 // ONE constant for every Prompt-bearing wire surface (imported from the invoke channel — the two
 // caps cannot drift apart): commands carry Prompts, which may ride base64 images.
@@ -119,7 +208,7 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
   }
 }
 
-export interface ControlRoutesOptions {
+export interface ControlPlaneOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
    *  remote-control endpoint must not be constructible by omission. */
   token: string;
@@ -131,12 +220,30 @@ export interface ControlRoutesOptions {
 }
 
 /**
- * Mount the control plane: `GET /control/capabilities|commands|state|entries|events` + `POST
- * /control/dispatch`, all bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
+ * Create the control plane as a mountable prefix owner: `GET
+ * /control/capabilities|commands|state|entries|events` + `POST /control/dispatch`, all
+ * bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
+ * The plane OWNS {@link CONTROL_PREFIX}: it is mounted as one sub-application, answers its own
+ * 404/405/preflight, and puts CORS headers on every reply — see {@link planeApp}.
  */
-export function controlRoutes(control: SessionControl, options: ControlRoutesOptions): Routes {
+export function createControlPlane(control: SessionControl, options: ControlPlaneOptions): PrefixMount {
+  return mountControlPlane(controlPlaneRoutes(control, options));
+}
+
+/** Mount a plane route table as a {@link PrefixMount} — the plane owns a PREFIX, while a route
+ *  table is a set of literal paths. */
+export function mountControlPlane(routes: Record<string, ChannelHandler>): PrefixMount {
+  return { prefix: CONTROL_PREFIX, handler: planeApp(routes) };
+}
+
+/** The plane's route table. Exported so the conformance sweeps derive their route list from what is
+ *  actually mounted, rather than from a hand-kept copy that cannot notice a new route. */
+export function controlPlaneRoutes(
+  control: SessionControl,
+  options: ControlPlaneOptions,
+): Record<string, ChannelHandler> {
   const { token } = options;
-  if (!token) throw new Error("controlRoutes: a bearer token is required (empty tokens are not a mode)");
+  if (!token) throw new Error("createControlPlane: a bearer token is required (empty tokens are not a mode)");
   const epoch = crypto.randomUUID();
 
   // Timing-safe: the bearer token is this surface's ONLY auth (and the --tunnel warning names it

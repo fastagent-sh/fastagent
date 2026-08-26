@@ -24,7 +24,7 @@
  */
 import { timingSafeEqual } from "node:crypto";
 import { isAbsolute, join } from "node:path";
-import type { ChannelModule } from "../../host/node.ts";
+import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";

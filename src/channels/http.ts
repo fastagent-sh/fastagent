@@ -6,14 +6,12 @@
  * web stream primitives give cancellation (consumer disconnect → cancel() → iterator.return() →
  * invoke cancellation, SPEC MUST 3), backpressure (pull-based), and the body cap natively.
  *
- * `nodeListener` is the thin node:http adapter for the embedded `fastagent dev/start` server.
+ * Serving it is somebody else's job: the node:http bridge and the route table belong to the HOST
+ * (`./serve.ts`). This file knows only the Agent contract and the wire shape of one stream.
  */
-import { Readable } from "node:stream";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "../agent.ts";
-import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
-import { text, textHeaders } from "./respond.ts";
+import { text } from "./respond.ts";
 
 /** Request body cap (1 MiB) — shared by every Prompt-bearing wire surface (the control plane's
  *  dispatch imports it), so the two caps cannot drift apart. */
@@ -125,103 +123,4 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
       },
     });
   };
-}
-
-/**
- * node:http adapter for a Fetch handler. Bridges IncomingMessage → Request and pumps the
- * Response body back to ServerResponse with backpressure; a client disconnect (`res` close)
- * cancels both the request signal and the response stream (→ invoke cancellation).
- */
-export function nodeListener(
-  handler: (req: Request) => Promise<Response>,
-): (req: IncomingMessage, res: ServerResponse) => void {
-  return (req, res) => {
-    void pump(handler, req, res); // safe: pump is TOTAL (never rejects) — see its contract below
-  };
-}
-
-/**
- * Consume ONE request and drive its response to a terminal state. pump is TOTAL: a SINGLE try/catch wraps
- * the whole request→response→stream path, so EVERY failure — a handler throw, a non-Response return
- * (`response.headers` undefined), a header Node rejects, `getReader`, or a body stream that errors
- * mid-flight — ends the response and the returned promise NEVER rejects, which is what lets the
- * `void pump(...)` above be safe. Before any byte goes out (headers not sent) it is a clean 500; once the
- * response is streaming, the only honest signal left is to destroy the socket (truncated stream, not a
- * hang). The process installs no `unhandledRejection` handler by design: robustness against a background
- * throw is each fire-and-forget's OWN contract (fail into a terminal HTTP response here), not a global net
- * that would blanket-swallow.
- */
-async function pump(
-  handler: (req: Request) => Promise<Response>,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
-  const controller = new AbortController();
-  res.on("close", () => controller.abort());
-
-  try {
-    const method = req.method ?? "GET";
-    const hasBody = method !== "GET" && method !== "HEAD";
-    const headers = new Headers();
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (Array.isArray(v)) for (const vv of v) headers.append(k, vv);
-      else if (v != null) headers.set(k, v);
-    }
-    const request = new Request(`http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`, {
-      method,
-      headers,
-      body: hasBody ? (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>) : undefined,
-      duplex: "half",
-      signal: controller.signal,
-    } as RequestInit & { duplex: "half" });
-    const response = await handler(request);
-
-    const outHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      outHeaders[key] = value;
-    });
-    res.writeHead(response.status, outHeaders);
-
-    if (!response.body) {
-      res.end();
-      return;
-    }
-    const reader = response.body.getReader();
-    res.on("close", () => void reader.cancel());
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done || res.destroyed) break;
-      // Backpressure: wait for drain, but ALSO resolve on close. A client disconnect after write()
-      // returned false never emits 'drain' on the closed socket, so waiting on 'drain' alone would
-      // suspend pump() forever (leaking the request/stream).
-      if (!res.write(value)) {
-        await new Promise<void>((resolve) => {
-          const settle = () => {
-            res.off("drain", settle);
-            res.off("close", settle);
-            resolve();
-          };
-          res.once("drain", settle);
-          res.once("close", settle);
-        });
-      }
-    }
-    if (!res.destroyed) res.end(); // normal completion
-  } catch (error) {
-    // The ONE totality boundary: every failure above lands here, so pump never rejects (see the header
-    // doc) — which REQUIRES the catch itself not to throw. Don't leak the internal message to the client.
-    log.error(`[host] request failed: ${String(error)}`);
-    // Never touch an already-terminal res: a client that disconnects during the handler await destroys res
-    // (headers not yet sent), and writeHead/end on a dead socket can throw ERR_STREAM_DESTROYED here — which
-    // WOULD be the unhandled rejection this boundary exists to kill. One named gate states the invariant;
-    // with it the catch is provably non-throwing (writeHead only when !headersSent && !destroyed, destroy is
-    // idempotent).
-    if (res.destroyed) return;
-    if (res.headersSent) {
-      res.destroy(error instanceof Error ? error : undefined); // streaming → truncate (not a hang)
-    } else {
-      res.writeHead(500, textHeaders); // pre-header → a clean 500
-      res.end("internal error\n");
-    }
-  }
 }

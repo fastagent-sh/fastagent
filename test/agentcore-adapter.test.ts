@@ -12,7 +12,8 @@ import {
 } from "../src/channels/agentcore.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { StateSync } from "../src/channels/agentcore-state.ts";
-import type { Routes } from "../src/host/node.ts";
+import type { Routes } from "../src/channel.ts";
+import type { RouteSurface } from "../src/channels/agentcore.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../src/schedule/scheduler.ts";
 
@@ -29,7 +30,7 @@ function scriptedAgent(events: AgentEvent[] = [{ type: "text", delta: "hi" }, { 
 const SECRET = "ingress-s3cret";
 
 interface AdapterOverrides {
-  routes?: Routes | (() => Promise<Routes> | Routes);
+  routes?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
   agent?: Agent;
   isBusy?: () => boolean;
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
@@ -59,7 +60,7 @@ const stateRoot = await mkdtemp(join(tmpdir(), "fa-agentcore-adapter-"));
 
 const adapter = (over: AdapterOverrides = {}): Routes =>
   agentcoreRoutes({
-    routes: over.routes ?? {},
+    routes: over.routes ?? { routes: {} },
     agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
@@ -97,7 +98,7 @@ describe("agentcore adapter: lazy channel construction", () => {
       routes: () => {
         order.push("construct");
         built += 1;
-        return health;
+        return { routes: health };
       },
     });
     expect(built).toBe(0); // never at boot — the mount is pre-restore there
@@ -134,7 +135,7 @@ describe("agentcore adapter: lazy channel construction", () => {
   });
 
   it("a probe reports construction structurally over transport-200 (diagnostics must survive the forwarder)", async () => {
-    const ok = adapter({ routes: () => health });
+    const ok = adapter({ routes: () => ({ routes: health }) });
     const okRes = await postEnvelope(ok, { kind: "probe" });
     expect(okRes.status).toBe(200);
     expect(await okRes.json()).toEqual({ ok: true });
@@ -159,7 +160,7 @@ describe("agentcore adapter: lazy channel construction", () => {
         throw new Error("snapshot GET failed: 403");
       },
     });
-    const routes = adapter({ stateSync: sync, routes: () => health });
+    const routes = adapter({ stateSync: sync, routes: () => ({ routes: health }) });
     const res = await postEnvelope(routes, {
       kind: "probe",
       state: { getUrl: "https://s3/g", putUrl: "https://s3/p" },
@@ -169,7 +170,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     expect(verdict.ok).toBe(false);
     expect(verdict.error).toContain("state restore failed");
 
-    expect((await postUntrusted(adapter({ routes: () => health }), { kind: "probe" })).status).toBe(403);
+    expect((await postUntrusted(adapter({ routes: () => ({ routes: health }) }), { kind: "probe" })).status).toBe(403);
   });
 
   it("a schedule fire initializes the channels first, and a broken channel does NOT silence the clock", async () => {
@@ -182,7 +183,7 @@ describe("agentcore adapter: lazy channel construction", () => {
       fire,
       routes: () => {
         order.push("construct");
-        return health;
+        return { routes: health };
       },
     });
     const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", slot: "2026-07-07T10:00:00Z" };
@@ -207,7 +208,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     const routes = adapter({
       routes: () => {
         built += 1;
-        return {};
+        return { routes: {} };
       },
     });
     expect((await postEnvelope(routes, { kind: "wake-poke" })).status).toBe(200);
@@ -284,16 +285,18 @@ describe("agentcore adapter: webhook envelope", () => {
     const seen: { method: string; secret: string | null; body: string }[] = [];
     const routes = adapter({
       routes: {
-        "POST /telegram": async (req) => {
-          seen.push({
-            method: req.method,
-            secret: req.headers.get("x-telegram-bot-api-secret-token"),
-            body: await req.text(),
-          });
-          return new Response('{"challenge":"pong"}', {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+        routes: {
+          "POST /telegram": async (req) => {
+            seen.push({
+              method: req.method,
+              secret: req.headers.get("x-telegram-bot-api-secret-token"),
+              body: await req.text(),
+            });
+            return new Response('{"challenge":"pong"}', {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          },
         },
       },
     });
@@ -313,7 +316,7 @@ describe("agentcore adapter: webhook envelope", () => {
   });
 
   it("enforces the original webhook-body limit even if a caller bypasses the public forwarder", async () => {
-    const routes = adapter({ routes: { "POST /hook": () => new Response("must not run") } });
+    const routes = adapter({ routes: { routes: { "POST /hook": () => new Response("must not run") } } });
     const res = await postEnvelope(routes, {
       kind: "webhook",
       method: "POST",
@@ -326,7 +329,9 @@ describe("agentcore adapter: webhook envelope", () => {
   });
 
   it("carries a non-2xx channel response inside the envelope (transport stays 200)", async () => {
-    const routes = adapter({ routes: { "POST /telegram": () => new Response("forbidden\n", { status: 403 }) } });
+    const routes = adapter({
+      routes: { routes: { "POST /telegram": () => new Response("forbidden\n", { status: 403 }) } },
+    });
     const res = await postEnvelope(routes, { kind: "webhook", method: "POST", path: "/telegram" });
     expect(res.status).toBe(200);
     expect(((await res.json()) as WebhookReply).status).toBe(403);
@@ -346,9 +351,11 @@ describe("agentcore adapter: webhook envelope", () => {
     const seen: string[] = [];
     const routes = adapter({
       routes: {
-        "GET /hook": (req) => {
-          seen.push(new URL(req.url).searchParams.get("code") ?? "(none)");
-          return new Response("ok", { status: 200 });
+        routes: {
+          "GET /hook": (req) => {
+            seen.push(new URL(req.url).searchParams.get("code") ?? "(none)");
+            return new Response("ok", { status: 200 });
+          },
         },
       },
     });
@@ -433,7 +440,7 @@ describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
   it("persists the forwarder URL ridden on an envelope for the wake-alarm sink", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-wake-url-"));
     const routes = agentcoreRoutes({
-      routes: {},
+      routes: { routes: {} },
       agent: scriptedAgent(),
       stateRoot: root,
       isBusy: () => false,
@@ -501,9 +508,11 @@ describe("agentcore adapter: cross-deploy state", () => {
     const routes = adapter({
       stateSync: sync,
       routes: {
-        "POST /hook": () => {
-          order.push("dispatch");
-          return new Response("ok");
+        routes: {
+          "POST /hook": () => {
+            order.push("dispatch");
+            return new Response("ok");
+          },
         },
       },
     });
@@ -522,7 +531,9 @@ describe("agentcore adapter: cross-deploy state", () => {
         },
       }),
       routes: {
-        "POST /hook": () => new Response("must not run"),
+        routes: {
+          "POST /hook": () => new Response("must not run"),
+        },
       },
     });
 
@@ -554,7 +565,7 @@ describe("agentcore adapter: cross-deploy state", () => {
 describe("agentcore adapter: the authentication boundary", () => {
   it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
     const fire = vi.fn(async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome);
-    const routes = adapter({ fire, routes: { "POST /hook": () => new Response("must not run") } });
+    const routes = adapter({ fire, routes: { routes: { "POST /hook": () => new Response("must not run") } } });
 
     for (const envelope of [
       { kind: "schedule-fire", name: "digest", slot: "2026-07-28T09:00:00Z" },

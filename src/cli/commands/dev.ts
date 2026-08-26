@@ -10,13 +10,14 @@ import { loadDotEnv } from "../../env.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
+import { mountAgentService } from "../../service.ts";
 import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { assertTunnelBindable, maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
+import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface DevOptions {
@@ -77,23 +78,36 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
-  const traced = logAgentLoop(a.agent);
-  const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl).catch(failStartup);
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = a.config.http?.host;
   const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
-  const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
-    tunnel: opts.tunnel ?? false,
-    agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent
-    host,
-  });
-  await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
-  serve({ ...routed, routes: withControl.routes }, { port: portFlag ?? a.config.http?.port ?? 8787, host }, (p) => {
-    withControl.announce(p);
-    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
-  });
+  // The SAME assembly an embedder gets from `createAgentService` — channels, control plane,
+  // schedules, long connections. `dev` opens the directory itself only because its startup report
+  // prints the opened values before anything mounts.
+  const service = await mountAgentService(a, {
+    // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev,
+    // gated out in start (level info), keeping end-user content out of production logs.
+    wrapAgent: logAgentLoop,
+    closeTimeoutMs: SHUTDOWN_GRACE_MS,
+    control: { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) },
+    onChannelClosed: (name, error) =>
+      failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
+  }).catch(failStartup);
+  serve(
+    service.handler,
+    { port: portFlag ?? a.config.http?.port ?? 8787, host },
+    {
+      ready: service.ready,
+      onListening: (p) => {
+        reportServing(service, host, p);
+        service.announce(p);
+        maybeTunnel(a.agentDir, service.channels.routes, p, opts.tunnel ?? false, a.stateRoot);
+      },
+      onShutdown: () => service.close(),
+    },
+  );
 }
 
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromDir>>;

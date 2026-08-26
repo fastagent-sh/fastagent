@@ -23,11 +23,25 @@ Code truth is `src/`.
 ```
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
+├── service.ts               # THE PRODUCT AS ONE CALL: a directory becomes a live service
+│                           # (createAgentService). Before it, only the CLI could keep fastagent's
+│                           # "into a live service inside an app" promise — everything else was
+│                           # parts an embedder had to assemble in the right order, and getting it
+│                           # wrong is silent (a plane that 404s while advertising itself). The
+│                           # assembly parts (routesFor / mountSessionControl / startSchedules) live
+│                           # here rather than in cli/, because a public entry must not reach into a
+│                           # directory that calls process.exit — guarded in package-boundary.test.
+│                           # dev/start are callers of this, not a second implementation.
+├── channel.ts               # the Channel contract — the TRIGGER side of the product boundary
+│                           # (core.md §1), beside agent.ts and session.ts: ChannelModule / Routes /
+│                           # ChannelHandler / LongConnection*. Pure types, no host, no framework:
+│                           # a WebSocket ingress needs LongConnection and has no HTTP in it, and a
+│                           # channel author must not pull node:http in behind a type import.
 ├── collect.ts               # caller-side stream helpers: collect (buffered consumption) + abortFirstIterator (shared cancellation protocol)
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
-├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers incl. mountSessionControl — per-boot token + control.json discovery file; process side effects live in the command modules), fail.ts, commands/ (one module per command)
+├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel, agentcore mount — the ASSEMBLY moved to service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── bind.ts                  # THE reading of a bind address, as the six DIFFERENT questions it is:
 │                           # bindable (isBindAddress) / an address not a name (bindAddress, applied
@@ -55,10 +69,20 @@ src/
 │                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
 ├── version.ts              # package version (deploy pins it into the image)
-├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
+│   ├── serve.ts             # HOW a route table becomes a running server. Dispatch is a MAP LOOKUP
+│   │                     # on literal paths — a deployment mounts a handful (one per channel, plus
+│   │                     # health, plus the plane's prefix), and a routing library would answer the
+│   │                     # same question through a pattern language we do not use, whose extra
+│   │                     # semantics every collision check would then have to PREDICT. Prefix
+│   │                     # owners are a separate PrefixMount argument, not a key spelling. Plus the
+│   │                     # totality boundary and the node:http binding. Shared ground, NOT a
+│   │                     # deployment target: every host in deploy/ runs this same process. Hono
+│   │                     # lives INSIDE this file (overrideGlobalObjects: false keeps it there — an
+│   │                     # embedder's globals are not ours to swap); the types stay pure Fetch.
+│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
+│   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── preview-kit.ts       # SHARED turn-view reducer (event → view state + line renderers) + preview policies (ChannelFailure, wording)
@@ -151,7 +175,11 @@ src/
     │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
     ├── report.ts            # startup report (auth/model/skills/tools surface)
     └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
-test/                        # vitest; faux models by default + reusable SPEC conformance
+test/                        # vitest; faux models by default + reusable SPEC conformance.
+└── embedding.test.ts         # the docs/embedding.md snippets, run against REAL express/fastify (the
+                             # only reason they are devDeps): that path crosses the Node/Fetch seam
+                             # through code we do not own, so a swap underneath can keep every unit
+                             # test green while breaking the paste-this-in promise
 docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 

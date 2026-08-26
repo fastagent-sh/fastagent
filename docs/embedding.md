@@ -88,7 +88,46 @@ import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
 ```
 
-The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`:
+### The whole agent, as a service
+
+The handler above serves `invoke` only. To mount the **whole** agent — every channel it declares,
+its control plane, health — open the directory as a surface:
+
+```ts
+import { nodeListener, createAgentService } from "@fastagent-sh/fastagent";
+
+const service = await createAgentService("./my-agent");
+app.use("/agent", nodeListener(service.handler));   // channels + control plane + health
+await service.ready;      // long connections up; rejects if one cannot come up
+// ...
+await service.close();    // stops long connections and schedules
+```
+
+`createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
+bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
+`service.control` carries the plane's bearer token so you can hand a client access without the
+CLI's `control.json` discovery file. Composing the same thing by hand
+means assembling routes, mounts, schedules and long connections in the right order — and getting it
+wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
+fires).
+
+Pass `{ signal }` to bind its lifetime to something you already own.
+
+### Mounting a single handler
+
+The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it.
+
+> **Mount before your body parser.** Node's request is a one-shot stream, so `app.use(express.json())`
+> registered *ahead* of the mount consumes it and nothing reaches the agent — and webhook channels
+> verify signatures over the RAW body, which a re-serialised one would fail. Order is the whole fix:
+>
+> ```ts
+> app.use("/agent", nodeListener(handler));  // first: fastagent takes these requests
+> app.use(express.json());                   // then: parses everything else as usual
+> ```
+>
+> Scoping the parser (`app.use("/other", express.json())`) works too. Get it wrong and the log says
+> so, naming the fix rather than `Body is unusable`.
 
 ```ts
 // Next.js App Router — app/api/chat/route.ts
@@ -97,8 +136,8 @@ export const POST = handler;
 // Hono — c.req.raw is a Web Request
 app.post("/chat", (c) => handler(c.req.raw));
 
-// Express — nodeListener bridges (req, res) to the Fetch handler; it reads the raw
-// body stream, so don't put a body parser on this route
+// Express — nodeListener bridges (req, res) to the Fetch handler. It reads the RAW body
+// stream, so mount it BEFORE any body parser (see the note below).
 import { nodeListener } from "@fastagent-sh/fastagent";
 app.post("/chat", nodeListener(handler));
 
@@ -117,8 +156,10 @@ Bun.serve({ port: 8787, fetch: (req) =>
   new URL(req.url).pathname === "/chat" ? handler(req) : new Response("not found", { status: 404 }) });
 
 // Plain Node (no native Fetch routing) — the built-in server
-import { serveNode, router } from "@fastagent-sh/fastagent";
-serveNode(router({ "POST /chat": handler }), { port: 8787 });
+import { createAgentService, serveNode } from "@fastagent-sh/fastagent";
+serveNode(handler, { port: 8787 });                    // just the invoke route
+// ...or the whole agent, channels and all:
+serveNode((await createAgentService("./my-agent")).handler, { port: 8787 });
 ```
 
 Cancellation, backpressure, and a body cap are native to the web-stream primitives: a client disconnect cancels the underlying invoke. Concurrent requests on the **same** session fail fast — the second receives `failed{session busy}`.

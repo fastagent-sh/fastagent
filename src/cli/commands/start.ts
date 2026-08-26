@@ -12,6 +12,14 @@ import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
+import {
+  assertNoControlPlaneCollision,
+  mountAgentService,
+  mountSessionControl,
+  routesFor,
+  startSchedules,
+} from "../../service.ts";
+import { router } from "../../channels/serve.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
@@ -19,16 +27,16 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
-import { type Routes, parseRouteKey } from "../../host/node.ts";
+import type { RouteSurface } from "../../channels/agentcore.ts";
+
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
+  SHUTDOWN_GRACE_MS,
   assertTunnelBindable,
   maybeTunnel,
   mountAgentcore,
-  mountSessionControl,
-  routesFor,
+  reportServing,
   serve,
-  startSchedules,
 } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
@@ -62,6 +70,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);
+  const opened = await openStartDir(dir, opts, sessionsDirOverride);
   const {
     agent,
     definition,
@@ -77,12 +86,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     toolCollisions,
     toolFailures,
     sessionControl,
-  } = await createPiAgentFromDir(dir, {
-    model: opts.model,
-    sessionsDir: sessionsDirOverride,
-    authPath: opts.authPath,
-    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
-  }).catch(failStartup);
+  } = opened;
 
   reportLine("agent", agentDir);
   reportLine("workspace", workspace);
@@ -139,19 +143,37 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // an eager build would cache that emptiness (thread participation, delivery dedup, pending turns)
   // and then clobber the restored files with it. Everywhere else the state root is durable at boot,
   // so channels mount eagerly and a broken channel fails startup.
-  const routed = agentcore
-    ? undefined
-    : await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: true }).catch(failStartup);
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
   const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
-  const withControl = mountSessionControl(routed?.routes ?? {}, sessionControl, stateRoot, {
-    tunnel: opts.tunnel ?? false,
-    agent: traced,
-    host,
-  });
+  const control = { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) };
+  // AgentCore assembles DIFFERENTLY, not accidentally: its channels load lazily (below), so it
+  // cannot take the shared `mountAgentService`, which discovers them eagerly. Every other
+  // deployment — and every embedder — takes the one assembly.
+  const mounted = agentcore
+    ? undefined
+    : await mountAgentService(opened, {
+        wrapAgent: () => traced,
+        closeTimeoutMs: SHUTDOWN_GRACE_MS,
+        control,
+        onChannelClosed: (name, error) =>
+          failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
+      }).catch(failStartup);
+  // AgentCore's own control mount, over the empty boot surface its lazy channels join later.
+  const withControl = agentcore
+    ? mountSessionControl({}, sessionControl, stateRoot, { ...control, agent: traced })
+    : undefined;
+  const planeMounts = withControl?.mounts ?? []; // only the agentcore branch composes its own router
+  // AgentCore has no AgentService to own the discovery file, so its cleanup is held here and wired
+  // into the same shutdown hook — a stale control.json points `attach` at a stopped service.
+  let unannounce: (() => void) | undefined;
+  const announce = mounted
+    ? (port: number) => mounted.announce(port)
+    : (port: number) => {
+        unannounce = withControl?.announce(port);
+      };
   // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
   // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
   // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment
@@ -174,53 +196,58 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       );
     }
   }
-  const schedules = await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
-    externalClock: agentcore,
-  });
-  let routes = withControl.routes;
+  // Only AgentCore starts its own: the shared assembly did it for every other deployment.
+  const scheduled = agentcore
+    ? await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
+        externalClock: true,
+      }).catch(failStartup)
+    : undefined;
+  if (scheduled) {
+    process.once("SIGINT", scheduled.stop);
+    process.once("SIGTERM", scheduled.stop);
+  }
+  const schedules = scheduled?.schedules ?? mounted?.schedules ?? [];
+  let handler = mounted?.handler;
   if (agentcore) {
     // The lazy channel surface the adapter resolves post-restore. Control routes ride along so a
     // forwarder-relayed /control/* request dispatches the same as on a direct host. Long-connection
     // channels cannot serve here — scale-to-zero severs a resident connection and nothing
     // re-establishes it — so their presence is a configuration error, surfaced per envelope and by
     // the deploy driver's health probe (there is no boot to fail on this host).
-    const lazyChannels = async (): Promise<Routes> => {
-      const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
-      if (surface.longConnections.length > 0) {
+    const lazyChannels = async (): Promise<RouteSurface> => {
+      const lazy = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
+      if (lazy.longConnections.length > 0) {
         throw new Error(
-          `long-connection channel(s) ${surface.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
+          `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
             `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
         );
       }
-      // mountSessionControl's PATH-level collision rule, re-asserted here: with no channels at boot
-      // its own check ran against an empty base, and a spread merge would silently let control win —
-      // but a channel on /control/* is the same configuration error it is on every other host.
-      const controlPaths = new Set(Object.keys(withControl.routes).map((key) => parseRouteKey(key).path));
-      const collisions = Object.keys(surface.routes).filter((key) => controlPaths.has(parseRouteKey(key).path));
-      if (collisions.length > 0) {
-        throw new Error(
-          `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control ` +
-            `plane — rename the channel route or disable sessionControl in fastagent.config`,
-        );
-      }
-      return { ...surface.routes, ...withControl.routes };
+      // The SAME rule mountSessionControl applies, through the same function: with no channels at
+      // boot its check ran against an empty base, and a spread merge would silently let control win.
+      for (const plane of planeMounts) assertNoControlPlaneCollision(lazy.routes, plane);
+      return { routes: lazy.routes, mounts: planeMounts };
     };
     try {
-      routes = mountAgentcore(routes, { agent: traced, stateRoot, schedules, onStateReady, lazyChannels });
+      handler = router(
+        mountAgentcore({}, { agent: traced, stateRoot, schedules, onStateReady, lazyChannels }),
+        planeMounts,
+      );
     } catch (e) {
       failStartup(e);
     }
     log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
   }
   serve(
-    {
-      ...(routed ?? { longConnections: [], routeChannels: [], builtinInvoke: false, markReady() {} }),
-      routes,
-    },
+    handler ?? router({}, planeMounts),
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
-    (p) => {
-      withControl.announce(p);
-      maybeTunnel(agentDir, routed?.routeChannels ?? [], p, opts.tunnel ?? false, stateRoot);
+    {
+      ...(mounted ? { ready: mounted.ready } : {}),
+      onListening: (p) => {
+        if (mounted) reportServing(mounted, host, p);
+        announce(p);
+        maybeTunnel(agentDir, mounted?.channels.routes ?? [], p, opts.tunnel ?? false, stateRoot);
+      },
+      onShutdown: () => (mounted ? mounted.close() : unannounce?.()),
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
@@ -235,6 +262,16 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
  * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
  * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
  */
+/** The opener, kept as its own call so `opened` can also feed the shared assembly below. */
+function openStartDir(dir: string, opts: StartOptions, sessionsDir: string | undefined) {
+  return createPiAgentFromDir(dir, {
+    model: opts.model,
+    sessionsDir,
+    authPath: opts.authPath,
+    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
+  }).catch(failStartup);
+}
+
 async function maybeSeedAuth(authPath: string): Promise<void> {
   // collectAuthSeed: the seed may arrive CHUNKED (FASTAGENT_AUTH_SEED + _2…) on hosts with a small
   // env-value max length (AgentCore); single-var hosts are unchanged.

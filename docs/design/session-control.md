@@ -411,7 +411,7 @@ same lease. Engine-specific records (pi JSONL, message classes) never cross the 
 ## 13. Transport and envelope
 
 The embedded contract is semantic-only; wire concerns exist only at the transport. As SHIPPED
-(HTTP+SSE, `controlRoutes`/`connectSessionControl`):
+(HTTP+SSE, `createControlPlane`/`connectSessionControl`):
 
 - **Commands** ride plain HTTP request/response — the request correlation the design once sketched
   as a `WireCommand.id` is implicit in HTTP itself; the dispatch body is `{ session, command }`,
@@ -432,6 +432,40 @@ The remote adapter consumes the envelope internally and re-exposes the same `Ses
 interface (and `connectAgent` does the same for the data plane's `Agent`). Local and remote
 consumers are isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
+**Browser reachability.** The bearer token travels in `Authorization`, which is not CORS-safelisted,
+so a browser preflights EVERY call to the plane — including a plain `GET`. `fastagent attach` is
+unaffected (Node's fetch does not enforce CORS), which is why the gap stayed invisible while
+blocking every browser client.
+
+The plane is therefore mounted as ONE sub-application owning the `/control` prefix, not as a set of
+routes that happen to share it. That is a correctness property, not tidiness: CORS belongs to every
+reply that LEAVES the plane, and three of those are produced where no route runs — an unknown path
+under the prefix, a method a path does not serve, and a handler that throws. As separate routes
+those three came from the host, outside anything the plane could decorate, and each surfaced as a
+bare "network error" in a browser. Owning the prefix makes them the plane's own answers, and the
+headers go on at the single exit they share.
+
+What it advertises: `access-control-allow-origin: *`, `access-control-allow-headers:
+authorization, content-type`, and allowed METHODS **per path**. Each value is forced.
+
+- `*` is the answer rather than a concession — authorisation here is the token, never the origin
+  and never a cookie, so an origin that cannot present it gets 401 either way, and a deployment
+  cannot know the origins of the GUIs that will manage it (the asymmetry [§14](#14-security-boundary)
+  settles).
+- `content-type` because only three values are safelisted and `application/json` is not among them:
+  a browser POSTing to `dispatch`/`invoke` names it in the preflight, so allowing just
+  `authorization` leaves precisely the WRITE routes unreachable while every read works.
+- Per-path methods, PLUS whatever the preflight asks for. The advertised set describes what the
+  path serves, but a preflight is a gate applied before the request exists: refusing there means the
+  real request is never sent and the client sees an opaque network error — the failure this exists
+  to remove. So every preflight under the prefix is answered `204`, and the requested method is
+  allowed even where the path does not serve it. The plane owns this prefix; saying what it does not
+  serve is its own reply's job, as a `404`/`405` carrying these headers and an explanation.
+
+`OPTIONS` is answered before any auth — a preflight carries no token, which is its entire purpose —
+and 404 stays distinct from 405, because a remote client reads 404 as "this serve predates the
+route" (skew) rather than as a fault.
+
 ## 14. Security boundary
 
 A remotely exposed control plane MUST be wrapped by a host that enforces: an authenticated
@@ -449,7 +483,7 @@ safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundar
 | 1 | **Done.** Observation plane: pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`), `AgentEvent` is its projection (`projectAgentEvent`); the `session` subpath types + pi `createPiSessionControl` (`state`/`entries`/`events` over the store's read-only `openIfExists`); conformance tests for projection fidelity, run boundaries (incl. cancellation → exactly-one `run_settled{aborted}`), reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
 | 2a | **Done.** Run modulation: `dispatch` routes `steer`/`follow_up`/`abort` to the live run via {@link RunControls} registered with `run_started`; the settle window spans steered/queued continuations inside one invoke (pi's agent loop drains both queues within one `prompt()`); `queue_changed` + live `pending` in state; a control-plane abort terminates as `failed{code: "aborted"}` / `run_settled{aborted}`; idle-session run commands reject `no_active_run` before acceptance. | L1 clients. |
 | 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / the MODEL's own thinking levels — `reasoning` + `thinkingLevelMap`, not the bare scale; `invalid_command` before acceptance) and the per-invoke resolve (`resolveSessionSettings`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` is ACCEPT-FAST (§5.2 has no exceptions: a summarization is a full model call, so the dispatch answers on admission — lease held, session bound — and the outcome travels as `compaction_finished{summary|error|aborted}`, emitted after the lease frees); pre-acceptance failures (binding the session and the local preparation — admission ends where the work becomes a model call) reject `boundary_command_failed` with nothing durable landed, and a session with no compactable history rejects `nothing_to_compact` (a no-op, not a failure — the `no_active_run` pattern: re-dispatch once the session grows); an in-flight compaction is abortable — `abort` during `compacting` aborts the summarization's controller (run/compaction symmetry: both are model calls a client must be able to stop) and converges as `compaction_finished{aborted}` with the lease released, mirroring `run_settled{aborted}`. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts), while the session's model, executing level and available levels come from ONE resolution (`resolveSessionSettings`) that `state()`, the `set_thinking` gate and the per-invoke resolve all read — model and thinking level are one setting, so deriving them separately is what let the surfaces disagree. `navigate` moves the leaf through pi's `SessionManager.branch()` (a pointer move that writes no record) under the same lease — an unknown `targetId` rejects `invalid_command` before it, and the move rides out as `state_changed{leafEntryId, model, thinkingLevel}` (a move can change which settings apply). Because the leaf is now MOVABLE, every last-wins read — the per-invoke activation/override walk, `state()`, the `set_thinking` gate — reads the ACTIVE PATH rather than the flat journal: a record on an abandoned branch no longer governs the session. An unreadable chain never resolves silently to the assembly defaults: `state()` stays TOTAL but leaves the settings pair ABSENT, and the fault surfaces where an error code exists — the next invoke's `failed` event and a boundary dispatch's `boundary_command_failed`. | L2 clients. |
-| 3 | **Done** (HTTP+SSE; subprocess adapter stays demand-driven). One transport serves every remote consumer — Web panel, desktop app, `fastagent attach`: `controlRoutes` (engine-neutral, bearer-token REQUIRED) serves `/control/capabilities\|commands\|state\|entries\|dispatch\|events`, with the envelope born at the wire (`{sessionId, epoch, seq, event}` per SSE message; HTTP itself is the request correlation). `connectSessionControl` re-exposes the SAME `SessionControl` interface and consumes the envelope internally — a seq gap ends the iterator into the standard reconnect steps; a server restart is covered by the same rule (its connections drop), and `epoch` is informational for consumers correlating ACROSS connections — within one connection it cannot change, so the client does not compare it. The DATA plane travels too: `POST /control/invoke` (the standard invoke handler behind the same token, mounted when the serve wires an agent) + `connectAgent` client-side — a remote consumer holds a full fastagent instance through the same two contracts local code uses. Serve wiring: `config.sessionControl: true` → dev/start mount the routes, mint a per-boot token, and write `<stateRoot>/control.json` (0600) for local discovery; product runners still own real authentication, idempotency, event persistence, and routing (§14). | Remote `SessionControl` is isomorphic to local (conformance-tested). |
+| 3 | **Done** (HTTP+SSE; subprocess adapter stays demand-driven). One transport serves every remote consumer — Web panel, desktop app, `fastagent attach`: `createControlPlane` (engine-neutral, bearer-token REQUIRED) serves `/control/capabilities\|commands\|state\|entries\|dispatch\|events`, with the envelope born at the wire (`{sessionId, epoch, seq, event}` per SSE message; HTTP itself is the request correlation). `connectSessionControl` re-exposes the SAME `SessionControl` interface and consumes the envelope internally — a seq gap ends the iterator into the standard reconnect steps; a server restart is covered by the same rule (its connections drop), and `epoch` is informational for consumers correlating ACROSS connections — within one connection it cannot change, so the client does not compare it. The DATA plane travels too: `POST /control/invoke` (the standard invoke handler behind the same token, mounted when the serve wires an agent) + `connectAgent` client-side — a remote consumer holds a full fastagent instance through the same two contracts local code uses. Serve wiring: `config.sessionControl: true` → dev/start mount the routes, mint a per-boot token, and write `<stateRoot>/control.json` (0600) for local discovery; product runners still own real authentication, idempotency, event persistence, and routing (§14). | Remote `SessionControl` is isomorphic to local (conformance-tested). |
 
 Phase 1 modifies the existing invoke pipeline incrementally (translation + projection); it does not
 build a parallel runtime that later needs reconciling. Demand-driven follow-ons, explicitly not

@@ -1,86 +1,25 @@
 /**
- * The serving spine shared by `dev` (its worker) and `start`: channel assembly, Node HTTP binding,
- * long-connection lifecycle, scheduler lifecycle, and the optional Cloudflare quick tunnel.
+ * What `dev` (its worker) and `start` need beyond the service itself: binding a port, the shutdown
+ * order, the startup report, the AgentCore mount, and the optional Cloudflare quick tunnel.
+ *
+ * The ASSEMBLY is not here — it lives in `src/service.ts`, which a public entry may import and this
+ * directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
  */
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Agent } from "../agent.ts";
 import { createStateSync } from "../channels/agentcore-state.ts";
-import { agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
+import { type RouteSurface, agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
-import { controlRoutes } from "../channels/control.ts";
-import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
-import { text } from "../channels/respond.ts";
-import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
-import { reportModuleLoadFailures } from "../engines/pi/report.ts";
+import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import { type Routes, parseRouteKey, router, serveNode } from "../host/node.ts";
+import type { ChannelHandler, Routes } from "../channel.ts";
+import type { AgentService } from "../service.ts";
+import { routeKeysConflict, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { loadSchedules } from "../schedule/discover.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
-import { createScheduler, fireScheduleOnce } from "../schedule/scheduler.ts";
-import type { SessionControl } from "../session.ts";
+import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
-
-export interface ServingSurface {
-  routes: Routes;
-  longConnections: LoadedLongConnectionChannel[];
-  /** Route-channel basenames; the tunnel registers only this subset. */
-  routeChannels: string[];
-  builtinInvoke: boolean;
-  /** Marks the built-in health route ready after every long-connection channel first connects. */
-  markReady(): void;
-}
-
-/**
- * The surface this deployment serves: default `GET /health` plus discovered channels, or the default
- * POST `/invoke` only when neither a route nor a long-connection channel was declared.
- */
-export async function routesFor(
-  agentDir: string,
-  agent: Agent,
-  stateRoot: string,
-  control: SessionControl | undefined,
-  options: { builtinInvoke?: boolean } = {},
-): Promise<ServingSurface> {
-  const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
-    agent,
-    stateRoot,
-    control,
-  });
-  for (const c of collisions) {
-    console.error(
-      `[fastagent] warn: channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`,
-    );
-  }
-  reportModuleLoadFailures(failures);
-  if (failures.length > 0 || collisions.length > 0) {
-    throw new Error(
-      `channel setup is invalid (${failures.length} load failure(s), ${collisions.length} route collision(s)) — ` +
-        `fix it, or rename an intentionally disabled file to *.disabled`,
-    );
-  }
-  const builtinInvoke =
-    options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
-  const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
-  const healthCovered = Object.keys(channels).some((key) => {
-    const entry = parseRouteKey(key);
-    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
-  });
-  let ready = longConnections.length === 0;
-  const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
-  return {
-    routes: healthCovered ? channels : { "GET /health": health, ...channels },
-    longConnections,
-    routeChannels,
-    builtinInvoke,
-    markReady() {
-      ready = true;
-    },
-  };
-}
 
 /**
  * Mount the session control plane (`/control/*`) when the agent enabled it
@@ -92,92 +31,6 @@ export async function routesFor(
  * (routesFor): `sessionControl` is an explicit opt-in, so declaring both is a configuration error,
  * and silently shadowing either side would serve a surface the author didn't write.
  */
-export function mountSessionControl(
-  routes: Routes,
-  control: SessionControl | undefined,
-  stateRoot: string,
-  options: { tunnel?: boolean; agent?: Agent; host?: string } = {},
-): { routes: Routes; announce: (boundPort: number) => void } {
-  if (!control) return { routes, announce: () => {} };
-  const token = crypto.randomUUID();
-  const mounted = controlRoutes(control, { token, agent: options.agent });
-  // PATH-level collision, matching the router's semantics (an any-method "/control/dispatch"
-  // channel key would dodge an exact-key check yet still shadow the method-qualified control
-  // route at match time — the router matches by path first).
-  const mountedPaths = new Set(Object.keys(mounted).map((key) => parseRouteKey(key).path));
-  const collisions = Object.keys(routes).filter((key) => mountedPaths.has(parseRouteKey(key).path));
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
-        `rename the channel route or disable sessionControl in fastagent.config`,
-    );
-  }
-  return {
-    routes: { ...routes, ...mounted },
-    announce: (boundPort) => {
-      // The state root normally exists (the opener mkdirs the sessions dir under it), but an
-      // external --sessions-dir leaves it uncreated — and announce runs inside serve's listening
-      // callback, where a throw is an unhandled rejection, not a one-line startup diagnostic.
-      mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
-      const path = join(stateRoot, "control.json");
-      // Atomic (tmp+rename, the state.ts pattern): attach re-reads this file exactly during the
-      // restart window — a torn read would be misdiagnosed as "serve gone".
-      const tmp = `${path}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify({ url: `http://${clientHost(options.host)}:${boundPort}`, token })}\n`, {
-        mode: 0o600,
-      });
-      chmodSync(tmp, 0o600); // an existing file keeps its old mode on rewrite — pin it
-      renameSync(tmp, path);
-      log.info(`[fastagent] session control on /control/* (token in ${path})`);
-      // The serve binds ALL interfaces by DEFAULT (containers require it), so /control/* is
-      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
-      // loudly, and the LAN path must not be the silent third way past the local trust story. A
-      // loopback bind closes exactly that reach, so it earns silence.
-      const bind = classifyBind(options.host);
-      if (bind !== "loopback") {
-        log.warn(
-          `[fastagent] the port binds ${bind === "wildcard" ? "all interfaces" : `${options.host} (off this machine)`}: ` +
-            "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
-            "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs: design §14)",
-        );
-      }
-      if (options.tunnel) {
-        // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC
-        // (beyond even the LAN reach the mount already warned about). The operator asked for the tunnel (webhooks), but must not DISCOVER the control
-        // plane went public with it — say it loudly.
-        log.warn(
-          "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +
-            "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
-        );
-      }
-      // Best-effort lifecycle end: a clean exit removes the discovery file so a later `attach`
-      // fails with "cannot read" (accurate) instead of a stale token's misleading 401/ECONNREFUSED.
-      const unlink = (): void => {
-        try {
-          rmSync(path, { force: true });
-        } catch {
-          /* the file is advisory — exit must not fail on it */
-        }
-      };
-      // Signal handlers MUST NOT absorb termination: registering any listener disables Node's
-      // default kill, so clean up and RE-RAISE. The mechanism: `process.kill` delivery is ASYNC —
-      // it lands after the current emit completes, so every listener of this same emit (scheduler
-      // stop, tunnel close — regardless of registration order) runs first, and the re-raised
-      // signal then hits the default action because each `once` handler is already consumed. When
-      // some listener exits the process itself (the tunnel path calls process.exit(0)), the
-      // re-raise is harmless redundancy. Without this, the first Ctrl+C would leave the serve
-      // alive minus its control.json, and dev's watch restart (SIGTERM → wait for exit → respawn)
-      // would hang on a worker that never exits.
-      const unlinkAndReraise = (signal: NodeJS.Signals) => (): void => {
-        unlink();
-        process.kill(process.pid, signal);
-      };
-      process.once("SIGINT", unlinkAndReraise("SIGINT"));
-      process.once("SIGTERM", unlinkAndReraise("SIGTERM"));
-      process.once("exit", unlink);
-    },
-  };
-}
 
 /**
  * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) over the serving routes —
@@ -191,17 +44,17 @@ export function mountAgentcore(
   options: {
     agent: Agent;
     stateRoot: string;
-    schedules: LoadedSchedule[];
+    schedules: readonly LoadedSchedule[];
     onStateReady?: () => void;
     /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
      *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
      *  `routes` is the dispatch target — for wirings whose state root is already authoritative. */
-    lazyChannels?: () => Promise<Routes>;
+    lazyChannels?: () => Promise<RouteSurface>;
   },
 ): Routes {
   const { agent, stateRoot, schedules, onStateReady, lazyChannels } = options;
   const mounted = agentcoreRoutes({
-    routes: lazyChannels ?? routes,
+    routes: lazyChannels ?? { routes },
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
@@ -223,8 +76,9 @@ export function mountAgentcore(
             return fireScheduleOnce({ agent, stateRoot, schedule, slot });
           },
   });
-  const mountedPaths = new Set(Object.keys(mounted).map((key) => parseRouteKey(key).path));
-  const collisions = Object.keys(routes).filter((key) => mountedPaths.has(parseRouteKey(key).path));
+  const collisions = Object.keys(routes).filter((key) =>
+    Object.keys(mounted).some((adapterKey) => routeKeysConflict(key, adapterKey)),
+  );
   if (collisions.length > 0) {
     throw new Error(
       `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the AgentCore adapter ` +
@@ -265,6 +119,20 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
  * A wildcard bind is every interface, and naming one address there would understate it — but the curl
  * still needs one to dial, which is what `clientHost` gives (loopback for a wildcard, itself otherwise).
  */
+/**
+ * The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and
+ * what mounted. One function because both commands must say the same thing at the same moment —
+ * after readiness, never at socket bind.
+ */
+export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
+  process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
+  for (const line of readyAddressLines(host, boundPort, service.channels.builtinInvoke)) log.info(line);
+  log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
+  if (service.channels.longConnections.length > 0) {
+    log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
+  }
+}
+
 export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   const lines = [
@@ -283,85 +151,66 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
  * adapter owns reconnects; a terminal close rejects `closed` and fails the process visibly. Abort is
  * the sole clean-shutdown command. `host` unset binds all interfaces.
  */
+/** What the CLI gives a service to stop in, and the hard exit that follows it. The order matters:
+ *  a forced exit before the service answers would report a clean shutdown over a stuck channel. */
+export const SHUTDOWN_GRACE_MS = 800;
+const FORCED_EXIT_MS = 1_500;
+
 export function serve(
-  surface: ServingSurface,
+  handler: ChannelHandler,
   bind: { port: number; host?: string },
-  onListening?: (boundPort: number) => void,
+  hooks: {
+    /** Awaited before anything is reported ready — see the listening handler. */
+    ready?: Promise<void>;
+    onListening?: (boundPort: number) => void;
+    onShutdown?: () => Promise<void> | void;
+  } = {},
 ): void {
   const { port, host } = bind;
-  const hosted = serveNode(router(surface.routes), { port, host });
-  const abort = new AbortController();
+  const hosted = serveNode(handler, { port, host });
   let stopping = false;
-
   const stop = (exitCode: number): void => {
     if (stopping) return;
     stopping = true;
-    abort.abort();
-    const deadline = setTimeout(() => process.exit(exitCode), 1_000);
-    void hosted
-      .close()
-      .catch(() => {})
-      .finally(() => {
-        clearTimeout(deadline);
-        process.exit(exitCode);
-      });
-    // Preserve the existing no-drain shutdown contract: stop accepting first, then cut active streams.
+    // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires
+    // regardless. No drain — an in-flight turn is cut, which is the existing contract.
+    // Later than the service's own close deadline (SHUTDOWN_GRACE_MS below), or the process leaves
+    // at 0 before `close()` has said a channel would not stop.
+    const deadline = setTimeout(() => {
+      log.error(`[fastagent] shutdown did not finish within ${FORCED_EXIT_MS}ms; exiting`);
+      process.exit(1);
+    }, FORCED_EXIT_MS);
+    // Stop accepting FIRST, before anything is awaited. `onShutdown` waits for long connections to
+    // close, and a socket still listening through that wait would dispatch new work into channels
+    // and a scheduler that are already shutting down.
+    const closingServer = hosted.close();
     hosted.closeAllConnections();
+    // A cleanup that failed is not a clean exit: `close()` reports a channel that would not stop,
+    // and swallowing it here would end the process at 0 over a resource still holding on.
+    void Promise.allSettled([closingServer, Promise.resolve(hooks.onShutdown?.())]).then((outcomes) => {
+      let code = exitCode;
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          log.error(`[fastagent] shutdown failed: ${String(outcome.reason)}`);
+          code = 1;
+        }
+      }
+      clearTimeout(deadline);
+      process.exit(code);
+    });
   };
   process.once("SIGINT", () => stop(0));
   process.once("SIGTERM", () => stop(0));
-
   hosted.listening.then(
     async (boundPort) => {
       try {
-        const runs = surface.longConnections.map((connection) => {
-          const run = connection.connect(abort.signal);
-          if (
-            run === null ||
-            typeof run !== "object" ||
-            typeof run.ready?.then !== "function" ||
-            typeof run.closed?.then !== "function"
-          ) {
-            throw new Error(`${connection.name} connect(signal) must return { ready: Promise, closed: Promise }`);
-          }
-          void run.closed.then(
-            () => {
-              if (!abort.signal.aborted) failStartup(new Error(`${connection.name} closed unexpectedly`));
-            },
-            (error) => {
-              if (!abort.signal.aborted) failStartup(new Error(`${connection.name} failed: ${String(error)}`));
-            },
-          );
-          return { connection, run };
-        });
-        await Promise.all(
-          runs.map(async ({ connection, run }) => {
-            await run.ready;
-            if (!abort.signal.aborted) log.info(`[fastagent] long connection ready: ${connection.name}`);
-          }),
-        );
-        // Shutdown raced startup: a pre-ready abort settles `ready` as cancellation, not readiness —
-        // stop() already owns the exit; don't mark ready or report a surface being torn down.
-        if (abort.signal.aborted) return;
-        surface.markReady();
-        process.send?.({
-          type: "ready",
-          port: boundPort,
-          routeChannels: surface.routeChannels,
-        });
-        for (const line of readyAddressLines(host, boundPort, surface.builtinInvoke)) log.info(line);
-        log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
-        if (surface.longConnections.length > 0) {
-          log.info(
-            `[fastagent] long connections: ${surface.longConnections.map((connection) => connection.name).join(", ")}`,
-          );
-        }
-        onListening?.(boundPort);
+        // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come
+        // up, and reporting ready before it does tells the supervisor (and --tunnel, and the
+        // operator) that a surface is live while a channel is dead.
+        await hooks.ready;
+        if (stopping) return;
+        hooks.onListening?.(boundPort);
       } catch (error) {
-        abort.abort();
-        const closing = hosted.close().catch(() => {});
-        hosted.closeAllConnections();
-        await closing;
         failStartup(error);
       }
     },
@@ -399,33 +248,4 @@ export function maybeTunnel(
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
   });
-}
-
-/**
- * Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
- * there are static schedules OR `selfSchedule` is on. Best-effort stop on process signals. Returns the
- * loaded schedules so a serving surface that needs them (the AgentCore adapter's fire binding) shares
- * ONE load instead of re-discovering. `externalClock` (AgentCore) arms no resident cron timers.
- */
-export async function startSchedules(
-  agentDir: string,
-  agent: Agent,
-  stateRoot: string,
-  selfSchedule: boolean,
-  options: { externalClock?: boolean } = {},
-): Promise<LoadedSchedule[]> {
-  const { schedules, failures } = await loadSchedules(agentDir).catch(failStartup);
-  reportModuleLoadFailures(failures);
-  if (schedules.length === 0 && !selfSchedule) return schedules;
-  const scheduler = createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock });
-  scheduler.start();
-  if (schedules.length > 0) {
-    log.info(
-      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
-    );
-  }
-  const stop = (): void => scheduler.stop();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
-  return schedules;
 }

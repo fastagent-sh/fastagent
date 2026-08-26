@@ -84,8 +84,7 @@ a dead connection — parse per the SSE spec (only `data:` lines carry events), 
 JSON.
 
 ```ts
-function nodeListener(handler: (req: Request) => Promise<Response>): (req, res) => void;
-function router(routes: Routes): ChannelHandler;
+function nodeListener(handler: ChannelHandler): (req, res) => void;
 // `host` is the bind address; unset binds all interfaces (what containers need).
 function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
   listening: Promise<number>;
@@ -101,7 +100,27 @@ type ChannelHandler = (req: Request) => Response | Promise<Response>;
 type Routes = Record<string, ChannelHandler>;
 ```
 
-Route keys are `"/path"` or `"METHOD /path"`.
+Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **literal**.
+
+Dispatch is a map lookup on the literal path, so "would these two fight over a request?" is string
+equality — a fact about the keys, not a prediction about a matcher. `:id` and `*` carry no pattern
+meaning here; they are ordinary characters, so a key containing one simply never matches.
+
+Startup refuses only what would cost ANOTHER route: two keys naming the same one (`"/x"` and
+`"GET /x"`), a route inside a mounted prefix, and any path a URL rewrites (`?`/`#`, `.`/`..`) —
+that request arrives under a different path, so the key never matches AND compares as distinct,
+hiding the collision.
+
+Paths are matched as they arrive, without percent-decoding — decoding would undo the normalisation
+`URL` performs, turning `%2F..%2F` back into `/../`. `HEAD` is answered from the `GET` route without
+the content (RFC 9110); writing an explicit `HEAD` route is allowed and takes precedence.
+
+A path that exists under another method answers 405, an unknown path 404; remote clients read that
+404 as version skew rather than as a fault.
+
+A handler owning a whole path prefix (the session control plane is the one) is mounted beside the
+routes rather than spelled as a key. `createAgentService` does that wiring; a route landing inside
+such a mount is refused at assembly, because the mount would answer requests aimed at it.
 
 ## pi assembly
 
@@ -146,6 +165,33 @@ function createPiAgentFromDefinition(
 Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` always passes the resolved workspace, which is the directory fastagent was pointed at (the agent dir's parent when the agent was found one level inside it, the agent dir itself when you aimed straight at it).
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
+
+### `createAgentService`
+
+```ts
+function createAgentService(
+  dir: string,
+  options?: { model?: string; authPath?: string; sessionsDir?: string; signal?: AbortSignal;
+              onChannelClosed?: (name: string, error?: unknown) => void },
+): Promise<{
+  handler: ChannelHandler;              // channels + control plane + health, composed
+  agent: Agent;
+  routes: Routes;                        // what is served, for a startup line
+  agentDir: string;
+  workspace: string;
+  channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
+  schedules: readonly LoadedSchedule[];
+  ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
+  control?: { token: string; prefix: string };  // the plane's bearer token, when sessionControl is on
+  announce(boundPort: number): void;     // write <stateRoot>/control.json for local discovery
+  close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
+                                         // to stop, or does not stop within 5s
+}>;
+```
+
+The assembly `dev`/`start` perform, without the process: no port bound, no signal handlers, no
+`process.exit`. This is the supported way to mount a whole agent inside an app; `nodeListener` and
+`serveNode` below are how you attach the handler it returns.
 
 ### `createPiAgentFromDir`
 
@@ -569,9 +615,14 @@ side, mount the bearer-authenticated routes (dev/start do this automatically whe
 `sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json`):
 
 ```ts
-import { controlRoutes, connectSessionControl } from "@fastagent-sh/fastagent/core";
+import { createAgentService } from "@fastagent-sh/fastagent";
+import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 
-const routes = controlRoutes(sessionControl, { token }); // GET/POST /control/*, SSE at /control/events
+// Set `sessionControl: true` in fastagent.config.*; the plane is then mounted on the service's
+// handler, owning the /control prefix — routes, preflight, 404/405 and a failing handler all carry
+// CORS headers, so a browser client can read every reply. SSE at /control/events.
+const service = await createAgentService("./my-agent");
+// service.control?.token is how you hand a client access
 
 // Client side — the SAME SessionControl interface, isomorphic to local:
 const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });

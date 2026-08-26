@@ -6,7 +6,7 @@
 import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
 import { collect } from "../../collect.ts";
-import type { ChannelModule } from "../../host/node.ts";
+import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { beginWork } from "../busy.ts";
