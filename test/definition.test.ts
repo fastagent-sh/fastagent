@@ -601,7 +601,7 @@ describe("create L2: the workspace roots the tools, the env reads the definition
 });
 
 describe("create L2: explicit tools replace the coding defaults", () => {
-  it("keeps omitted built-ins out of the runtime registry", async () => {
+  it("keeps omitted built-ins inactive — the model is never offered one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
     const { faux } = makeFaux();
