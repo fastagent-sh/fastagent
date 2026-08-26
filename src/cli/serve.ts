@@ -15,6 +15,7 @@ import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/ch
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
+import type { AgentSurface } from "../surface.ts";
 import { type PrefixMount, parseRouteKey, pathUnderPrefix, routeKeysConflict, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -281,6 +282,21 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
  * A wildcard bind is every interface, and naming one address there would understate it — but the curl
  * still needs one to dial, which is what `clientHost` gives (loopback for a wildcard, itself otherwise).
  */
+/**
+ * The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and
+ * what mounted. One function because both commands must say the same thing at the same moment —
+ * after readiness, never at socket bind.
+ */
+export function reportServing(surface: AgentSurface, host: string | undefined, boundPort: number): void {
+  process.send?.({ type: "ready", port: boundPort, routeChannels: surface.channels.routes });
+  const builtinInvoke = Object.keys(surface.routes).some((key) => key === "POST /invoke");
+  for (const line of readyAddressLines(host, boundPort, builtinInvoke)) log.info(line);
+  log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
+  if (surface.channels.longConnections.length > 0) {
+    log.info(`[fastagent] long connections: ${surface.channels.longConnections.join(", ")}`);
+  }
+}
+
 export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   const lines = [
@@ -302,7 +318,12 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
 export function serve(
   handler: ChannelHandler,
   bind: { port: number; host?: string },
-  hooks: { onListening?: (boundPort: number) => void; onShutdown?: () => Promise<void> | void } = {},
+  hooks: {
+    /** Awaited before anything is reported ready — see the listening handler. */
+    ready?: Promise<void>;
+    onListening?: (boundPort: number) => void;
+    onShutdown?: () => Promise<void> | void;
+  } = {},
 ): void {
   const { port, host } = bind;
   const hosted = serveNode(handler, { port, host });
@@ -325,7 +346,18 @@ export function serve(
   process.once("SIGINT", () => stop(0));
   process.once("SIGTERM", () => stop(0));
   hosted.listening.then(
-    (boundPort) => hooks.onListening?.(boundPort),
+    async (boundPort) => {
+      try {
+        // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come
+        // up, and reporting ready before it does tells the supervisor (and --tunnel, and the
+        // operator) that a surface is live while a channel is dead.
+        await hooks.ready;
+        if (stopping) return;
+        hooks.onListening?.(boundPort);
+      } catch (error) {
+        failStartup(error);
+      }
+    },
     (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
         // With a bind address the port is only taken ON THAT interface, so moving the bind is as valid

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { mountAgentcore, mountSessionControl, routesFor } from "../src/cli/serve.ts";
+import { mountAgentcore, mountSessionControl, reportServing, routesFor } from "../src/cli/serve.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
@@ -94,6 +94,33 @@ describe("mountAgentcore", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
+  });
+});
+
+describe("cli: the serving report", () => {
+  it("tells the dev supervisor it is ready, with the channels that mounted", () => {
+    // The watch supervisor waits for this message to mark a worker as having served; without it a
+    // restart loop never learns the previous boot worked, and --tunnel never starts. It has no other
+    // observer, which is how it was once deleted with every test still green.
+    const sent: unknown[] = [];
+    const original = process.send;
+    (process as { send?: unknown }).send = (m: unknown) => {
+      sent.push(m);
+      return true;
+    };
+    try {
+      reportServing(
+        {
+          routes: { "POST /telegram": () => new Response("x") },
+          channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
+        } as never,
+        "127.0.0.1",
+        8787,
+      );
+    } finally {
+      (process as { send?: unknown }).send = original;
+    }
+    expect(sent).toEqual([{ type: "ready", port: 8787, routeChannels: ["telegram"] }]);
   });
 });
 

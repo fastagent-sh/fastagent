@@ -190,6 +190,7 @@ function openAgentSurface(
   workspace: string;
   channels: { routes: string[]; longConnections: string[] };
   schedules: readonly LoadedSchedule[];
+  ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   announce(boundPort: number): void;     // write <stateRoot>/control.json for local discovery
   close(): Promise<void>;                // stop long connections and schedules
 }>;

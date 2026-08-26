@@ -132,6 +132,39 @@ describe("openAgentSurface", () => {
     await expect(surface.close()).resolves.toBeUndefined();
   });
 
+  it("a long connection that cannot come up rejects `ready` and tears the surface down", async () => {
+    // Not a degraded surface: a declared channel that is dead means this deployment is not serving
+    // what it was configured to serve. `ready` carries that to the caller — the CLI fails startup,
+    // an embedder gets a rejection it can handle — and nothing is left running behind it.
+    (globalThis as Record<string, unknown>).__faFailClosed = false;
+    const dir = await agentDir({
+      "channels/sock.mjs": `export default {
+        name: "sock",
+        connect: (ctx, signal) => ({
+          ready: Promise.reject(new Error("dial refused")),
+          closed: new Promise((resolve) => signal.addEventListener("abort", () => {
+            globalThis.__faFailClosed = true; resolve();
+          }, { once: true })),
+        }),
+      };`,
+    });
+    const surface = await openAgentSurface(dir);
+    await expect(surface.ready).rejects.toThrow(/dial refused/);
+    expect((globalThis as Record<string, unknown>).__faFailClosed).toBe(true); // torn down, not left up
+    // Health never flipped to 200: the surface must not advertise itself as serving.
+    expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
+  });
+
+  it("`ready` resolves immediately when there are no long connections", async () => {
+    const surface = await openAgentSurface(await agentDir());
+    try {
+      await expect(surface.ready).resolves.toBeUndefined();
+      expect((await surface.handler(new Request("http://h/health"))).status).toBe(200);
+    } finally {
+      await surface.close();
+    }
+  });
+
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
     await expect(openAgentSurface(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);

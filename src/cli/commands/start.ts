@@ -30,6 +30,7 @@ import {
   maybeTunnel,
   mountAgentcore,
   mountSessionControl,
+  reportServing,
   routesFor,
   serve,
   startSchedules,
@@ -227,7 +228,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     handler ?? router({}, planeMounts),
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
     {
+      ...(mounted ? { ready: mounted.ready } : {}),
       onListening: (p) => {
+        if (mounted) reportServing(mounted, host, p);
         announce(p);
         maybeTunnel(agentDir, mounted?.channels.routes ?? [], p, opts.tunnel ?? false, stateRoot);
       },

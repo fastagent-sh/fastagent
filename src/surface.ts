@@ -35,6 +35,10 @@ export interface AgentSurface {
   /** What actually mounted, for a startup line: channel files serving routes, and long connections. */
   channels: { routes: string[]; longConnections: string[] };
   schedules: readonly LoadedSchedule[];
+  /** Settles when every long connection is up — immediately when there are none. REJECTS if one
+   *  fails to come up, after closing the surface: a host must not report itself serving while a
+   *  declared channel is dead, and health answers 503 until this resolves. */
+  ready: Promise<void>;
   /** Write `<stateRoot>/control.json` so a local client can find the plane, once the port is known.
    *  Only meaningful when `sessionControl` is on and the surface has its own port; an embedder
    *  mounted inside a larger app usually distributes the token another way. */
@@ -146,13 +150,6 @@ export async function mountAgentSurface(
     );
     runs.push(run);
   }
-  // Health answers 503 until EVERY long connection is up, so a load balancer does not route into a
-  // surface whose socket-mode channels are still dialling. An abort before that settles `ready` as
-  // cancellation, not readiness — a surface being torn down must not report itself healthy.
-  void Promise.all(runs.map((run) => run.ready)).then(() => {
-    if (!abort.signal.aborted) routed.markReady();
-  });
-
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
@@ -167,6 +164,29 @@ export async function mountAgentSurface(
   if (options.signal?.aborted) await close();
   else options.signal?.addEventListener("abort", () => void close(), { once: true });
 
+  // Health answers 503 until EVERY long connection is up, so a load balancer does not route into a
+  // surface whose socket-mode channels are still dialling. An abort before that settles `ready` as
+  // cancellation, not readiness — a surface being torn down must not report itself healthy.
+  const ready = (async () => {
+    try {
+      await Promise.all(
+        runs.map(async (run, i) => {
+          await run.ready;
+          const name = routed.longConnections[i]?.name;
+          if (!abort.signal.aborted && name) log.info(`[fastagent] long connection ready: ${name}`);
+        }),
+      );
+    } catch (error) {
+      // A connection that cannot come up is a startup failure, not a degraded surface: tear the rest
+      // down before rejecting, so nothing is left running behind a caller that saw an error.
+      await close();
+      throw error;
+    }
+    if (!abort.signal.aborted) routed.markReady();
+  })();
+  // Observed here so a rejection is never unhandled; every caller still sees it through `ready`.
+  ready.catch(() => {});
+
   return {
     handler: router(withControl.routes, withControl.mounts),
     agent,
@@ -179,6 +199,7 @@ export async function mountAgentSurface(
       longConnections: routed.longConnections.map((c) => c.name),
     },
     schedules: scheduled.schedules,
+    ready,
     announce: withControl.announce,
     close,
   };

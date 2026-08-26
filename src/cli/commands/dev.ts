@@ -17,7 +17,7 @@ import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { assertTunnelBindable, maybeTunnel, serve } from "../serve.ts";
+import { assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface DevOptions {
@@ -98,7 +98,9 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     surface.handler,
     { port: portFlag ?? a.config.http?.port ?? 8787, host },
     {
+      ready: surface.ready,
       onListening: (p) => {
+        reportServing(surface, host, p);
         surface.announce(p);
         maybeTunnel(a.agentDir, surface.channels.routes, p, opts.tunnel ?? false, a.stateRoot);
       },

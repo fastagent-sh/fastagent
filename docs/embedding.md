@@ -98,8 +98,9 @@ import { openAgentSurface } from "@fastagent-sh/fastagent";
 
 const surface = await openAgentSurface("./my-agent");
 app.use("/agent", nodeListener(surface.handler));   // channels + control plane + health
+await surface.ready;      // long connections up; rejects if one cannot come up
 // ...
-await surface.close();   // stops long connections and schedules
+await surface.close();    // stops long connections and schedules
 ```
 
 `openAgentSurface` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
