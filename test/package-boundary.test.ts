@@ -17,7 +17,9 @@ const srcDir = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 function staticPackageGraph(entryRel: string): Set<string> {
   const visited = new Set<string>();
   const packages = new Set<string>();
-  const fromRe = /^\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']/gm;
+  // `import type` / `export type` are erased at compile time, so they cost a consumer nothing. A
+  // graph that counted them would report a dependency the published .js does not have.
+  const fromRe = /^\s*(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s*["']([^"']+)["']/gm;
   const bareRe = /^\s*import\s+["']([^"']+)["']/gm;
 
   const visit = (fileAbs: string): void => {
@@ -155,13 +157,13 @@ describe("the assembly's parts stay out of the public surface", () => {
     // This is what makes the two checks below sufficient. A `export *` — or `export type *`, which
     // leaves no runtime trace at all — would re-export whatever its target grows next, and neither a
     // name list nor a module import can see that coming.
-    for (const entry of ["core.ts", "pi.ts", "session.ts"]) {
+    for (const entry of ["core.ts", "node.ts", "pi.ts", "session.ts"]) {
       expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
     }
     // The root is the all-in-one, and may forward the curated three — but only those.
     const index = readFileSync(resolve(srcDir, "index.ts"), "utf8");
     const targets = [...index.matchAll(/export\s+(?:type\s+)?\*\s+from\s+"([^"]+)"/g)].map((m) => m[1]);
-    expect(targets.sort()).toEqual(["./core.ts", "./pi.ts", "./session.ts"]);
+    expect(targets.sort()).toEqual(["./core.ts", "./node.ts", "./pi.ts", "./session.ts"]);
   });
 
   for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
@@ -201,6 +203,14 @@ describe("the contracts depend on nothing", () => {
       expect([...staticPackageGraph(contract)]).toEqual([]);
     });
   }
+
+  it("the /core entry costs nothing to import — the Node binding is at /node", () => {
+    // A channel package or a second engine takes `/core` for the contract and the fetch-shaped kit.
+    // Before `/node` existed, that import also pulled a node:http bridge it would never call (and,
+    // earlier still, a cron library). ZERO is the property; `/node` is where the cost is paid.
+    expect([...staticPackageGraph("core.ts")]).toEqual([]);
+    expect([...staticPackageGraph("node.ts")]).toEqual(["@hono/node-server"]);
+  });
 
   it("...and the mechanism that serves them depends on one, for the node bridge only", () => {
     // The guard has teeth: serving pulls a package, contracts pull none. What it pulls is the
