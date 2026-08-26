@@ -254,6 +254,22 @@ describe("createAgentService", () => {
     await expect(service.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
   });
 
+  it("a connect() that throws rolls back the connections already open", async () => {
+    // The rollback path (a synchronous throw from `connect`), where the cleanup can ALSO fail: the
+    // caller must still get the reason the start failed, not the aftermath of tearing it down.
+    const dir = await agentDir({
+      "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
+        ready: Promise.resolve(),
+        closed: new Promise((_, reject) =>
+          signal.addEventListener("abort", () => reject(new Error("and cleanup failed too")), { once: true })),
+      }) };`,
+      "channels/b-throws.mjs": `export default { name: "b-throws", connect: () => { throw new Error("cannot dial"); } };`,
+    });
+    await expect(createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 })).rejects.toThrow(
+      /cannot dial/,
+    );
+  });
+
   it("a failed start reports the start failure, not the cleanup's", async () => {
     // Both fail here: the connection cannot come up AND cannot stop. The caller needs the first —
     // the second is the aftermath, and replacing one with the other hides the actual cause.

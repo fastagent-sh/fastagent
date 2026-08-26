@@ -7,8 +7,8 @@
  * calls `process.exit`) which a library mounted inside someone's app does not get to decide.
  * Everything else was parts: assemble the agent, discover channels, mount the control plane, start
  * schedules, open long connections, compose a router. An embedder had to know that list and get its
- * order right; getting it wrong is silent (a plane that 404s while advertising itself, a schedule
- * that never fires), and this repo has made that exact mistake in its own CLI.
+ * order right, and getting it wrong is silent: a plane that 404s while advertising itself, a
+ * schedule that never fires.
  *
  * So the assembly lives here, and `dev`/`start` are callers. AgentCore is the one exception, and a
  * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
@@ -381,24 +381,44 @@ export async function mountAgentService(
     ((name, error) =>
       log.error(`[fastagent] long connection ${name} ${error === undefined ? "closed" : `failed: ${String(error)}`}`));
   const runs: LongConnection[] = [];
-  // Rolled back on failure: a connection that throws while the ones before it are open, and the
-  // scheduler already ticking, would otherwise leave both running behind a rejected open().
+
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
+    // and a caller tearing down a test or a request-scoped service needs that to be true on return.
+    closing ??= (async () => {
+      abort.abort();
+      scheduled.stop();
+      options.signal?.removeEventListener("abort", onAbort);
+      unannounce?.(); // a stale discovery file would point a client at a dead port
+      // A failure to stop is the caller's to know about — swallowing it would let `close()` report
+      // success over a channel still holding on. Bounded, because a channel that ignores its abort
+      // signal must not hang the teardown either.
+      const { stuck, failures } = await closeWithin(
+        runs,
+        routed.longConnections.map((c) => c.name),
+        closeTimeoutMs,
+      );
+      if (stuck.length > 0) {
+        throw new Error(`long connection(s) did not stop within ${closeTimeoutMs}ms: ${stuck.join(", ")}`);
+      }
+      if (failures.length > 0) {
+        throw failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close");
+      }
+    })();
+    return closing;
+  };
+
+  // Rollback IS close(), plus keeping the original error: a failure to clean up is the aftermath,
+  // and replacing the reason the caller needs with it hides the actual cause.
   const rollback = async (error: unknown): Promise<never> => {
-    abort.abort();
-    scheduled.stop();
-    // Bounded and non-throwing: the original error is what the caller needs, so neither a connection
-    // that failed to stop nor one that never stops may replace it or delay it forever.
-    const { stuck, failures } = await closeWithin(
-      runs,
-      routed.longConnections.map((c) => c.name),
-      closeTimeoutMs,
+    await close().catch((closeError: unknown) =>
+      log.error(`[fastagent] cleanup after a failed start also failed: ${String(closeError)}`),
     );
-    for (const failure of failures) {
-      log.error(`[fastagent] cleanup after a failed start also failed: ${String(failure)}`);
-    }
-    if (stuck.length > 0) log.error(`[fastagent] did not stop within ${closeTimeoutMs}ms: ${stuck.join(", ")}`);
     throw error;
   };
+  // Rolled back on failure: a connection that throws while the ones before it are open, and the
+  // scheduler already ticking, would otherwise leave both running behind a rejected open().
   for (const connection of routed.longConnections) {
     let run: LongConnection;
     try {
@@ -426,32 +446,6 @@ export async function mountAgentService(
     );
     runs.push(run);
   }
-  let closing: Promise<void> | undefined;
-  const close = (): Promise<void> => {
-    // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
-    // and a caller tearing down a test or a request-scoped service needs that to be true on return.
-    closing ??= (async () => {
-      abort.abort();
-      scheduled.stop();
-      options.signal?.removeEventListener("abort", onAbort);
-      unannounce?.(); // a stale discovery file would point a client at a dead port
-      // A failure to stop is the caller's to know about — swallowing it would let `close()` report
-      // success over a channel still holding on. Bounded, because a channel that ignores its abort
-      // signal must not hang the teardown either.
-      const { stuck, failures } = await closeWithin(
-        runs,
-        routed.longConnections.map((c) => c.name),
-        closeTimeoutMs,
-      );
-      if (stuck.length > 0) {
-        throw new Error(`long connection(s) did not stop within ${closeTimeoutMs}ms: ${stuck.join(", ")}`);
-      }
-      if (failures.length > 0) {
-        throw failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close");
-      }
-    })();
-    return closing;
-  };
   // Detached by `close()`: a caller that closes services itself while holding one long-lived signal
   // would otherwise accumulate listeners, each pinning a whole service through its closure.
   // The signal path has no caller awaiting the promise, so a failure to stop would be an unhandled
