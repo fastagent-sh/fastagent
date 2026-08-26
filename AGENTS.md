@@ -23,12 +23,15 @@ Code truth is `src/`.
 ```
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
-├── surface.ts               # THE PRODUCT AS ONE CALL: a directory becomes a mounted HTTP handler
+├── service.ts               # THE PRODUCT AS ONE CALL: a directory becomes a live service
 │                           # (createAgentService). Before it, only the CLI could keep fastagent's
 │                           # "into a live service inside an app" promise — everything else was
 │                           # parts an embedder had to assemble in the right order, and getting it
 │                           # wrong is silent (a plane that 404s while advertising itself). The
-│                           # assembly lives here once; dev/start are callers, not the only path.
+│                           # assembly parts (routesFor / mountSessionControl / startSchedules) live
+│                           # here rather than in cli/, because a public entry must not reach into a
+│                           # directory that calls process.exit — guarded in package-boundary.test.
+│                           # dev/start are callers of this, not a second implementation.
 ├── channel.ts               # the Channel contract — the TRIGGER side of the product boundary
 │                           # (core.md §1), beside agent.ts and session.ts: ChannelModule / Routes /
 │                           # ChannelHandler / LongConnection*. Pure types, no host, no framework:
@@ -38,7 +41,7 @@ src/
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
-├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers incl. mountSessionControl — per-boot token + control.json discovery file; process side effects live in the command modules), fail.ts, commands/ (one module per command)
+├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel, agentcore mount — the ASSEMBLY moved to service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── bind.ts                  # THE reading of a bind address, as the six DIFFERENT questions it is:
 │                           # bindable (isBindAddress) / an address not a name (bindAddress, applied
