@@ -104,7 +104,9 @@ await surface.close();    // stops long connections and schedules
 ```
 
 `openAgentSurface` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
-bound, no signals are installed, nothing calls `process.exit`. Composing the same thing by hand
+bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
+`surface.control` carries the plane's bearer token so you can hand a client access without the
+CLI's `control.json` discovery file. Composing the same thing by hand
 means assembling routes, mounts, schedules and long connections in the right order — and getting it
 wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
 fires).

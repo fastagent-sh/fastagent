@@ -39,9 +39,16 @@ export interface AgentSurface {
    *  fails to come up, after closing the surface: a host must not report itself serving while a
    *  declared channel is dead, and health answers 503 until this resolves. */
   ready: Promise<void>;
-  /** Write `<stateRoot>/control.json` so a local client can find the plane, once the port is known.
-   *  Only meaningful when `sessionControl` is on and the surface has its own port; an embedder
-   *  mounted inside a larger app usually distributes the token another way. */
+  /** The control plane's bearer token and prefix, when `sessionControl` is on — how an embedder
+   *  hands access to a client without a discovery file. */
+  control?: { token: string; prefix: string };
+  /** Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the plane,
+   *  once the port is known. Optional: an embedder mounted inside a larger app has no port of its
+   *  own to describe and uses {@link AgentSurface.control} instead.
+   *
+   *  Removed by `close()`. Not by an `exit` handler: installing one is a decision about the whole
+   *  process, which a mounted library does not get to make. A hard exit therefore leaves the file
+   *  behind — advisory, overwritten by the next boot, and the client's own error stays honest. */
   announce(boundPort: number): void;
   /** Stop long connections and schedules. Idempotent; also runs when `options.signal` aborts. */
   close(): Promise<void>;
@@ -117,6 +124,7 @@ export async function mountAgentSurface(
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false);
 
   const abort = new AbortController();
+  let unannounce: (() => void) | undefined;
   const onClosed =
     options.onChannelClosed ??
     ((name, error) =>
@@ -142,10 +150,15 @@ export async function mountAgentSurface(
     }
     void run.closed.then(
       () => {
-        if (!abort.signal.aborted) onClosed(connection.name);
+        if (abort.signal.aborted) return;
+        // A channel that dies after coming up leaves the surface serving something it no longer has.
+        routed.setReady(false);
+        onClosed(connection.name);
       },
       (error: unknown) => {
-        if (!abort.signal.aborted) onClosed(connection.name, error);
+        if (abort.signal.aborted) return;
+        routed.setReady(false);
+        onClosed(connection.name, error);
       },
     );
     runs.push(run);
@@ -157,6 +170,7 @@ export async function mountAgentSurface(
     closing ??= (async () => {
       abort.abort();
       scheduled.stop();
+      unannounce?.(); // a stale discovery file would point a client at a dead port
       await Promise.allSettled(runs.map((run) => run.closed));
     })();
     return closing;
@@ -182,7 +196,7 @@ export async function mountAgentSurface(
       await close();
       throw error;
     }
-    if (!abort.signal.aborted) routed.markReady();
+    if (!abort.signal.aborted) routed.setReady(true);
   })();
   // Observed here so a rejection is never unhandled; every caller still sees it through `ready`.
   ready.catch(() => {});
@@ -200,7 +214,10 @@ export async function mountAgentSurface(
     },
     schedules: scheduled.schedules,
     ready,
-    announce: withControl.announce,
+    ...(withControl.control ? { control: withControl.control } : {}),
+    announce: (boundPort) => {
+      unannounce = withControl.announce(boundPort);
+    },
     close,
   };
 }

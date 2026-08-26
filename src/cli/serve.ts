@@ -35,7 +35,9 @@ export interface ServingSurface {
   routeChannels: string[];
   builtinInvoke: boolean;
   /** Marks the built-in health route ready after every long-connection channel first connects. */
-  markReady(): void;
+  /** Flip health between 200 and 503. Two-way on purpose: a long connection that dies after coming
+   *  up leaves the surface serving something it no longer has, and a load balancer should hear it. */
+  setReady(value: boolean): void;
 }
 
 /**
@@ -80,8 +82,8 @@ export async function routesFor(
     longConnections,
     routeChannels,
     builtinInvoke,
-    markReady() {
-      ready = true;
+    setReady(value: boolean) {
+      ready = value;
     },
   };
 }
@@ -122,33 +124,38 @@ export function mountSessionControl(
   control: SessionControl | undefined,
   stateRoot: string,
   options: { tunnel?: boolean; agent?: Agent; host?: string } = {},
-): { routes: Routes; mounts: PrefixMount[]; announce: (boundPort: number) => void } {
-  if (!control) return { routes, mounts: [], announce: () => {} };
+): {
+  routes: Routes;
+  mounts: PrefixMount[];
+  /** The plane's bearer token and prefix — how an embedder distributes access without a discovery file. */
+  control?: { token: string; prefix: string };
+  /** Write the local discovery file; returns its removal. Installs no signal handlers. */
+  announce: (boundPort: number) => () => void;
+} {
+  if (!control) return { routes, mounts: [], announce: () => () => {} };
   const token = crypto.randomUUID();
   const plane = controlRoutes(control, { token, agent: options.agent });
   assertNoControlPlaneCollision(routes, plane);
   return {
     routes,
     mounts: [plane],
+    control: { token, prefix: plane.prefix },
+    // Writes the discovery file and hands back its removal. It installs NO signal handlers: a
+    // library mounted inside someone's app must not change how that app exits — the CLI wires the
+    // returned cleanup into its own shutdown, an embedder into `close()`.
     announce: (boundPort) => {
-      // The state root normally exists (the opener mkdirs the sessions dir under it), but an
-      // external --sessions-dir leaves it uncreated — and announce runs inside serve's listening
-      // callback, where a throw is an unhandled rejection, not a one-line startup diagnostic.
       mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
       const path = join(stateRoot, "control.json");
-      // Atomic (tmp+rename, the state.ts pattern): attach re-reads this file exactly during the
-      // restart window — a torn read would be misdiagnosed as "serve gone".
-      const tmp = `${path}.tmp`;
+      const tmp = `${path}.${process.pid}.tmp`;
       writeFileSync(tmp, `${JSON.stringify({ url: `http://${clientHost(options.host)}:${boundPort}`, token })}\n`, {
         mode: 0o600,
       });
-      chmodSync(tmp, 0o600); // an existing file keeps its old mode on rewrite — pin it
       renameSync(tmp, path);
+      chmodSync(path, 0o600);
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
-      // The serve binds ALL interfaces by DEFAULT (containers require it), so /control/* is
-      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
-      // loudly, and the LAN path must not be the silent third way past the local trust story. A
-      // loopback bind closes exactly that reach, so it earns silence.
+      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths
+      // warn loudly, and the LAN path must not be the silent third way past the local trust story.
+      // A loopback bind closes exactly that reach, so it earns silence.
       const bind = classifyBind(options.host);
       if (bind !== "loopback") {
         log.warn(
@@ -158,39 +165,21 @@ export function mountSessionControl(
         );
       }
       if (options.tunnel) {
-        // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC
-        // (beyond even the LAN reach the mount already warned about). The operator asked for the tunnel (webhooks), but must not DISCOVER the control
-        // plane went public with it — say it loudly.
+        // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
         log.warn(
           "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +
             "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
         );
       }
-      // Best-effort lifecycle end: a clean exit removes the discovery file so a later `attach`
+      // Removed on shutdown so a stale file cannot point a client at a dead port: `attach` then
       // fails with "cannot read" (accurate) instead of a stale token's misleading 401/ECONNREFUSED.
-      const unlink = (): void => {
+      return () => {
         try {
           rmSync(path, { force: true });
         } catch {
-          /* the file is advisory — exit must not fail on it */
+          /* the file is advisory — shutdown must not fail on it */
         }
       };
-      // Signal handlers MUST NOT absorb termination: registering any listener disables Node's
-      // default kill, so clean up and RE-RAISE. The mechanism: `process.kill` delivery is ASYNC —
-      // it lands after the current emit completes, so every listener of this same emit (scheduler
-      // stop, tunnel close — regardless of registration order) runs first, and the re-raised
-      // signal then hits the default action because each `once` handler is already consumed. When
-      // some listener exits the process itself (the tunnel path calls process.exit(0)), the
-      // re-raise is harmless redundancy. Without this, the first Ctrl+C would leave the serve
-      // alive minus its control.json, and dev's watch restart (SIGTERM → wait for exit → respawn)
-      // would hang on a worker that never exits.
-      const unlinkAndReraise = (signal: NodeJS.Signals) => (): void => {
-        unlink();
-        process.kill(process.pid, signal);
-      };
-      process.once("SIGINT", unlinkAndReraise("SIGINT"));
-      process.once("SIGTERM", unlinkAndReraise("SIGTERM"));
-      process.once("exit", unlink);
     },
   };
 }

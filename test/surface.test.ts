@@ -4,7 +4,7 @@
  * These are the properties an embedder gets for free by calling one function instead of composing
  * the parts. Each was, at some point, composed wrong — inside this repo's own CLI.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -65,6 +65,56 @@ describe("openAgentSurface", () => {
       // 401, not 404: the plane is mounted and asking for the token it minted.
       expect((await surface.handler(new Request("http://h/control/capabilities"))).status).toBe(401);
       expect(surface.mounts.map((m) => m.prefix)).toEqual(["/control"]);
+    } finally {
+      await surface.close();
+    }
+  });
+
+  it("hands the embedder the plane's token, and cleans the discovery file up on close", async () => {
+    // An embedded surface has no port of its own to advertise, so `control` is how a client gets
+    // access at all. `announce` stays available for a host that does have one — and its file must
+    // not outlive the surface, or `attach` reads a stale token and gets a misleading 401.
+    const dir = await mkdtemp(join(tmpdir(), "fa-surface-token-"));
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
+    );
+    await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
+    const surface = await openAgentSurface(dir);
+    expect(surface.control?.prefix).toBe("/control");
+    expect(surface.control?.token).toMatch(/[0-9a-f-]{36}/);
+    // The token actually opens the plane it came from.
+    const res = await surface.handler(
+      new Request("http://h/control/capabilities", { headers: { authorization: `Bearer ${surface.control?.token}` } }),
+    );
+    expect(res.status).toBe(200);
+
+    surface.announce(8787);
+    const discovery = join(surface.agentDir, ".state", "control.json");
+    expect(JSON.parse(await readFile(discovery, "utf8"))).toMatchObject({ token: surface.control?.token });
+    await surface.close();
+    await expect(readFile(discovery, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("a connection that dies after coming up makes health say so again", async () => {
+    // Readiness is two-way: the surface would otherwise keep telling a load balancer it serves a
+    // channel it no longer has.
+    const dir = await agentDir({
+      "channels/sock.mjs": `let end; export default {
+        name: "sock",
+        connect: (ctx, signal) => ({
+          ready: Promise.resolve(),
+          closed: new Promise((resolve) => { globalThis.__faDropSock = resolve; }),
+        }),
+      };`,
+    });
+    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    try {
+      await surface.ready;
+      expect((await surface.handler(new Request("http://h/health"))).status).toBe(200);
+      (globalThis as unknown as { __faDropSock?: () => void }).__faDropSock?.(); // the channel drops
+      await new Promise((r) => setTimeout(r, 20));
+      expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
     } finally {
       await surface.close();
     }

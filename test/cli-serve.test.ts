@@ -36,7 +36,7 @@ describe("serving surface", () => {
     expect(surface.routeChannels).toEqual([]);
     const health = surface.routes["GET /health"]!;
     expect((await health(new Request("http://x/health"))).status).toBe(503);
-    surface.markReady();
+    surface.setReady(true);
     expect((await health(new Request("http://x/health"))).status).toBe(200);
   });
 });
