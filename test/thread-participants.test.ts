@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createThreadParticipants } from "../src/channels/thread-participants.ts";
+import { createThreadParticipants } from "../src/channels/kit/thread-participants.ts";
 import { log } from "../src/log.ts";
 
 const roots: string[] = [];

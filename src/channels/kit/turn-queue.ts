@@ -10,8 +10,8 @@
  * process-crash recovery, at-least-once). Exactly-once / deterministic step-replay (L2) is the K-axis
  * backend — an external queue with distributed locking (SPEC §11) — not this in-memory queue.
  */
-import { log } from "../log.ts";
-import { beginWork } from "./busy.ts";
+import { log } from "../../log.ts";
+import { beginWork } from "../busy.ts";
 
 export interface TurnQueue<T> {
   /** Schedule onto the session's serial chain (runs after that session's previous turn). */

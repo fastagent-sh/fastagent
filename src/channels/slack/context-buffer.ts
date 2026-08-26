@@ -1,5 +1,5 @@
 /**
- * Slack's half of the shared context buffer (mechanics + consume protocol: ../context-buffer.ts):
+ * Slack's half of the shared context buffer (mechanics + consume protocol: ../kit/context-buffer.ts):
  * the entry shape, its fold-line rendering, and buffered-file selection. Durable, bounded
  * unsummoned Slack discussion folded into the next answered turn in the same place.
  */
@@ -7,7 +7,7 @@ import {
   BUFFER_ATTACH_MAX,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
-} from "../context-buffer.ts";
+} from "../kit/context-buffer.ts";
 
 export interface SlackBufferEntry {
   sender: string;

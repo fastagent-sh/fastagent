@@ -12,7 +12,7 @@ import { dotEnvPath, loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
-import { isUnderDir } from "../../engines/pi/definition.ts";
+import { isUnderDir } from "../../paths.ts";
 import { displayPath } from "../../paths.ts";
 import {
   type ChannelKind,

@@ -18,7 +18,7 @@
  * well under it; longer answers overflow into follow-up messages (preview.ts owns that policy).
  */
 
-import { truncateCodePointPrefix } from "../text.ts";
+import { truncateCodePointPrefix } from "../kit/text.ts";
 
 /** The append-only answer element's id — shared by create (card.ts) and update (preview.ts). */
 export const ANSWER_ELEMENT_ID = "answer";

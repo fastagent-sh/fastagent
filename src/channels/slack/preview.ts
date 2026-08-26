@@ -13,7 +13,7 @@ import {
   revealedAnswer,
   summarizeToolArgs,
   toolLines,
-} from "../preview-kit.ts";
+} from "../kit/preview-kit.ts";
 import {
   type SlackApi,
   type SlackTarget,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -190,6 +190,43 @@ describe("the assembly's parts stay out of the public surface", () => {
       expect(named.filter((n) => ORPHAN_TYPES.includes(n))).toEqual([]);
     });
   }
+});
+
+describe("channels/kit is defined by who imports it", () => {
+  // The split is a FACT about consumers, not a filing preference: a kit file is one that only a
+  // platform directory uses. `wait-health.ts` and `registration.ts` live one level up precisely
+  // because deploy/ and cli/ use them too. Checking the direction of imports would not have caught
+  // that — this walks the actual importers.
+  const KIT = resolve(srcDir, "channels/kit");
+
+  const importersOf = (file: string): string[] => {
+    const found: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith(".ts") && readFileSync(p, "utf8").includes(`kit/${file}"`)) {
+          found.push(relative(srcDir, p));
+        }
+      }
+    };
+    walk(srcDir);
+    return found;
+  };
+
+  for (const file of readdirSync(KIT).filter((f) => f.endsWith(".ts"))) {
+    it(`${file} is used only by platform directories`, () => {
+      const strays = importersOf(file).filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p));
+      expect(strays).toEqual([]);
+    });
+  }
+
+  it("...and the serving mechanism beside it stays out of the kit", () => {
+    for (const file of ["serve.ts", "http.ts", "control.ts", "discover.ts"]) {
+      const src = readFileSync(resolve(srcDir, "channels", file), "utf8");
+      expect(src.includes("./kit/"), `${file} reaches into the kit`).toBe(false);
+    }
+  });
 });
 
 describe("the contracts depend on nothing", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTaskTracker } from "../src/channels/tasks.ts";
+import { createTaskTracker } from "../src/channels/kit/tasks.ts";
 
 describe("createTaskTracker", () => {
   it("drain waits for tracked tasks; settled tasks drop out", async () => {

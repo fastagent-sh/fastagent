@@ -25,7 +25,7 @@ import {
 } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
-import { isUnderDir } from "../src/engines/pi/definition.ts";
+import { isUnderDir } from "../src/paths.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 

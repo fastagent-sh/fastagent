@@ -4,7 +4,7 @@
  * un-summoned messages per conversation "place", kept under a char budget and folded into the next
  * answered turn in that place, so a summoned agent has the discussion it didn't see turn-by-turn.
  *
- * Channel-neutral and generic over the entry shape (like ../turn-store.ts): the channel supplies its
+ * Channel-neutral and generic over the entry shape (like ../kit/turn-store.ts): the channel supplies its
  * entry type, the shape validator (state files are an IO boundary — valid JSON of the WRONG shape
  * must degrade exactly like a corrupt file: warn + empty, never flow in as trusted data), the
  * fold-line renderer, and its log label. What stays per channel: the entry type itself, place-key
@@ -21,7 +21,7 @@
  *    message that arrives while the turn runs survives for the next answered turn (a whole-bucket
  *    delete would lose it).
  */
-import { log } from "../log.ts";
+import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
 /** Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded

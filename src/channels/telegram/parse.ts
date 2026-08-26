@@ -5,8 +5,8 @@
  * "decide" and prompt-building half; telegram.ts wires it in and owns the stateful lifecycle. Kept
  * separate so this layer tests as plain functions and reads without the factory's noise.
  */
-import { BUFFER_LINE_MAX_CHARS } from "../context-buffer.ts";
-import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../text.ts";
+import { BUFFER_LINE_MAX_CHARS } from "../kit/context-buffer.ts";
+import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
 export interface TelegramMessage {

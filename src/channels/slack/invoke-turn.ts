@@ -9,7 +9,7 @@ import {
   backgroundImagesManifest,
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
-} from "../invoke-turn-kit.ts";
+} from "../kit/invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
 import type { DownloadedSlackFile, SlackApi } from "./slack-api.ts";
 

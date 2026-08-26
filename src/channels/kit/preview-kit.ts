@@ -8,7 +8,7 @@
  * everything platform-independent lives here, so a new event type or a wording change lands in ONE
  * place instead of one hunk per channel.
  */
-import type { AgentEvent, Json } from "../agent.ts";
+import type { AgentEvent, Json } from "../../agent.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
 /** A terminal failure, as a channel hands it to its `onError`. */

@@ -3,7 +3,7 @@
  * either retries or reports. Structured status/code first, prose only as the last-resort ceiling.
  */
 import { describe, expect, it } from "vitest";
-import { attachedFilesManifest } from "../src/channels/invoke-turn-kit.ts";
+import { attachedFilesManifest } from "../src/channels/kit/invoke-turn-kit.ts";
 import { classifyRetryable, errorToTerminal, toTerminal } from "../src/engines/pi/turn-kit.ts";
 
 describe("classifyRetryable (structured signal first, prose as the ceiling)", () => {

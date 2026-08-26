@@ -13,12 +13,12 @@ import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
-import { createSeenRing } from "../seen.ts";
-import { createTaskTracker } from "../tasks.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "../state.ts";
-import { dispatchStop, isStopText } from "../stop-command.ts";
-import { createTurnQueue } from "../turn-queue.ts";
-import { createTurnStore } from "../turn-store.ts";
+import { createSeenRing } from "../kit/seen.ts";
+import { createTaskTracker } from "../kit/tasks.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
+import { dispatchStop, isStopText } from "../kit/stop-command.ts";
+import { createTurnQueue } from "../kit/turn-queue.ts";
+import { createTurnStore } from "../kit/turn-store.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
   collectFeishuBufferedAttachments,
@@ -31,7 +31,7 @@ import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
-import { createThreadParticipants } from "../thread-participants.ts";
+import { createThreadParticipants } from "../kit/thread-participants.ts";
 import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   FEISHU_MESSAGE_READ_REQUEST,

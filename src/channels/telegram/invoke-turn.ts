@@ -14,7 +14,7 @@ import {
   attributedFileName,
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
-} from "../invoke-turn-kit.ts";
+} from "../kit/invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
 

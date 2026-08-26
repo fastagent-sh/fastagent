@@ -18,7 +18,7 @@ import {
   revealedAnswer,
   thinkingLine,
   toolLines,
-} from "../preview-kit.ts";
+} from "../kit/preview-kit.ts";
 import { log } from "../../log.ts";
 import { TELEGRAM_MAX_TEXT, type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 

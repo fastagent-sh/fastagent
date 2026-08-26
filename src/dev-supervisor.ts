@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_NAMES, AGENT_MODELS_FILE, type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
-import { isUnderDir } from "./engines/pi/definition.ts";
+import { isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";

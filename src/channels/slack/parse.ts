@@ -1,5 +1,5 @@
-import { BUFFER_LINE_MAX_CHARS } from "../context-buffer.ts";
-import { codePointPrefix, truncateCodePointPrefix } from "../text.ts";
+import { BUFFER_LINE_MAX_CHARS } from "../kit/context-buffer.ts";
+import { codePointPrefix, truncateCodePointPrefix } from "../kit/text.ts";
 import type { SlackEventEnvelope, SlackMessageEvent, SlackRoute } from "./model.ts";
 
 export type { SlackEventEnvelope, SlackFile, SlackMessageEvent, SlackRoute } from "./model.ts";
