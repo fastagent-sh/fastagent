@@ -119,6 +119,7 @@ describe("serve: the route path language", () => {
     expect(mount("/files/*")).toThrow(/literal path/);
     expect(mount("control")).toThrow(/must start/);
     expect(mount("/control/")).toThrow(/no trailing slash/);
+    expect(mount("/")).toThrow(/owning every path IS that handler/); // the root is not a mount
     expect(mount("/control")).not.toThrow();
   });
 

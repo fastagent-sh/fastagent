@@ -85,7 +85,9 @@ export function routeKeysConflict(a: string, b: string): boolean {
  *  user. Kept OUT of {@link Routes}: mixing "a literal path" and "a prefix I own" in one dictionary
  *  is what forced every collision check to parse keys and predict the matcher's behaviour. */
 export interface PrefixMount {
-  /** Absolute, no trailing slash (`/control`). Owns `/control` and everything below it. */
+  /** Absolute, no trailing slash, and not `/` (`/control`). Owns `/control` and everything below it.
+   *  The root is excluded deliberately: a handler owning every path is that handler, and routing to
+   *  it through here would only add a table nothing can reach. */
   prefix: string;
   handler: ChannelHandler;
 }
@@ -118,6 +120,9 @@ export function pathUnderPrefix(path: string, prefix: string): boolean {
 export function router(routes: Routes, mounts: readonly PrefixMount[] = []): ChannelHandler {
   for (const [i, mount] of mounts.entries()) {
     assertRouteKey(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
+    if (mount.prefix === "/") {
+      throw new Error(`mount prefix "/" is invalid — a handler owning every path IS that handler; serve it directly`);
+    }
     if (mount.prefix.endsWith("/")) {
       throw new Error(`mount prefix "${mount.prefix}" is invalid — no trailing slash (write "/control")`);
     }
