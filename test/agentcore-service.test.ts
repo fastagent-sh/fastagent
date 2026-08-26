@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
-import { addWakeup, setWakeupsSink } from "../src/schedule/wakeups.ts";
 import { mountAgentcoreService } from "../src/channels/agentcore-service.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
@@ -103,47 +102,5 @@ describe("mountAgentcoreService", () => {
     // NOT asserted: that the scheduler's timers are gone. Fake timers would have to be installed
     // before the assembly, which deadlocks its filesystem IO, so the stop is unobservable from here
     // — see the note on close() in agentcore-service.ts.
-  });
-
-  it("releases the process-global wake sink on close", async () => {
-    // The sink is a module-level singleton. Before close() disarmed it, a stopped service kept
-    // catching the wake-ups of whatever ran next — in-process, that is the following test.
-    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`);
-    process.env.FASTAGENT_WAKE_SECRET = "s";
-    try {
-      const service = await mountAgentcoreService(await open(dir));
-      // Whoever registers AFTER us owns the sink; closing must not take theirs down with ours.
-      const caught: string[] = [];
-      const later = (root: string) => caught.push(root);
-      setWakeupsSink(later);
-      await service.close();
-
-      const other = await agentDir();
-      const added = addWakeup(other, { session: "s1", prompt: "later", fireAt: new Date(Date.now() + 3_600_000) });
-      expect(added.ok).toBe(true);
-      expect(caught).toEqual([other]); // still installed — close() cleared only its own
-    } finally {
-      delete process.env.FASTAGENT_WAKE_SECRET;
-      setWakeupsSink(undefined);
-    }
-  });
-
-  it("does not strand the global sink when the mount fails", async () => {
-    // The sink is installed before the schedules load. A failure after that point returns no
-    // service, so nobody is left holding a close() that could take it down.
-    const dir = await agentDir(
-      { schedules: "not a directory\n" },
-      `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`,
-    );
-    process.env.FASTAGENT_WAKE_SECRET = "s";
-    try {
-      await expect(mountAgentcoreService(await open(dir))).rejects.toThrow();
-      // Read what is installed WITHOUT overwriting first — installing a sink here would mask the
-      // leak instead of detecting it.
-      expect(setWakeupsSink(undefined)).toBeUndefined();
-    } finally {
-      delete process.env.FASTAGENT_WAKE_SECRET;
-      setWakeupsSink(undefined);
-    }
   });
 });

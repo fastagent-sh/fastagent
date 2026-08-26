@@ -20,6 +20,8 @@ import { exists } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
 
 import { isAgentcoreRuntime, mountAgentcoreService } from "../../channels/agentcore-service.ts";
+import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
+import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
@@ -123,8 +125,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // ONE branch for the whole posture. AgentCore assembles differently — lazy channels over a
   // pre-restore state mount, an external clock, no resident connections — but it yields the same
   // AgentService, so everything below this point is common.
+  // The wake-alarm sink is a PROCESS-global (schedule/wakeups.ts) — this process IS the AgentCore
+  // deployment, so the process entry installs it. A service can be closed; a global cannot be
+  // handed to something that can, without inventing an ownership the singleton does not have.
+  const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(opened, { wrapAgent: () => traced, control })
+    ? mountAgentcoreService(opened, { wrapAgent: () => traced, control, onStateReady })
     : mountAgentService(opened, {
         wrapAgent: () => traced,
         closeTimeoutMs: SHUTDOWN_GRACE_MS,
@@ -176,4 +182,25 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
   await mkdir(dirname(authPath), { recursive: true });
   await writeFile(authPath, bytes);
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
+}
+
+/**
+ * Install the wake-ALARM sink before the scheduler starts — the boot wake pump may advance a
+ * recurring entry, and that save must already re-arm its alarm. Returns the post-restore reconcile:
+ * running it at boot would read the pre-restore state mount, see no pending wake-ups, and conclude
+ * there is nothing to re-arm.
+ */
+function armWakeAlarms(stateRoot: string): (() => void) | undefined {
+  const secret = process.env.FASTAGENT_WAKE_SECRET;
+  if (!secret) {
+    log.warn(
+      `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
+        `(redeploy with the current template to fix)`,
+    );
+    return undefined;
+  }
+  const sink = createWakeAlarmSink({ secret });
+  setWakeupsSink(sink);
+  log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
+  return () => reconcileWakeAlarms(stateRoot, sink);
 }

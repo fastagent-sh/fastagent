@@ -19,8 +19,6 @@ import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
-import { reconcileWakeAlarms, createWakeAlarmSink } from "../schedule/wake-alarm.ts";
-import { clearWakeupsSink, setWakeupsSink } from "../schedule/wakeups.ts";
 import {
   type AgentService,
   type OpenedAgentDir,
@@ -37,6 +35,9 @@ import { routeKeysConflict, router } from "./serve.ts";
 export interface MountAgentcoreServiceOptions {
   /** Wrap the opened agent before anything binds to it (the CLI's turn trace). */
   wrapAgent?: (agent: Agent) => Agent;
+  /** Runs once the state snapshot is restored. The wake-alarm reconcile passes through here because
+   *  its sink is a PROCESS-global: the process entry owns that, not a service that can be closed. */
+  onStateReady?: () => void;
   control?: { tunnel?: boolean; host?: string };
 }
 
@@ -56,14 +57,8 @@ export async function mountAgentcoreService(
   // collision rule runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, stateRoot, { ...options.control, agent });
 
-  const wake = config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
-  // The sink is already installed, and it is PROCESS-global — a mount that throws here would leave
-  // it behind with no service to own it or take it down.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false, {
     externalClock: true,
-  }).catch((error: unknown) => {
-    wake?.disarm();
-    throw error;
   });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
@@ -86,7 +81,7 @@ export async function mountAgentcoreService(
       agent,
       stateRoot,
       schedules: scheduled.schedules,
-      onStateReady: wake?.reconcile,
+      onStateReady: options.onStateReady,
       lazyChannels,
     },
   );
@@ -115,37 +110,8 @@ export async function mountAgentcoreService(
       // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
       // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
-      // The sink is process-global. A service that outlived its close would keep catching wake-ups
-      // written by whatever runs next.
-      wake?.disarm();
       unannounce?.(); // a stale discovery file would point `attach` at a stopped service
     },
-  };
-}
-
-/**
- * Register the wake-ALARM sink before the scheduler starts — the boot wake pump may advance a
- * recurring entry, and that save must already re-arm its alarm. Returns the post-restore reconcile:
- * running it at boot would read the pre-restore mount, see no pending wake-ups, and conclude there
- * is nothing to re-arm.
- */
-function armWakeAlarms(stateRoot: string): { reconcile: () => void; disarm: () => void } | undefined {
-  const secret = process.env.FASTAGENT_WAKE_SECRET;
-  if (!secret) {
-    log.warn(
-      `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
-        `(redeploy with the current template to fix)`,
-    );
-    return undefined;
-  }
-  const sink = createWakeAlarmSink({ secret });
-  setWakeupsSink(sink);
-  log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
-  return {
-    reconcile: () => reconcileWakeAlarms(stateRoot, sink),
-    // Clear only what WE installed. The sink is a process-wide singleton while a service is an
-    // instance, so an unconditional clear would take down whoever registered after us.
-    disarm: () => clearWakeupsSink(sink),
   };
 }
 
