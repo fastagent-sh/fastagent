@@ -221,7 +221,14 @@ export async function mountAgentSurface(
     // contract lets a connection resolve it on abort. Returning normally would tell a caller its
     // channels are up while the surface is shut and health says 503.
     if (abort.signal.aborted) throw new Error("surface closed before it became ready");
-    if (!dropped) routed.setReady(true);
+    // A drop DURING startup fails it. `dropped` is only reachable here from the startup window —
+    // after this line `ready` has settled — and resolving while health is permanently 503 would
+    // hand the caller two contradictory answers about the same surface.
+    if (dropped) {
+      await close();
+      throw new Error("a long connection closed before startup completed");
+    }
+    routed.setReady(true);
   })();
   // Observed here so a rejection is never unhandled; every caller still sees it through `ready`.
   ready.catch(() => {});

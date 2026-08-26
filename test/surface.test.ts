@@ -122,9 +122,9 @@ describe("openAgentSurface", () => {
     }
   });
 
-  it("a drop during startup is not undone by a later connection coming up", async () => {
-    // Interleaving: one channel dies while another is still dialling. The late `ready` must not
-    // restore health — the surface is missing a declared channel from the drop onwards.
+  it("a drop during startup fails startup, whatever the other connections do", async () => {
+    // Interleaving: one channel dies while another is still dialling. Startup must FAIL — resolving
+    // `ready` while health is permanently 503 would answer the same question two ways.
     (globalThis as Record<string, unknown>).__faSlowReady = undefined;
     const dir = await agentDir({
       "channels/dies.mjs": `export default { name: "dies", connect: () => ({
@@ -138,7 +138,7 @@ describe("openAgentSurface", () => {
     try {
       await new Promise((r) => setTimeout(r, 20)); // let "dies" report closed
       (globalThis as unknown as { __faSlowReady?: () => void }).__faSlowReady?.();
-      await surface.ready;
+      await expect(surface.ready).rejects.toThrow(/closed before startup completed/);
       expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
     } finally {
       await surface.close();
