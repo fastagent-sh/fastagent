@@ -130,7 +130,7 @@ describe("the public subpaths do not reach into the CLI", () => {
 
 describe("the assembly's parts stay out of the public surface", () => {
   // Each of these was public once. They are how `createAgentService` builds a service, not something
-  // a caller reproduces — and every one of them re-exported is a promise we then have to keep.
+  // a caller reproduces — and every one re-exported is a promise we then have to keep.
   const PARTS = [
     "router",
     "createControlPlane",
@@ -145,20 +145,11 @@ describe("the assembly's parts stay out of the public surface", () => {
   ];
 
   for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
-    it(`${entry} exports no assembly part`, () => {
-      const source = readFileSync(resolve(srcDir, entry), "utf8");
-      // Value exports only — a TYPE of the same name may legitimately surface in a signature.
-      const values = [...source.matchAll(/export \{([^}]*)\}/g)]
-        .flatMap((m) => m[1]!.split(","))
-        .map((raw) => raw.trim())
-        .filter((raw) => raw !== "" && !raw.startsWith("type "))
-        .map((raw) =>
-          raw
-            .split(/\s+as\s+/)
-            .pop()!
-            .trim(),
-        );
-      expect(values.filter((v) => PARTS.includes(v))).toEqual([]);
+    it(`${entry} exports no assembly part`, async () => {
+      // The MODULE, not its source: a `export *` added later would satisfy a regex over the text
+      // while re-exporting everything behind it.
+      const mod = (await import(resolve(srcDir, entry))) as Record<string, unknown>;
+      expect(PARTS.filter((p) => p in mod)).toEqual([]);
     });
   }
 });
