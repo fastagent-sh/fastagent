@@ -246,8 +246,9 @@ An "auth service" is modeled as a provider — its per-request credential logic 
 
 For contract-only or channel code, import `@fastagent-sh/fastagent/core` — it loads no third-party
 package at all. `@fastagent-sh/fastagent/node` adds what needs a Node runtime (`mountAgentService`,
-`serveNode`, `nodeListener`); `@fastagent-sh/fastagent/pi` is the engine-specific assembly. The root
-entry re-exports all three, which is what every example above uses.
+`serveNode`, `nodeListener`); `@fastagent-sh/fastagent/session` is the control-plane contract; and
+`@fastagent-sh/fastagent/pi` is the engine-specific assembly. The root entry re-exports every one of
+them, which is what every example above uses.
 
 ## Where next
 

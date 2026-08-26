@@ -39,7 +39,7 @@ src/
 │                           # channel author must not pull node:http in behind a type import.
 ├── collect.ts               # caller-side stream helpers: collect (buffered consumption) + abortFirstIterator (shared cancellation protocol)
 ├── core.ts, node.ts,        # THE THREE LAYERS, split by what each costs to import: core (+session)
-│   pi.ts                 # is engine- AND runtime-neutral with ZERO packages; node adds what needs
+│   pi.ts                    # is engine- AND runtime-neutral with ZERO packages; node adds what needs
 │                           # a Node runtime (the assembly, the http binding); pi names an engine.
 │                           # Every layer's dependency list is asserted in package-boundary.test.ts.
 ├── index.ts                 # supported all-in-one entry (re-exports core + node + session + pi)
@@ -101,6 +101,8 @@ src/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
+│   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
+│   │                     # so it lives here and not under engines/ (#365)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── wait-health.ts       # SHARED readiness probe — channels AND deploy use it, so NOT in kit/
 │   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) — same reason
@@ -197,7 +199,7 @@ src/
     │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
     └── report.ts            # startup report (auth/model/skills/tools surface)
 test/                        # vitest; faux models by default + reusable SPEC conformance.
-  embedding.test.ts          # the docs/embedding.md snippets, run against REAL express/fastify (the
+└── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
                              # only reason they are devDeps): that path crosses the Node/Fetch seam
                              # through code we do not own, so a swap underneath can keep every unit
                              # test green while breaking the paste-this-in promise
@@ -212,7 +214,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 2. **Incremental migration.** Both directions. For users: adoption is incremental (existing definition → service, a few rough edges acceptable if the path forward is viable). For us: migrate systems in place; a full rewrite pauses maintenance and usually loses. If you *must* rewrite, say so explicitly and own the risk.
 3. **Clarity.** Surface the *right* level of complexity at the best interaction point — do not mask it in the name of "getting out of the way." The `docs/SPEC.md` contract is the narrative; keep plans, APIs, and names plain. It's never too early to share a draft (this is what the PR loop is for) — test changes with whoever has the most context before building.
 4. **Re-evaluate assumptions, constraints, trade-offs.** Engine-/model-/cloud-neutrality exists *because* these change. Old code wasn't bad — its constraints differed; gain that context before reshaping it. Be honest that most solutions carry negative trade-offs; refuse the ones that put us in a worse future position, and don't stack complex abstractions on complex systems.
-5. **Maximize option value.** Every change should unlock more future options, not fewer. This is the architecture's design center: a neutral contract, clear API boundaries, swappable implementations (the `PiSessionStore` port, `engines/pi/`), and carefully chosen dependencies. Prefer modular seams that let a piece be replaced over monoliths that must move as one.
+5. **Maximize option value.** Every change should unlock more future options, not fewer. This is the architecture's design center: a neutral contract, clear API boundaries, swappable implementations (the `PiSessionRecordStore` port, `engines/pi/`), and carefully chosen dependencies. Prefer modular seams that let a piece be replaced over monoliths that must move as one.
 
 ## Working rules specific to this repo
 

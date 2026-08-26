@@ -86,7 +86,7 @@ A channel adapter should depend on the engine-neutral `@fastagent-sh/fastagent/c
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
 
-Do not import from `src/engines/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract; `/core` also avoids loading the reference runtime.
+Do not import from `src/engines/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract, and `/core` loads no third-party package at all — which is what makes it the right dependency for a channel package.
 
 ## Minimal adapter
 
