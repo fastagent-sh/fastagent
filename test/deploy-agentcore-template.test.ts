@@ -10,7 +10,7 @@
  * resource that owns it, and does every reference point at something that exists.
  */
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parseDocument } from "yaml";
 import {
   type AgentcorePlanInput,
   type ScheduleFact,
@@ -19,7 +19,15 @@ import {
   scheduleResourceName,
 } from "../src/deploy/agentcore/plan.ts";
 
-/** CloudFormation's short tags are not standard YAML — resolve them to their long forms. */
+/**
+ * CloudFormation's short tags are not standard YAML — resolve them to their long forms.
+ *
+ * Only the SCALAR forms, which is all this template uses. `yaml` does not throw on a tag it cannot
+ * resolve; it warns and hands back the bare node. So `!Sub [template, vars]` would arrive as a plain
+ * array with `Fn::Sub` gone, and the reference check would quietly stop seeing what is inside it.
+ * `parseTemplate` therefore fails on any warning — whoever introduces a form not handled here gets a
+ * red test naming it, instead of silent loss of coverage.
+ */
 const CFN_TAGS = [
   { tag: "!Ref", resolve: (s: string) => ({ Ref: s }) },
   { tag: "!GetAtt", resolve: (s: string) => ({ "Fn::GetAtt": s }) },
@@ -49,7 +57,10 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
 
 function parseTemplate(over: Partial<AgentcorePlanInput> = {}): Template {
   const content = planAgentcoreDeploy(baseInput(over)).artifacts[0]!.content;
-  return parse(content, { customTags: CFN_TAGS }) as Template;
+  const doc = parseDocument(content, { customTags: CFN_TAGS });
+  const problems = [...doc.errors, ...doc.warnings].map((p) => p.message);
+  if (problems.length > 0) throw new Error(`template did not parse cleanly:\n${problems.join("\n")}`);
+  return doc.toJS() as Template;
 }
 
 /** Every `!Ref`/`!GetAtt` target anywhere in the tree, paired with where it was found. */
