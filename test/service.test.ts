@@ -9,11 +9,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createAgentService } from "../src/service.ts";
+import { createAgentService } from "../src/engines/pi/service.ts";
+import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
-async function agentDir(files: Record<string, string> = {}): Promise<string> {
+async function agentDir(
+  files: Record<string, string> = {},
+  config = `{ model: "openai-codex/gpt-5.5" }`,
+): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
-  await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+  await writeFile(join(dir, "fastagent.config.mjs"), `export default ${config};\n`);
   await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
   for (const [rel, body] of Object.entries(files)) {
     await mkdir(join(dir, rel, ".."), { recursive: true });
@@ -386,5 +390,20 @@ describe("createAgentService", () => {
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
     await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);
+  });
+});
+
+describe("the opener feeds the assembly what the assembly reads", () => {
+  it("carries selfSchedule from the config into the mounted service", async () => {
+    // MountableAgent asks for `selfSchedule`; a pi opener that does not answer leaves the wake pump
+    // off while the config says it is on — silently, since nothing else changes.
+    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`);
+    const opened = await createPiAgentFromDir(dir, { serving: true });
+    expect(opened.selfSchedule).toBe(true);
+  });
+
+  it("leaves it off when the config does not ask", async () => {
+    const opened = await createPiAgentFromDir(await agentDir(), { serving: true });
+    expect(opened.selfSchedule).toBe(false);
   });
 });

@@ -171,6 +171,9 @@ export async function createPiAgentFromDir(
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
+  /** Whether the agent schedules its own follow-up turns — read from the config, so a caller
+   *  assembling a service does not have to reach back into it (MountableAgent). */
+  selfSchedule: boolean;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
    *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
   toolNames: string[];
@@ -277,6 +280,7 @@ export async function createPiAgentFromDir(
     definition,
     sessions,
     sessionControl: hub?.control,
+    selfSchedule: config.selfSchedule ?? false,
     agentDir,
     workspace,
     config,

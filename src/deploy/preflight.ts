@@ -16,7 +16,7 @@ import { classifyBind } from "../bind.ts";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
-import { inspectChannels } from "../engines/pi/channel.ts";
+import { inspectChannels } from "../channels/discover.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";

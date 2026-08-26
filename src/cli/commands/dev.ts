@@ -7,7 +7,8 @@ import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
 
-import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
+import { reportModuleLoadFailures } from "../../log.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService } from "../../service.ts";

@@ -1,19 +1,16 @@
 /**
  * Channel discovery (the N axis, filesystem form). A channel file default-exports either the existing
  * route factory `(ctx) => Routes`, or an explicit long-connection module `{ name, connect(ctx, signal) }`.
+ *
+ * Engine-neutral, and living here rather than under `engines/` because of it: reading `channels/*.ts`
+ * is the Channel contract plus a directory, with no engine in sight.
  */
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import type {
-  ChannelContext,
-  ChannelModule,
-  LongConnection,
-  LongConnectionChannelModule,
-  Routes,
-} from "../../channel.ts";
-import { assertRouteKey, routeKeysConflict } from "../../channels/serve.ts";
-import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
-import { assertInsideAgentDir } from "../../paths.ts";
+import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
+import { assertRouteKey, routeKeysConflict } from "./serve.ts";
+import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../loader.ts";
+import { assertInsideAgentDir } from "../paths.ts";
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
 export interface ChannelCollision {

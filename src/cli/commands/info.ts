@@ -1,7 +1,7 @@
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { discoverChannelFiles } from "../../engines/pi/channel.ts";
+import { discoverChannelFiles } from "../../channels/discover.ts";
 import {
   defaultSessionsDir,
   loadConfig,
@@ -14,7 +14,8 @@ import { createPiModelRuntime } from "../../engines/pi/models.ts";
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
-import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
+import { reportModuleLoadFailures } from "../../log.ts";
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";

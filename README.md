@@ -157,6 +157,15 @@ const agent = createPiAgent({
 
 The root export intentionally contains the supported surface only.
 
+Engine-neutral and runtime-neutral are different properties, and the entries are layered by them —
+each layer drops one, and every layer's dependency list is asserted in CI:
+
+| | engine-neutral | runtime-neutral | costs |
+|---|---|---|---|
+| `/core`, `/session` | yes | yes | nothing |
+| `/node` | yes | no (filesystem, clock, environment) | `@hono/node-server`, `croner` |
+| `/pi` | no | no | the pi runtime |
+
 `Provider` and `ProviderAuth` are exported as types because our options name them; the factory that
 builds one, `createProvider`, comes from `@earendil-works/pi-ai` — add it as a direct dependency when
 you register a custom provider.
@@ -164,7 +173,7 @@ you register a custom provider.
 | Area | Examples | Stability |
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
-| Directory → service | `createAgentService`, `AgentService` | The supported way to mount an agent directory in an app |
+| Directory → service | `createAgentService` (pi opener), `mountAgentService` + `MountableAgent` (neutral assembly), `AgentService` | The supported way to mount an agent directory in an app |
 | Mounting | `createInvokeHandler`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
 | Node binding | `nodeListener`, `serveNode` (from `/node`) | The one runtime-specific piece; see below |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
@@ -175,7 +184,7 @@ you register a custom provider.
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
 - `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`). **Zero third-party dependencies**, enforced by test;
-- `@fastagent-sh/fastagent/node` — `serveNode` / `nodeListener`, the `node:http` ↔ Fetch binding. Separate because it is the only runtime-specific piece, and the only one that costs a package;
+- `@fastagent-sh/fastagent/node` — the engine-neutral pieces that need a Node runtime: `mountAgentService` (the assembly), `serveNode` / `nodeListener` (the `node:http` ↔ Fetch binding);
 - `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;

@@ -204,12 +204,15 @@ describe("the contracts depend on nothing", () => {
     });
   }
 
-  it("the /core entry costs nothing to import — the Node binding is at /node", () => {
-    // A channel package or a second engine takes `/core` for the contract and the fetch-shaped kit.
-    // Before `/node` existed, that import also pulled a node:http bridge it would never call (and,
-    // earlier still, a cron library). ZERO is the property; `/node` is where the cost is paid.
+  it("the three neutral layers each cost exactly what their name promises", () => {
+    // Engine-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by
+    // them: /core has both, /node drops the second (a filesystem, a clock, an environment), /pi
+    // drops both. Each layer's package list is that statement, checkable.
     expect([...staticPackageGraph("core.ts")]).toEqual([]);
-    expect([...staticPackageGraph("node.ts")]).toEqual(["@hono/node-server"]);
+    expect([...staticPackageGraph("node.ts")].sort()).toEqual(["@hono/node-server", "croner"]);
+    // ...and neither neutral layer names an engine (the engine-neutrality suite above covers this
+    // for core; node now carries the assembly, so it needs the same bar).
+    expect([...staticPackageGraph("node.ts")].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
   });
 
   it("...and the mechanism that serves them depends on one, for the node bridge only", () => {

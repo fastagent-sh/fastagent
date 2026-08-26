@@ -23,15 +23,13 @@ import { createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { parseRouteKey, pathUnderPrefix } from "./channels/serve.ts";
-import { type LoadedLongConnectionChannel, loadChannels } from "./engines/pi/channel.ts";
-import { reportModuleLoadFailures } from "./engines/pi/report.ts";
+import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { type PrefixMount, router } from "./channels/serve.ts";
-import { createPiAgentFromDir } from "./engines/pi/open.ts";
-import { log } from "./log.ts";
+import { log, reportModuleLoadFailures } from "./log.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. A channel that ignores its
@@ -309,33 +307,26 @@ export interface MountAgentServiceOptions {
   closeTimeoutMs?: number;
 }
 
-export interface CreateAgentServiceOptions extends MountAgentServiceOptions {
-  model?: string;
-  authPath?: string;
-  sessionsDir?: string;
-}
-
 /**
- * Open an agent directory as a live service: one handler, mounted wherever you serve.
- *
- * ```ts
- * const service = await createAgentService("./my-agent");
- * app.use("/agent", nodeListener(service.handler));
- * ```
+ * What the assembly needs from an opened agent directory — the whole of it. Spelled as its own type
+ * rather than an engine's return shape: every field here is either the SPEC contract or a path, so
+ * an engine that is not pi can satisfy it without either side knowing about the other.
  */
-export async function createAgentService(dir: string, options: CreateAgentServiceOptions = {}): Promise<AgentService> {
-  const opened = await createPiAgentFromDir(dir, {
-    ...(options.model !== undefined ? { model: options.model } : {}),
-    ...(options.authPath !== undefined ? { authPath: options.authPath } : {}),
-    ...(options.sessionsDir !== undefined ? { sessionsDir: options.sessionsDir } : {}),
-    serving: true, // a mounted service is long-running: the scheduler poller runs
-  });
-  return mountAgentService(opened, options);
+export interface MountableAgent {
+  agent: Agent;
+  /** The definition dir: where channels/, tools/ and schedules/ are read from. */
+  agentDir: string;
+  /** The agent's cwd. */
+  workspace: string;
+  /** Where durable state lives (channel state, sessions, schedule fires). */
+  stateRoot: string;
+  /** Present iff this agent published a control plane. */
+  sessionControl?: SessionControl;
+  /** Whether the agent schedules its own follow-up turns. REQUIRED, not optional-with-a-default:
+   *  an engine that forgot it would turn self-scheduling off silently, which is exactly the bug
+   *  this type was introduced with. */
+  selfSchedule: boolean;
 }
-
-/** An already-opened directory — `createPiAgentFromDir`'s result. The CLI opens first so it can
- *  print its startup report, then mounts through the same assembly an embedder gets. */
-export type OpenedAgentDir = Awaited<ReturnType<typeof createPiAgentFromDir>>;
 
 /**
  * The assembly itself, over an already-opened directory: channels, the control plane, schedules and
@@ -346,10 +337,10 @@ export type OpenedAgentDir = Awaited<ReturnType<typeof createPiAgentFromDir>>;
  * one assembly rather than one per caller.
  */
 export async function mountAgentService(
-  opened: OpenedAgentDir,
+  opened: MountableAgent,
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, workspace, stateRoot, config, sessionControl } = opened;
+  const { agentDir, workspace, stateRoot, sessionControl } = opened;
   // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the
   // same agent, so this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
@@ -366,7 +357,7 @@ export async function mountAgentService(
   // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
   // with no service for the caller to close. Free to order correctly; expensive to discover later.
   const handler = router(withControl.routes, withControl.mounts);
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, config.selfSchedule ?? false);
+  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule);
 
   const abort = new AbortController();
   let unannounce: (() => void) | undefined;
