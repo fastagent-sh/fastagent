@@ -162,7 +162,14 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     ? mountSessionControl({}, sessionControl, stateRoot, { ...control, agent: traced })
     : undefined;
   const planeMounts = mounted?.mounts ?? withControl?.mounts ?? [];
-  const announce = mounted?.announce ?? withControl?.announce ?? (() => {});
+  // AgentCore has no AgentSurface to own the discovery file, so its cleanup is held here and wired
+  // into the same shutdown hook — a stale control.json points `attach` at a stopped service.
+  let unannounce: (() => void) | undefined;
+  const announce = mounted
+    ? (port: number) => mounted.announce(port)
+    : (port: number) => {
+        unannounce = withControl?.announce(port);
+      };
   // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
   // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
   // alarm. The secret arrives via the stack (FASTAGENT_WAKE_SECRET); without it the deployment
@@ -236,7 +243,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         announce(p);
         maybeTunnel(agentDir, mounted?.channels.routes ?? [], p, opts.tunnel ?? false, stateRoot);
       },
-      ...(mounted ? { onShutdown: () => mounted.close() } : {}),
+      onShutdown: () => (mounted ? mounted.close() : unannounce?.()),
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
