@@ -396,7 +396,10 @@ export async function startSchedules(
   selfSchedule: boolean,
   options: { externalClock?: boolean } = {},
 ): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
-  const { schedules, failures } = await loadSchedules(agentDir).catch(failStartup);
+  // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library
+  // that calls process.exit takes a decision (degrade? retry? stop?) that belongs to its host. The
+  // CLI catches at its own boundary.
+  const { schedules, failures } = await loadSchedules(agentDir);
   reportModuleLoadFailures(failures);
   if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
   const scheduler = createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock });

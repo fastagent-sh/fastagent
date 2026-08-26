@@ -187,7 +187,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   }
   // Only AgentCore starts its own: the shared assembly did it for every other deployment.
   const scheduled = agentcore
-    ? await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, { externalClock: true })
+    ? await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false, {
+        externalClock: true,
+      }).catch(failStartup)
     : undefined;
   if (scheduled) {
     process.once("SIGINT", scheduled.stop);

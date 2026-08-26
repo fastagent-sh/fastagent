@@ -215,6 +215,15 @@ describe("openAgentSurface", () => {
     }
   });
 
+  it("a broken schedule rejects instead of killing the host process", async () => {
+    // The library must not decide an embedder's app should die. `startSchedules` used to exit(1)
+    // here, which for a mounted surface means taking down someone else's server. A single bad
+    // schedule FILE is isolated on purpose (G2); this is the whole-load fault that is not.
+    const dir = await agentDir();
+    await writeFile(join(dir, "schedules"), "not a directory\n"); // readdir fails on it
+    await expect(openAgentSurface(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
+  });
+
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
     await expect(openAgentSurface(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);
