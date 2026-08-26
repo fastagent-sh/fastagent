@@ -100,6 +100,34 @@ describe("engine neutrality: the core subpath + channel spine import no engine p
   });
 });
 
+describe("the public subpaths do not reach into the CLI", () => {
+  // A published entry pulling `cli/` drags process-level decisions (`failStartup` calls
+  // `process.exit`) into a library someone mounts inside their own app. It also reads as permission
+  // to put shared assembly there — which is how `service.ts` came to import `cli/serve.ts` before
+  // the parts moved out.
+  const relativeGraph = (entryRel: string): Set<string> => {
+    const seen = new Set<string>();
+    const visit = (fileAbs: string): void => {
+      if (seen.has(fileAbs)) return;
+      seen.add(fileAbs);
+      for (const m of readFileSync(fileAbs, "utf8").matchAll(
+        /^\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']/gm,
+      )) {
+        const spec = m[1];
+        if (spec?.startsWith("./") || spec?.startsWith("../")) visit(resolve(dirname(fileAbs), spec));
+      }
+    };
+    visit(resolve(srcDir, entryRel));
+    return seen;
+  };
+  for (const entry of ["index.ts", "core.ts", "pi.ts", "session.ts"]) {
+    it(`${entry} reaches no cli/ module`, () => {
+      const cli = [...relativeGraph(entry)].filter((f) => f.includes(`${srcDir}/cli/`));
+      expect(cli.map((f) => f.replace(`${srcDir}/`, ""))).toEqual([]);
+    });
+  }
+});
+
 describe("the contracts depend on nothing", () => {
   // agent.ts (what an engine implements), channel.ts (what a trigger implements) and session.ts (the
   // serving control plane) are the three product contracts — pure types, zero packages. The bar is

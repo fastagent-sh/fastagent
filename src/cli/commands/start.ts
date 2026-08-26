@@ -12,7 +12,13 @@ import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { mountAgentService } from "../../service.ts";
+import {
+  assertNoControlPlaneCollision,
+  mountAgentService,
+  mountSessionControl,
+  routesFor,
+  startSchedules,
+} from "../../service.ts";
 import { router } from "../../channels/serve.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
@@ -26,15 +32,11 @@ import type { RouteSurface } from "../../channels/agentcore.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
   SHUTDOWN_GRACE_MS,
-  assertNoControlPlaneCollision,
   assertTunnelBindable,
   maybeTunnel,
   mountAgentcore,
-  mountSessionControl,
   reportServing,
-  routesFor,
   serve,
-  startSchedules,
 } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 

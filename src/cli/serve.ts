@@ -2,91 +2,26 @@
  * The serving spine shared by `dev` (its worker) and `start`: channel assembly, Node HTTP binding,
  * long-connection lifecycle, scheduler lifecycle, and the optional Cloudflare quick tunnel.
  */
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {} from "node:path";
 import type { Agent } from "../agent.ts";
 import { createStateSync } from "../channels/agentcore-state.ts";
 import { type RouteSurface, agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
-import { createControlPlane } from "../channels/control.ts";
-import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
-import { text } from "../channels/respond.ts";
-import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
-import { reportModuleLoadFailures } from "../engines/pi/report.ts";
+import {} from "../channels/control.ts";
+import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
+import {} from "../channels/respond.ts";
+import {} from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import type { AgentService } from "../service.ts";
-import { type PrefixMount, parseRouteKey, pathUnderPrefix, routeKeysConflict, serveNode } from "../channels/serve.ts";
+import { routeKeysConflict, serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { loadSchedules } from "../schedule/discover.ts";
+import {} from "../schedule/discover.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
-import { createScheduler, fireScheduleOnce } from "../schedule/scheduler.ts";
-import type { SessionControl } from "../session.ts";
+import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
-
-export interface ServingSurface {
-  routes: Routes;
-  /** Prefix-owning handlers mounted beside the routes (the session control plane). */
-  mounts?: readonly PrefixMount[];
-  longConnections: LoadedLongConnectionChannel[];
-  /** Route-channel basenames; the tunnel registers only this subset. */
-  routeChannels: string[];
-  builtinInvoke: boolean;
-  /** Marks the built-in health route ready after every long-connection channel first connects. */
-  /** Flip health between 200 and 503. Two-way on purpose: a long connection that dies after coming
-   *  up leaves the surface serving something it no longer has, and a load balancer should hear it. */
-  setReady(value: boolean): void;
-}
-
-/**
- * The surface this deployment serves: default `GET /health` plus discovered channels, or the default
- * POST `/invoke` only when neither a route nor a long-connection channel was declared.
- */
-export async function routesFor(
-  agentDir: string,
-  agent: Agent,
-  stateRoot: string,
-  control: SessionControl | undefined,
-  options: { builtinInvoke?: boolean } = {},
-): Promise<ServingSurface> {
-  const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
-    agent,
-    stateRoot,
-    control,
-  });
-  for (const c of collisions) {
-    console.error(
-      `[fastagent] warn: channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`,
-    );
-  }
-  reportModuleLoadFailures(failures);
-  if (failures.length > 0 || collisions.length > 0) {
-    throw new Error(
-      `channel setup is invalid (${failures.length} load failure(s), ${collisions.length} route collision(s)) — ` +
-        `fix it, or rename an intentionally disabled file to *.disabled`,
-    );
-  }
-  const builtinInvoke =
-    options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
-  const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
-  const healthCovered = Object.keys(channels).some((key) => {
-    const entry = parseRouteKey(key);
-    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
-  });
-  let ready = longConnections.length === 0;
-  const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
-  return {
-    routes: healthCovered ? channels : { "GET /health": health, ...channels },
-    longConnections,
-    routeChannels,
-    builtinInvoke,
-    setReady(value: boolean) {
-      ready = value;
-    },
-  };
-}
 
 /**
  * Mount the session control plane (`/control/*`) when the agent enabled it
@@ -98,91 +33,6 @@ export async function routesFor(
  * (routesFor): `sessionControl` is an explicit opt-in, so declaring both is a configuration error,
  * and silently shadowing either side would serve a surface the author didn't write.
  */
-/**
- * Refuse channel routes the control plane would swallow.
- *
- * `router` refuses this too, and would catch it a moment later; this exists for the sentence, not
- * the check — an author who lands a route under `/control` needs to hear about `sessionControl`,
- * which the host has no way to mention. Both ask {@link pathUnderPrefix}, so there is one rule with
- * two wordings, not two rules.
- *
- * Called from BOTH mount points: here at boot, and again on agentcore's lazy path, whose channels
- * load after this ran against an empty base.
- */
-export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: PrefixMount): void {
-  const collisions = Object.keys(channelRoutes).filter((key) => pathUnderPrefix(parseRouteKey(key).path, plane.prefix));
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
-        `rename the channel route or disable sessionControl in fastagent.config`,
-    );
-  }
-}
-
-export function mountSessionControl(
-  routes: Routes,
-  control: SessionControl | undefined,
-  stateRoot: string,
-  options: { tunnel?: boolean; agent?: Agent; host?: string } = {},
-): {
-  routes: Routes;
-  mounts: PrefixMount[];
-  /** The plane's bearer token and prefix — how an embedder distributes access without a discovery file. */
-  control?: { token: string; prefix: string };
-  /** Write the local discovery file; returns its removal. Installs no signal handlers. */
-  announce: (boundPort: number) => () => void;
-} {
-  if (!control) return { routes, mounts: [], announce: () => () => {} };
-  const token = crypto.randomUUID();
-  const plane = createControlPlane(control, { token, agent: options.agent });
-  assertNoControlPlaneCollision(routes, plane);
-  return {
-    routes,
-    mounts: [plane],
-    control: { token, prefix: plane.prefix },
-    // Writes the discovery file and hands back its removal. It installs NO signal handlers: a
-    // library mounted inside someone's app must not change how that app exits — the CLI wires the
-    // returned cleanup into its own shutdown, an embedder into `close()`.
-    announce: (boundPort) => {
-      mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
-      const path = join(stateRoot, "control.json");
-      const tmp = `${path}.${process.pid}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify({ url: `http://${clientHost(options.host)}:${boundPort}`, token })}\n`, {
-        mode: 0o600,
-      });
-      renameSync(tmp, path);
-      chmodSync(path, 0o600);
-      log.info(`[fastagent] session control on /control/* (token in ${path})`);
-      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths
-      // warn loudly, and the LAN path must not be the silent third way past the local trust story.
-      // A loopback bind closes exactly that reach, so it earns silence.
-      const bind = classifyBind(options.host);
-      if (bind !== "loopback") {
-        log.warn(
-          `[fastagent] the port binds ${bind === "wildcard" ? "all interfaces" : `${options.host} (off this machine)`}: ` +
-            "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
-            "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs: design §14)",
-        );
-      }
-      if (options.tunnel) {
-        // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
-        log.warn(
-          "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +
-            "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
-        );
-      }
-      // Removed on shutdown so a stale file cannot point a client at a dead port: `attach` then
-      // fails with "cannot read" (accurate) instead of a stale token's misleading 401/ECONNREFUSED.
-      return () => {
-        try {
-          rmSync(path, { force: true });
-        } catch {
-          /* the file is advisory — shutdown must not fail on it */
-        }
-      };
-    },
-  };
-}
 
 /**
  * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) over the serving routes —
@@ -400,36 +250,4 @@ export function maybeTunnel(
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
   });
-}
-
-/**
- * Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
- * there are static schedules OR `selfSchedule` is on. Best-effort stop on process signals. Returns the
- * loaded schedules so a serving surface that needs them (the AgentCore adapter's fire binding) shares
- * ONE load instead of re-discovering. `externalClock` (AgentCore) arms no resident cron timers.
- */
-export async function startSchedules(
-  agentDir: string,
-  agent: Agent,
-  stateRoot: string,
-  selfSchedule: boolean,
-  options: { externalClock?: boolean } = {},
-): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
-  // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library
-  // that calls process.exit takes a decision (degrade? retry? stop?) that belongs to its host. The
-  // CLI catches at its own boundary.
-  const { schedules, failures } = await loadSchedules(agentDir);
-  reportModuleLoadFailures(failures);
-  if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
-  const scheduler = createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock });
-  scheduler.start();
-  if (schedules.length > 0) {
-    log.info(
-      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
-    );
-  }
-  // Returned rather than bound to process signals here: this runs inside an embedder's app as well
-  // as the CLI, and a library that installs SIGINT handlers is deciding something that is not its
-  // to decide. `runStart`/`runDev` wire it to their own shutdown.
-  return { schedules, stop: () => scheduler.stop() };
 }

@@ -740,7 +740,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const { mkdtemp, rm, readFile, stat } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { assertNoControlPlaneCollision, mountSessionControl } = await import("../src/cli/serve.ts");
+    const { assertNoControlPlaneCollision, mountSessionControl } = await import("../src/service.ts");
     const root = await mkdtemp(join(tmpdir(), "fa-ctl-mount-"));
     const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
     try {
@@ -790,7 +790,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const { mkdtemp, rm, readFile } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { mountSessionControl } = await import("../src/cli/serve.ts");
+    const { mountSessionControl } = await import("../src/service.ts");
     const { log } = await import("../src/log.ts");
     const root = await mkdtemp(join(tmpdir(), "fa-ctl-bind-"));
     try {
