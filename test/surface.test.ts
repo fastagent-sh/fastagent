@@ -228,6 +228,19 @@ describe("openAgentSurface", () => {
     expect((await surface.handler(new Request("http://h/health"))).status).toBe(503);
   });
 
+  it("a connection that dies while dialling fails startup instead of hanging it", async () => {
+    // The contract puts a terminal failure on `closed`, and a channel that dies before connecting
+    // may never settle `ready`. Waiting on `ready` alone hangs open() forever with no diagnosis.
+    const dir = await agentDir({
+      "channels/stuck.mjs": `export default { name: "stuck", connect: () => ({
+        ready: new Promise(() => {}),
+        closed: Promise.reject(new Error("dial refused")),
+      }) };`,
+    });
+    const surface = await openAgentSurface(dir, { onChannelClosed: () => {} });
+    await expect(surface.ready).rejects.toThrow(/stuck failed before it was ready|dial refused/);
+  });
+
   it("`ready` resolves immediately when there are no long connections", async () => {
     const surface = await openAgentSurface(await agentDir());
     try {

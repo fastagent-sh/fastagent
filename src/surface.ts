@@ -190,9 +190,18 @@ export async function mountAgentSurface(
     try {
       await Promise.all(
         runs.map(async (run, i) => {
-          await run.ready;
-          const name = routed.longConnections[i]?.name;
-          if (!abort.signal.aborted && name) log.info(`[fastagent] long connection ready: ${name}`);
+          const name = routed.longConnections[i]?.name ?? "channel";
+          // Raced against `closed`, because the contract puts a terminal failure THERE: a channel
+          // that dies dialling may leave `ready` pending forever, and waiting on it alone hangs
+          // startup with no diagnosis.
+          await Promise.race([
+            run.ready,
+            run.closed.then(
+              () => Promise.reject(new Error(`${name} closed before it was ready`)),
+              (error: unknown) => Promise.reject(new Error(`${name} failed before it was ready: ${String(error)}`)),
+            ),
+          ]);
+          if (!abort.signal.aborted) log.info(`[fastagent] long connection ready: ${name}`);
         }),
       );
     } catch (error) {

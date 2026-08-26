@@ -94,7 +94,7 @@ The handler above serves `invoke` only. To mount the **whole** agent — every c
 its control plane, health — open the directory as a surface:
 
 ```ts
-import { openAgentSurface } from "@fastagent-sh/fastagent";
+import { nodeListener, openAgentSurface } from "@fastagent-sh/fastagent";
 
 const surface = await openAgentSurface("./my-agent");
 app.use("/agent", nodeListener(surface.handler));   // channels + control plane + health
