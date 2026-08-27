@@ -3,7 +3,7 @@
  * share a record, and a conversation started by the harness path is continued rather than restarted.
  */
 import { writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -228,5 +228,76 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     expect((await store.list()).map((r) => r.session).sort()).toEqual(["copy", "room"]);
     expect(await store.delete("copy")).toBe(true);
     expect(await store.list()).toHaveLength(1);
+  });
+});
+
+describe("the lifecycle primitives: the failure modes each one owes", () => {
+  it("a store that cannot be READ rejects — pi's own list() answers [] on any IO error", async () => {
+    // Why this probe exists at all: `[]` is the honest answer for a deployment with no sessions, so
+    // a swallowed fault would render as "no conversations" in a GUI — the conflation the coded 503
+    // (sessions_unavailable) exists to prevent. Without the readdir probe this test goes green with
+    // an empty array, which is exactly how the mechanism was dead on arrival.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-unreadable-"));
+    // A FILE where the records directory belongs: ENOTDIR reproduces on every platform and does not
+    // depend on the test user's privileges (a root CI container ignores mode bits).
+    await writeFile(join(dir, "agent-session"), "not a directory\n");
+    await expect(piSessionRecordStore({ dir, cwd: dir }).list()).rejects.toThrow(/ENOTDIR/);
+  });
+
+  it("an empty session has NO preview — pi's placeholder is not something a user typed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-preview-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    await store.openOrCreate("fresh");
+    expect((await store.list())[0]).toMatchObject({ session: "fresh", messageCount: 0 });
+    expect((await store.list())[0]?.preview).toBeUndefined(); // not "(no messages)"
+  });
+
+  it("forking onto an existing session is refused by the STORE, in both backends", async () => {
+    // The hub checks this too, but the port promises "a new record": a second caller (or two
+    // concurrent forks) must not be able to replace a live conversation's history.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-collide-"));
+    const disk = piSessionRecordStore({ dir, cwd: dir });
+    const memory = piInMemorySessionRecordStore();
+    for (const store of [disk, memory]) {
+      const parent = await store.openOrCreate("room");
+      parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
+      const at = parent.appendMessage(fauxAssistantMessage("answer"));
+      await store.openOrCreate("taken");
+      await expect(store.fork("room", at, "taken")).rejects.toThrow(/already exists/);
+      expect((await store.openIfExists("taken"))?.getBranch()).toHaveLength(0); // untouched
+    }
+  });
+
+  it("a lifecycle fork keeps the whole copied history — the inheritance window is not its business", async () => {
+    // A new THREAD gets a compaction mark bounding what its model sees. A fork is the same user
+    // keeping their own history, so marking it would hide the exact entries they forked to keep.
+    // Only visible past the window (50 exchanges), which is why the two backends drifted unnoticed.
+    const store = piInMemorySessionRecordStore();
+    const parent = await store.openOrCreate("long");
+    let at = "";
+    for (let i = 0; i < 60; i++) {
+      parent.appendMessage({ role: "user", content: `q${i}`, timestamp: i });
+      at = parent.appendMessage(fauxAssistantMessage(`a${i}`));
+    }
+    await store.fork("long", at, "long-fork");
+    const child = await store.openIfExists("long-fork");
+    expect(child?.getBranch().filter((e) => e.type === "compaction")).toHaveLength(0);
+    // The inheritance path, same backend, DOES bound it — the split is deliberate, not an omission.
+    const thread = await store.openOrCreate("thread", { parentSession: "long" });
+    expect(thread.getBranch().filter((e) => e.type === "compaction").length).toBeGreaterThan(0);
+  });
+
+  it("a fork carries the source's name, on disk and in memory alike", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-forkname-"));
+    for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
+      const parent = await store.openOrCreate("named");
+      parent.appendSessionInfo("Deploy notes");
+      parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
+      const at = parent.appendMessage(fauxAssistantMessage("answer"));
+      await store.fork("named", at, "named-fork");
+      // On disk the name cannot NOT travel (it is a record on the copied path); memory matches it
+      // rather than being quietly different.
+      expect((await store.openIfExists("named-fork"))?.getSessionName()).toBe("Deploy notes");
+    }
   });
 });

@@ -6,7 +6,7 @@
  * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
  * READ path for existing conversations, not a second engine.
  */
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -14,6 +14,7 @@ import { log } from "../../log.ts";
 import type { SessionSummary } from "../../session.ts";
 import {
   type SessionInheritance,
+  copyBranchForInheritance,
   copyBranchInto,
   forkAt,
   forkForInheritance,
@@ -204,6 +205,11 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return legacy ? SessionManager.open(legacy.path, root) : undefined;
     },
     async list() {
+      // THE PROBE, not a formality: pi's own list() catches every IO error and answers `[]`, so a
+      // permissions/hardware fault would arrive as "this deployment has no conversations" — the one
+      // conflation `sessions_unavailable` exists to prevent, and the reason that code cannot be left
+      // to pi's return value. An ABSENT directory is not a fault: no records is exactly `[]`.
+      if (existsSync(own)) readdirSync(own);
       // THIS store's records only. A pre-existing record (the older spelling, in `root`) is still
       // opened by id and continued — but that spelling cannot be decoded back to the Caller's id,
       // and listing a row nobody can dial is worse than a row that is missing.
@@ -218,7 +224,10 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
             createdAt: r.created.getTime(),
             updatedAt: r.modified.getTime(),
             messageCount: r.messageCount,
-            ...(r.firstMessage ? { preview: r.firstMessage.slice(0, PREVIEW_CHARS) } : {}),
+            // pi fills `firstMessage` with a literal "(no messages)" placeholder rather than an
+            // empty string, so the message COUNT is what says whether there is a preview at all —
+            // truthiness would hand a client a sentence to render as if a user had typed it.
+            ...(r.messageCount > 0 && r.firstMessage ? { preview: r.firstMessage.slice(0, PREVIEW_CHARS) } : {}),
           },
         ];
       });
@@ -226,6 +235,10 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     async fork(from, at, into) {
       const parent = await this.openIfExists(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
+      // The port promises a NEW record, so the guarantee belongs here rather than in the one caller
+      // that happens to check: two records under one id makes which one a lookup finds a matter of
+      // directory order.
+      if (await this.openIfExists(into)) throw new Error(`session "${into}" already exists`);
       mkdirSync(staging, { recursive: true });
       // Same staging discipline as inheritance: the fork is finished in `.staging` (which `list()`
       // never sees, being a directory) and published by rename, so a reader finds a whole record or
@@ -399,7 +412,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
         try {
           const staged = fresh();
           const cut = inheritanceCut(reconcileInterruptedToolCalls(parent), inherit.branchHints);
-          if (cut) copyBranchInto(parent, staged, cut.at);
+          if (cut) copyBranchForInheritance(parent, staged, cut.at);
           created = staged;
         } catch (error) {
           log.warn(
@@ -438,10 +451,20 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
     async fork(from, at, into) {
       const parent = live.get(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
+      // The port's promise, not the caller's: registering over a live session would replace its
+      // history outright.
+      if (live.has(into)) throw new Error(`session "${into}" already exists`);
       // Entry-by-entry, like the in-memory inheritance path: there is no file to fork. Registered
-      // only once complete, so a failure leaves no half-copied session behind.
+      // only once complete, so a failure leaves no half-copied session behind. NO inheritance
+      // window: this is the same user keeping their own history, not a new thread bounded from a
+      // parent's.
       const staged = SessionManager.inMemory(cwd, { id: piSessionId(into) });
       copyBranchInto(reconcileInterruptedToolCalls(parent), staged, at);
+      // The name travels, because on disk it cannot NOT travel: pi copies the whole path, and the
+      // `session_info` record sits on it. One behaviour for both backends beats a truthful-sounding
+      // difference nobody can predict — a client that wants "(copy)" calls `set_name`.
+      const name = parent.getSessionName();
+      if (name) staged.appendSessionInfo(name);
       live.set(into, staged);
     },
     async delete(sessionId) {

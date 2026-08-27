@@ -187,6 +187,11 @@ export function inheritanceCut(parent: SessionManager, branchHints?: string[]): 
  * Copy the parent's path up to `at` into `child`, entry by entry — what a backend with no FILE to
  * fork has to do instead. Kinds pi models as facts about an entry rather than positions (labels,
  * the session name) are not copied: they describe the parent's record, not the thread's history.
+ *
+ * The COPY only. Bounding what the child's model sees is {@link markInheritanceWindow}, applied by
+ * the inheritance path alone — the same split the disk side makes between {@link forkAt} and
+ * {@link forkForInheritance}, and for the same reason: a lifecycle fork that marked a window would
+ * hide the exact entries its user forked to keep.
  */
 export function copyBranchInto(parent: SessionManager, child: SessionManager, at: string): void {
   for (const raw of parent.getBranch(at)) {
@@ -219,6 +224,12 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         break; // label / session_info / branch_summary: the parent's facts, not the thread's history
     }
   }
+}
+
+/** {@link copyBranchInto} plus the inheritance window — the in-memory twin of
+ *  {@link forkForInheritance}, so both backends bound a new THREAD the same way. */
+export function copyBranchForInheritance(parent: SessionManager, child: SessionManager, at: string): void {
+  copyBranchInto(parent, child, at);
   markInheritanceWindow(child);
 }
 

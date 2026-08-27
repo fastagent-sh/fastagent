@@ -171,7 +171,13 @@ type SessionCommand =
   `into` is the CALLER's id: the plane never invents one, because a session id belongs to whoever
   minted it, and a client that forks is about to `invoke` on the result anyway. A fork onto an id
   that already exists rejects `invalid_command` rather than merging two histories under one id.
-  There is no separate `clone`: it is this command with the session's own `leafEntryId`.
+  There is no separate `clone`: it is this command with the session's own `leafEntryId`. The fork
+  carries the source's NAME: on disk it cannot not — the `session_info` record sits on the copied
+  path — so the in-memory backend matches rather than being quietly different, and a client that
+  wants "(copy)" calls `set_name`. What it does NOT carry is the inheritance window: a new THREAD is
+  bounded by a mechanical compaction mark ([participant-model §5](participant-model.md)), while a
+  fork is the same user keeping their own history, and marking it would hide the very entries they
+  forked to keep.
 - `set_name` sets the display name `sessions()` reports — a label, not an identity: the id stays the
   Caller's.
 - `delete` destroys the record. It is the plane's only IRREVERSIBLE command, and it is guarded by
@@ -507,7 +513,10 @@ route" (skew) rather than as a fault.
 **When a read cannot be total.** `state`/`entries`/`events` are TOTAL: their absent fields are shapes
 a control-less deployment answers with too, which is what lets a client rely on them for reconnect.
 `sessions()` is the first read where that is impossible — `[]` is the honest answer for a deployment
-with no sessions, so a store that cannot be enumerated must not borrow it. The rule, decided once for
+with no sessions, so a store that cannot be enumerated must not borrow it. That costs the engine a
+PROBE rather than a pass-through: pi's own session listing catches every IO error and answers `[]`,
+so the store checks the records directory itself before asking — a mechanism trusted to surface a
+fault it never sees is worse than none, because it stops anyone from looking. The rule, decided once for
 every read that follows: a read that CAN be total stays total; one that cannot REJECTS, and the
 transport carries the same error shape a `SessionResult` does (`{ code, message, retryable }`) on a
 non-2xx — `sessions_unavailable` + 503 here. The in-process contract keeps its return types; the
