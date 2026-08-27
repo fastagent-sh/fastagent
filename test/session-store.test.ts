@@ -3,7 +3,7 @@
  * share a record, and a conversation started by the harness path is continued rather than restarted.
  */
 import { writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { symlinkSync } from "node:fs";
@@ -328,6 +328,22 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     }
   });
 
+  it("both backends build a row the same way", async () => {
+    // They drifted once already — the in-memory listing had no `preview`, which an embedder finds
+    // as a missing field rather than as a difference anyone chose.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-rowparity-"));
+    for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
+      const record = await store.openOrCreate("room");
+      record.appendSessionInfo("Named");
+      record.appendMessage({ role: "user", content: "the first question", timestamp: 1 });
+      record.appendMessage(fauxAssistantMessage("an answer"));
+      const [row] = await store.list();
+      expect(row).toMatchObject({ session: "room", name: "Named", messageCount: 2, preview: "the first question" });
+      expect(Number.isFinite(row?.createdAt)).toBe(true);
+      expect(row?.updatedAt).toBeGreaterThanOrEqual(row?.createdAt as number);
+    }
+  });
+
   it("in memory too: same three primitives, same semantics", async () => {
     const store = piInMemorySessionRecordStore();
     const parent = await store.openOrCreate("room");
@@ -501,6 +517,55 @@ describe("fork: the copy is a copy", () => {
     expect(JSON.stringify((await moved.openIfExists("room"))?.getBranch())).toContain("asked before the move");
   });
 
+  it("a named parent is found after the workspace moves, like every other lookup", async () => {
+    // The listing and `openIfExists` were moved off pi's cwd-filtered listing; inheritance was the
+    // call site that kept it, so a renamed directory left a thread starting empty beside the very
+    // conversation it named.
+    const root = await mkdtemp(join(tmpdir(), "fa-store-inherit-moved-"));
+    const before = join(root, "before");
+    const store = piSessionRecordStore({ dir: "sessions", cwd: before });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "room history", timestamp: 1 });
+    room.appendMessage(fauxAssistantMessage("answered in the room"));
+
+    await rename(before, join(root, "after"));
+    const moved = piSessionRecordStore({ dir: "sessions", cwd: join(root, "after") });
+    const thread = await moved.openOrCreate("thread", { parentSession: "room" });
+    expect(JSON.stringify(thread.getBranch())).toContain("room history");
+  });
+
+  it("rows come back newest-ACTIVITY first, and a broken timestamp is still a number", async () => {
+    // Filenames sort by creation, so ordering by them put a conversation that just received a
+    // message below a newer idle one — the wrong answer for the column a list is read by.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-order-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const older = await store.openOrCreate("older");
+    older.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    older.appendMessage(fauxAssistantMessage("a"));
+    await new Promise((r) => setTimeout(r, 1100)); // the filename's timestamp has to differ
+    const newer = await store.openOrCreate("newer");
+    newer.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    newer.appendMessage(fauxAssistantMessage("a"));
+    await new Promise((r) => setTimeout(r, 5)); // the two records must not share a millisecond
+    (await store.openOrCreate("older")).appendMessage(fauxAssistantMessage("just now"));
+
+    const ordered = await store.list();
+    expect(ordered.map((r) => r.session)).toEqual(["older", "newer"]);
+    expect(ordered[0]?.updatedAt).toBeGreaterThan(ordered[1]?.updatedAt as number);
+
+    // An entry whose timestamp does not parse is NaN, and NaN serializes to null — in a field the
+    // contract types as a number and a client sorts by.
+    const file = (await store.openIfExists("newer"))?.getSessionFile() as string;
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+    const last = JSON.parse(lines.at(-1) as string) as { timestamp: string };
+    last.timestamp = "not-a-date";
+    lines[lines.length - 1] = JSON.stringify(last);
+    await writeFile(file, `${lines.join("\n")}\n`);
+    const row = (await store.list()).find((r) => r.session === "newer");
+    expect(Number.isFinite(row?.updatedAt)).toBe(true);
+    expect(JSON.parse(JSON.stringify(row)).updatedAt).not.toBeNull();
+  });
+
   it("one unreadable record is named, and the rest of the listing survives it", async () => {
     // A record that cannot be read must not take the listing down — the other conversations are
     // fine — and must not vanish silently either: that is `sessions_unavailable`'s conflation, one
@@ -518,6 +583,11 @@ describe("fork: the copy is a copy", () => {
       expect((await store.list()).map((r) => r.session)).toEqual(["room"]);
       expect(warned.join("\n")).toMatch(/1 of 2 session records/);
       expect(warned.join("\n")).toMatch(/sbroken\.jsonl/); // WHICH one, and why
+
+      // Said when the SET changes, not once per poll: this endpoint is polled about once a second.
+      warned.length = 0;
+      await store.list();
+      expect(warned).toEqual([]);
     } finally {
       spy.mockRestore();
     }

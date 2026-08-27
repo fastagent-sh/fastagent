@@ -233,9 +233,12 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
    *  is a warn: a thread must not lose its first turn to an inheritance edge. */
   const inheritInto = async (id: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
     const parentId = piSessionId(inherit.parentSession);
+    // The store's own directory, like every other lookup here: pi's listing filters by the cwd in
+    // each header, so a renamed agent directory made a named parent unfindable — the thread then
+    // started empty beside a conversation that was sitting right there.
     const found =
-      (await SessionManager.list(cwd, own)).find((r) => r.id === parentId) ??
-      (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(inherit.parentSession));
+      recordFiles(own).find((f) => f.id === parentId) ??
+      recordFiles(root).find((f) => f.id === legacySessionId(inherit.parentSession));
     if (!found) {
       log.warn(
         `[fastagent] session "${id}" names parent "${inherit.parentSession}", which has no record — starting empty`,
@@ -258,6 +261,9 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return undefined;
     }
   };
+  /** The unreadable records the last listing reported, so a polled endpoint states the condition
+   *  once rather than once a second. */
+  let lastUnreadable = "";
   /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
    *  broken by a caller that spreads this object into another one. */
   const openExisting = async (sessionId: string): Promise<SessionManager | undefined> => {
@@ -304,10 +310,20 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
           unreadable.push(`${basename(file.path)} (${String(error)})`);
         }
       }
-      if (unreadable.length > 0) {
-        log.warn(
-          `[fastagent] ${unreadable.length} of ${files.length} session records in ${own} could not be read and are missing from this listing: ${unreadable.join("; ")}`,
-        );
+      // NEWEST ACTIVITY first. The filenames sort by CREATION, so an old conversation that just
+      // received a message would otherwise sit below a newer idle one — the wrong answer for the
+      // column a conversation list is read by.
+      rows.sort((a, b) => b.updatedAt - a.updatedAt);
+      // Said when the SET changes, not on every poll: this endpoint is polled once a second or so,
+      // and an unreadable record stays unreadable until someone acts on it.
+      const reported = unreadable.join("; ");
+      if (reported !== lastUnreadable) {
+        lastUnreadable = reported;
+        if (unreadable.length > 0) {
+          log.warn(
+            `[fastagent] ${unreadable.length} of ${files.length} session records in ${own} could not be read and are missing from this listing: ${reported}`,
+          );
+        }
       }
       return rows;
     },
@@ -476,7 +492,9 @@ function recordFiles(dir: string): { path: string; id: string }[] {
 function summarize(session: string, record: SessionManager): SessionSummary {
   const entries = record.getEntries() as unknown as { type?: string; timestamp?: string; message?: unknown }[];
   const createdAt = Date.parse(record.getHeader()?.timestamp ?? "") || 0;
-  const last = entries.at(-1)?.timestamp;
+  // `|| 0` on both: an unparseable timestamp is NaN, and NaN in `updatedAt` serializes to `null` —
+  // which the contract types as a number and a client sorts by.
+  const lastAt = Date.parse(entries.at(-1)?.timestamp ?? "") || 0;
   const messages = entries.filter((e) => e.type === "message");
   const name = record.getSessionName();
   const preview = firstUserText(messages);
@@ -484,7 +502,7 @@ function summarize(session: string, record: SessionManager): SessionSummary {
     session,
     ...(name ? { name } : {}),
     createdAt,
-    updatedAt: Math.max(last ? Date.parse(last) : 0, createdAt),
+    updatedAt: Math.max(lastAt, createdAt),
     messageCount: messages.length,
     ...(preview ? { preview } : {}),
   };
@@ -507,7 +525,10 @@ function firstUserText(messages: { message?: unknown }[]): string | undefined {
               .map((block) => (block as { text?: string }).text ?? "")
               .join(" ")
           : "";
-    if (text.trim()) return [...text].slice(0, PREVIEW_CHARS).join("");
+    // Cut to UTF-16 units FIRST: a pasted megabyte would otherwise become a million-element array
+    // on the way to keeping 200 of them. Two units per code point is the ceiling, so this cannot
+    // take fewer characters than the slice below wants.
+    if (text.trim()) return [...text.slice(0, PREVIEW_CHARS * 2)].slice(0, PREVIEW_CHARS).join("");
   }
   return undefined;
 }
@@ -673,23 +694,10 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
     },
     applyProperties: (sessionId, writes) => applyProperties(async () => live.get(sessionId), writes),
     async list() {
-      // No file metadata in memory: the timestamps that exist are the entries' own. A session with
-      // no entries yet reports the same instant for both, which is what "created, never used" is.
-      // No `preview`: the field is optional by contract, and digging a first user message out of
-      // pi's entry union would be more code here than the row is worth. The disk store, which is
-      // what a deployment lists, gets it from pi's own index for free.
-      return [...live].map(([session, record]) => {
-        const entries = record.getEntries() as { timestamp?: string; type?: string }[];
-        const times = entries.flatMap((e) => (e.timestamp ? [Date.parse(e.timestamp)] : []));
-        const name = record.getSessionName();
-        return {
-          session,
-          ...(name ? { name } : {}),
-          createdAt: times[0] ?? 0,
-          updatedAt: times[times.length - 1] ?? 0,
-          messageCount: entries.filter((e) => e.type === "message").length,
-        };
-      });
+      // The SAME row builder the disk store uses, ordered the same way: a backend difference here is
+      // one an embedder discovers as a missing field (this one had no `preview` for exactly that
+      // reason). Nothing to read from disk, so nothing can be unreadable.
+      return [...live].map(([session, record]) => summarize(session, record)).sort((a, b) => b.updatedAt - a.updatedAt);
     },
     async fork(from, at, into, provenance) {
       const parent = live.get(from);
