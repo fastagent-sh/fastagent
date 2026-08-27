@@ -154,11 +154,16 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     const staged = stage(id);
     try {
       fill(staged);
+      // INSIDE the try: publishing is a mkdir + rename, and both can fail (EACCES, a store root on
+      // another filesystem). A finished record stranded in staging is the same accumulation as a
+      // partial one — nothing reads that directory either way. NOT covered by a test: the tests
+      // reach the fill failure by making a copy throw, and no equivalent injection point exists for
+      // rename without mocking node:fs for the whole file.
+      return publishStaged(staged);
     } catch (error) {
       rmSync(staged.getSessionFile() ?? "", { force: true });
       throw error;
     }
-    return publishStaged(staged);
   };
   /** Move a finished record into the store: one same-filesystem rename, so a reader sees the whole
    *  thing or nothing at all. */
@@ -250,8 +255,10 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
             // extractable TEXT — a caption-less photo opens plenty of them. The count cannot say
             // that (it counts every message, this one included), so the sentinel is what to exclude:
             // a client must not render pi's placeholder as if a user had typed it.
+            // Sliced by CODE POINT: a cut through a surrogate pair (an emoji at the boundary) would
+            // put a lone half in the row, which renders as U+FFFD.
             ...(r.firstMessage && r.firstMessage !== PI_NO_MESSAGES
-              ? { preview: r.firstMessage.slice(0, PREVIEW_CHARS) }
+              ? { preview: [...r.firstMessage].slice(0, PREVIEW_CHARS).join("") }
               : {}),
           },
         ];

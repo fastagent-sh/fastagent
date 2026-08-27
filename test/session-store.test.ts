@@ -364,3 +364,19 @@ describe("fork: the copy is a copy", () => {
     expect(row?.preview).toBeUndefined();
   });
 });
+
+describe("list rows are safe to render", () => {
+  it("truncates a preview by CODE POINT — never half an emoji", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-emoji-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const session = await store.openOrCreate("emoji");
+    // The astral character straddles the 200-char cut: a UTF-16 slice leaves a lone surrogate.
+    session.appendMessage({ role: "user", content: `${"a".repeat(199)}🌤 tail`, timestamp: 1 });
+    session.appendMessage(fauxAssistantMessage("ok"));
+
+    const preview = (await store.list()).find((r) => r.session === "emoji")?.preview as string;
+    expect(preview).toHaveLength(201); // 199 + the pair, as ONE code point sliced whole
+    expect(preview.endsWith("🌤")).toBe(true);
+    expect(preview).not.toMatch(/[\uD800-\uDBFF]$/); // no dangling HIGH surrogate — a whole pair ends on a low one
+  });
+});

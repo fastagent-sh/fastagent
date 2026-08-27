@@ -1745,6 +1745,26 @@ describe("session control (Phase 4): session lifecycle", () => {
     expect((await control.state("room-b")).name).toBeUndefined();
   });
 
+  it("the set_name event carries the RECORDED name, not the payload", async () => {
+    // pi collapses newlines and trims, so echoing the payload would hand a client tracking the
+    // event stream a label neither state() nor sessions() ever confirms.
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("room-n");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("room-n")) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+    expect(await control.dispatch("room-n", { type: "set_name", name: "  Deploy\nnotes  " })).toEqual({ ok: true });
+    await watching;
+    const recorded = (await control.state("room-n")).name;
+    expect(recorded).toBe("Deploy notes");
+    expect(seen.at(-1)?.data).toEqual({ name: recorded });
+    expect((await control.sessions()).find((x) => x.session === "room-n")?.name).toBe(recorded);
+  });
+
   it("an empty name is a payload error, and nothing durable lands", async () => {
     const { control, sessions } = await makeBoundary([]);
     await sessions.openOrCreate("room-c");

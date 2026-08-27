@@ -560,7 +560,15 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             }
             apply = async (s) => {
               s.appendSessionInfo(command.name);
-              return { type: "state_changed", timestamp: Date.now(), data: { name: command.name } };
+              // READ BACK, never echo: pi collapses newlines and trims, so the recorded name can
+              // differ from the payload — and `state()`/`sessions()` report the recorded one. Same
+              // rule the `set_model` branch states: the event must not carry a value the other two
+              // surfaces would disagree with.
+              return {
+                type: "state_changed",
+                timestamp: Date.now(),
+                data: { name: s.getSessionName() ?? command.name },
+              };
             };
           } else if (command.type === "navigate") {
             apply = async (s) => {
