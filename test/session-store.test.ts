@@ -566,6 +566,33 @@ describe("fork: the copy is a copy", () => {
     expect(JSON.parse(JSON.stringify(row)).updatedAt).not.toBeNull();
   });
 
+  it("listing leaves room for everything else — it is polled, and reading a record is synchronous", async () => {
+    // pi's own listing streamed and interleaved; reading records directly is faster but blocks for
+    // the whole scan. Measured before the yield: 40ms with ZERO event-loop turns, once a second,
+    // while SSE heartbeats and in-flight turns waited.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-yield-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    for (let s = 0; s < 12; s++) {
+      const record = await store.openOrCreate(`session-${s}`);
+      record.appendMessage({ role: "user", content: "q", timestamp: 1 });
+      record.appendMessage(fauxAssistantMessage("a"));
+    }
+
+    let turns = 0;
+    let stop = false;
+    const tick = () => {
+      if (!stop) {
+        turns++;
+        setImmediate(tick);
+      }
+    };
+    setImmediate(tick);
+    const rows = await store.list();
+    stop = true;
+    expect(rows).toHaveLength(12);
+    expect(turns).toBeGreaterThanOrEqual(rows.length); // at least one turn per record read
+  });
+
   it("one unreadable record is named, and the rest of the listing survives it", async () => {
     // A record that cannot be read must not take the listing down — the other conversations are
     // fine — and must not vanish silently either: that is `sessions_unavailable`'s conflation, one

@@ -153,8 +153,10 @@ export function callerSessionId(recordId: string): string | undefined {
 /**
  * Disk-backed store under `dir`: restart the process, conversations continue.
  *
- * Lookup is a directory scan (`SessionManager.list`) because pi names files `<timestamp>_<id>.jsonl`
- * and the timestamp is not ours to predict — the same trade sessions.ts makes today.
+ * Lookup is a directory scan of THIS store's own directory, reading ids out of the filenames pi
+ * writes (`<timestamp>_<id>.jsonl`) — not `SessionManager.list`, which filters by the cwd recorded in
+ * each header and would make a renamed agent directory look like an empty store (see
+ * {@link recordFiles}).
  *
  * A record written before this store existed keeps ITS id (the older path spelled them differently),
  * so the scan accepts either: a conversation that predates this store is continued rather than
@@ -309,6 +311,12 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
           // cannot be read is a condition someone has to act on.
           unreadable.push(`${basename(file.path)} (${String(error)})`);
         }
+        // A TURN for everything else. Reading a record is synchronous (pi parses the whole file and
+        // builds its index), and this endpoint is POLLED — so without a yield the process stops for
+        // the length of the whole listing, once a second, while SSE heartbeats and in-flight turns
+        // wait. pi's own listing streamed and interleaved; this reads faster and must not take that
+        // away.
+        await new Promise((resolve) => setImmediate(resolve));
       }
       // NEWEST ACTIVITY first. The filenames sort by CREATION, so an old conversation that just
       // received a message would otherwise sit below a newer idle one — the wrong answer for the
@@ -472,10 +480,10 @@ function recordFiles(dir: string): { path: string; id: string }[] {
     if ((error as { code?: unknown }).code !== "ENOENT") throw error;
     return [];
   }
+  // UNORDERED. Lookup does not care, and `list()` sorts its rows by activity — a filename order kept
+  // here would be one nobody consumes and the next reader has to prove is unused.
   return names
     .filter((name) => name.endsWith(RECORD_SUFFIX))
-    .sort()
-    .reverse()
     .flatMap((name) => {
       // The FIRST underscore: the timestamp holds none, and an encoded id may hold several
       // (`piSessionId` escapes with `_`).
