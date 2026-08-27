@@ -59,6 +59,7 @@ function idleWatchdog(abort: AbortController): ReadWatch {
     stop: () => clearInterval(timer),
   };
 }
+import { isAddressableSession } from "./session.ts";
 import type {
   AgentCommand,
   Session,
@@ -272,29 +273,42 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         write(`/control/sessions/${id(into)}`, "PUT", { from, at }),
 
       // The local hub's handle is a pure binding; so is this one — an id and the transport above it.
-      // Nothing is fetched here, which is what keeps the two isomorphic.
-      get: (session: string): Session => ({
-        id: session,
-        state: () => get<SessionState>(`/control/sessions/${id(session)}`),
-        entries: (options) =>
-          get<SessionEntries>(
-            `/control/sessions/${id(session)}/entries${
-              options?.since !== undefined ? `?since=${encodeURIComponent(options.since)}` : ""
-            }`,
-            PAYLOAD_TIMEOUT_MS, // the download-direction payload call — see the constant's note
-          ),
-        events: () => eventsOf(session),
-        update: (patch) => write(`/control/sessions/${id(session)}`, "PATCH", patch),
-        steer: (prompt) => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "steer", prompt }),
-        followUp: (prompt) => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "follow_up", prompt }),
-        abort: () => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "abort" }),
-        compact: (options) =>
-          write(`/control/sessions/${id(session)}/actions`, "POST", {
-            type: "compact",
-            ...(options?.instructions !== undefined ? { instructions: options.instructions } : {}),
-          }),
-        delete: () => write(`/control/sessions/${id(session)}`, "DELETE"),
-      }),
+      // Nothing is FETCHED here, which is what keeps the two isomorphic. What is checked is the one
+      // thing the wire cannot express: `.` and `..` survive `encodeURIComponent` and are then
+      // normalised away by URL parsing, so every call on such a handle would arrive at a DIFFERENT
+      // route — `.` reads as the collection (200 JSON, which the SSE reader ends as a silently empty
+      // stream) and `..` as a 404 the local plane answers normally. Refused at the binding, where a
+      // caller can see it, rather than once per call in a place it looks like a server answer.
+      get: (session: string): Session => {
+        if (!isAddressableSession(session)) {
+          throw new Error(
+            `session id ${JSON.stringify(session)} cannot travel as a URL path segment — this transport cannot address it`,
+          );
+        }
+        return {
+          id: session,
+          state: () => get<SessionState>(`/control/sessions/${id(session)}`),
+          entries: (options) =>
+            get<SessionEntries>(
+              `/control/sessions/${id(session)}/entries${
+                options?.since !== undefined ? `?since=${encodeURIComponent(options.since)}` : ""
+              }`,
+              PAYLOAD_TIMEOUT_MS, // the download-direction payload call — see the constant's note
+            ),
+          events: () => eventsOf(session),
+          update: (patch) => write(`/control/sessions/${id(session)}`, "PATCH", patch),
+          steer: (prompt) => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "steer", prompt }),
+          followUp: (prompt) =>
+            write(`/control/sessions/${id(session)}/actions`, "POST", { type: "follow_up", prompt }),
+          abort: () => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "abort" }),
+          compact: (options) =>
+            write(`/control/sessions/${id(session)}/actions`, "POST", {
+              type: "compact",
+              ...(options?.instructions !== undefined ? { instructions: options.instructions } : {}),
+            }),
+          delete: () => write(`/control/sessions/${id(session)}`, "DELETE"),
+        };
+      },
     },
   };
 }

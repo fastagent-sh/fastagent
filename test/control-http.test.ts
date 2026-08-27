@@ -505,7 +505,10 @@ describe("session control over HTTP (Phase 3)", () => {
       const res = await fetch(`${served.url}/control/sessions/sW/actions`, {
         method: "POST",
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-        body: JSON.stringify({ session: "sX", command: { type: "make_coffee" } }),
+        // An actual unknown TYPE, not a malformed envelope: the body moved to the action itself
+        // when the route did, and sending the old wrapper tested the wrong branch — the runtime
+        // default arm went uncovered while the name said otherwise.
+        body: JSON.stringify({ type: "make_coffee" }),
       });
       expect(res.status).toBe(200);
       const result = (await res.json()) as { ok: boolean; error?: { code: string } };
@@ -1186,6 +1189,28 @@ describe("session control over HTTP (Phase 3)", () => {
       new Request("http://x/control/sessions/s", { method: "PATCH", headers: auth, body: '{"name":42}' }),
     );
     expect(await wrongType.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
+  });
+
+  it("an id that is not a path segment fails VISIBLY, instead of addressing its neighbour", async () => {
+    // Moving the id from `?session=` into a path segment subjects it to URL normalisation, which
+    // `encodeURIComponent` does not prevent (the spec normalises `%2E` too). Measured before the
+    // guard: `.` arrived as `/control/sessions` — 200 JSON, which the SSE reader ended as a silently
+    // EMPTY event stream — and `..` arrived as `/control/` → 404, while the local hub answered a
+    // normal state for the same id. Two different ways to lie, so the transport refuses instead.
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      for (const id of ["", ".", ".."]) {
+        // At the BINDING, not once per call: a caller sees it where it made the mistake.
+        expect(() => remote.sessions.get(id)).toThrow(/cannot travel as a URL path segment/);
+        // …and the plane will not MINT one either: a fork target no client could open.
+        const forked = await served.localControl.sessions.fork({ from: "s", at: "e", into: id });
+        expect(forked.ok).toBe(false);
+        if (!forked.ok) expect(forked.error.code).toBe("invalid_command");
+      }
+    } finally {
+      served.close();
+    }
   });
 
   it("createControlPlane refuses to mount without a token", async () => {

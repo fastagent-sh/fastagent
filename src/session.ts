@@ -63,6 +63,23 @@ export interface SessionCollection {
 }
 
 /**
+ * Can this id be ADDRESSED by a client? A session id is an opaque Caller string, and the data plane
+ * takes any of it — but a control plane carries the id as a URL path segment, and three strings are
+ * not path segments: the empty one, `.` and `..`. URL normalisation eats them before any router
+ * sees them (`encodeURIComponent` does not help; the spec normalises `%2E` too), so a request for
+ * `.` arrives as a request for the collection and answers about something else entirely.
+ *
+ * The rule lives HERE, in the contract, because both sides enforce it and they must not drift: a
+ * transport rejects such an id rather than sending a request that will silently address its
+ * neighbour, and an implementation refuses to MINT one (a fork target nothing could open) — while a
+ * session a channel already created under one keeps running, and keeps appearing in `list()`, since
+ * hiding it would be the silent half of the same problem.
+ */
+export function isAddressableSession(session: string): boolean {
+  return session !== "" && session !== "." && session !== "..";
+}
+
+/**
  * One session, bound. Every call here is about THIS session, so the id is spelled once.
  *
  * The split inside it is the one the contract is built on: {@link update} sets PROPERTIES (durable,
@@ -275,7 +292,7 @@ export type SessionResult =
  *  contents. `session` is the CALLER's id (the string a channel minted), never a storage name. */
 export interface SessionSummary {
   session: string;
-  /** Set by `set_name`; absent until then — a client showing a list falls back to `preview`. */
+  /** Set by `update({ name })`; absent until then — a client showing a list falls back to `preview`. */
   name?: string;
   createdAt: number;
   updatedAt: number;
@@ -285,7 +302,7 @@ export interface SessionSummary {
 }
 
 export interface SessionState {
-  /** Set by `set_name`, so a client that opens a session directly gets the same label the list
+  /** Set by `update({ name })`, so a client that opens a session directly gets the same label the list
    *  showed. */
   name?: string;
   /** `compacting` refers to Phase 2 MANUAL compaction at a session boundary. Automatic overflow

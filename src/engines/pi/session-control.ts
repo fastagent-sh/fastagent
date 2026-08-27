@@ -21,6 +21,7 @@ import {
   type AgentCommand,
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
+  isAddressableSession,
   NO_ACTIVE_RUN_CODE,
   NOTHING_TO_COMPACT_CODE,
   NO_SUCH_SESSION_CODE,
@@ -645,10 +646,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         writeError = error;
       }
 
-      // The event, and every field READ BACK rather than echoed: pi collapses newlines in a name, a
-      // new model can change which thinking level executes, and a moved leaf can drop an override
-      // that used to apply. `state()` and `list()` report what is recorded, so the event must not
-      // carry anything they would disagree with.
+      // The event. `name` and the settings pair are READ BACK rather than echoed — pi collapses
+      // newlines in a name, a new model can change which thinking level executes, and a moved leaf
+      // can drop an override that used to apply — because `state()` and `list()` report what is
+      // recorded, and the event must not carry anything they would disagree with. `leafEntryId` is
+      // the exception, and can be: `branch()` validates and then sets, so its postcondition IS the
+      // requested id, and a read-back could only re-report what the call already established.
       if (landed.length > 0) {
         let settings: ReturnType<typeof resolveSessionSettings> | undefined;
         try {
@@ -855,10 +858,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     const provenance = `${from}@${at}`;
     const b = boundary?.();
     if (!b) return unsupported("fork()");
-    // An id every OTHER call refuses: a session-keyed path segment cannot carry the empty string, so
-    // minting one would put a row in list() that nothing can open — listed, unopenable by the client
-    // that just listed it.
-    if (into.trim() === "") return invalid("a fork target id cannot be empty");
+    // An id no client could then open: the empty string, `.` and `..` are not URL path segments
+    // (isAddressableSession), so minting one would put a row in list() that nothing can address —
+    // listed, unopenable by the client that just listed it.
+    if (!isAddressableSession(into.trim())) {
+      return invalid(`${JSON.stringify(into)} cannot be a session id — the control plane could not address it`);
+    }
     const source = await sessions.openIfExists(from);
     if (!source) return noSuchSession(from);
     // The entry predicate is the one `entries()` publishes by, so "everything published is forkable"

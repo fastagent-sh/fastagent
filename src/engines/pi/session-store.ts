@@ -304,7 +304,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         // on its own first open, like every other record.
         copyBranchInto(parent, staged, at);
         // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot
-        // place. A client that wants "(copy)" calls `set_name`.
+        // place. A client that wants "(copy)" calls `update({ name })`.
         const name = parent.getSessionName();
         if (name) staged.appendSessionInfo(name);
         stampProvenance(staged, provenance);
@@ -519,7 +519,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       copyBranchInto(parent, staged, at);
       // The name travels, because on disk it cannot NOT travel: pi copies the whole path, and the
       // `session_info` record sits on it. One behaviour for both backends beats a truthful-sounding
-      // difference nobody can predict — a client that wants "(copy)" calls `set_name`.
+      // difference nobody can predict — a client that wants "(copy)" calls `update({ name })`.
       const name = parent.getSessionName();
       if (name) staged.appendSessionInfo(name);
       stampProvenance(staged, provenance);

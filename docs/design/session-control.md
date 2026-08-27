@@ -510,7 +510,13 @@ POST   /control/invoke                         the DATA plane
 - **The id is a path segment**, percent-encoded. A session id is an opaque Caller string that can
   contain `:` and `/` (a Feishu thread key does), so the plane matches paths SEGMENT BY SEGMENT
   rather than by pattern: `URL.pathname` leaves `%2F` encoded, so splitting on `/` cannot be fooled
-  by an id that contains one. An empty segment is not an id and does not match.
+  by an id that contains one. Three strings are NOT path segments, though — the empty one, `.` and
+  `..` — because URL normalisation eats them before any router sees them, and encoding does not
+  help (the spec normalises `%2E` too). A request for `.` would arrive as one for the collection: a
+  200 that an SSE reader ends as a silently empty stream. So the transport refuses such an id at the
+  binding, and the plane refuses to MINT one (`fork`). A session a channel already created under one
+  keeps running and keeps appearing in `list()` — hiding it would be the silent half of the same
+  problem — it simply cannot be addressed remotely.
 - **`POST /control/invoke` stays at the prefix**, not under a session: its body already carries the
   scope (SPEC `invoke(scope, prompt)`), and two places to say one thing is a place for them to
   disagree.
