@@ -28,13 +28,13 @@ export async function dispatchStop(
 ): Promise<string> {
   if (!control) return STOP_UNAVAILABLE_NOTICE;
   try {
-    const result = await control.dispatch(session, { type: "abort" });
+    const result = await control.sessions.get(session).abort();
     if (result.ok) return STOPPED_NOTICE;
     if (result.error.code === NO_ACTIVE_RUN_CODE) return NOTHING_RUNNING_NOTICE;
-    log.warn(`${label} stop dispatch rejected for ${session}: ${result.error.code} — ${result.error.message}`);
+    log.warn(`${label} stop rejected for ${session}: ${result.error.code} — ${result.error.message}`);
     return `⚠️ Could not stop (${result.error.code}).`;
   } catch (error) {
-    log.warn(`${label} stop dispatch failed for ${session}: ${String(error)}`);
+    log.warn(`${label} stop failed for ${session}: ${String(error)}`);
     return "⚠️ Could not stop — see the server logs.";
   }
 }

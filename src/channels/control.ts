@@ -22,9 +22,11 @@ import type { ImageRef, Prompt } from "../agent.ts";
 import {
   INVALID_COMMAND_CODE,
   SESSIONS_UNAVAILABLE_CODE,
-  type SessionCommand,
+  type SessionAction,
   type SessionControl,
   type SessionEvent,
+  type SessionUpdate,
+  type SessionUpdateField,
 } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
@@ -37,6 +39,17 @@ import { text } from "./respond.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
 const CONTROL_PREFIX = "/control";
+
+/** The one variable segment in this plane's paths: a percent-encoded session id. Written into route
+ *  keys so the table reads like the URLs it serves. */
+const SESSION_SEGMENT = "{session}";
+
+/** A plane handler: the request, plus the session id the path named (`""` where the path has none). */
+type PlaneHandler = (req: Request, session: string) => Response | Promise<Response>;
+
+/** The plane's route table: `"<METHOD> <path>"` → handler, where at most one path segment is
+ *  {@link SESSION_SEGMENT}. */
+export type PlaneRoutes = Record<string, PlaneHandler>;
 
 /** The token, when the DEPLOYER owns it rather than the box (`mountSessionControl` reads it, `deploy`
  *  carries it). Declared here with the prefix because both are the plane's public names: the serving
@@ -74,26 +87,45 @@ const json = (value: unknown, status = 200): Response =>
  * `content-type` is not either (only three values are, and `application/json` is not among them),
  * so a browser POSTing to dispatch/invoke names it — allowing just `authorization` leaves precisely
  * the WRITE routes unreachable while reads work.
- */
-function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
-  // Normalised keys (see serve.ts): the method is upper-cased when parsed.
-  const byKey = new Map(
-    Object.entries(routes).map(([key, handler]) => {
-      const { method, path } = parseRouteKey(key);
-      return [method ? `${method} ${path}` : path, handler] as const;
-    }),
-  );
-  const methodsByPath = new Map<string, Set<string>>();
-  for (const key of Object.keys(routes)) {
+ */ function planeApp(routes: PlaneRoutes): ChannelHandler {
+  /** A route key's path split into segments, with `{session}` marked. Paths are matched SEGMENT BY
+   *  SEGMENT rather than by regex because a session id is an opaque Caller string: percent-encoded
+   *  it can contain anything, and `URL.pathname` leaves `%2F` encoded — so splitting on `/` cannot
+   *  be fooled by an id that contains one. */
+  const compiled = Object.entries(routes).map(([key, handler]) => {
     const { method, path } = parseRouteKey(key);
-    const methods = methodsByPath.get(path) ?? new Set<string>();
-    if (method) methods.add(method);
-    methodsByPath.set(path, methods);
-  }
+    return { method, path, segments: path.split("/"), handler };
+  });
+  const match = (path: string): { route: (typeof compiled)[number]; session?: string }[] => {
+    const segments = path.split("/");
+    const hits: { route: (typeof compiled)[number]; session?: string }[] = [];
+    for (const route of compiled) {
+      if (route.segments.length !== segments.length) continue;
+      let session: string | undefined;
+      let ok = true;
+      for (const [i, expected] of route.segments.entries()) {
+        const actual = segments[i] as string;
+        if (expected === SESSION_SEGMENT) {
+          // The one place a path segment becomes a Caller id again. An empty segment is not an id —
+          // it would address a session no other call can name.
+          if (actual === "") {
+            ok = false;
+            break;
+          }
+          session = decodeURIComponent(actual);
+        } else if (expected !== actual) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) hits.push({ route, session });
+    }
+    return hits;
+  };
   // Per PATH, stating what it actually serves — omitting a method it does serve has the browser
   // refuse a call that would have worked. `HEAD` is that case: every GET route answers it.
-  const allowMethods = (path: string, requested: string | null) => {
-    const methods = new Set(methodsByPath.get(path) ?? []);
+  const allowMethods = (hits: ReturnType<typeof match>, requested: string | null) => {
+    const methods = new Set(hits.flatMap((h) => (h.route.method ? [h.route.method] : [])));
     if (methods.has("GET")) methods.add("HEAD");
     // The requested method is always allowed, even where this path does not serve it: preflight is a
     // gate applied BEFORE the request exists, so refusing there means the real request is never sent
@@ -105,19 +137,17 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
 
   return async (req) => {
     const path = new URL(req.url).pathname;
-    const known = methodsByPath.has(path);
+    const hits = match(path);
     const answer = async (): Promise<Response> => {
       // A preflight carries no token — that is its purpose — so it is answered before auth, and for
       // ANY path under the prefix: gating it would stop the request the 404 below is waiting for.
       if (req.method === "OPTIONS") return new Response(null, { status: 204 });
-      const handler = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
-      if (handler) return await handler(req);
-      if (known && req.method === "HEAD") {
-        const get = byKey.get(`GET ${path}`);
-        if (get) return await get(req);
-      }
+      const hit =
+        hits.find((h) => h.route.method === req.method) ??
+        (req.method === "HEAD" ? hits.find((h) => h.route.method === "GET") : undefined);
+      if (hit) return await hit.route.handler(req, hit.session ?? "");
       // 404 vs 405 as in the host router: a client reads 404 as "this serve predates the route".
-      if (known) return text("method not allowed\n", 405);
+      if (hits.length > 0) return text("method not allowed\n", 405);
       return text("not found\n", 404);
     };
     let res: Response;
@@ -136,40 +166,34 @@ function planeApp(routes: Record<string, ChannelHandler>): ChannelHandler {
     res.headers.set("access-control-allow-headers", "authorization, content-type");
     res.headers.set(
       "access-control-allow-methods",
-      allowMethods(path, req.headers.get("access-control-request-method")),
+      allowMethods(hits, req.headers.get("access-control-request-method")),
     );
     return res;
   };
 }
 
 // ONE constant for every Prompt-bearing wire surface (imported from the invoke channel — the two
-// caps cannot drift apart): commands carry Prompts, which may ride base64 images.
-const DISPATCH_BODY_LIMIT = MAX_BODY_BYTES;
+// caps cannot drift apart): actions carry Prompts, which may ride base64 images.
+const ACTION_BODY_LIMIT = MAX_BODY_BYTES;
 
 /**
  * Parse-don't-validate at the wire: a remote client can send any JSON, and the hub's inner layers
- * trust command shapes (a malformed `steer` would surface as an ENGINE failure misclassified as
- * `run_command_failed`). Returns the typed command, or undefined for anything malformed — which
+ * trust action shapes (a malformed `steer` would surface as an ENGINE failure misclassified as
+ * `run_command_failed`). Returns the typed action, or undefined for anything malformed — which
  * answers protocol-level `invalid_command`, same responsibility as the hub's unknown-type default.
  */
-function parseWireCommand(raw: unknown): SessionCommand | undefined {
-  // COMPILE-TIME drift guard, variant level: this switch hand-mirrors the SessionCommand union,
-  // and a new variant added in session.ts would otherwise compile clean while the wire answers it
+function parseWireAction(raw: unknown): SessionAction | undefined {
+  // COMPILE-TIME drift guard, variant level: this switch hand-mirrors the SessionAction union, and a
+  // new variant added in session.ts would otherwise compile clean while the wire answers it
   // `invalid_command` — silently breaking local/remote isomorphism. A new variant must break THIS
   // line first, forcing the decision of how the wire carries it.
-  const _commandDriftGuard: Record<SessionCommand["type"], true> = {
+  const _actionDriftGuard: Record<SessionAction["type"], true> = {
     steer: true,
     follow_up: true,
     abort: true,
     compact: true,
-    set_model: true,
-    set_thinking: true,
-    set_name: true,
-    navigate: true,
-    fork: true,
-    delete: true,
   };
-  void _commandDriftGuard;
+  void _actionDriftGuard;
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
   const imageOk = (i: unknown): boolean =>
@@ -185,8 +209,8 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
     // failure this parser exists to prevent (ImageRef shape from src/session.ts's Prompt).
     return images === undefined || (Array.isArray(images) && images.every(imageOk));
   };
-  // REBUILD, never pass raw through: "typed command out" must be construction, not assertion — a
-  // passed-through object would carry arbitrary extra keys into the engine.
+  // REBUILD, never pass raw through: "typed out" must be construction, not assertion — a passed-
+  // through object would carry arbitrary extra keys into the engine.
   const rebuildPrompt = (p: { text: string }): { text: string; images?: { data: string; mimeType: string }[] } => {
     const images = (p as { images?: { data: string; mimeType: string }[] }).images;
     return {
@@ -206,32 +230,45 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
   switch (c.type) {
     case "steer":
     case "follow_up":
-      return promptOk(c.prompt) ? ({ type: c.type, prompt: rebuildPrompt(c.prompt) } as SessionCommand) : undefined;
+      return promptOk(c.prompt) ? ({ type: c.type, prompt: rebuildPrompt(c.prompt) } as SessionAction) : undefined;
     case "abort":
       return { type: "abort" };
     case "compact":
       return c.instructions === undefined || typeof c.instructions === "string"
         ? { type: "compact", instructions: c.instructions as string | undefined }
         : undefined;
-    case "set_model":
-      return typeof c.model === "string" ? { type: "set_model", model: c.model } : undefined;
-    case "set_thinking":
-      return typeof c.level === "string" ? { type: "set_thinking", level: c.level } : undefined;
-    case "navigate":
-      return typeof c.targetId === "string" ? { type: "navigate", targetId: c.targetId } : undefined;
-    case "set_name":
-      return typeof c.name === "string" ? { type: "set_name", name: c.name } : undefined;
-    case "fork":
-      return typeof c.fromEntryId === "string" && typeof c.into === "string"
-        ? { type: "fork", fromEntryId: c.fromEntryId, into: c.into }
-        : undefined;
-    case "delete":
-      return { type: "delete" };
     default:
       return undefined;
   }
 }
 
+/**
+ * Parse a PATCH body into a session update. Same discipline as {@link parseWireAction}: rebuilt
+ * field by field, so an unknown key is dropped at the wire rather than reaching the hub, and a wrong
+ * TYPE is a 400 rather than an engine failure wearing a session error's code.
+ */
+function parseWireUpdate(raw: unknown): SessionUpdate | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const c = raw as Record<string, unknown>;
+  const fields: SessionUpdateField[] = ["name", "model", "thinkingLevel", "leafEntryId"];
+  // COMPILE-TIME drift guard: a field added to SessionUpdate must break THIS line, not silently
+  // stop travelling while the client believes it was sent.
+  const _updateDriftGuard: Record<SessionUpdateField, true> = {
+    name: true,
+    model: true,
+    thinkingLevel: true,
+    leafEntryId: true,
+  };
+  void _updateDriftGuard;
+  const patch: SessionUpdate = {};
+  for (const field of fields) {
+    const value = c[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string") return undefined;
+    patch[field] = value;
+  }
+  return patch;
+}
 export interface ControlPlaneOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
    *  remote-control endpoint must not be constructible by omission. */
@@ -244,28 +281,33 @@ export interface ControlPlaneOptions {
 }
 
 /**
- * Create the control plane as a mountable prefix owner: `GET
- * /control/capabilities|commands|state|entries|events` + `POST /control/dispatch`, all
- * bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
- * The plane OWNS {@link CONTROL_PREFIX}: it is mounted as one sub-application, answers its own
- * 404/405/preflight, and puts CORS headers on every reply — see {@link planeApp}.
+ * Create the control plane as a mountable prefix owner — a RESTful surface over
+ * {@link CONTROL_PREFIX}: sessions are a collection, a session is a resource, its history and event
+ * stream are sub-resources, and the things that HAPPEN to a run are posted to `…/actions`.
+ * The plane OWNS the prefix: it answers its own 404/405/preflight and puts CORS headers on every
+ * reply — see {@link planeApp}.
  */
 export function createControlPlane(control: SessionControl, options: ControlPlaneOptions): PrefixMount {
   return mountControlPlane(controlPlaneRoutes(control, options));
 }
 
 /** Mount a plane route table as a {@link PrefixMount} — the plane owns a PREFIX, while a route
- *  table is a set of literal paths. */
-export function mountControlPlane(routes: Record<string, ChannelHandler>): PrefixMount {
+ *  table is a set of paths, at most one segment of which is a session id. */
+export function mountControlPlane(routes: PlaneRoutes): PrefixMount {
   return { prefix: CONTROL_PREFIX, handler: planeApp(routes) };
 }
 
-/** The plane's route table. Exported so the conformance sweeps derive their route list from what is
- *  actually mounted, rather than from a hand-kept copy that cannot notice a new route. */
-export function controlPlaneRoutes(
-  control: SessionControl,
-  options: ControlPlaneOptions,
-): Record<string, ChannelHandler> {
+/**
+ * The plane's route table. Exported so the conformance sweeps derive their route list from what is
+ * actually mounted, rather than from a hand-kept copy that cannot notice a new route.
+ *
+ * The shape mirrors the contract: a collection, a resource, its sub-resources, and one action
+ * endpoint. What a session IS gets `GET`; what a session HAS gets `PATCH` (properties, last-wins);
+ * what happens TO a run gets `POST …/actions` (not a property — an event in time). `PUT` on a
+ * session id is the fork, and it is a PUT because a fork is idempotent by construction: the id is
+ * the caller's, the body says where the history came from, and repeating it changes nothing.
+ */
+export function controlPlaneRoutes(control: SessionControl, options: ControlPlaneOptions): PlaneRoutes {
   const { token } = options;
   if (!token) throw new Error("createControlPlane: a bearer token is required (empty tokens are not a mode)");
   const epoch = crypto.randomUUID();
@@ -278,82 +320,130 @@ export function controlPlaneRoutes(
     return header.length === expected.length && timingSafeEqual(header, expected);
   };
   const invokeHandler = options.agent ? createInvokeHandler(options.agent) : undefined;
-  /** Wrap a handler with auth + the session query param most routes need. */
+  /** Authenticate, then hand the handler the pieces every route wants: the request, the URL (for
+   *  query parameters), and the session the PATH named — `""` on the routes that have no id in
+   *  them, which those handlers never read. */
   const guard =
-    (handler: (req: Request, url: URL) => Response | Promise<Response>) =>
-    (req: Request): Response | Promise<Response> => {
+    (handler: (req: Request, url: URL, session: string) => Response | Promise<Response>): PlaneHandler =>
+    (req, session) => {
       if (!authed(req)) return text("unauthorized\n", 401);
-      return handler(req, new URL(req.url));
+      return handler(req, new URL(req.url), session);
     };
-  // Extraction only — each route still answers its own 400 (the name must not imply enforcement).
-  const sessionParam = (url: URL): string | undefined => url.searchParams.get("session") ?? undefined;
+  /** Read a JSON body under the shared cap. Answers the Response to send on failure, so a route can
+   *  `if ("error" in read) return read.error`. */
+  const readJson = async (req: Request): Promise<{ value: unknown } | { error: Response }> => {
+    const body = await readBodyCapped(req, ACTION_BODY_LIMIT);
+    // The 413 names the ceiling: the docs promise images on this plane, and an unexplained
+    // rejection would send a client author hunting everywhere but the cap. Derived from the
+    // constant — a hardcoded "1 MiB" would lie the day the cap changes.
+    if ("tooLarge" in body) {
+      return {
+        error: text(`body too large (limit ${MAX_BODY_BYTES >> 20} MiB — images count base64-inflated)\n`, 413),
+      };
+    }
+    // An empty body is an empty object: `POST …/actions` always carries one, but `PATCH` with
+    // nothing to set is a legal no-op and a client should not have to send `{}` to say so.
+    if (body.text.trim() === "") return { value: {} };
+    try {
+      return { value: JSON.parse(body.text) as unknown };
+    } catch {
+      return { error: text("invalid JSON\n", 400) };
+    }
+  };
 
   return {
+    // The DATA plane, at the prefix rather than under a session: its body already carries the scope
+    // (SPEC `invoke(scope, prompt)`), so a session in the path would be a second place to say it —
+    // and two places to say one thing is a place for them to disagree.
     ...(invokeHandler ? { "POST /control/invoke": guard((req) => invokeHandler(req)) } : {}),
+
     "GET /control/capabilities": guard(() => json(control.capabilities())),
 
     "GET /control/commands": guard(async () => json(await control.commands())),
 
-    // The DEPLOYMENT's conversation list — the one route not keyed by a session, and the one read
-    // that may fail: `[]` is what an empty deployment answers, so a store that cannot be enumerated
-    // gets a coded non-2xx instead. 503 + the code, because the alternative (#309's lesson) is a
-    // client that can only classify a bare 500 as "the endpoint is unreachable" and burns its
-    // reconnect budget on a condition reconnecting cannot fix.
+    // The DEPLOYMENT's conversation list — and the one read that may fail: `[]` is what an empty
+    // deployment answers, so a store that cannot be enumerated gets a coded non-2xx instead. 503 +
+    // the code, because the alternative (#309's lesson) is a client that can only classify a bare
+    // 500 as "the endpoint is unreachable" and burns its reconnect budget on a condition
+    // reconnecting cannot fix.
     "GET /control/sessions": guard(async () => {
       try {
-        return json(await control.sessions());
+        return json(await control.sessions.list());
       } catch (error) {
         return json({ code: SESSIONS_UNAVAILABLE_CODE, message: String(error), retryable: true }, 503);
       }
     }),
 
-    "GET /control/state": guard(async (_req, url) => {
-      const session = sessionParam(url);
-      if (!session) return text("missing ?session\n", 400);
-      return json(await control.state(session));
+    // PUT, because a fork is idempotent: this id, holding the history that was at `from`@`at`.
+    // Repeating it answers ok and writes nothing; naming an id that holds a different history is a
+    // conflict, not an overwrite.
+    [`PUT /control/sessions/${SESSION_SEGMENT}`]: guard(async (req, _url, session) => {
+      const read = await readJson(req);
+      if ("error" in read) return read.error;
+      const body = read.value as { from?: unknown; at?: unknown };
+      if (typeof body.from !== "string" || typeof body.at !== "string") {
+        return text("expected { from: string, at: string }\n", 400);
+      }
+      return json(await control.sessions.fork({ from: body.from, at: body.at, into: session }));
     }),
 
-    "GET /control/entries": guard(async (_req, url) => {
-      const session = sessionParam(url);
-      if (!session) return text("missing ?session\n", 400);
-      const since = url.searchParams.get("since") ?? undefined;
-      return json(await control.entries(session, since !== undefined ? { since } : undefined));
-    }),
+    [`GET /control/sessions/${SESSION_SEGMENT}`]: guard(async (_req, _url, session) =>
+      json(await control.sessions.get(session).state()),
+    ),
 
-    "POST /control/dispatch": guard(async (req) => {
-      const body = await readBodyCapped(req, DISPATCH_BODY_LIMIT);
-      // The 413 names the ceiling: the docs promise images on this plane, and an unexplained
-      // rejection would send a client author hunting everywhere but the cap.
-      if ("tooLarge" in body) {
-        // Derived from the constant — a hardcoded "1 MiB" would lie the day the cap changes.
-        return text(`body too large (limit ${MAX_BODY_BYTES >> 20} MiB — images count base64-inflated)\n`, 413);
-      }
-      let parsed: { session?: unknown; command?: unknown };
-      try {
-        parsed = JSON.parse(body.text) as typeof parsed;
-      } catch {
-        return text("invalid JSON\n", 400);
-      }
-      if (typeof parsed.session !== "string") {
-        return text("expected { session: string, command: SessionCommand }\n", 400);
-      }
-      const command = parseWireCommand(parsed.command);
-      if (!command) {
-        // Malformed shape = a protocol-level answer, mirrored from the hub's unknown-type default.
+    // PATCH, because these are session PROPERTIES: last-wins, durable, applied by the next turn.
+    [`PATCH /control/sessions/${SESSION_SEGMENT}`]: guard(async (req, _url, session) => {
+      const read = await readJson(req);
+      if ("error" in read) return read.error;
+      const patch = parseWireUpdate(read.value);
+      if (!patch) {
+        // Malformed shape = a protocol-level answer, mirrored from the hub's own payload rejections.
         return json({
           ok: false,
-          error: { code: INVALID_COMMAND_CODE, message: "malformed command", retryable: false },
+          error: { code: INVALID_COMMAND_CODE, message: "malformed update", retryable: false },
         });
       }
-      // The result rides HTTP 200 either way: `ok: false` is a protocol-level answer (rejected
-      // before acceptance), not a transport failure.
-      return json(await control.dispatch(parsed.session, command));
+      return json(await control.sessions.get(session).update(patch));
     }),
 
-    "GET /control/events": guard((_req, url) => {
-      const session = sessionParam(url);
-      if (!session) return text("missing ?session\n", 400);
-      const iterator = control.events(session)[Symbol.asyncIterator]();
+    [`DELETE /control/sessions/${SESSION_SEGMENT}`]: guard(async (_req, _url, session) =>
+      json(await control.sessions.get(session).delete()),
+    ),
+
+    [`GET /control/sessions/${SESSION_SEGMENT}/entries`]: guard(async (_req, url, session) => {
+      const since = url.searchParams.get("since") ?? undefined;
+      return json(await control.sessions.get(session).entries(since !== undefined ? { since } : undefined));
+    }),
+
+    // The run actions. Not PATCH: none of them SETS anything — they join, queue, stop, or summarize,
+    // and the outcome arrives on the event stream rather than in the resource's next read.
+    [`POST /control/sessions/${SESSION_SEGMENT}/actions`]: guard(async (req, _url, session) => {
+      const read = await readJson(req);
+      if ("error" in read) return read.error;
+      const action = parseWireAction(read.value);
+      if (!action) {
+        return json({
+          ok: false,
+          error: { code: INVALID_COMMAND_CODE, message: "malformed action", retryable: false },
+        });
+      }
+      const s = control.sessions.get(session);
+      // The result rides HTTP 200 either way: `ok: false` is a protocol-level answer (rejected
+      // before acceptance), not a transport failure.
+      switch (action.type) {
+        case "steer":
+          return json(await s.steer(action.prompt));
+        case "follow_up":
+          return json(await s.followUp(action.prompt));
+        case "abort":
+          return json(await s.abort());
+        case "compact":
+          return json(await s.compact(action.instructions !== undefined ? { instructions: action.instructions } : {}));
+      }
+    }),
+
+    [`GET /control/sessions/${SESSION_SEGMENT}/events`]: guard((_req, _url, session) => {
+      const iterator = control.sessions.get(session).events()[Symbol.asyncIterator]();
       // EAGER registration: issue the first pull NOW, before the Response (and thus the client's
       // fetch resolution) exists — hub subscription is registered synchronously inside next(), so
       // "the client saw response headers" implies "events from that moment on will be delivered".

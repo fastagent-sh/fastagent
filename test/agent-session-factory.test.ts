@@ -169,7 +169,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       },
       openIfExists: (id: string) => real.openIfExists(id),
       list: () => real.list(),
-      fork: (from: string, at: string, into: string) => real.fork(from, at, into),
+      fork: (from: string, at: string, into: string, provenance: string) => real.fork(from, at, into, provenance),
       delete: (id: string) => real.delete(id),
     };
 

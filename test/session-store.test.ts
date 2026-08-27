@@ -147,6 +147,12 @@ describe("piSessionRecordStore", () => {
   });
 });
 
+/** The MESSAGES on a record's active path. A forked record also carries one metadata entry (its
+ *  provenance), which is not history — counting raw entries would make these assertions about it. */
+function messages(record: { getBranch(): { type?: string }[] } | undefined): { type?: string }[] {
+  return (record?.getBranch() ?? []).filter((e) => e.type === "message");
+}
+
 describe("piInMemorySessionRecordStore", () => {
   it("continuity within the instance, and none across ids", async () => {
     const store = piInMemorySessionRecordStore();
@@ -206,12 +212,12 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     parent.appendMessage({ role: "user", content: "second", timestamp: 3 });
     parent.appendMessage(fauxAssistantMessage("second answer"));
 
-    await store.fork("room", at, "room-fork");
+    await store.fork("room", at, "room-fork", "test-provenance");
     const forked = await store.openIfExists("room-fork");
-    expect(forked?.getBranch().length).toBe(2); // up to `at`, not the parent's leaf
+    expect(messages(forked)).toHaveLength(2); // up to `at`, not the parent's leaf
     expect((await store.list()).map((r) => r.session).sort()).toEqual(["room", "room-fork"]);
     // The parent is untouched by its own fork.
-    expect((await store.openIfExists("room"))?.getBranch().length).toBe(4);
+    expect(messages(await store.openIfExists("room"))).toHaveLength(4);
 
     expect(await store.delete("room-fork")).toBe(true);
     expect(await store.openIfExists("room-fork")).toBeUndefined();
@@ -223,8 +229,8 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     const parent = await store.openOrCreate("room");
     const at = parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
     parent.appendMessage({ role: "user", content: "second", timestamp: 2 });
-    await store.fork("room", at, "copy");
-    expect((await store.openIfExists("copy"))?.getBranch().length).toBe(1);
+    await store.fork("room", at, "copy", "test-provenance");
+    expect(messages(await store.openIfExists("copy"))).toHaveLength(1);
     expect((await store.list()).map((r) => r.session).sort()).toEqual(["copy", "room"]);
     expect(await store.delete("copy")).toBe(true);
     expect(await store.list()).toHaveLength(1);
@@ -263,8 +269,8 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
       parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
       const at = parent.appendMessage(fauxAssistantMessage("answer"));
       await store.openOrCreate("taken");
-      await expect(store.fork("room", at, "taken")).rejects.toThrow(/already exists/);
-      expect((await store.openIfExists("taken"))?.getBranch()).toHaveLength(0); // untouched
+      await expect(store.fork("room", at, "taken", "test-provenance")).rejects.toThrow(/already exists/);
+      expect(messages(await store.openIfExists("taken"))).toHaveLength(0); // untouched
     }
   });
 
@@ -279,7 +285,7 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
       parent.appendMessage({ role: "user", content: `q${i}`, timestamp: i });
       at = parent.appendMessage(fauxAssistantMessage(`a${i}`));
     }
-    await store.fork("long", at, "long-fork");
+    await store.fork("long", at, "long-fork", "test-provenance");
     const child = await store.openIfExists("long-fork");
     expect(child?.getBranch().filter((e) => e.type === "compaction")).toHaveLength(0);
     // The inheritance path, same backend, DOES bound it — the split is deliberate, not an omission.
@@ -294,7 +300,7 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
       parent.appendSessionInfo("Deploy notes");
       parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
       const at = parent.appendMessage(fauxAssistantMessage("answer"));
-      await store.fork("named", at, "named-fork");
+      await store.fork("named", at, "named-fork", "test-provenance");
       // On disk the name cannot NOT travel (it is a record on the copied path); memory matches it
       // rather than being quietly different.
       expect((await store.openIfExists("named-fork"))?.getSessionName()).toBe("Deploy notes");
@@ -314,9 +320,9 @@ describe("fork: the copy is a copy", () => {
       const at = parent.appendMessage({ role: "user", content: "the question", timestamp: 1 });
       parent.appendMessage(fauxAssistantMessage("an answer to discard"));
 
-      await store.fork("room", at, "retry");
+      await store.fork("room", at, "retry", "test-provenance");
       const child = await store.openIfExists("retry");
-      expect(child?.getBranch()).toHaveLength(1);
+      expect(messages(child)).toHaveLength(1);
       expect(JSON.stringify(child?.getBranch())).toContain("the question");
       expect(JSON.stringify(child?.getBranch())).not.toContain("an answer to discard");
     }
@@ -337,7 +343,7 @@ describe("fork: the copy is a copy", () => {
     } as never);
 
     const before = (await store.list()).find((r) => r.session === "room");
-    await store.fork("room", at, "copy");
+    await store.fork("room", at, "copy", "test-provenance");
     const after = (await store.list()).find((r) => r.session === "room");
     expect(after?.messageCount).toBe(before?.messageCount); // the source is untouched by its own fork
 
@@ -356,7 +362,7 @@ describe("fork: the copy is a copy", () => {
     parent.appendMessage({ role: "user", content: "asked long ago", timestamp: 1 });
     const at = parent.appendMessage({ ...fauxAssistantMessage("answered long ago"), timestamp: 2 } as never);
 
-    await store.fork("old", at, "branch");
+    await store.fork("old", at, "branch", "test-provenance");
     const row = (await store.list()).find((r) => r.session === "branch") as { createdAt: number; updatedAt: number };
     expect(row.updatedAt).toBeGreaterThanOrEqual(row.createdAt);
   });

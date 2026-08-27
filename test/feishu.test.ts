@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
-import type { SessionCommand, SessionControl } from "../src/session.ts";
+import type { SessionControl } from "../src/session.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
@@ -2615,27 +2615,31 @@ describe("cardSummary: the settled card's chat-list/notification preview", () =>
 
 describe("feishu stop command", () => {
   const fakeControl = (result: { ok: true } | { code: string }) => {
-    const dispatched: { session: string; command: SessionCommand }[] = [];
+    const aborted: string[] = [];
     const control = {
-      dispatch: async (session: string, command: SessionCommand) => {
-        dispatched.push({ session, command });
-        return "ok" in result
-          ? { ok: true as const }
-          : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+      sessions: {
+        get: (session: string) => ({
+          abort: async () => {
+            aborted.push(session);
+            return "ok" in result
+              ? { ok: true as const }
+              : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+          },
+        }),
       },
     } as unknown as SessionControl;
-    return { control, dispatched };
+    return { control, aborted };
   };
 
   it("aborts the session, replies, and never submits a turn (mention-stripped match)", async () => {
     feishuFetch();
-    const { control, dispatched } = fakeControl({ ok: true });
+    const { control, aborted } = fakeControl({ ok: true });
     const { handler, calls, idle } = buildChannel({ control });
     const evt = messageEvent({ id: "om_stop", text: "Stop." });
     expect((await handler(feishuRequest(evt))).status).toBe(200);
     await flush();
     await idle();
-    expect(dispatched).toEqual([{ session: "feishu:oc_1", command: { type: "abort" } }]);
+    expect(aborted).toEqual(["feishu:oc_1"]);
     expect(calls).toHaveLength(0); // a control action, never a turn
   });
 

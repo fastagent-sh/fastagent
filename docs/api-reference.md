@@ -510,7 +510,7 @@ const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer 
 // Live events are NOT durable history: a subscription sees only what happens while it iterates,
 // so start watching BEFORE (or while) the run is driven — never after it drained.
 const watching = (async () => {
-  for await (const ev of control.events("s1")) {
+  for await (const ev of control.sessions.get("s1").events()) {
     console.log(ev.type); // run_started, message_delta, tool_started, …
     if (ev.type === "run_settled") break; // events() has no natural end — the consumer decides
   }
@@ -523,26 +523,27 @@ await watching;
 await control.commands(); // [{ name: "triage", description: "Sort an inbox", source: "skill" }]
 
 // After a disconnect, missed history comes from the durable plane, not the live stream:
-const { entries, leafEntryId } = await control.entries("s1", { since: cursor });
-const state = await control.state("s1"); // { status, activeRunId?, leafEntryId? }
+const s1 = control.sessions.get("s1"); // a pure binding: an id + the transport, nothing to dispose
+const { entries, leafEntryId } = await s1.entries({ since: cursor });
+const state = await s1.state(); // { status, name?, activeRunId?, leafEntryId? }
 ```
 
 `invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich
-`SessionEvent` stream. `dispatch` modulates the run an invoke is driving — acceptance is not
+`SessionEvent` stream. A session's ACTIONS modulate the run an invoke is driving — acceptance is not
 outcome (`ok: true` = admitted; the result arrives as `run_settled`):
 
 ```ts
-await control.dispatch("s1", { type: "steer", prompt: { text: "use bun, not npm" } }); // joins the run
-await control.dispatch("s1", { type: "follow_up", prompt: { text: "then summarize" } }); // FIFO queue
-await control.dispatch("s1", { type: "abort" }); // invoke ends failed{code:"aborted"}, run_settled{aborted}
+await s1.steer({ text: "use bun, not npm" });   // joins the run
+await s1.followUp({ text: "then summarize" });  // FIFO queue
+await s1.abort();                                // invoke ends failed{code:"aborted"}, run_settled{aborted}
 ```
 
 With steering/follow-ups the invoke stream terminates at the run's SETTLE (all queued continuations
-drained) — for consumers that never dispatch, a run equals a single turn, byte-identical behavior.
-Run commands on an idle session reject with `no_active_run` before acceptance; a command that
-reached a run but could not take effect (the run raced to settlement) rejects with
-`run_command_failed`. Both are `retryable: false` — the same command as-is fails again; consult
-`state()` before re-dispatching. The race window applies to all three commands symmetrically: an
+drained) — for consumers that never act on a run, a run equals a single turn, byte-identical
+behavior. Actions on an idle session reject with `no_active_run` before acceptance; one that reached
+a run but could not take effect (the run raced to settlement) rejects with `run_command_failed`. Both
+are `retryable: false` — the same call fails again; consult `state()` before trying again. The race
+window applies to all three symmetrically: an
 accepted `abort` can still settle `completed`, and an accepted `steer`/`follow_up` can settle
 without its prompt being consumed, when the run finishes inside the window — acceptance is not
 outcome; the settlement is the truth.
@@ -557,7 +558,7 @@ a definition the server cannot read at all is a deployment fault with no truthfu
 the rejection carries no stable code (remotely: an uncoded non-2xx → `ControlRequestError`). Wrap the
 call, and expect no `error.code` to branch on.
 
-`sessions()` is the deployment's conversation list — `{ session, name?, createdAt, updatedAt,
+`sessions.list()` is the deployment's conversation list — `{ session, name?, createdAt, updatedAt,
 messageCount, preview? }` per record, with `session` being the id the CALLER minted (a channel's
 thread key, not a storage name). It is DEPLOYMENT-level: it answers for every session at once, so a
 multi-tenant facade in front of one deployment must not expose it (it does not need to — it already
@@ -566,56 +567,57 @@ unlike that one it carries a stable code: a store that cannot be enumerated answ
 `sessions_unavailable` (remotely: 503 with the code on `ControlRequestError.code`), because `[]`
 already means "no sessions".
 
-Lifecycle commands are whole-record writes, gated by `capabilities().lifecycle` and taking the same
-lease as a run:
+Writes run between runs, under the SAME lease (`session_busy` while a run is active, retryable at
+idle). A session's PROPERTIES are one patch — `update` validates every field before writing any, so a
+rejected patch leaves nothing behind, and one event reports the result:
 
 ```ts
-await control.dispatch("s1", { type: "set_name", name: "Deploy notes" });          // the list's label
-await control.dispatch("s1", { type: "fork", fromEntryId: entryId, into: "s1-b" }); // copy history into a NEW session
-await control.dispatch("s1", { type: "delete" });                                   // irreversible
+await s1.update({ name: "Deploy notes" });                      // the list's label
+await s1.update({ model: "anthropic/claude-sonnet-4-5" });      // durable per-session override
+await s1.update({ thinkingLevel: "high" });
+await s1.update({ leafEntryId: entryId });                      // move the leaf → state_changed
+await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" }); // both, atomically
 ```
 
-`fork` names its target: `into` is a Caller id like any other, so the plane invents nothing and a
-fork onto an existing session rejects `invalid_command` rather than merging two histories. Cloning is
-`fork` with the session's own `leafEntryId`. There is no `create` — `invoke` is what brings a session
-into being. `delete` ends the session's live `events()` streams; it is guarded by the same bearer
-token as every other command, which is the only key the framework owns.
+`leafEntryId` is the write verb for the tree `entries()` publishes: it moves the session's active
+leaf, so the next turn hangs off it instead of the old one — which is also how sibling branches come
+to exist. An id that `entries()` did not publish rejects `invalid_command`. Gate each field on
+`capabilities().updatable`.
 
-Boundary mutations run between runs, under the SAME lease (`session_busy` while a run is active,
-retryable at idle):
+The rest are whole-record or run-scoped calls:
 
 ```ts
-await control.dispatch("s1", { type: "set_model", model: "anthropic/claude-sonnet-4-5" }); // durable per-session override
-await control.dispatch("s1", { type: "set_thinking", level: "high" });
-await control.dispatch("s1", { type: "compact", instructions: "keep the decisions" }); // accept-fast: ok on
-// admission; the outcome arrives as compaction_finished{summary|error|aborted} (emitted after the
-// lease frees; aborted = a deliberate stop via dispatch(abort) — not a failure)
-await control.dispatch("s1", { type: "navigate", targetId: entryId }); // move the leaf; state_changed{leafEntryId}
+await s1.compact({ instructions: "keep the decisions" }); // accept-fast: ok on admission; the
+// outcome arrives as compaction_finished{summary|error|aborted} (emitted after the lease frees;
+// aborted = a deliberate s1.abort() — not a failure)
+await control.sessions.fork({ from: "s1", at: entryId, into: "s1-b" }); // copy history into a NEW session
+await s1.delete();                                                       // irreversible
 ```
 
-`navigate` is the write verb for the tree `entries()` publishes: it moves the session's active leaf,
-so the next turn hangs off `targetId` instead of the old leaf — which is also how sibling branches
-come to exist. A `targetId` that is not one of the ids `entries()` published rejects
-`invalid_command`; gate on `capabilities().navigate`.
+`fork` names its target: `into` is a Caller id like any other, so the plane invents nothing. It is
+IDEMPOTENT — the new record carries where it came from, so repeating the same fork answers `ok: true`
+and writes nothing (a retry after a lost response does not produce a second record), while the same
+id holding a different history rejects `invalid_command`. Cloning is `fork` at the session's own
+`leafEntryId`. There is no `create` — `invoke` is what brings a session into being. `delete` ends the
+session's live `events()` streams; it is guarded by the same bearer token as every other call, which
+is the only key the framework owns.
 
 Overrides persist in the session record and every later turn's fresh session binding applies them — on any
 serving path, channels included. One exception: a recorded thinking level the session's CURRENT
-model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. `set_model`
-re-records the clamped level at the boundary, so `state()` and the execution agree and the client gets
+model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. `update({ model })`
+re-records the clamped level, so `state()` and the execution agree and the client gets
 it in the same `state_changed`; the resolve keeps clamping as a BACKSTOP for what the boundary cannot
 see (a deployment whose CONFIGURED model changed between restarts), and there it warns server-side
 while `state()` reports the recorded level. Note the clamp's direction: it takes the lowest supported
 level at or above the recorded one and only falls back downward if nothing above exists — a gap
-resolves upward, which costs more, not less. Boundary mutations require an EXISTING session (`no_such_session`
-otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
-`invalid_command` before acceptance;
-`capabilities()` lists `allowedModels` (the deployment's registry — a static fact) and reports
-`thinkingLevel` as a plain boolean: WHICH levels exist depends on the model a session is running, so
-they ride `state().availableThinkingLevels`. `set_thinking` validates against that same set and
-rejects anything outside it with `invalid_command`
-rather than recording an override the run would ignore. Boundary commands require the wiring the
-agent opener provides (`sessionControl: true`); a hub without it reports them off and rejects
-with `unsupported_capability`.
+resolves upward, which costs more, not less. Writes require an EXISTING session (`no_such_session`
+otherwise): sessions are created by `invoke` or copied by `fork`, never minted by an update. Invalid
+payloads reject `invalid_command` before acceptance. `capabilities()` lists `allowedModels` (the
+deployment's registry — a static fact) but not thinking LEVELS: which exist depends on the model a
+session is running, so they ride `state().availableThinkingLevels`, and `update({ thinkingLevel })`
+validates against that same set rather than recording an override the run would ignore. Every write
+requires the wiring the agent opener provides (`sessionControl: true`); a hub without it reports an
+empty `updatable`, `fork: false`, `delete: false`, and rejects with `unsupported_capability`.
 
 For agent assembly the store lives inside the opener, so ask the opener to wire the hub:
 
@@ -637,22 +639,38 @@ import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 
 // Set `sessionControl: true` in fastagent.config.*; the plane is then mounted on the service's
 // handler, owning the /control prefix — routes, preflight, 404/405 and a failing handler all carry
-// CORS headers, so a browser client can read every reply. SSE at /control/events.
+// CORS headers, so a browser client can read every reply. SSE at /control/sessions/{id}/events.
 const service = await createAgentService("./my-agent");
 // service.control?.token is how you hand a client access
 
 // Client side — the SAME SessionControl interface, isomorphic to local:
 const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });
-for await (const ev of remote.events("s1")) console.log(ev.type);
+for await (const ev of remote.sessions.get("s1").events()) console.log(ev.type);
 ```
 
 The DATA plane travels the same wire: `connectAgent({ url, token })` returns an `Agent` whose
 `invoke` drives `POST /control/invoke` (mounted when the serve wires an agent — dev/start do) —
 paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
 same two contracts local code uses. Disconnecting the invoke stream cancels the run. The invoke wire is
-text-only for now (images fail visibly there); `steer`/`follow_up` via `dispatch` carry full
-Prompts, images included — within the dispatch body cap (1 MiB, with base64 inflation counted;
-oversized bodies get a 413 naming the limit).
+text-only for now (images fail visibly there); `steer`/`followUp` carry full Prompts, images
+included — within the action body cap (1 MiB, with base64 inflation counted; oversized bodies get a
+413 naming the limit).
+
+The wire is RESTful and mechanical, so a non-TypeScript client is a `curl` away:
+
+```
+GET    /control/sessions                       list
+PUT    /control/sessions/{id}                  {from, at} — fork (idempotent)
+GET    /control/sessions/{id}                  state
+PATCH  /control/sessions/{id}                  {name?, model?, thinkingLevel?, leafEntryId?}
+DELETE /control/sessions/{id}
+GET    /control/sessions/{id}/entries          ?since=
+GET    /control/sessions/{id}/events           SSE
+POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
+```
+
+`{id}` is percent-encoded, so a Telegram group is `/control/sessions/tg%3A-1001234567890` — session
+ids are opaque Caller strings and may contain `:` and `/`.
 
 The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
 gap — and any mid-stream transport failure, a server restart included — throws from the events

@@ -14,6 +14,7 @@ import { log } from "../../log.ts";
 import type { SessionSummary } from "../../session.ts";
 import {
   type SessionInheritance,
+  stampProvenance,
   copyBranchForInheritance,
   copyBranchInto,
   inheritanceCut,
@@ -34,9 +35,11 @@ export interface PiSessionRecordStore {
    *  type: the hub forwards it, and a second identical shape here would only be a thing to keep in
    *  sync. */
   list(): Promise<SessionSummary[]>;
-  /** Copy `from`'s history up to entry `at` into a new record named `into`. Throws on any failure:
-   *  a half-copied fork is never left in place, and the caller turns the throw into a coded result. */
-  fork(from: string, at: string, into: string): Promise<void>;
+  /** Copy `from`'s history up to entry `at` into a new record named `into`, stamped with `provenance`
+   *  so a repeat of the SAME fork can be recognised as one ({@link forkProvenance}) instead of
+   *  becoming a second record or an overwrite. Throws on any failure: a half-copied fork is never
+   *  left in place, and the caller turns the throw into a coded result. */
+  fork(from: string, at: string, into: string, provenance: string): Promise<void>;
   /** Destroy a record. `false` = there was none (the caller answers `no_such_session`). */
   delete(sessionId: string): Promise<boolean>;
 }
@@ -268,7 +271,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         ];
       });
     },
-    async fork(from, at, into) {
+    async fork(from, at, into, provenance) {
       const parent = await openExisting(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
       // The port promises a NEW record, so the guarantee belongs here rather than in the one caller
@@ -284,6 +287,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         // place. A client that wants "(copy)" calls `set_name`.
         const name = parent.getSessionName();
         if (name) staged.appendSessionInfo(name);
+        stampProvenance(staged, provenance);
       });
     },
     async delete(sessionId) {
@@ -481,7 +485,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
         };
       });
     },
-    async fork(from, at, into) {
+    async fork(from, at, into, provenance) {
       const parent = live.get(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
       // The port's promise, not the caller's: registering over a live session would replace its
@@ -498,6 +502,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // difference nobody can predict — a client that wants "(copy)" calls `set_name`.
       const name = parent.getSessionName();
       if (name) staged.appendSessionInfo(name);
+      stampProvenance(staged, provenance);
       live.set(into, staged);
     },
     async delete(sessionId) {

@@ -3,8 +3,15 @@
  * (docs/design/session-control.md). Pure types, zero dependencies; importing any engine
  * implementation here is forbidden, exactly like agent.ts.
  *
- * The plane model: `invoke` is the only data plane (no run exists without an invoke); `dispatch`
- * modulates the run an invoke drives; `state`/`entries`/`events` observe, strictly read-only.
+ * The plane model: `invoke` is the only data plane (no run exists without an invoke); a session's
+ * ACTIONS modulate the run an invoke drives; `state`/`entries`/`events` observe, strictly read-only.
+ *
+ * The shape follows the question each call answers, not the transport that carries it. A session's
+ * PROPERTIES (name, model, thinking level, where its leaf points) are updated; things that HAPPEN to
+ * a run (steer, abort, compact) are actions; the set of sessions is a collection. Folding all three
+ * into one `dispatch(session, command)` — which is what this once was — made a client spell the
+ * session id on every call and read `{ type: "delete" }` as something dispatched INTO a session that
+ * is about to stop existing.
  */
 import type { Json, Prompt } from "./agent.ts";
 
@@ -12,67 +19,149 @@ import type { Json, Prompt } from "./agent.ts";
 
 export interface SessionControl {
   capabilities(): SessionCapabilities;
-  /** The names this agent exposes — what a composer's `/` completion LISTS. A listing, not a
-   *  dispatch surface: the data plane takes prompts as text, so what typing one means (expanding it,
-   *  sending "use the X skill", filtering a menu) is the client's business. Sessionless (the
+  /** The names this agent exposes — what a composer's `/` completion LISTS. A listing, not an
+   *  invocation surface: the data plane takes prompts as text, so what typing one means (expanding
+   *  it, sending "use the X skill", filtering a menu) is the client's business. Sessionless (the
    *  definition is a deployment fact) but ASYNC, because a definition is allowed to be live: an
    *  implementation that re-reads it per turn must answer from that same read, or the list and the
    *  behavior diverge. `[]` is a complete answer, not a missing one; a definition the implementation
    *  cannot read at all is a deployment fault and MAY reject. */
   commands(): Promise<AgentCommand[]>;
+  sessions: SessionCollection;
+}
+
+/** The deployment's sessions, as a collection. */
+export interface SessionCollection {
   /** Every session this DEPLOYMENT holds — what a GUI shows as its conversation list, and the only
-   *  route that is not keyed by a session. Deployment-level on purpose: a multi-tenant facade in
-   *  front of one deployment MUST NOT expose it, because it answers for every user at once. Such a
-   *  facade does not need it either — `Scope.session` is the Caller's own string, so it already
-   *  holds the mapping this would return (design §5).
+   *  call that is not about ONE session. Deployment-level on purpose: a multi-tenant facade in front
+   *  of one deployment MUST NOT expose it, because it answers for every user at once. Such a facade
+   *  does not need it either — `Scope.session` is the Caller's own string, so it already holds the
+   *  mapping this would return (design §5).
    *
    *  The one read that MAY reject: `[]` is a complete answer for a deployment with no sessions, so
-   *  it would be a lie for a store that cannot be enumerated. The others stay TOTAL — their absent
-   *  fields are answers a control-less deployment gives too. */
-  sessions(): Promise<SessionSummary[]>;
-  state(session: string): Promise<SessionState>;
+   *  it would be a lie for a store that cannot be enumerated. Every other read stays TOTAL — their
+   *  absent fields are answers a control-less deployment gives too. */
+  list(): Promise<SessionSummary[]>;
+  /**
+   * Copy `from`'s history up to entry `at` into a session called `into` — the growth verb beside
+   * {@link SessionUpdate.leafEntryId}'s walk, and the two together are what make a session tree
+   * usable. Cloning is this with the source's own `leafEntryId`.
+   *
+   * IDEMPOTENT: `into` is the CALLER's id (the plane never invents one), so repeating a fork that
+   * already landed is `ok: true` and writes nothing — a client that retries a request whose response
+   * it never saw does not get a second record. `into` naming a session that exists but came from
+   * somewhere else rejects `invalid_command`: same id, different history is what the id would then
+   * be lying about.
+   *
+   * Answers a result, not the new session: the caller minted `into` and can {@link get} it.
+   */
+  fork(options: { from: string; at: string; into: string }): Promise<SessionResult>;
+  /** Bind an id. A PURE BINDING — an id plus the transport it travels on: no state, no lifecycle,
+   *  nothing to dispose, and it does not check that the session exists (the calls on it answer that,
+   *  each in its own vocabulary). Two handles for one id are interchangeable. */
+  get(session: string): Session;
+}
+
+/**
+ * One session, bound. Every call here is about THIS session, so the id is spelled once.
+ *
+ * The split inside it is the one the contract is built on: {@link update} sets PROPERTIES (durable,
+ * last-wins, applied by the next turn), while the action methods do things TO A RUN (admitted or
+ * rejected now, outcome later on the event stream). {@link SessionResult} says which of the two a
+ * given answer is.
+ */
+export interface Session {
+  readonly id: string;
+  state(): Promise<SessionState>;
   /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
    *  id", regardless of branch structure. Reconstructing the active path in a branched session is
    *  the client's job via `parentId` chains from `leafEntryId`. An unknown cursor falls back to a
    *  full backfill (correct, merely larger). */
-  entries(session: string, options?: { since?: string }): Promise<SessionEntries>;
-  events(session: string): AsyncIterable<SessionEvent>;
-  dispatch(session: string, command: SessionCommand): Promise<SessionResult>;
+  entries(options?: { since?: string }): Promise<SessionEntries>;
+  events(): AsyncIterable<SessionEvent>;
+  /** Set durable session properties. Last-wins, applied by every later turn; an empty patch is a
+   *  no-op that still answers `ok: true`. Fields outside {@link SessionCapabilities.updatable}
+   *  reject `unsupported_capability`; invalid values reject `invalid_command`, before anything
+   *  durable lands. Takes the same lease as a run (`session_busy` while one is in flight). */
+  update(patch: SessionUpdate): Promise<SessionResult>;
+  /** Join the active run: delivered after the current turn's tool calls, before the next model
+   *  call. Not polyfillable — its delivery point is an engine primitive. */
+  steer(prompt: Prompt): Promise<SessionResult>;
+  /** Queue for the active run, FIFO, delivered when it is otherwise idle. */
+  followUp(prompt: Prompt): Promise<SessionResult>;
+  /** Stop the active run — its queues, its retry delay, its cancellable tool work — or an in-flight
+   *  {@link compact}, which is the same kind of thing: a model call a client must be able to stop. */
+  abort(): Promise<SessionResult>;
+  /** Summarize the history at a session boundary. ACCEPT-FAST: a full model call, so `ok: true`
+   *  means admitted and the outcome travels as `compaction_finished{summary|error|aborted}`. */
+  compact(options?: { instructions?: string }): Promise<SessionResult>;
+  /** Destroy the record. The plane's only IRREVERSIBLE call, guarded by the same bearer token as
+   *  everything else — the only key the framework owns (design §14). Live {@link events} streams for
+   *  this session END; a later {@link state} answers for a session that no longer exists. */
+  delete(): Promise<SessionResult>;
 }
 
+/** The durable properties {@link Session.update} sets. Every field is optional and last-wins; which
+ *  ones a deployment accepts is {@link SessionCapabilities.updatable}. */
+export interface SessionUpdate {
+  /** The display name `list()` reports — a label, not an identity: the id stays the Caller's. */
+  name?: string;
+  /** A FastAgent model spec, constrained to {@link SessionCapabilities.allowedModels}. Never a
+   *  provider credential. */
+  model?: string;
+  /** A string because supported levels are MODEL-dependent — the set for this session's current
+   *  model is {@link SessionState.availableThinkingLevels}. */
+  thinkingLevel?: string;
+  /** Move the session's active leaf: the write verb for the tree `entries()` publishes, and how
+   *  sibling branches come to exist (the next turn hangs off it). Every entry `entries()` publishes
+   *  is a legal target; anything else rejects `invalid_command`. A move to where the leaf already is
+   *  writes nothing. There is no move to the ROOT — "start from nothing" is a new session, not an
+   *  emptied one. */
+  leafEntryId?: string;
+}
+
+/** What {@link Session.update} can be asked to set. */
+export type SessionUpdateField = keyof SessionUpdate;
+
 /**
- * STATIC support declaration — sessionless, so nothing here may depend on a session. Two kinds of flag:
- * - COMMAND GATES (`steering`, `followUp`, `manualCompaction`, `modelSelection`, `thinkingLevel`,
- *   `navigate`):
- *   clients MUST gate dispatch on them; an unsupported command is rejected before acceptance with
+ * The wire form of the run actions — what a transport carries for {@link Session.steer} and its
+ * siblings. Clients use the METHODS; this exists so a transport has one body shape to parse, and so
+ * an implementation can answer an unknown `type` as `invalid_command` rather than crashing.
+ */
+export type SessionAction =
+  | { type: "steer"; prompt: Prompt }
+  | { type: "follow_up"; prompt: Prompt }
+  | { type: "abort" }
+  | { type: "compact"; instructions?: string };
+
+/**
+ * STATIC support declaration — sessionless, so nothing here may depend on a session. Two kinds of
+ * flag, and the difference decides what a client does with them:
+ * - GATES (`steering`, `followUp`, `compaction`, `fork`, `delete`, `updatable`): a client MUST gate
+ *   its controls on these; calling past one rejects before acceptance with
  *   {@link UNSUPPORTED_CAPABILITY_CODE}.
- * - OBSERVATION-QUALITY flags (`toolProgress`, `usage`): whether those events/state fields appear
- *   at all — nothing to dispatch, nothing to reject.
+ * - OBSERVATION QUALITY (`toolProgress`, `usage`): whether those events/state fields appear at all —
+ *   nothing to call, nothing to reject.
  *
- * `modelSelection` may carry a list because the registry is a deployment fact; thinking levels
- * depend on the session's current model, so they live on {@link SessionState.availableThinkingLevels}.
+ * `allowedModels` may live here because the registry is a deployment fact; thinking LEVELS depend on
+ * the model a session is currently running, so they live on
+ * {@link SessionState.availableThinkingLevels} — a static list could only answer for one model.
  *
- * `state`/`entries`/`events` are mandatory (the reconnect contract) and deliberately absent here.
+ * `state`/`entries`/`events` and `sessions.list()` are mandatory (the reconnect contract and the
+ * conversation list) and deliberately absent here.
  */
 export interface SessionCapabilities {
   steering: boolean;
   followUp: boolean;
-  manualCompaction: boolean;
-  modelSelection: false | { allowedModels: string[] };
-  /** Whether `set_thinking` is servable at all. WHICH levels is per-session — see
-   *  {@link SessionState.availableThinkingLevels}. */
-  thinkingLevel: boolean;
-  /** Whether the lifecycle commands (`fork` / `set_name` / `delete`) are servable. One gate for the
-   *  three because they stand or fall together: each is a WRITE against the record store under the
-   *  same lease, so a deployment that can serve one can serve all three. `sessions()` is NOT gated
-   *  here — it only reads, and a read has its own way to fail. */
-  lifecycle: boolean;
-  /** Whether `navigate` is servable at all — `false` both when the engine's sessions are linear and
-   *  when this deployment has no write path for them; either way the tree the contract publishes
-   *  (`SessionEntry.parentId` + `SessionEntries.leafEntryId`) is read-only here. Named after its COMMAND, unlike the older gates (`manualCompaction` gates
-   *  `compact`, `thinkingLevel` gates `set_thinking`): those already force a client to translate,
-   *  and a gate keyed by the command literal is the only naming a derived map could ever produce. */
-  navigate: boolean;
+  compaction: boolean;
+  fork: boolean;
+  delete: boolean;
+  /** Which {@link SessionUpdate} fields this deployment accepts. A patch naming anything else
+   *  rejects `unsupported_capability` — a LIST rather than a flag per field, so a client reads the
+   *  same names it writes. */
+  updatable: SessionUpdateField[];
+  /** The specs `update({ model })` accepts — present iff `model` is updatable. */
+  allowedModels?: string[];
   toolProgress: boolean;
   usage: boolean;
 }
@@ -90,30 +179,32 @@ export interface AgentCommand {
   source: string;
 }
 
-/** Stable `SessionResult.error.code` for a command the implementation does not support. */
+/** Stable `SessionResult.error.code` for a call, or an update field, the implementation does not
+ *  support — the answer to calling past a {@link SessionCapabilities} gate. */
 export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 
-/** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
- *  dispatched while the session has no active run — and, for `abort`, no in-flight manual
- *  compaction either (`abort` is also the door out of a `compacting` state; the outcome then
- *  travels as `compaction_finished{aborted}`). `retryable: false` — re-dispatching as-is fails
- *  again; re-dispatch only after `state()` shows an active run. */
+/** Stable `SessionResult.error.code` for a run action
+ *  (`steer`/`follow_up`/`abort`) called while the session has no active run — and, for `abort`, no
+ *  in-flight compaction either (`abort` is also the door out of a `compacting` state; the outcome
+ *  then travels as `compaction_finished{aborted}`). `retryable: false` — the same call fails again;
+ *  call it after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
-/** Stable `SessionResult.error.code` for a command whose PAYLOAD is invalid for this runtime — an
- *  unknown model spec, an unsupported thinking level. Permanent for that payload; a different value
- *  may succeed. Rejected before acceptance. */
+/** Stable `SessionResult.error.code` for a PAYLOAD that is invalid for this runtime — an unknown
+ *  model spec, an unsupported thinking level, an entry id that is not a position, a fork onto an id
+ *  another history already holds. Permanent for that payload; a different value may succeed.
+ *  Rejected before acceptance. */
 export const INVALID_COMMAND_CODE = "invalid_command";
 
-/** Stable `SessionResult.error.code` for a boundary mutation on a session that does not exist.
- *  Sessions are created by the DATA plane (`invoke`), never by the control plane — a mutation on an
- *  unknown id (a typo, a not-yet-started conversation) must not mint a ghost record. Rejected
- *  before acceptance; retry after the session's first turn exists. */
+/** Stable `SessionResult.error.code` for a write against a session that does not exist. Sessions are
+ *  created by the DATA plane (`invoke`) or copied by `fork`, never minted by an update — a write on
+ *  an unknown id (a typo, a not-yet-started conversation) must not create a ghost record. Rejected
+ *  before acceptance; retry once the session's first turn exists. */
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
-/** Stable `SessionResult.error.code` for a boundary mutation rejected BEFORE acceptance with
- *  nothing durable landed — a failed override append, or compact's admission failing (binding the session
- *  build, the local preparation). Acceptance sits where the work becomes asynchronous and
+/** Stable `SessionResult.error.code` for a write rejected BEFORE acceptance with nothing durable
+ *  landed — a failed property append, a fork whose copy could not be written, or compact's admission
+ *  failing (binding the session, the local preparation). Acceptance sits where the work becomes asynchronous and
  *  expensive: the model call — compact is accept-fast (holding the dispatch open for a full model
  *  call would make acceptance = outcome), and post-acceptance outcomes travel as
  *  `compaction_finished{summary|error|aborted}` events. `retryable: true` throughout: the same
@@ -123,53 +214,23 @@ export const BOUNDARY_COMMAND_FAILED_CODE = "boundary_command_failed";
 
 /** Stable `SessionResult.error.code` for `compact` on a session with no compactable history yet —
  *  a no-op, not a failure, rejected before acceptance. The {@link NO_ACTIVE_RUN_CODE} pattern:
- *  `retryable: false` (as-is retry fails now), re-dispatch once the session has grown. */
+ *  `retryable: false` (as-is retry fails now), call it again once the session has grown. */
 export const NOTHING_TO_COMPACT_CODE = "nothing_to_compact";
 
-/** Stable `SessionResult.error.code` for a run command that reached an active run but could not
- *  take effect because the run raced to settlement (or the engine refused it). Distinct from
- *  {@link NO_ACTIVE_RUN_CODE}: the run existed — and TRANSIENT: the session's next run can be
- *  dispatched to. Still pre-acceptance — nothing was queued — and `retryable: false`: the same
- *  command as-is fails again. (A run registered without modulation controls is a capability
- *  problem, not a run problem, and rejects with {@link UNSUPPORTED_CAPABILITY_CODE}.) */
+/** Stable `SessionResult.error.code` for a run action that reached an active run but could not take
+ *  effect because the run raced to settlement (or the engine refused it). Distinct from
+ *  {@link NO_ACTIVE_RUN_CODE}: the run existed — and TRANSIENT: the session's next run can be acted
+ *  on. Still pre-acceptance — nothing was queued — and `retryable: false`: the same call fails
+ *  again. (A run registered without modulation controls is a capability problem, not a run problem,
+ *  and rejects with {@link UNSUPPORTED_CAPABILITY_CODE}.) */
 export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
-/** Stable error code for the ONE read that may fail: {@link SessionControl.sessions} against a store
+/** Stable error code for the ONE read that may fail: {@link SessionCollection.list} against a store
  *  it cannot enumerate. It does not ride a `SessionResult` — `sessions()` rejects, and a transport
  *  carries this code in the error body of a non-2xx (design §13). `retryable: true`: the condition is
  *  the store's availability, not the request. Every OTHER read stays total, so this is the whole of
  *  the read failure vocabulary. */
 export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
-
-// ── Commands (control plane) ─────────────────────────────────────────────────
-
-/** Ten commands; deliberately NO `prompt` — starting work is the data plane's definition, and no
- *  command here creates a session from nothing (`fork` copies one that exists). */
-export type SessionCommand =
-  | { type: "steer"; prompt: Prompt }
-  | { type: "follow_up"; prompt: Prompt }
-  | { type: "abort" }
-  | { type: "compact"; instructions?: string }
-  | { type: "set_model"; model: string }
-  | { type: "set_thinking"; level: string }
-  /** Move the session's active leaf to `targetId`, an existing entry — the write verb for the tree
-   *  `entries()` already publishes (and how sibling branches come to exist: the next turn hangs off
-   *  the new leaf). Every entry `entries()` publishes is a legal target; a `targetId` that is not
-   *  one rejects `invalid_command`. A boundary mutation otherwise: same lease as a run. */
-  | { type: "navigate"; targetId: string }
-  /** Copy this session's history up to `fromEntryId` into a NEW session called `into` — the growth
-   *  verb beside `navigate`'s walk. `into` is the CALLER's id, minted the same way every other
-   *  session id is: the plane never invents one, and a repeat of the same fork is a rejection
-   *  (`invalid_command`) rather than a second record. Cloning is this command with the session's
-   *  own `leafEntryId`. */
-  | { type: "fork"; fromEntryId: string; into: string }
-  /** The session's display name — what `sessions()` reports and a conversation list shows. */
-  | { type: "set_name"; name: string }
-  /** Destroy the record. The plane's only IRREVERSIBLE command: it is guarded by the same bearer
-   *  token as everything else, which is the only key the framework owns (design §14). Live
-   *  `events()` streams for the session END; a later `state()` answers for a session that no longer
-   *  exists. */
-  | { type: "delete" };
 
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately
@@ -177,10 +238,9 @@ export type SessionCommand =
  * mean rejection BEFORE acceptance — nothing was queued or applied. ONE exception to "nothing took
  * effect": a rejected `abort` may still have attributed a concurrently-settling run as `aborted`
  * (the intent was live while the run resolved — see the guarantee boundary in the pi
- * implementation); the settlement is the truth. `error.retryable` means "re-dispatching the SAME
- * command as-is may succeed"; a `false` with a state-dependent code (e.g.
- * {@link NO_ACTIVE_RUN_CODE}) invites a re-dispatch only after `state()` shows the condition
- * changed.
+ * implementation); the settlement is the truth. `error.retryable` means "the SAME call as-is may
+ * succeed"; a `false` with a state-dependent code (e.g. {@link NO_ACTIVE_RUN_CODE}) invites another
+ * call only after `state()` shows the condition changed.
  */
 export type SessionResult =
   | { ok: true; runId?: string }

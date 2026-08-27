@@ -18,6 +18,30 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 
+/** The custom-entry kind carrying "this record is a fork of X at Y" — a fact about the RECORD, like
+ *  its name, not a part of the history. Its own entry rather than pi's header `parentSession`, which
+ *  pi fills from its own fork path and names a FILE, not the branch point idempotency needs. Never
+ *  published by `entries()` (a custom entry is not a position) and never sent to a model. */
+const FORK_PROVENANCE = "fastagent.fork";
+
+/** Stamp a fresh fork with where it came from. */
+export function stampProvenance(record: SessionManager, provenance: string): void {
+  record.appendCustomEntry(FORK_PROVENANCE, { provenance });
+}
+
+/** What fork this record IS, or undefined for a record that was not forked. The LAST stamp wins — a
+ *  fork of a fork carries its own — and the whole journal is read rather than the active path, so a
+ *  later leaf move cannot make a fork stop being one. */
+export function forkProvenance(record: SessionManager): string | undefined {
+  let found: string | undefined;
+  for (const raw of record.getEntries() as { type?: string; customType?: string; data?: unknown }[]) {
+    if (raw.type !== "custom" || raw.customType !== FORK_PROVENANCE) continue;
+    const value = (raw.data as { provenance?: unknown } | undefined)?.provenance;
+    if (typeof value === "string") found = value;
+  }
+  return found;
+}
+
 /** What a Caller names when a new session should start from an existing one. */
 export interface SessionInheritance {
   /** The session to inherit from. Missing or unreadable → start empty, with a warn: context is not
@@ -216,7 +240,11 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         if (entry.thinkingLevel) child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
-        if (entry.customType) child.appendCustomEntry(entry.customType, entry.data);
+        // The parent's own provenance is not the child's: copying it would make a fork of a fork
+        // claim its grandparent's branch point, and the idempotency check reads that value.
+        if (entry.customType && entry.customType !== FORK_PROVENANCE) {
+          child.appendCustomEntry(entry.customType, entry.data);
+        }
         break;
       default:
         break; // label / session_info / branch_summary: the parent's facts, not the thread's history
