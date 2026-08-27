@@ -106,7 +106,8 @@ await service.close();    // stops long connections and schedules
 `createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
 bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
 `service.control` carries the plane's bearer token so you can hand a client access without the
-CLI's `control.json` discovery file. Composing the same thing by hand
+CLI's `control.json` discovery file — a per-boot mint, or `FASTAGENT_CONTROL_TOKEN` when your
+process environment sets it (set it yourself to hand out a token that survives a restart). Composing the same thing by hand
 means assembling routes, mounts, schedules and long connections in the right order — and getting it
 wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
 fires).

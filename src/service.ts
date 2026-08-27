@@ -19,7 +19,7 @@ import { writeFileAtomic } from "./atomic-write.ts";
 import { join } from "node:path";
 import type { Agent } from "./agent.ts";
 import { classifyBind, clientHost } from "./bind.ts";
-import { createControlPlane } from "./channels/control.ts";
+import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { parseRouteKey, pathUnderPrefix } from "./channels/serve.ts";
@@ -174,9 +174,20 @@ export function mountSessionControl(
   if (!control) return { routes, mounts: [], announce: () => () => {} };
   // WHO OWNS the secret. Per-boot mint is right locally: discovery is `control.json` and its file
   // permissions, which works because both holders share a filesystem. A deployment removes that
-  // premise — a token minted in the container is unreadable from outside and replaced every restart —
-  // so there the deployer mints it and injects it here, like the wake/ingress secrets.
-  const token = process.env.FASTAGENT_CONTROL_TOKEN || crypto.randomUUID();
+  // premise — a token minted in the container is replaced every restart and reachable only by shelling
+  // in — so there the deployer mints it and injects it here, like the wake/ingress secrets.
+  const injected = process.env[CONTROL_TOKEN_ENV];
+  // SET BUT EMPTY is the deployed default, not an edge case: the generated Compose topology writes
+  // every secret as `NAME: "${NAME:-}"`, so an operator who skipped this one lands here. Falling back
+  // silently would leave exactly the symptom the injection exists to remove — a token the caller does
+  // not have — with nothing in the log to tell it apart from a deployment that never asked.
+  if (injected !== undefined && injected === "") {
+    log.warn(
+      `[fastagent] ${CONTROL_TOKEN_ENV} is set but empty — minting a per-boot token instead; callers holding ` +
+        "the deploy-time value will get 401 (set it, or read the minted one from control.json on the box)",
+    );
+  }
+  const token = injected || crypto.randomUUID();
   const plane = createControlPlane(control, { token, agent: options.agent });
   assertNoControlPlaneCollision(routes, plane);
   return {

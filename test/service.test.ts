@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentService } from "../src/engines/pi/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
@@ -124,6 +124,23 @@ describe("createAgentService", () => {
         expect(res.status).toBe(200);
       } finally {
         await service.close();
+      }
+      // SET BUT EMPTY is what a generated Compose file produces (`NAME: "${NAME:-}"`) for a secret the
+      // operator skipped. It must still serve — an empty token would throw at the plane — so it falls
+      // back to a mint, and the warning is the only thing telling the operator their token is not the
+      // box's. Without it the symptom is a bare 401 on every call.
+      process.env.FASTAGENT_CONTROL_TOKEN = "";
+      const logged: string[] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        logged.push(args.join(" "));
+      });
+      const blank = await createAgentService(dir);
+      try {
+        expect(blank.control?.token).toMatch(/[0-9a-f-]{36}/);
+        expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is set but empty/);
+      } finally {
+        spy.mockRestore();
+        await blank.close();
       }
     } finally {
       delete process.env.FASTAGENT_CONTROL_TOKEN;

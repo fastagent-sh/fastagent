@@ -31,6 +31,12 @@ import { text } from "./respond.ts";
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
 const CONTROL_PREFIX = "/control";
 
+/** The token, when the DEPLOYER owns it rather than the box (`mountSessionControl` reads it, `deploy`
+ *  carries it). Declared here with the prefix because both are the plane's public names: the serving
+ *  side and the deploy side must spell it identically, and a rename that hits only one of them fails
+ *  silently — the box mints its own and every caller the runbook told gets a 401. */
+export const CONTROL_TOKEN_ENV = "FASTAGENT_CONTROL_TOKEN";
+
 /** The SSE payload: one control-plane event in its transport envelope. */
 export interface WireEvent {
   sessionId: string;

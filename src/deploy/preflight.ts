@@ -24,7 +24,8 @@ import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
-import { CONTROL_TOKEN_ENV, isEnvKey } from "./secrets.ts";
+import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
+import { isEnvKey } from "./secrets.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). Host-neutral advisories. */
 interface DeployMessage {
@@ -150,9 +151,11 @@ export async function preflightDeploy(input: {
       level: "warn",
       text:
         `sessionControl: true — the deployed box serves /control/* (steer/abort/set_model) at its public URL, ` +
-        `protected only by the ${CONTROL_TOKEN_ENV} bearer token (listed with the other secrets — set it and ` +
-        `give the same value to callers: attach --url <public-url> --token …). Unset, the box mints a per-boot ` +
-        `token nothing outside can read. Front the endpoint with real auth for anything wider (design §14)`,
+        `protected only by a bearer token. Set ${CONTROL_TOKEN_ENV} (listed with the other secrets) and give the ` +
+        `same value to callers: attach --url <public-url> --token …. Unset, the box mints its own per boot — ` +
+        `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +
+        `url field is container-loopback) and replaced on every restart. Front the endpoint with real auth for ` +
+        `anything wider (design §14)`,
     });
   }
 
