@@ -370,13 +370,16 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
   runId: string;
 };
 
-/** A boundary mutation changed durable session state (L2; no runId — boundary mutations happen
- *  between runs). `leafEntryId` reports a `navigate` — a deliberate move of the branch head, which
- *  a second attached client would otherwise have no signal for. It is NOT a general leaf feed:
- *  every turn advances the leaf too, and that is read from `entries()`/`state()` after the run. */
+/** An {@link Session.update} changed durable session state (L2; no runId — a property is set between
+ *  runs). Carries what LANDED, read back from the record: a patch that set two fields reports both,
+ *  and one that failed partway reports only what applied.
+ *
+ *  `leafEntryId` reports a deliberate move of the branch head, which a second attached client would
+ *  otherwise have no signal for. It is NOT a general leaf feed: every turn advances the leaf too,
+ *  and that is read from `entries()`/`state()` after the run. */
 export type StateChangedEvent = SessionEvent<
   "state_changed",
-  { model?: string; thinkingLevel?: string; leafEntryId?: string }
+  { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string }
 >;
 
 /** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one

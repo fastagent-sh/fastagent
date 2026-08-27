@@ -303,7 +303,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // turn off a stale branch, or pull the record out from under it.
         fork: !!b,
         delete: !!b,
-        updatable: b ? (["name", "model", "thinkingLevel", "leafEntryId"] as SessionUpdateField[]) : [],
+        // The CONTRACT's list, not a copy of it: a field added to SessionUpdate is advertised
+        // without anyone remembering to, and one removed cannot linger here.
+        updatable: b ? [...UPDATE_FIELDS] : [],
         // The registry is a deployment fact (any session may be pointed at any of it). Thinking
         // LEVELS are a property of the model a session is running, so they ride
         // `state().availableThinkingLevels` — a list here could only answer for one model.

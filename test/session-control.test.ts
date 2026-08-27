@@ -26,6 +26,7 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
   type SessionEntry,
   type SessionEvent,
+  type StateChangedEvent,
 } from "../src/session.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
@@ -865,9 +866,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     ).toEqual({ ok: true });
     await watching;
 
-    // ONE event for the patch, carrying every field it set.
+    // ONE event for the patch, carrying every field it set — and a TYPED consumer can read them:
+    // `name` rode the event while the declared type omitted it, so every client needed a cast.
     expect(seen.filter((e) => e.type === "state_changed")).toHaveLength(1);
-    expect(seen.at(-1)?.data).toEqual({ model: spec, thinkingLevel: "high", name: "Both at once" });
+    const changed = seen.at(-1) as StateChangedEvent;
+    const named: string | undefined = changed.data.name;
+    expect(named).toBe("Both at once");
+    expect(changed.data).toEqual({ model: spec, thinkingLevel: "high", name: "Both at once" });
     const after = await control.sessions.get("sPatch").state();
     expect(after).toMatchObject({ model: spec, thinkingLevel: "high", name: "Both at once" });
 

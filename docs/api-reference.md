@@ -588,7 +588,8 @@ A patch is validated as a whole — a rejected one leaves nothing behind, which 
 `ok: false` safe to retry. The writes themselves are separate journal entries, so a failure BETWEEN
 them (a full disk) answers `partial_update` naming what landed, after an event reporting the record
 as it now is: read `state()` before retrying. A field this serve does not know rejects
-`unsupported_capability` rather than being ignored.
+`unsupported_capability` — the same code on both planes, naming the field, so a newer client talking
+to an older serve knows which one to drop; a wrong value type is `invalid_command`.
 
 `leafEntryId` is the write verb for the tree `entries()` publishes: it moves the session's active
 leaf, so the next turn hangs off it instead of the old one — which is also how sibling branches come

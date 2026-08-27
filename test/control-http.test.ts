@@ -1171,11 +1171,21 @@ describe("session control over HTTP (Phase 3)", () => {
     const { control } = await fauxControlledAgent([]);
     const plane = createControlPlane(control, { token: TOKEN }).handler;
     const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
-    const res = await plane(
+    // The code is the SAME one the in-process path answers: the wire must not be where a client
+    // loses the difference between "drop that field" and "fix that value".
+    const unknownField = await plane(
       new Request("http://x/control/sessions/s", { method: "PATCH", headers: auth, body: '{"nmae":"typo"}' }),
     );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
+    expect(unknownField.status).toBe(200);
+    expect(await unknownField.json()).toMatchObject({
+      ok: false,
+      error: { code: UNSUPPORTED_CAPABILITY_CODE, message: expect.stringContaining("nmae") },
+    });
+    // A wrong VALUE type is the other answer — a malformed payload, not a missing feature.
+    const wrongType = await plane(
+      new Request("http://x/control/sessions/s", { method: "PATCH", headers: auth, body: '{"name":42}' }),
+    );
+    expect(await wrongType.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
   });
 
   it("createControlPlane refuses to mount without a token", async () => {
@@ -1195,33 +1205,59 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
-  it("a store that cannot be enumerated answers a CODED 503, not a bare 500", async () => {
+  it("a store FAULT is a coded 503; anything else is a 500 the operator can see", async () => {
     // #309's lesson, one route over: an uncoded failure is indistinguishable from an unreachable
-    // endpoint, so a client burns its reconnect budget on a condition reconnecting cannot fix.
+    // endpoint, so a client burns its reconnect budget on a condition reconnecting cannot fix. The
+    // inverse matters too — a bug of OURS answered `retryable: true` would have it poll forever.
     const { control } = await fauxControlledAgent([]);
-    const broken: typeof control = {
+    const ioError = Object.assign(new Error("EACCES: permission denied, scandir '/data/.state'"), { code: "EACCES" });
+    const broken = (thrown: unknown): typeof control => ({
       ...control,
       sessions: {
         ...control.sessions,
         list: async () => {
-          throw new Error("the store is unavailable");
+          throw thrown;
         },
       },
-    };
-    const server = serveNode(router({}, [createControlPlane(broken, { token: TOKEN })]), { port: 0 });
-    const port = await server.listening;
+    });
+    const logged: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation((line: string) => void logged.push(line));
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/control/sessions`, {
-        headers: { authorization: `Bearer ${TOKEN}` },
-      });
-      expect(res.status).toBe(503);
-      expect(await res.json()).toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, retryable: true });
+      const faulty = serveNode(router({}, [createControlPlane(broken(ioError), { token: TOKEN })]), { port: 0 });
+      const faultyPort = await faulty.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${faultyPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, retryable: true });
+        expect(logged.join("\n")).toMatch(/EACCES/); // and the operator sees it, not just the client
 
-      // And the client can READ that code — the whole point of carrying it on the wire.
-      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
-      await expect(remote.sessions.list()).rejects.toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, status: 503 });
+        // And the client can READ that code — the whole point of carrying it on the wire.
+        const remote = await connectSessionControl({ url: `http://127.0.0.1:${faultyPort}`, token: TOKEN });
+        await expect(remote.sessions.list()).rejects.toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, status: 503 });
+      } finally {
+        await faulty.close();
+      }
+
+      // A TypeError from our own row building is a BUG: it goes back to the plane's boundary, which
+      // logs it and answers 500 — never `retryable: true`, which would have a client poll forever.
+      const buggy = serveNode(
+        router({}, [createControlPlane(broken(new TypeError("rows.map is not a function")), { token: TOKEN })]),
+        { port: 0 },
+      );
+      const buggyPort = await buggy.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${buggyPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(500);
+        expect(logged.join("\n")).toMatch(/rows\.map is not a function/);
+      } finally {
+        await buggy.close();
+      }
     } finally {
-      await server.close();
+      spy.mockRestore();
     }
   });
 });

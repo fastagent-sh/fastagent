@@ -26,6 +26,7 @@ import {
   type SessionControl,
   type SessionEvent,
   type SessionUpdate,
+  UNSUPPORTED_CAPABILITY_CODE,
   UPDATE_FIELDS,
 } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -253,27 +254,37 @@ function parseWireAction(raw: unknown): SessionAction | undefined {
 }
 
 /**
- * Parse a PATCH body into a session update. Same discipline as {@link parseWireAction}: rebuilt
- * field by field, so an unknown key is dropped at the wire rather than reaching the hub, and a wrong
- * TYPE is a 400 rather than an engine failure wearing a session error's code.
+ * Parse a PATCH body into a session update — or into the REASON it is not one, because the two
+ * reasons are different answers to the client. An unknown KEY means this serve does not have that
+ * field (a newer client talking to an older serve, or a typo), and the client's move is to drop it:
+ * `unsupported_capability`, the same code the in-process path answers, so the two planes stay
+ * isomorphic. A wrong VALUE TYPE is a malformed payload: `invalid_command`. Neither is dropped
+ * silently, which would answer `ok: true` for a patch that set nothing.
  */
-function parseWireUpdate(raw: unknown): SessionUpdate | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
+function parseWireUpdate(raw: unknown): { patch: SessionUpdate } | { code: string; message: string } {
+  if (typeof raw !== "object" || raw === null) {
+    return { code: INVALID_COMMAND_CODE, message: "expected an object of session properties" };
+  }
   const c = raw as Record<string, unknown>;
-  // An unknown KEY is rejected, not dropped. Silently ignoring it answers `ok: true` for a patch
-  // that set nothing — a client typo, or a newer client talking to an older serve, both hearing
-  // success. The action parser rejects an unknown `type` for the same reason.
-  if (Object.keys(c).some((key) => !(UPDATE_FIELDS as readonly string[]).includes(key))) return undefined;
+  const unknown = Object.keys(c).filter((key) => !(UPDATE_FIELDS as readonly string[]).includes(key));
+  if (unknown.length > 0) {
+    return {
+      code: UNSUPPORTED_CAPABILITY_CODE,
+      message: `update field(s) ${unknown.join(", ")} — capabilities().updatable lists what this serve sets`,
+    };
+  }
   const patch: SessionUpdate = {};
   // The field list is the CONTRACT's (`UPDATE_FIELDS`), not a copy: a field added to SessionUpdate
   // travels here without anyone remembering to, and one removed cannot linger.
   for (const field of UPDATE_FIELDS) {
     const value = c[field];
     if (value === undefined) continue;
-    if (typeof value !== "string") return undefined;
+    if (typeof value !== "string") {
+      return { code: INVALID_COMMAND_CODE, message: `${field} must be a string` };
+    }
     patch[field] = value;
   }
-  return patch;
+  return { patch };
 }
 export interface ControlPlaneOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
@@ -376,6 +387,15 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
       try {
         return json(await control.sessions.list());
       } catch (error) {
+        // ONLY a store fault becomes the retryable code. A TypeError from our own row building is a
+        // bug, and answering `retryable: true` for it has a client poll forever on something no
+        // retry can fix — so it goes back to the plane's totality boundary, which logs it and
+        // answers 500. An IO error carries a `code` (EACCES, ENOTDIR); that is the shape of a
+        // condition the operator can act on.
+        if (typeof (error as { code?: unknown }).code !== "string") throw error;
+        // Logged as well as answered: the catch would otherwise be the one place a store fault is
+        // invisible on the server, since it preempts the boundary that does the logging.
+        log.error(`[control] GET /control/sessions failed: ${String(error)}`);
         return json({ code: SESSIONS_UNAVAILABLE_CODE, message: String(error), retryable: true }, 503);
       }
     }),
@@ -403,15 +423,13 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
     [`PATCH /control/sessions/${SESSION_SEGMENT}`]: guard(async (req, _url, session) => {
       const read = await readJson(req);
       if ("error" in read) return read.error;
-      const patch = parseWireUpdate(read.value);
-      if (!patch) {
-        // Malformed shape = a protocol-level answer, mirrored from the hub's own payload rejections.
-        return json({
-          ok: false,
-          error: { code: INVALID_COMMAND_CODE, message: "malformed update", retryable: false },
-        });
+      const parsed = parseWireUpdate(read.value);
+      // A protocol-level answer carrying the SAME code the hub would have used — the wire must not
+      // be where a client loses the difference between "drop that field" and "fix that value".
+      if (!("patch" in parsed)) {
+        return json({ ok: false, error: { ...parsed, retryable: false } });
       }
-      return json(await control.sessions.get(session).update(patch));
+      return json(await control.sessions.get(session).update(parsed.patch));
     }),
 
     [`DELETE /control/sessions/${SESSION_SEGMENT}`]: guard(async (_req, _url, session) =>
