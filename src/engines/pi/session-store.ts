@@ -254,7 +254,9 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         })
         .sort()
         .join("|");
-      if (listed && listed.stamp === stamp) return listed.rows;
+      // A COPY: the cache outlives the call, and a caller that sorts the list it was handed must not
+      // reorder what the next caller sees.
+      if (listed && listed.stamp === stamp) return [...listed.rows];
       // THIS store's records only. A pre-existing record (the older spelling, in `root`) is still
       // opened by id and continued — but that spelling cannot be decoded back to the Caller's id,
       // and listing a row nobody can dial is worse than a row that is missing.
@@ -287,7 +289,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         ];
       });
       listed = { stamp, rows };
-      return rows;
+      return [...rows];
     },
     async fork(from, at, into, provenance) {
       const parent = await openExisting(from);

@@ -26,7 +26,7 @@ import {
   type SessionControl,
   type SessionEvent,
   type SessionUpdate,
-  type SessionUpdateField,
+  UPDATE_FIELDS,
 } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
@@ -260,18 +260,14 @@ function parseWireAction(raw: unknown): SessionAction | undefined {
 function parseWireUpdate(raw: unknown): SessionUpdate | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
-  const fields: SessionUpdateField[] = ["name", "model", "thinkingLevel", "leafEntryId"];
-  // COMPILE-TIME drift guard: a field added to SessionUpdate must break THIS line, not silently
-  // stop travelling while the client believes it was sent.
-  const _updateDriftGuard: Record<SessionUpdateField, true> = {
-    name: true,
-    model: true,
-    thinkingLevel: true,
-    leafEntryId: true,
-  };
-  void _updateDriftGuard;
+  // An unknown KEY is rejected, not dropped. Silently ignoring it answers `ok: true` for a patch
+  // that set nothing — a client typo, or a newer client talking to an older serve, both hearing
+  // success. The action parser rejects an unknown `type` for the same reason.
+  if (Object.keys(c).some((key) => !(UPDATE_FIELDS as readonly string[]).includes(key))) return undefined;
   const patch: SessionUpdate = {};
-  for (const field of fields) {
+  // The field list is the CONTRACT's (`UPDATE_FIELDS`), not a copy: a field added to SessionUpdate
+  // travels here without anyone remembering to, and one removed cannot linger.
+  for (const field of UPDATE_FIELDS) {
     const value = c[field];
     if (value === undefined) continue;
     if (typeof value !== "string") return undefined;

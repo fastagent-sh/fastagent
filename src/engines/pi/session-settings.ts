@@ -120,8 +120,10 @@ export function resolveSessionSettings(
  * turn silently on assembly defaults. The caller decides what to do with the fault (state() reports
  * the settings as absent, dispatch answers with a code); what it must not do is guess.
  */
-export function activePath(record: SessionManager): OverrideEntryLike[] {
-  const path = record.getBranch();
+export function activePath(record: SessionManager, from?: string): OverrideEntryLike[] {
+  // `from` asks a different question: the path a leaf move is ABOUT to make active, which a caller
+  // validating a patch needs before the move exists. Absent, it is the session's current path.
+  const path = record.getBranch(from);
   const root = path[0] as { id?: string; parentId?: string | null } | undefined;
   if (root?.parentId != null) {
     throw new Error(`session entry "${root.parentId}" is missing from the journal (parent of "${root.id}")`);

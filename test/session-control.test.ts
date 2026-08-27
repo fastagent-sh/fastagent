@@ -21,6 +21,7 @@ import {
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
   NO_SUCH_SESSION_CODE,
+  PARTIAL_UPDATE_CODE,
   RUN_COMMAND_FAILED_CODE,
   UNSUPPORTED_CAPABILITY_CODE,
   type SessionEntry,
@@ -839,6 +840,82 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const rejected = await control.sessions.get("sAuth").update({ thinkingLevel: "high" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+  });
+
+  it("a multi-field patch applies together and reports once", async () => {
+    // The headline of the reshaped API, and it had no test: four properties used to be four
+    // commands, so nothing exercised them arriving as one.
+    const { control, sessions, faux } = await fauxControlledAgent([], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      modelId: "plain",
+    });
+    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
+    await sessions.openOrCreate("sPatch");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("sPatch").events()) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+
+    const spec = `${thinker.provider}/${thinker.id}`;
+    expect(
+      await control.sessions.get("sPatch").update({ model: spec, thinkingLevel: "high", name: "Both at once" }),
+    ).toEqual({ ok: true });
+    await watching;
+
+    // ONE event for the patch, carrying every field it set.
+    expect(seen.filter((e) => e.type === "state_changed")).toHaveLength(1);
+    expect(seen.at(-1)?.data).toEqual({ model: spec, thinkingLevel: "high", name: "Both at once" });
+    const after = await control.sessions.get("sPatch").state();
+    expect(after).toMatchObject({ model: spec, thinkingLevel: "high", name: "Both at once" });
+
+    // And a patch that fails VALIDATION leaves nothing behind — the property that makes ok:false
+    // safe to retry.
+    const rejected = await control.sessions.get("sPatch").update({ name: "changed", model: "nope/nothing" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.sessions.get("sPatch").state()).name).toBe("Both at once");
+  });
+
+  it("a patch that fails BETWEEN writes says what landed — it cannot claim a rollback pi has no way to do", async () => {
+    // Properties are separate journal entries, so a failure partway is a real state. The old
+    // contract text ("nothing durable landed") would have been a lie a client cannot recover from.
+    const { control, sessions } = await makeBoundary([]);
+    const record = await sessions.openOrCreate("sPartial");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("sPartial").events()) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+    // The name is written LAST; failing it leaves the thinking level durable.
+    const appendName = vi.spyOn(record, "appendSessionInfo").mockImplementation(() => {
+      throw new Error("ENOSPC: no space left on device");
+    });
+    const result = await control.sessions.get("sPartial").update({ thinkingLevel: "high", name: "never lands" });
+    appendName.mockRestore();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(PARTIAL_UPDATE_CODE);
+      expect(result.error.message).toMatch(/applied thinkingLevel/);
+      expect(result.error.retryable).toBe(false); // re-sending would re-apply what landed
+    }
+    await watching;
+    // The event reports the record as it NOW is: the level that landed, not the name that did not.
+    expect(seen.at(-1)?.data).toMatchObject({ thinkingLevel: "high" });
+    expect((seen.at(-1)?.data as { name?: string } | undefined)?.name).toBeUndefined();
+    expect((await control.sessions.get("sPartial").state()).thinkingLevel).toBe("high");
+  });
+
+  it("an update naming a field this serve does not know is refused, not silently ignored", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("sUnknown");
+    const rejected = await control.sessions.get("sUnknown").update({ nmae: "typo" } as never);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
 
   it("set_model RE-RECORDS a level the new model cannot do, so state and the run never disagree", async () => {

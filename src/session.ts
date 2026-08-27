@@ -81,8 +81,13 @@ export interface Session {
   events(): AsyncIterable<SessionEvent>;
   /** Set durable session properties. Last-wins, applied by every later turn; an empty patch is a
    *  no-op that still answers `ok: true`. Fields outside {@link SessionCapabilities.updatable}
-   *  reject `unsupported_capability`; invalid values reject `invalid_command`, before anything
-   *  durable lands. Takes the same lease as a run (`session_busy` while one is in flight). */
+   *  reject `unsupported_capability`; invalid values reject `invalid_command`. Takes the same lease
+   *  as a run (`session_busy` while one is in flight).
+   *
+   *  VALIDATION is all-or-nothing: a rejected patch leaves nothing behind, which is what makes
+   *  `ok: false` safe to retry. The WRITES need not be one operation — an engine may record each
+   *  property separately — so a failure BETWEEN them answers {@link PARTIAL_UPDATE_CODE}, naming
+   *  what landed, after an event reporting the record as it now is. */
   update(patch: SessionUpdate): Promise<SessionResult>;
   /** Join the active run: delivered after the current turn's tool calls, before the next model
    *  call. Not polyfillable — its delivery point is an engine primitive. */
@@ -122,6 +127,16 @@ export interface SessionUpdate {
 
 /** What {@link Session.update} can be asked to set. */
 export type SessionUpdateField = keyof SessionUpdate;
+
+/** Every field name, as a value — what an implementation checks a patch against, and what a
+ *  transport rejects an unknown key by. The `satisfies` anchor keeps it exhaustive: a field added to
+ *  {@link SessionUpdate} must be added here too, or this stops compiling. */
+export const UPDATE_FIELDS = [
+  "name",
+  "model",
+  "thinkingLevel",
+  "leafEntryId",
+] as const satisfies readonly SessionUpdateField[];
 
 /**
  * The wire form of the run actions — what a transport carries for {@link Session.steer} and its
@@ -231,6 +246,14 @@ export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
  *  the store's availability, not the request. Every OTHER read stays total, so this is the whole of
  *  the read failure vocabulary. */
 export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
+
+/** Stable `SessionResult.error.code` for a multi-field {@link Session.update} that wrote some of its
+ *  fields and then failed. It exists because {@link BOUNDARY_COMMAND_FAILED_CODE} promises the
+ *  opposite — nothing durable landed — and an implementation cannot keep that promise across
+ *  properties an engine records as separate journal entries. `retryable: false`: re-sending the same
+ *  patch would re-apply what already landed, so a client reads `state()` (or the `state_changed`
+ *  this emits first, which reports the record as it now is) and decides what is left to ask for. */
+export const PARTIAL_UPDATE_CODE = "partial_update";
 
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately

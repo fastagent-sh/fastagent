@@ -581,8 +581,14 @@ await s1.update({ name: "Deploy notes" });                      // the list's la
 await s1.update({ model: "anthropic/claude-sonnet-4-5" });      // durable per-session override
 await s1.update({ thinkingLevel: "high" });
 await s1.update({ leafEntryId: entryId });                      // move the leaf → state_changed
-await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" }); // both, atomically
+await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" }); // one call, one event
 ```
+
+A patch is validated as a whole — a rejected one leaves nothing behind, which is what makes
+`ok: false` safe to retry. The writes themselves are separate journal entries, so a failure BETWEEN
+them (a full disk) answers `partial_update` naming what landed, after an event reporting the record
+as it now is: read `state()` before retrying. A field this serve does not know rejects
+`unsupported_capability` rather than being ignored.
 
 `leafEntryId` is the write verb for the tree `entries()` publishes: it moves the session's active
 leaf, so the next turn hangs off it instead of the old one — which is also how sibling branches come

@@ -1165,6 +1165,19 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(await patched.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
   });
 
+  it("PATCH with an unknown field is refused at the wire, not answered ok with nothing written", async () => {
+    // A client typo — or a newer client talking to an older serve — otherwise reads success for a
+    // patch that set nothing. The action parser rejects an unknown `type` for the same reason.
+    const { control } = await fauxControlledAgent([]);
+    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    const res = await plane(
+      new Request("http://x/control/sessions/s", { method: "PATCH", headers: auth, body: '{"nmae":"typo"}' }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
+  });
+
   it("createControlPlane refuses to mount without a token", async () => {
     const { control } = await fauxControlledAgent([]);
     expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);

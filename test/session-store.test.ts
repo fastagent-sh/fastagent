@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   callerSessionId,
   piInMemorySessionRecordStore,
@@ -363,13 +363,20 @@ describe("fork: the copy is a copy", () => {
     session.appendMessage(fauxAssistantMessage("answer"));
 
     const first = await store.list();
+    // THE observation: pi's listing is what costs the parse, so count the calls rather than trust a
+    // shape. Without the stamp check this runs on every poll.
+    const listing = vi.spyOn(SessionManager, "list");
     const again = await store.list();
-    expect(again).toBe(first); // the SAME array: nothing was rebuilt
+    expect(listing).not.toHaveBeenCalled();
+    listing.mockRestore();
+    expect(again).toEqual(first); // same rows
+    expect(again).not.toBe(first); // a COPY: sorting what you were handed must not reorder the cache
+    again.reverse();
+    expect((await store.list())[0]?.session).toBe(first[0]?.session);
 
     // A write invalidates it, and the new row reflects the write.
     (await store.openOrCreate("room")).appendMessage({ role: "user", content: "second", timestamp: 3 });
     const rebuilt = await store.list();
-    expect(rebuilt).not.toBe(first);
     expect(rebuilt[0]?.messageCount).toBeGreaterThan(first[0]?.messageCount as number);
 
     // So does a NEW record, whose file the stamp did not have at all.

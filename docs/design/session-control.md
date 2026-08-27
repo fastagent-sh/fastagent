@@ -170,8 +170,13 @@ session from nothing — `fork` copies one that exists.
 type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string };
 ```
 
-- A patch is ALL-OR-NOTHING: every field is validated before anything is written, so a client that
-  asked for two does not have to discover that one of them landed. An empty patch is `ok: true`.
+- A patch's VALIDATION is all-or-nothing: every field is checked before anything is written, so a
+  rejected patch leaves nothing behind — the property that makes `ok: false` safe to retry. An empty
+  patch is `ok: true`. The WRITES are not one operation, because an engine records properties as
+  separate journal entries: a failure between them answers `partial_update`, naming what landed,
+  after an event reporting the record as it now is. Claiming a rollback the engine cannot perform
+  would be the one lie a client has no way to recover from. A field the deployment does not know
+  rejects `unsupported_capability`; it is never dropped.
 - `model` takes a FastAgent model spec, constrained by the assembled definition and host policy. It
   never accepts provider credentials. `thinkingLevel` is a string because supported levels are
   MODEL-dependent — and a patch carrying both is checked against the model it LEAVES the session on,
