@@ -20,8 +20,12 @@ import { log } from "../../log.ts";
 
 /** The custom-entry kind carrying "this record is a fork of X at Y" — a fact about the RECORD, like
  *  its name, not a part of the history. Its own entry rather than pi's header `parentSession`, which
- *  pi fills from its own fork path and names a FILE, not the branch point idempotency needs. Never
- *  published by `entries()` (a custom entry is not a position) and never sent to a model. */
+ *  pi fills from its own fork path and names a FILE, not the branch point idempotency needs.
+ *
+ *  It IS published by `entries()` — the plane publishes every entry that can be a position, and a
+ *  custom entry can (the tool-activation record is one), so filtering it out would hide that one
+ *  too. Which is why a fork writes it BEFORE the history it copies: written last it would be the new
+ *  session's leaf. It never reaches a model either way (pi excludes custom entries from context). */
 const FORK_PROVENANCE = "fastagent.fork";
 
 /** Stamp a fresh fork with where it came from. */

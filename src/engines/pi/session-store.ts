@@ -155,6 +155,10 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
    *  a directory nothing ever reads. */
   const fillStaged = (id: string, fill: (staged: SessionManager) => void): SessionManager => {
     const staged = stage(id);
+    // WHERE the record is, so cleanup deletes the file that exists rather than the path it used to
+    // have: after the rename, removing the staging path succeeds against nothing while the record it
+    // was supposed to undo sits in the store.
+    let published: string | undefined;
     try {
       fill(staged);
       // INSIDE the try: publishing is a mkdir + rename, and both can fail (EACCES, a store root on
@@ -162,21 +166,22 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       // partial one — nothing reads that directory either way. NOT covered by a test: the tests
       // reach the fill failure by making a copy throw, and no equivalent injection point exists for
       // rename without mocking node:fs for the whole file.
-      return publishStaged(staged);
+      published = publishStaged(staged);
+      return SessionManager.open(published, own);
     } catch (error) {
-      rmSync(staged.getSessionFile() ?? "", { force: true });
+      rmSync(published ?? staged.getSessionFile() ?? "", { force: true });
       throw error;
     }
   };
   /** Move a finished record into the store: one same-filesystem rename, so a reader sees the whole
-   *  thing or nothing at all. */
-  const publishStaged = (staged: SessionManager): SessionManager => {
+   *  thing or nothing at all. Answers WHERE it landed — the caller opens it, and can undo it. */
+  const publishStaged = (staged: SessionManager): string => {
     const file = staged.getSessionFile();
     if (!file) throw new Error(`staged record ${staged.getSessionId()} has no file to publish`);
     mkdirSync(own, { recursive: true });
     const target = join(own, basename(file));
     renameSync(file, target);
-    return SessionManager.open(target, own);
+    return target;
   };
   /** Fork the named parent into `id`, or answer undefined so the caller starts empty. Every failure
    *  is a warn: a thread must not lose its first turn to an inheritance edge. */
@@ -248,9 +253,13 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       // rebuilds everything, because pi's listing has no per-file entry point: the fix is for the
       // idle case, and the busy case pays what it always did.
       const stamp = files
-        .map((f) => {
-          const st = statSync(join(own, f));
-          return `${f}:${st.mtimeMs}:${st.size}`;
+        .flatMap((f) => {
+          // A record deleted between the readdir and this stat is not a store fault — `delete` is a
+          // call this plane serves, and a poll that raced one would otherwise report ENOENT as
+          // `sessions_unavailable`: the exact conflation that code exists to prevent, against a
+          // perfectly healthy store.
+          const st = statSync(join(own, f), { throwIfNoEntry: false });
+          return st ? [`${f}:${st.mtimeMs}:${st.size}`] : [];
         })
         .sort()
         .join("|");
@@ -299,15 +308,19 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       // directory order.
       if (await openExisting(into)) throw new Error(`session "${into}" already exists`);
       fillStaged(piSessionId(into), (staged) => {
+        // METADATA FIRST, history last. pi has one leaf pointer and every append advances it, so
+        // whatever is written last becomes the fork's `leafEntryId` — and a client opening a fresh
+        // fork would find its head on an empty `custom` record instead of on the exchange it forked
+        // at. The name and the provenance describe the record; the history is what the session IS.
+        const name = parent.getSessionName();
+        // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot
+        // place. A client that wants "(copy)" calls `update({ name })`.
+        if (name) staged.appendSessionInfo(name);
+        stampProvenance(staged, provenance);
         // NOT reconciled: the repair appends at the parent's LEAF, which a copy stopping at `at` can
         // never reach — it would only write to the record being copied FROM. The child is reconciled
         // on its own first open, like every other record.
         copyBranchInto(parent, staged, at);
-        // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot
-        // place. A client that wants "(copy)" calls `update({ name })`.
-        const name = parent.getSessionName();
-        if (name) staged.appendSessionInfo(name);
-        stampProvenance(staged, provenance);
       });
     },
     async delete(sessionId) {
@@ -516,13 +529,15 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // window: this is the same user keeping their own history, not a new thread bounded from a
       // parent's.
       const staged = SessionManager.inMemory(cwd, { id: piSessionId(into) });
-      copyBranchInto(parent, staged, at);
-      // The name travels, because on disk it cannot NOT travel: pi copies the whole path, and the
-      // `session_info` record sits on it. One behaviour for both backends beats a truthful-sounding
-      // difference nobody can predict — a client that wants "(copy)" calls `update({ name })`.
+      // METADATA FIRST, history last — the same order the disk store writes in, and for the same
+      // reason: pi has one leaf pointer, so whatever is appended last is where a client opening this
+      // fork finds its head. That should be the exchange it was forked at, not a metadata record.
+      // The name travels so a fork of "Deploy notes" is not an untitled row a user cannot place; a
+      // client that wants "(copy)" calls `update({ name })`.
       const name = parent.getSessionName();
       if (name) staged.appendSessionInfo(name);
       stampProvenance(staged, provenance);
+      copyBranchInto(parent, staged, at);
       live.set(into, staged);
     },
     async delete(sessionId) {

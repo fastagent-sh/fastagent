@@ -268,9 +268,17 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
       // unreachable endpoint instead of retrying forever.
       list: () => get<SessionSummary[]>("/control/sessions", PAYLOAD_TIMEOUT_MS),
 
-      // PUT: the fork is idempotent, and so is the request that carries it.
-      fork: ({ from, at, into }: { from: string; at: string; into: string }) =>
-        write(`/control/sessions/${id(into)}`, "PUT", { from, at }),
+      // PUT: the fork is idempotent, and so is the request that carries it. `into` becomes a path
+      // segment exactly like `get`'s id, so it is refused on the same rule — without this the local
+      // plane answers `invalid_command` while the wire answers 404 from a URL that normalised away.
+      fork: ({ from, at, into }: { from: string; at: string; into: string }) => {
+        if (!isAddressableSession(into)) {
+          throw new Error(
+            `session id ${JSON.stringify(into)} cannot travel as a URL path segment — this transport cannot address it`,
+          );
+        }
+        return write(`/control/sessions/${id(into)}`, "PUT", { from, at });
+      },
 
       // The local hub's handle is a pure binding; so is this one — an id and the transport above it.
       // Nothing is FETCHED here, which is what keeps the two isomorphic. What is checked is the one

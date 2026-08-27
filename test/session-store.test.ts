@@ -6,6 +6,7 @@ import { writeFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { symlinkSync } from "node:fs";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -224,6 +225,25 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     expect(await store.delete("room-fork")).toBe(false); // gone is not an error, it is an answer
   });
 
+  it("a fork's leaf is the exchange it was taken at, not a metadata record", async () => {
+    // pi has ONE leaf pointer and every append advances it, so whatever a fork writes LAST is what a
+    // client opening it finds its head on. Written after the history, the provenance stamp made that
+    // an empty `custom` entry — published by entries() like any position, and the next turn would
+    // hang off it.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-forkleaf-"));
+    for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
+      const parent = await store.openOrCreate("src");
+      parent.appendSessionInfo("Named");
+      parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+      const at = parent.appendMessage(fauxAssistantMessage("a"));
+
+      await store.fork("src", at, "branch", `src@${at}`);
+      const branch = await store.openIfExists("branch");
+      const leaf = branch?.getEntries().find((e) => e.id === branch.getLeafId()) as { type?: string } | undefined;
+      expect(leaf?.type).toBe("message"); // the forked exchange, not session_info or the stamp
+    }
+  });
+
   it("in memory too: same three primitives, same semantics", async () => {
     const store = piInMemorySessionRecordStore();
     const parent = await store.openOrCreate("room");
@@ -382,6 +402,20 @@ describe("fork: the copy is a copy", () => {
     // So does a NEW record, whose file the stamp did not have at all.
     await store.openOrCreate("other");
     expect((await store.list()).map((r) => r.session).sort()).toEqual(["other", "room"]);
+  });
+
+  it("a record that vanishes between the readdir and the stat is not a store fault", async () => {
+    // `list` reads the directory and then stats each file; `delete` is a call this plane serves, and
+    // a GUI polls the list. A record gone in that window threw ENOENT — which carries a `code`, so
+    // the route classified it as `sessions_unavailable` against a perfectly healthy store.
+    // A dangling symlink IS that window, deterministically: listed by readdir, ENOENT on stat.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-race-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    (await store.openOrCreate("survivor")).appendMessage({ role: "user", content: "hi", timestamp: 1 });
+    symlinkSync(join(dir, "agent-session", "gone.jsonl"), join(dir, "agent-session", "dangling.jsonl"));
+
+    const rows = await store.list();
+    expect(rows.map((r) => r.session)).toEqual(["survivor"]); // no throw, and the survivor is listed
   });
 
   it("a fork never lists as modified BEFORE it existed", async () => {
