@@ -12,10 +12,10 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import type { SessionSummary, SessionUpdateField } from "../../session.ts";
+import { LEAF_ANCHOR, publishedLeaf, stampProvenance } from "./session-markers.ts";
 import { type OverrideEntryLike, activePath } from "./session-settings.ts";
 import {
   type SessionInheritance,
-  stampProvenance,
   copyBranchForInheritance,
   copyBranchInto,
   inheritanceCut,
@@ -62,38 +62,6 @@ export interface PiSessionRecordStore {
   fork(from: string, at: string, into: string, provenance: string): Promise<void>;
   /** Destroy a record. `false` = there was none (the caller answers `no_such_session`). */
   delete(sessionId: string): Promise<boolean>;
-}
-
-/**
- * OUR bookkeeping, written into the journal because pi has nowhere else to put it: the fork's
- * provenance, the tool-activation record, the anchor a leaf move needs. A client must not see any of
- * them as positions — they are not places in a conversation, and moving the head "to" one means
- * nothing. Recognised by the `fastagent` prefix on the custom type, which every one of ours carries.
- */
-export function isInternalMarker(entry: { type?: string; customType?: string }): boolean {
-  return entry.type === "custom" && (entry.customType ?? "").startsWith("fastagent");
-}
-
-/** Every position a client may move the branch head to, and everything `entries()` publishes — one
- *  predicate, so "anything published is navigable" holds by construction. `label` is metadata ABOUT
- *  an entry rather than a place; {@link isInternalMarker} is ours rather than the conversation's. */
-export function isNavigable(entry: { type?: string; customType?: string }): boolean {
-  return entry.type !== "label" && !isInternalMarker(entry);
-}
-
-/**
- * The head a client SEES: the last publishable entry on the active path.
- *
- * Not pi's leaf, which may be one of our markers — a leaf move anchors itself with one, so reporting
- * pi's answer would hand back an id the client did not ask for and cannot find in `entries()`.
- */
-export function publishedLeaf(record: SessionManager): string | undefined {
-  const path = record.getBranch() as unknown as { id: string; type?: string; customType?: string }[];
-  for (let i = path.length - 1; i >= 0; i--) {
-    const entry = path[i];
-    if (entry && isNavigable(entry)) return entry.id;
-  }
-  return undefined;
 }
 
 /** A validated property patch, in the shape a RECORD takes it: the model already resolved to the
@@ -460,17 +428,27 @@ async function applyProperties(
       record.appendSessionInfo(writes.name);
       landed.push("name");
     }
-    // THE ANCHOR. pi's `branch()` writes nothing — the leaf is runtime state, and `open()` puts it
-    // back on the file's last entry — so a move that no other write followed is forgotten the moment
-    // anything reopens the record: `state()` would contradict the event this patch just emitted, and
-    // the next turn would hang off the old tip. Appending anything pins it, so this appends only
-    // when nothing else in the patch already did (an exact check, not a guess about which fields
-    // were asked for).
-    if (moved && record.getLeafId() === writes.leafEntryId) record.appendCustomEntry(LEAF_ANCHOR, {});
   } catch (error) {
     // Held, not rethrown: what already landed still has to be reported, and the report is the only
     // way a caller learns the record moved.
     failure = error;
+  }
+  // THE ANCHOR, and it runs whatever happened above. pi's `branch()` writes nothing — the leaf is
+  // runtime state, and `open()` puts it back on the file's last entry — so a move that no other
+  // write followed is forgotten the moment anything reopens the record: `state()` would contradict
+  // the event this patch just emitted, and the next turn would hang off the old tip. Inside the try
+  // it was skipped exactly when a later property threw, which is the case that reports a MOVE as
+  // landed. Appending anything pins the move, so this appends only when nothing else already did.
+  if (moved && record.getLeafId() === writes.leafEntryId) {
+    try {
+      record.appendCustomEntry(LEAF_ANCHOR, {});
+    } catch (error) {
+      // The move is runtime-only and will not survive the next open, so it did NOT land: saying it
+      // did is the one thing a partial report cannot afford. A first failure keeps its place — it is
+      // what stopped the patch — and this one is reported when nothing else went wrong.
+      landed.splice(landed.indexOf("leafEntryId"), 1);
+      failure ??= error;
+    }
   }
   // READ BACK, never echo: pi rewrites a name (newlines collapse, ends trim), and the settings a
   // path resolves to can change under a moved leaf. The caller reports THIS, so `state()` and
@@ -495,10 +473,6 @@ async function applyProperties(
     ...(path ? { path } : {}),
   };
 }
-
-/** The marker that pins a leaf move to disk — see {@link applyProperties}. Carries no data: its
- *  PARENT is the position, which is the whole point of appending it. */
-const LEAF_ANCHOR = "fastagent.leaf";
 
 /** How much of the first message a list row carries. A row, not a transcript. */
 const PREVIEW_CHARS = 200;

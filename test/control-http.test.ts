@@ -251,7 +251,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // 4. A percent-encoded spelling is a DIFFERENT path, answered like any other unknown one —
       //    and still readably. Paths are matched as they arrive: decoding them first would undo the
       //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client
-      //    sends these (the remote client percent-encodes session ids, which travel in the query).
+      //    sends these (the remote client percent-encodes session ids into a path segment).
       const encoded = await fetch(`${served.url}/control/%63apabilities`, { headers: auth });
       expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: "*" });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
@@ -320,7 +320,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const applied = await remote.sessions.get("sW").update({ thinkingLevel: "low" });
       expect(applied).toEqual({ ok: true });
       expect((await remote.sessions.get("sW").state()).thinkingLevel).toBe("low");
-      // navigate carries a field of its own, so its wire shape needs a POSITIVE round trip: a typo
+      // A leaf move carries a field of its own, so its wire shape needs a POSITIVE round trip: a typo
       // in the field name would otherwise ship green behind the malformed-command assertions.
       const target = localEntries.entries.find((e) => e.kind === "user")?.id as string;
       expect(await remote.sessions.get("sW").update({ leafEntryId: target })).toEqual({ ok: true });

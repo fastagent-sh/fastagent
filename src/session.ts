@@ -314,7 +314,7 @@ export interface SessionState {
    *  model cannot do is clamped). Absent where the implementation exposes no model control. */
   model?: string;
   thinkingLevel?: string;
-  /** What `set_thinking` accepts for THIS session — re-read after a `set_model`. */
+  /** What `update({ thinkingLevel })` accepts for THIS session — re-read after a model change. */
   availableThinkingLevels?: string[];
   pending: { steering: number; followUp: number };
   usage?: {

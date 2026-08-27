@@ -8,7 +8,7 @@
  * stays in the session repository (read via {@link PiSessionRecordStore}), live truth in the events the
  * data plane emits, modulation in the controls the data plane registers.
  *
- * Boundary mutations (Phase 2b: compact/set_model/set_thinking/navigate) take the same lease as runs;
+ * The plane's writes (`update`, `compact`, `fork`, `delete`) take the same lease as runs;
  * without boundary wiring they are rejected before acceptance with `unsupported_capability` — a
  * client gating on `capabilities()` never sends them.
  */
@@ -43,14 +43,15 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import { forkProvenance } from "./session-inheritance.ts";
+import { forkProvenance } from "./session-markers.ts";
 import type { RunControls, SessionObserver } from "./turn-kit.ts";
 import type { Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
-import { type PiSessionRecordStore, isNavigable, publishedLeaf } from "./session-store.ts";
+import { isNavigable, publishedLeaf } from "./session-markers.ts";
+import type { PiSessionRecordStore } from "./session-store.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -106,13 +107,6 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
   return { ...base, kind: entry.type, data: {} };
 }
 
-/**
- * THE invariant the client's rule rests on: everything `entries()` publishes is a legal `navigate`
- * target. pi's `leaf` records are the exception — they journal a MOVE rather than mark a position
- * (their parentId is the OLD leaf, nothing is ever chained onto them), so navigating to one would
- * put the branch head off every conversation path. Withheld from the published plane and refused as
- * a target THROUGH THIS ONE PREDICATE, so a second exclusion cannot make the two disagree.
- */
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
 /** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
@@ -181,8 +175,8 @@ class Subscriber {
 
 // ── The hub ──────────────────────────────────────────────────────────────────
 
-/** What boundary mutations (compact / set_model / set_thinking / navigate) need — the SAME instances the
- *  agent assembly uses: the lease (mutations must not race a run), the model registry (validation +
+/** What the plane's writes (`update` / `compact` / `fork` / `delete`) need — the SAME instances the
+ *  agent assembly uses: the lease (a write must not race a run), the model registry (validation +
  *  allowedModels), and the session factory (compaction is a model call). Writes go through the
  *  record the hub's reader opened — after an existence check, so the control plane never creates
  *  a session (that is the data plane's monopoly). */

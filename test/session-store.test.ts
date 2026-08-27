@@ -12,11 +12,11 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   callerSessionId,
-  publishedLeaf,
   piInMemorySessionRecordStore,
   piSessionId,
   piSessionRecordStore,
 } from "../src/engines/pi/session-store.ts";
+import { publishedLeaf } from "../src/engines/pi/session-markers.ts";
 
 /** What the built-in channels and a custom route() produce. */
 const CHANNEL_IDS = [
@@ -262,6 +262,50 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     expect(
       after?.getEntries().filter((e) => (e as { customType?: string }).customType === "fastagent.leaf"),
     ).toHaveLength(1); // still just the one from the solo move
+  });
+
+  it("a fork carries the ENGINE's custom entries and drops only the plane's own", async () => {
+    // The distinction a `fastagent` prefix could not make: `fastagent:tool-activation` is written by
+    // the engine and IS thread history (which deferred tools this conversation discovered), so a
+    // child that inherits the assistant messages calling those tools must inherit it too. The fork
+    // stamp and the leaf anchor describe the RECORD, and stay behind.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-markers-"));
+    for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
+      const parent = await store.openOrCreate("src");
+      parent.appendMessage({ role: "user", content: "use the tool", timestamp: 1 });
+      parent.appendCustomEntry("fastagent:tool-activation", { names: ["search_docs"] });
+      const at = parent.appendMessage(fauxAssistantMessage("done"));
+      await store.applyProperties("src", { leafEntryId: at }); // leaves an anchor behind
+
+      await store.fork("src", at, "branch", `src@${at}`);
+      const kinds = ((await store.openIfExists("branch"))?.getEntries() ?? []).map(
+        (e) => (e as { customType?: string }).customType,
+      );
+      expect(kinds).toContain("fastagent:tool-activation"); // history travels
+      expect(kinds).not.toContain("fastagent.leaf"); // the parent's anchor does not
+      expect(kinds.filter((k) => k === "fastagent.fork")).toHaveLength(1); // its OWN stamp, not the parent's
+    }
+  });
+
+  it("a leaf move that cannot be anchored is not reported as landed", async () => {
+    // The anchor is what makes a move durable, so a move it could not pin did NOT happen — reporting
+    // it would leave the client believing a position the next `open()` forgets. Reachable only when
+    // a later property write already failed, which is why the anchor runs outside that try.
+    const store = piInMemorySessionRecordStore();
+    const record = await store.openOrCreate("s1");
+    const first = record.appendMessage({ role: "user", content: "one", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage("a1"));
+
+    const custom = vi.spyOn(record, "appendCustomEntry").mockImplementation(() => {
+      throw new Error("ENOSPC: no space left on device");
+    });
+    try {
+      const applied = await store.applyProperties("s1", { leafEntryId: first });
+      expect(applied?.landed).toEqual([]); // NOT ["leafEntryId"]
+      expect(applied?.failure).toBeTruthy();
+    } finally {
+      custom.mockRestore();
+    }
   });
 
   it("a fork's leaf is the exchange it was taken at, not a metadata record", async () => {
