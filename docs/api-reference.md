@@ -567,6 +567,11 @@ unlike that one it carries a stable code: a store that cannot be enumerated answ
 `sessions_unavailable` (remotely: 503 with the code on `ControlRequestError.code`), because `[]`
 already means "no sessions".
 
+Building that list costs a full read of every record, so an unchanged store answers from the last
+build (one `stat` per record decides). A poll against an idle deployment is therefore cheap; one
+against a deployment mid-turn rebuilds. Refresh on a timer if you like — but drive the open
+conversation from `events()`, not from re-listing.
+
 Writes run between runs, under the SAME lease (`session_busy` while a run is active, retryable at
 idle). A session's PROPERTIES are one patch — `update` validates every field before writing any, so a
 rejected patch leaves nothing behind, and one event reports the result:

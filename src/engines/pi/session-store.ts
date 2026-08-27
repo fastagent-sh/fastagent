@@ -6,7 +6,7 @@
  * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
  * READ path for existing conversations, not a second engine.
  */
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -207,6 +207,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return undefined;
     }
   };
+  /** The last built listing, keyed by what every record's file looked like when it was built. */
+  let listed: { stamp: string; rows: SessionSummary[] } | undefined;
   /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
    *  broken by a caller that spreads this object into another one. */
   const openExisting = async (sessionId: string): Promise<SessionManager | undefined> => {
@@ -238,12 +240,26 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       // permissions/hardware fault would arrive as "this deployment has no conversations" — the one
       // conflation `sessions_unavailable` exists to prevent, and the reason that code cannot be left
       // to pi's return value. An ABSENT directory is not a fault: no records is exactly `[]`.
-      if (existsSync(own)) readdirSync(own);
+      const files = existsSync(own) ? readdirSync(own).filter((f) => f.endsWith(".jsonl")) : [];
+      // A conversation list is POLLED, and building one costs a full parse of every record's jsonl
+      // (pi reads each line and accumulates a search index we never ask for). The cheap question is
+      // whether anything changed at all: one stat per file, and an idle deployment — which is what a
+      // GUI refreshing on a timer mostly finds — answers from the last build. Any single change
+      // rebuilds everything, because pi's listing has no per-file entry point: the fix is for the
+      // idle case, and the busy case pays what it always did.
+      const stamp = files
+        .map((f) => {
+          const st = statSync(join(own, f));
+          return `${f}:${st.mtimeMs}:${st.size}`;
+        })
+        .sort()
+        .join("|");
+      if (listed && listed.stamp === stamp) return listed.rows;
       // THIS store's records only. A pre-existing record (the older spelling, in `root`) is still
       // opened by id and continued — but that spelling cannot be decoded back to the Caller's id,
       // and listing a row nobody can dial is worse than a row that is missing.
       const records = await SessionManager.list(cwd, own);
-      return records.flatMap((r) => {
+      const rows = records.flatMap((r) => {
         const session = callerSessionId(r.id);
         if (!session) return [];
         return [
@@ -270,6 +286,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
           },
         ];
       });
+      listed = { stamp, rows };
+      return rows;
     },
     async fork(from, at, into, provenance) {
       const parent = await openExisting(from);

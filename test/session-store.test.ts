@@ -352,6 +352,31 @@ describe("fork: the copy is a copy", () => {
     expect(JSON.stringify(child.getBranch())).toContain("interrupted-tool-call");
   });
 
+  it("an unchanged store is not re-read: a polled list costs one stat per record", async () => {
+    // Building a row parses the whole jsonl (pi reads every line and accumulates a search index we
+    // never ask for), and a conversation list is POLLED. The cheap question is whether anything
+    // changed; an idle deployment — what a timer mostly finds — must not pay the parse again.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-poll-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const session = await store.openOrCreate("room");
+    session.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    session.appendMessage(fauxAssistantMessage("answer"));
+
+    const first = await store.list();
+    const again = await store.list();
+    expect(again).toBe(first); // the SAME array: nothing was rebuilt
+
+    // A write invalidates it, and the new row reflects the write.
+    (await store.openOrCreate("room")).appendMessage({ role: "user", content: "second", timestamp: 3 });
+    const rebuilt = await store.list();
+    expect(rebuilt).not.toBe(first);
+    expect(rebuilt[0]?.messageCount).toBeGreaterThan(first[0]?.messageCount as number);
+
+    // So does a NEW record, whose file the stamp did not have at all.
+    await store.openOrCreate("other");
+    expect((await store.list()).map((r) => r.session).sort()).toEqual(["other", "room"]);
+  });
+
   it("a fork never lists as modified BEFORE it existed", async () => {
     // The copied entries carry the SOURCE's timestamps, and pi reads "modified" off the last one —
     // so a branch made today sorted into whenever the original was written, which is the one column

@@ -1133,6 +1133,38 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(returned2).toBe(true);
   });
 
+  it("a malformed id segment is a 404 from the PLANE, not a throw past its boundary", async () => {
+    // `decodeURIComponent` throws on a bad escape, and the match runs BEFORE the try that guards the
+    // handlers — so this used to leave the boundary entirely: no CORS headers, no log, and a
+    // rejected promise for an embedder mounting the handler directly. The query-parameter form this
+    // replaced decoded leniently and could not throw, which is what made it a regression.
+    const { control } = await fauxControlledAgent([]);
+    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    for (const path of ["/control/sessions/100%", "/control/sessions/%E0%A4%A/entries"]) {
+      const res = await plane(new Request(`http://x${path}`));
+      expect(res.status).toBe(404);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*"); // it left through the exit
+    }
+  });
+
+  it("a malformed body is a 400, never a 500 — including the ones that are not objects", async () => {
+    const { control } = await fauxControlledAgent([]);
+    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    // `JSON.parse("null")` is null: reaching into it unguarded turned a malformed request into an
+    // internal error the client cannot act on.
+    for (const body of ["null", '"a string"', "42"]) {
+      const res = await plane(new Request("http://x/control/sessions/abc", { method: "PUT", headers: auth, body }));
+      expect(res.status).toBe(400);
+    }
+    // The PATCH parser already answered a protocol-level rejection for these; it still must.
+    const patched = await plane(
+      new Request("http://x/control/sessions/abc", { method: "PATCH", headers: auth, body: "null" }),
+    );
+    expect(patched.status).toBe(200);
+    expect(await patched.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
+  });
+
   it("createControlPlane refuses to mount without a token", async () => {
     const { control } = await fauxControlledAgent([]);
     expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);

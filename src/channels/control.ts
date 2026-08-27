@@ -112,7 +112,17 @@ const json = (value: unknown, status = 200): Response =>
             ok = false;
             break;
           }
-          session = decodeURIComponent(actual);
+          try {
+            session = decodeURIComponent(actual);
+          } catch {
+            // `%zz` and friends: not an id any client could have produced, so this path matches
+            // nothing and falls through to the plane's own 404. Decoding runs BEFORE the try that
+            // guards the handlers, so letting it throw would leave the boundary entirely — no CORS
+            // headers, no log line, and a rejected promise for an embedder mounting this handler
+            // directly. The query-parameter form this replaced decoded leniently and could not.
+            ok = false;
+            break;
+          }
         } else if (expected !== actual) {
           ok = false;
           break;
@@ -380,8 +390,10 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
     [`PUT /control/sessions/${SESSION_SEGMENT}`]: guard(async (req, _url, session) => {
       const read = await readJson(req);
       if ("error" in read) return read.error;
-      const body = read.value as { from?: unknown; at?: unknown };
-      if (typeof body.from !== "string" || typeof body.at !== "string") {
+      // `JSON.parse("null")` is null, and a body is whatever the client sent: reaching into it
+      // unguarded turns a malformed request into a 500 the client cannot act on.
+      const body = read.value as { from?: unknown; at?: unknown } | null;
+      if (typeof body?.from !== "string" || typeof body.at !== "string") {
         return text("expected { from: string, at: string }\n", 400);
       }
       return json(await control.sessions.fork({ from: body.from, at: body.at, into: session }));
