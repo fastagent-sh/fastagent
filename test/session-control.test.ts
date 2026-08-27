@@ -1816,6 +1816,39 @@ describe("session control (Phase 4): session lifecycle", () => {
     expect(await sessions.openIfExists("busy")).toBeDefined(); // the delete never touched it
   });
 
+  it("refuses a fork target no other route can address", async () => {
+    // `?session=` cannot carry the empty string — every session-keyed read answers 400 — so a
+    // session minted under it would sit in sessions() unopenable by the client that just listed it.
+    const { control, sessions } = await makeBoundary([]);
+    const parent = await sessions.openOrCreate("src-empty");
+    const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    const rejected = await control.dispatch("src-empty", { type: "fork", fromEntryId: at, into: "  " });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.sessions()).map((s) => s.session)).toEqual(["src-empty"]);
+  });
+
+  it("a target taken inside the lease window is a PAYLOAD error, not a retryable failure", async () => {
+    // The pre-lease check cannot be the last word: a session created between it and the write is
+    // still there when the record lands. Re-asked under the lease, so the client hears "pick another
+    // id" once instead of retrying an id that will never be free.
+    const base = piInMemorySessionRecordStore();
+    let asked = 0;
+    const racing: PiSessionRecordStore = {
+      ...base,
+      openIfExists: async (id) => (id === "dst" && asked++ === 0 ? undefined : base.openIfExists(id)),
+    };
+    const { control } = await fauxControlledAgent([], { sessions: racing });
+    const parent = await base.openOrCreate("src");
+    const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    await base.openOrCreate("dst"); // taken — but the FIRST look (pre-lease) answers absent
+
+    const rejected = await control.dispatch("src", { type: "fork", fromEntryId: at, into: "dst" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE); // not boundary_command_failed
+    expect((await base.openIfExists("dst"))?.getBranch()).toHaveLength(0); // and nothing was written over
+  });
+
   it("fork leases BOTH ends: a busy destination is refused, not written over", async () => {
     // The source lease alone leaves the destination unguarded — an invoke creating `into`, or a
     // second fork from a DIFFERENT source (a different lease key), lands between "into does not

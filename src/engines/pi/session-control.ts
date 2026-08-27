@@ -876,6 +876,15 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           }
           if (command.type === "fork") {
+            // An id every OTHER route refuses. `?session=` cannot carry the empty string — each
+            // session-keyed read answers 400 — so minting one puts a row in `sessions()` that
+            // nothing can open: listed, undeletable by any client reading that list, half-addressable.
+            if (command.into.trim() === "") {
+              return {
+                ok: false,
+                error: { code: INVALID_COMMAND_CODE, message: "a fork target id cannot be empty", retryable: false },
+              };
+            }
             // Both payload questions BEFORE the lease, as everywhere else. The entry predicate is
             // the one `entries()` publishes by, so "everything published is forkable" holds by
             // construction — the same argument `navigate` makes.
@@ -916,11 +925,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           }
           // BOTH ends of a fork. The source lease keeps the copy from reading a history a run is
-          // mid-write on; the DESTINATION lease is what makes "into does not exist" still true at
-          // the moment the record lands — an invoke creating it, or a second fork from a different
-          // source (whose source lease is a different key), otherwise slips between the check and
-          // the write, and two records under one id is what the id encoding exists to prevent.
-          // tryAcquire never blocks, so taking two cannot deadlock.
+          // mid-write on; the DESTINATION lease closes the window the pre-lease existence check
+          // leaves open — an invoke creating `into`, or a second fork from a DIFFERENT source (whose
+          // source lease is another key entirely), otherwise lands between that check and this
+          // write. tryAcquire never blocks, so taking two cannot deadlock.
           const releaseInto = command.type === "fork" ? b.lease.tryAcquire(command.into) : (): void => {};
           if (!releaseInto) {
             release();
@@ -930,6 +938,22 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 code: SESSION_BUSY_CODE,
                 message: `session "${command.type === "fork" ? command.into : session}" is busy — retry at idle`,
                 retryable: true,
+              },
+            };
+          }
+          // Holding the lease is not the same as having looked: a session created and released
+          // inside the window is still there. Re-asked UNDER the lease, as `set_model`/`navigate`
+          // re-open their record, so a taken id answers `invalid_command` (permanent for this
+          // payload) instead of reaching the store and surfacing as a retryable failure.
+          if (command.type === "fork" && (await sessions.openIfExists(command.into))) {
+            releaseInto();
+            release();
+            return {
+              ok: false,
+              error: {
+                code: INVALID_COMMAND_CODE,
+                message: `session "${command.into}" already exists — fork mints nothing over a session that is already there`,
+                retryable: false,
               },
             };
           }

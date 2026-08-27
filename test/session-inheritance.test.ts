@@ -1,7 +1,7 @@
 /**
  * A thread starts from what the room knew (participant-model.md §5), on the AgentSession engine.
  */
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -161,6 +161,9 @@ describe("inheritance edges", () => {
     expect(thread.getBranch()).toHaveLength(0); // started empty, as the fallback promises
     const named = (await SessionManager.list(cwd, join(dir, "agent-session"))).filter((r) => r.id === "sthread-5");
     expect(named).toHaveLength(1);
+    // …and staging is EMPTY: the partial file is removed on the way out. Nothing ever reads that
+    // directory, so a file left per failed attempt would accumulate until someone looked.
+    expect(await readdir(join(dir, "agent-session", ".staging"))).toEqual([]);
 
     // And the thread is usable afterwards: the second open continues THAT record, not a third one.
     thread.appendMessage({ role: "user", content: "after the failure", timestamp: 9 });

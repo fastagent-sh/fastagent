@@ -145,6 +145,21 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     mkdirSync(staging, { recursive: true });
     return publish(SessionManager.create(cwd, staging, { id }), staging);
   };
+  /** Fill a staged record and move it in — or leave nothing behind. The partial file is deleted on
+   *  the way out and the failure is rethrown untouched: `fork` turns it into a coded result and
+   *  inheritance falls back to an empty session, but neither can see `.staging`, which would
+   *  otherwise accumulate a file per failed attempt (ENOSPC being the realistic repeat offender) in
+   *  a directory nothing ever reads. */
+  const fillStaged = (id: string, fill: (staged: SessionManager) => void): SessionManager => {
+    const staged = stage(id);
+    try {
+      fill(staged);
+    } catch (error) {
+      rmSync(staged.getSessionFile() ?? "", { force: true });
+      throw error;
+    }
+    return publishStaged(staged);
+  };
   /** Move a finished record into the store: one same-filesystem rename, so a reader sees the whole
    *  thing or nothing at all. */
   const publishStaged = (staged: SessionManager): SessionManager => {
@@ -175,9 +190,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const parent = reconcileInterruptedToolCalls(SessionManager.open(found.path, parentDir));
       const cut = inheritanceCut(parent, inherit.branchHints);
       if (!cut) return undefined;
-      const staged = stage(id);
-      copyBranchForInheritance(parent, staged, cut.at);
-      return publishStaged(staged);
+      return fillStaged(id, (staged) => copyBranchForInheritance(parent, staged, cut.at));
     } catch (error) {
       // Unattributed on purpose: this spans reading the parent AND writing the child.
       log.warn(
@@ -185,6 +198,15 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       );
       return undefined;
     }
+  };
+  /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
+   *  broken by a caller that spreads this object into another one. */
+  const openExisting = async (sessionId: string): Promise<SessionManager | undefined> => {
+    const id = piSessionId(sessionId);
+    const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
+    if (mine) return SessionManager.open(mine.path, own);
+    const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
+    return legacy ? SessionManager.open(legacy.path, root) : undefined;
   };
   return {
     async openOrCreate(sessionId, inherit) {
@@ -202,13 +224,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       }
       return publish(SessionManager.create(cwd, own, { id }), own);
     },
-    async openIfExists(sessionId) {
-      const id = piSessionId(sessionId);
-      const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
-      if (mine) return SessionManager.open(mine.path, own);
-      const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
-      return legacy ? SessionManager.open(legacy.path, root) : undefined;
-    },
+    openIfExists: openExisting,
     async list() {
       // THE PROBE, not a formality: pi's own list() catches every IO error and answers `[]`, so a
       // permissions/hardware fault would arrive as "this deployment has no conversations" — the one
@@ -242,22 +258,22 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       });
     },
     async fork(from, at, into) {
-      const parent = await this.openIfExists(from);
+      const parent = await openExisting(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
       // The port promises a NEW record, so the guarantee belongs here rather than in the one caller
       // that happens to check: two records under one id makes which one a lookup finds a matter of
       // directory order.
-      if (await this.openIfExists(into)) throw new Error(`session "${into}" already exists`);
-      // NOT reconciled: the repair appends at the parent's LEAF, which a copy stopping at `at` can
-      // never reach — it would only write to the record being copied FROM. The child is reconciled
-      // on its own first open, like every other record.
-      const staged = stage(piSessionId(into));
-      copyBranchInto(parent, staged, at);
-      // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot
-      // place. A client that wants "(copy)" calls `set_name`.
-      const name = parent.getSessionName();
-      if (name) staged.appendSessionInfo(name);
-      publishStaged(staged);
+      if (await openExisting(into)) throw new Error(`session "${into}" already exists`);
+      fillStaged(piSessionId(into), (staged) => {
+        // NOT reconciled: the repair appends at the parent's LEAF, which a copy stopping at `at` can
+        // never reach — it would only write to the record being copied FROM. The child is reconciled
+        // on its own first open, like every other record.
+        copyBranchInto(parent, staged, at);
+        // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot
+        // place. A client that wants "(copy)" calls `set_name`.
+        const name = parent.getSessionName();
+        if (name) staged.appendSessionInfo(name);
+      });
     },
     async delete(sessionId) {
       const id = piSessionId(sessionId);
