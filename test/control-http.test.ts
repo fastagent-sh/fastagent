@@ -1288,6 +1288,35 @@ describe("session control over HTTP (Phase 3)", () => {
       } finally {
         await buggy.close();
       }
+
+      // Node's OWN argument validation throws TypeErrors carrying a string `code`, so "has a code"
+      // was not the test the comment above claims: an errno SHAPE is.
+      const nodeBug = Object.assign(new TypeError('The "path" argument must be of type string'), {
+        code: "ERR_INVALID_ARG_TYPE",
+      });
+      const misread = serveNode(router({}, [createControlPlane(broken(nodeBug), { token: TOKEN })]), { port: 0 });
+      const misreadPort = await misread.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${misreadPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(500);
+      } finally {
+        await misread.close();
+      }
+
+      // And a thrown null reaches the boundary as ITSELF, not as a TypeError from reading `.code`.
+      const nothing = serveNode(router({}, [createControlPlane(broken(null), { token: TOKEN })]), { port: 0 });
+      const nothingPort = await nothing.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${nothingPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(500);
+        expect(logged.join("\n")).not.toMatch(/Cannot read propert/);
+      } finally {
+        await nothing.close();
+      }
     } finally {
       spy.mockRestore();
     }

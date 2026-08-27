@@ -207,7 +207,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       // ABORTED_CODE: a deliberate stop from ANY client (this attach's /abort, another attach, a
       // Web panel) — the settled line reports it either way; no source discrimination here.
     }
-    // session_busy = the LEASE is held — by another run OR a boundary mutation (compact/set_model
+    // session_busy = the LEASE is held — by another run OR a boundary mutation (compact/update
     // contend on the same lease); "a run started" would be a guess, and "steer it" bad advice
     // against a compact. State the lease fact, promise nothing.
     if (sawBusy) console.log("[session busy — another run or a boundary operation holds it; try again shortly]");
@@ -460,7 +460,7 @@ export interface AttachIo {
 }
 
 /**
- * The backfill slice REDUCED TO THE ACTIVE PATH — a session is a tree (a `navigate`, or a
+ * The backfill slice REDUCED TO THE ACTIVE PATH — a session is a tree (a leaf move, or a
  * compaction, leaves sibling branches behind), and printing the slice raw renders the abandoned
  * branch interleaved with the live one as if it were one conversation. Reachability is computed
  * backwards from the leaf; an entry whose parent lies BEFORE the slice is path-connected by
@@ -472,7 +472,7 @@ export function activePathSlice(entries: SessionEntry[], leafEntryId: string | u
   if (leafEntryId === undefined) return entries;
   const byId = new Map(entries.map((e) => [e.id, e]));
   // An append always moves the leaf, so a leaf BEHIND the slice means every entry in it was
-  // appended and then abandoned — a navigate backwards with no new turn since. Nothing here is on
+  // appended and then abandoned — a leaf move backwards with no new turn since. Nothing here is on
   // the active path.
   if (!byId.has(leafEntryId)) return [];
   const onPath = new Set<string>();

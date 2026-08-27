@@ -89,7 +89,8 @@ const json = (value: unknown, status = 200): Response =>
  * `content-type` is not either (only three values are, and `application/json` is not among them),
  * so a browser POSTing to dispatch/invoke names it — allowing just `authorization` leaves precisely
  * the WRITE routes unreachable while reads work.
- */ function planeApp(routes: PlaneRoutes): ChannelHandler {
+ */
+function planeApp(routes: PlaneRoutes): ChannelHandler {
   /** A route key's path split into segments, with `{session}` marked. Paths are matched SEGMENT BY
    *  SEGMENT rather than by regex because a session id is an opaque Caller string: percent-encoded
    *  it can contain anything, and `URL.pathname` leaves `%2F` encoded — so splitting on `/` cannot
@@ -287,6 +288,7 @@ function parseWireUpdate(raw: unknown): { patch: SessionUpdate } | { code: strin
   }
   return { patch };
 }
+
 export interface ControlPlaneOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
    *  remote-control endpoint must not be constructible by omission. */
@@ -391,9 +393,16 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
         // ONLY a store fault becomes the retryable code. A TypeError from our own row building is a
         // bug, and answering `retryable: true` for it has a client poll forever on something no
         // retry can fix — so it goes back to the plane's totality boundary, which logs it and
-        // answers 500. An IO error carries a `code` (EACCES, ENOTDIR); that is the shape of a
+        // answers 500. An IO error carries an ERRNO `code` (EACCES, ENOTDIR); that is the shape of a
         // condition the operator can act on.
-        if (typeof (error as { code?: unknown }).code !== "string") throw error;
+        //
+        // The errno SHAPE, not merely "has a string code": Node's own argument-validation errors are
+        // TypeErrors carrying `ERR_INVALID_ARG_TYPE`/`ERR_OUT_OF_RANGE`, so a bug in row building
+        // would otherwise be handed to a client as retryable — the exact case this excludes. Read
+        // through `?.` because a thrown null must reach the boundary as itself, not as a TypeError
+        // from this line that replaces it in the log.
+        const code = (error as { code?: unknown } | null | undefined)?.code;
+        if (typeof code !== "string" || !/^E[A-Z]+$/.test(code)) throw error;
         // Logged as well as answered: the catch would otherwise be the one place a store fault is
         // invisible on the server, since it preempts the boundary that does the logging.
         log.error(`[control] GET /control/sessions failed: ${String(error)}`);

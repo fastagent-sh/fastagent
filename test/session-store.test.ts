@@ -3,7 +3,7 @@
  * share a record, and a conversation started by the harness path is continued rather than restarted.
  */
 import { writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { symlinkSync } from "node:fs";
@@ -16,6 +16,7 @@ import {
   piSessionId,
   piSessionRecordStore,
 } from "../src/engines/pi/session-store.ts";
+import { log } from "../src/log.ts";
 import { publishedLeaf } from "../src/engines/pi/session-markers.ts";
 
 /** What the built-in channels and a custom route() produce. */
@@ -479,36 +480,47 @@ describe("fork: the copy is a copy", () => {
     expect(JSON.stringify(child.getBranch())).toContain("interrupted-tool-call");
   });
 
-  it("an unchanged store is not re-read: a polled list costs one stat per record", async () => {
-    // Building a row parses the whole jsonl (pi reads every line and accumulates a search index we
-    // never ask for), and a conversation list is POLLED. The cheap question is whether anything
-    // changed; an idle deployment — what a timer mostly finds — must not pay the parse again.
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-poll-"));
+  it("the listing is built from the RECORDS, so a moved workspace still has its conversations", async () => {
+    // pi's own listing filters by the cwd in each header — right for a TUI showing "this project's
+    // sessions", and quietly catastrophic for a repository: renaming the agent directory emptied the
+    // listing AND made lookup miss, so the next turn started a fresh session on top of the old one.
+    // Measured before the change: 1 session listed at the original path, 0 after a rename.
+    const root = await mkdtemp(join(tmpdir(), "fa-store-moved-"));
+    const before = join(root, "before");
+    const store = piSessionRecordStore({ dir: "sessions", cwd: before });
+    const rec = await store.openOrCreate("room");
+    rec.appendMessage({ role: "user", content: "asked before the move", timestamp: 1 });
+    rec.appendMessage(fauxAssistantMessage("answered"));
+    expect((await store.list()).map((r) => r.session)).toEqual(["room"]);
+
+    const after = join(root, "after");
+    await rename(before, after);
+    const moved = piSessionRecordStore({ dir: "sessions", cwd: after });
+    expect((await moved.list()).map((r) => r.session)).toEqual(["room"]);
+    expect(await moved.openIfExists("room")).toBeDefined();
+    expect(JSON.stringify((await moved.openIfExists("room"))?.getBranch())).toContain("asked before the move");
+  });
+
+  it("one unreadable record is named, and the rest of the listing survives it", async () => {
+    // A record that cannot be read must not take the listing down — the other conversations are
+    // fine — and must not vanish silently either: that is `sessions_unavailable`'s conflation, one
+    // level down. pi's own listing does exactly that, dropping what it cannot parse.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-unreadable-record-"));
     const store = piSessionRecordStore({ dir, cwd: dir });
-    const session = await store.openOrCreate("room");
-    session.appendMessage({ role: "user", content: "first", timestamp: 1 });
-    session.appendMessage(fauxAssistantMessage("answer"));
+    (await store.openOrCreate("room")).appendMessage({ role: "user", content: "hi", timestamp: 1 });
+    // Named the way THIS store names its records (`s` + the encoded id) — a file under some other
+    // spelling is not ours to account for, and is skipped without a word.
+    await writeFile(join(dir, "agent-session", "2020-01-01T00-00-00-000Z_sbroken.jsonl"), "not a session header\n");
 
-    const first = await store.list();
-    // THE observation: pi's listing is what costs the parse, so count the calls rather than trust a
-    // shape. Without the stamp check this runs on every poll.
-    const listing = vi.spyOn(SessionManager, "list");
-    const again = await store.list();
-    expect(listing).not.toHaveBeenCalled();
-    listing.mockRestore();
-    expect(again).toEqual(first); // same rows
-    expect(again).not.toBe(first); // a COPY: sorting what you were handed must not reorder the cache
-    again.reverse();
-    expect((await store.list())[0]?.session).toBe(first[0]?.session);
-
-    // A write invalidates it, and the new row reflects the write.
-    (await store.openOrCreate("room")).appendMessage({ role: "user", content: "second", timestamp: 3 });
-    const rebuilt = await store.list();
-    expect(rebuilt[0]?.messageCount).toBeGreaterThan(first[0]?.messageCount as number);
-
-    // So does a NEW record, whose file the stamp did not have at all.
-    await store.openOrCreate("other");
-    expect((await store.list()).map((r) => r.session).sort()).toEqual(["other", "room"]);
+    const warned: string[] = [];
+    const spy = vi.spyOn(log, "warn").mockImplementation((line: string) => void warned.push(line));
+    try {
+      expect((await store.list()).map((r) => r.session)).toEqual(["room"]);
+      expect(warned.join("\n")).toMatch(/1 of 2 session records/);
+      expect(warned.join("\n")).toMatch(/sbroken\.jsonl/); // WHICH one, and why
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("a record that vanishes between the readdir and the stat is not a store fault", async () => {

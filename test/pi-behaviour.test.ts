@@ -11,7 +11,7 @@
  * behind a defensive-looking line in the store has an executable citation, and a pi upgrade that
  * changes one of these answers turns THIS file red instead of a channel three layers away.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,14 +29,49 @@ async function withRecord(): Promise<{ dir: string; record: SessionManager }> {
 }
 
 describe("pi behaviour the session store is built on", () => {
-  it("SessionManager.list SWALLOWS io errors and answers [] — so a store must probe for itself", async () => {
-    // Why `list()` stats the directory before asking pi: without it, an unreadable store renders as
-    // "this deployment has no conversations" and `sessions_unavailable` can never fire.
-    const dir = await mkdtemp(join(tmpdir(), "fa-pi-unreadable-"));
-    const sessions = join(dir, "sessions");
-    writeFileSync(sessions, "not a directory\n"); // readdir on this is ENOTDIR
+  it("SessionManager.list swallows io errors, drops what it cannot parse, and FILTERS BY CWD", async () => {
+    // Three reasons the store does its own readdir instead of asking pi for a listing. The third is
+    // the one that cost the most: the cwd filter is right for a TUI ("this project's sessions") and
+    // catastrophic for a repository, where renaming the agent directory emptied both the listing and
+    // the lookup built on it — the next turn then started an empty session on top of the old one.
+    const dir = await mkdtemp(join(tmpdir(), "fa-pi-listing-"));
+    const own = join(dir, "own");
+    mkdirSync(own, { recursive: true });
 
-    await expect(SessionManager.list(dir, sessions)).resolves.toEqual([]);
+    // 1. an io fault answers [] rather than throwing
+    const notADir = join(dir, "not-a-dir");
+    writeFileSync(notADir, "a file\n");
+    await expect(SessionManager.list(dir, notADir)).resolves.toEqual([]);
+
+    const ours = SessionManager.create(dir, own, { id: "ours" });
+    ours.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    ours.appendMessage(fauxAssistantMessage("a"));
+    // 2. a record it cannot parse is dropped, silently
+    writeFileSync(join(own, "2020-01-01T00-00-00-000Z_corrupt.jsonl"), "not a header\n");
+    // 3. a record written under another cwd is filtered out
+    const elsewhere = SessionManager.create(join(dir, "elsewhere"), own, { id: "elsewhere" });
+    elsewhere.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    elsewhere.appendMessage(fauxAssistantMessage("a"));
+
+    expect(readdirSync(own)).toHaveLength(3);
+    expect((await SessionManager.list(dir, own)).map((r) => r.id)).toEqual(["ours"]);
+  });
+
+  it("open() on a record it cannot read THROWS — which is what makes a per-record fault visible", async () => {
+    // The other half of the reason the store opens records itself: unlike `list`, `open` says so.
+    const dir = await mkdtemp(join(tmpdir(), "fa-pi-open-"));
+    const corrupt = join(dir, "2020-01-01T00-00-00-000Z_corrupt.jsonl");
+    writeFileSync(corrupt, "not a header\n");
+    expect(() => SessionManager.open(corrupt, dir)).toThrow(/not a valid pi session/);
+  });
+
+  it("getBranch(id) answers [] for an id that is not there — it does not throw", async () => {
+    // Why a leaf move is validated (getEntry + navigable) BEFORE anything resolves settings against
+    // the branch it names: an unknown id would otherwise resolve to an empty path, which reads as a
+    // session with no overrides at all rather than as a mistake.
+    const { record } = await withRecord();
+    expect(record.getBranch("nope")).toEqual([]);
+    expect(() => record.branch("nope")).toThrow(/not found/);
   });
 
   it("firstMessage is a SENTENCE when there is no user text, not an empty string", async () => {

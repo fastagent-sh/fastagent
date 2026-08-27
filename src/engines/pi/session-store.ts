@@ -6,7 +6,7 @@
  * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
  * READ path for existing conversations, not a second engine.
  */
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -258,23 +258,20 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return undefined;
     }
   };
-  /** The last built listing, keyed by what every record's file looked like when it was built. */
-  let listed: { stamp: string; rows: SessionSummary[] } | undefined;
   /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
    *  broken by a caller that spreads this object into another one. */
   const openExisting = async (sessionId: string): Promise<SessionManager | undefined> => {
-    const id = piSessionId(sessionId);
-    const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
+    const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
     if (mine) return SessionManager.open(mine.path, own);
-    const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
+    const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
     return legacy ? SessionManager.open(legacy.path, root) : undefined;
   };
   return {
     async openOrCreate(sessionId, inherit) {
       const id = piSessionId(sessionId);
-      const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
+      const mine = recordFiles(own).find((f) => f.id === id);
       if (mine) return reconcileInterruptedToolCalls(SessionManager.open(mine.path, own));
-      const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
+      const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
       if (legacy) return reconcileInterruptedToolCalls(SessionManager.open(legacy.path, root));
       mkdirSync(own, { recursive: true });
       // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which
@@ -288,77 +285,31 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     openIfExists: openExisting,
     applyProperties: (sessionId, writes) => applyProperties(() => openExisting(sessionId), writes),
     async list() {
-      // THE READ, done here so its failure is ours to report: pi's own list() catches every IO error
-      // and answers `[]`, so a permissions or hardware fault would arrive as "this deployment has no
-      // conversations" — the one conflation `sessions_unavailable` exists to prevent.
-      //
-      // No `exists` check in front of it, and no `statSync` either: BOTH swallow more than they look
-      // like they do. `existsSync` answers false for any stat failure (an unreadable ancestor reads
-      // as an empty store), and `statSync(…, { throwIfNoEntry: false })` returns undefined for
-      // ENOTDIR as well as ENOENT — measured, not assumed. Asking the operation itself leaves exactly
-      // one condition to special-case.
-      let files: string[];
-      try {
-        files = readdirSync(own).filter((f) => f.endsWith(".jsonl"));
-      } catch (error) {
-        // A directory that is not there is not a fault: no records is exactly `[]`. Anything else is
-        // a store this process cannot read, and it travels to the caller with its code intact.
-        if ((error as { code?: unknown }).code !== "ENOENT") throw error;
-        files = [];
+      const files = recordFiles(own);
+      const rows: SessionSummary[] = [];
+      const unreadable: string[] = [];
+      for (const file of files) {
+        // A record this store did not write (the older spelling) cannot be decoded back to a Caller
+        // id, and a row nobody can dial is worse than a row that is missing. It stays openable BY id.
+        const session = callerSessionId(file.id);
+        if (!session) continue;
+        try {
+          rows.push(summarize(session, SessionManager.open(file.path, own)));
+        } catch (error) {
+          // ONE unreadable record must not take the listing down — the other conversations are fine,
+          // and a GUI that shows nothing is worse than one missing a row. But it must not vanish
+          // silently either: that is the same conflation `sessions_unavailable` prevents one level
+          // up, just per record. Named, with its reason, every time it is polled: a record that
+          // cannot be read is a condition someone has to act on.
+          unreadable.push(`${basename(file.path)} (${String(error)})`);
+        }
       }
-      // A conversation list is POLLED, and building one costs a full parse of every record's jsonl
-      // (pi reads each line and accumulates a search index we never ask for). The cheap question is
-      // whether anything changed at all: one stat per file, and an idle deployment — which is what a
-      // GUI refreshing on a timer mostly finds — answers from the last build. Any single change
-      // rebuilds everything, because pi's listing has no per-file entry point: the fix is for the
-      // idle case, and the busy case pays what it always did.
-      const stamp = files
-        .flatMap((f) => {
-          // A record deleted between the readdir and this stat is not a store fault — `delete` is a
-          // call this plane serves, and a poll that raced one would otherwise report ENOENT as
-          // `sessions_unavailable`: the exact conflation that code exists to prevent, against a
-          // perfectly healthy store.
-          const st = statSync(join(own, f), { throwIfNoEntry: false });
-          return st ? [`${f}:${st.mtimeMs}:${st.size}`] : [];
-        })
-        .sort()
-        .join("|");
-      // A COPY: the cache outlives the call, and a caller that sorts the list it was handed must not
-      // reorder what the next caller sees.
-      if (listed && listed.stamp === stamp) return [...listed.rows];
-      // THIS store's records only. A pre-existing record (the older spelling, in `root`) is still
-      // opened by id and continued — but that spelling cannot be decoded back to the Caller's id,
-      // and listing a row nobody can dial is worse than a row that is missing.
-      const records = await SessionManager.list(cwd, own);
-      const rows = records.flatMap((r) => {
-        const session = callerSessionId(r.id);
-        if (!session) return [];
-        return [
-          {
-            session,
-            ...(r.name ? { name: r.name } : {}),
-            createdAt: r.created.getTime(),
-            // NEVER before `createdAt`. pi derives "modified" from the last entry's own timestamp,
-            // and a fork's entries carry the SOURCE conversation's — rewriting them would falsify
-            // history, so a fresh branch would otherwise sort into last week. The record's own
-            // creation is the floor: nothing about it is older than itself.
-            updatedAt: Math.max(r.modified.getTime(), r.created.getTime()),
-            messageCount: r.messageCount,
-            // pi fills `firstMessage` with a literal "(no messages)" placeholder rather than an
-            // empty string, and it does so for any session whose first user message has no
-            // extractable TEXT — a caption-less photo opens plenty of them. The count cannot say
-            // that (it counts every message, this one included), so the sentinel is what to exclude:
-            // a client must not render pi's placeholder as if a user had typed it.
-            // Sliced by CODE POINT: a cut through a surrogate pair (an emoji at the boundary) would
-            // put a lone half in the row, which renders as U+FFFD.
-            ...(r.firstMessage && r.firstMessage !== PI_NO_MESSAGES
-              ? { preview: [...r.firstMessage].slice(0, PREVIEW_CHARS).join("") }
-              : {}),
-          },
-        ];
-      });
-      listed = { stamp, rows };
-      return [...rows];
+      if (unreadable.length > 0) {
+        log.warn(
+          `[fastagent] ${unreadable.length} of ${files.length} session records in ${own} could not be read and are missing from this listing: ${unreadable.join("; ")}`,
+        );
+      }
+      return rows;
     },
     async fork(from, at, into, provenance) {
       const parent = await openExisting(from);
@@ -384,12 +335,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       });
     },
     async delete(sessionId) {
-      const id = piSessionId(sessionId);
-      const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
-      const legacy = mine
-        ? undefined
-        : (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
-      const found = mine ?? legacy;
+      const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
+      const found = mine ?? recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
       if (!found) return false;
       // A record that cannot be deleted must not report success — the caller turns the throw into a
       // coded failure, and the session is still there for the next attempt.
@@ -487,12 +434,89 @@ async function applyProperties(
   };
 }
 
+/**
+ * The record files in a directory, newest first — pi names them `<ISO timestamp>_<id>.jsonl`, so the
+ * name sorts by time and carries the id without opening anything.
+ *
+ * OUR readdir, not pi's `SessionManager.list`, and the difference is the reason this exists: that one
+ * filters by the cwd recorded in each header — right for a TUI showing "this project's sessions",
+ * wrong for a repository, where renaming the agent directory made every conversation vanish from the
+ * listing AND from lookup, so the next turn started an empty session on top of the old one. It also
+ * swallows per-file faults, which a listing needs to see.
+ *
+ * ENOENT is the one condition that is not a fault: a store nobody has written to holds no records.
+ * Anything else — an unreadable ancestor, a file where the directory should be — travels with its
+ * code, because "this deployment has no conversations" is not an answer for a store we cannot read.
+ */
+function recordFiles(dir: string): { path: string; id: string }[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== "ENOENT") throw error;
+    return [];
+  }
+  return names
+    .filter((name) => name.endsWith(RECORD_SUFFIX))
+    .sort()
+    .reverse()
+    .flatMap((name) => {
+      // The FIRST underscore: the timestamp holds none, and an encoded id may hold several
+      // (`piSessionId` escapes with `_`).
+      const cut = name.indexOf("_");
+      return cut < 0 ? [] : [{ path: join(dir, name), id: name.slice(cut + 1, -RECORD_SUFFIX.length) }];
+    });
+}
+
+/** One record as a conversation-list row. Read out of the record itself rather than from pi's
+ *  listing, which is not asked for one — so the fields mean exactly what they say: no sentinel
+ *  standing in for "no first message", and `updatedAt` floored at the record's own creation (a
+ *  fork's entries carry the SOURCE's timestamps, so a branch made today would otherwise sort into
+ *  whenever the original was written — the one column a conversation list orders by). */
+function summarize(session: string, record: SessionManager): SessionSummary {
+  const entries = record.getEntries() as unknown as { type?: string; timestamp?: string; message?: unknown }[];
+  const createdAt = Date.parse(record.getHeader()?.timestamp ?? "") || 0;
+  const last = entries.at(-1)?.timestamp;
+  const messages = entries.filter((e) => e.type === "message");
+  const name = record.getSessionName();
+  const preview = firstUserText(messages);
+  return {
+    session,
+    ...(name ? { name } : {}),
+    createdAt,
+    updatedAt: Math.max(last ? Date.parse(last) : 0, createdAt),
+    messageCount: messages.length,
+    ...(preview ? { preview } : {}),
+  };
+}
+
+/** The first user message with text in it, truncated by CODE POINT (a cut through a surrogate pair
+ *  would put a lone half in the row, which renders as U+FFFD). A session opened with a caption-less
+ *  photo has none, and answers undefined — a row without a preview, not a row claiming one. */
+function firstUserText(messages: { message?: unknown }[]): string | undefined {
+  for (const entry of messages) {
+    const message = entry.message as { role?: string; content?: unknown } | undefined;
+    if (message?.role !== "user") continue;
+    const content = message.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content
+              .filter((block) => (block as { type?: string }).type === "text")
+              .map((block) => (block as { text?: string }).text ?? "")
+              .join(" ")
+          : "";
+    if (text.trim()) return [...text].slice(0, PREVIEW_CHARS).join("");
+  }
+  return undefined;
+}
+
+/** What pi names a record file. */
+const RECORD_SUFFIX = ".jsonl";
+
 /** How much of the first message a list row carries. A row, not a transcript. */
 const PREVIEW_CHARS = 200;
-
-/** pi's placeholder for "no first user message text" — a sentinel STRING, not an empty one, so it
- *  has to be excluded by value (`session-manager.js`: `firstMessage || "(no messages)"`). */
-const PI_NO_MESSAGES = "(no messages)";
 
 /**
  * Crash-safety reconciliation, run on every OPEN of an existing record.

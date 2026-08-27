@@ -15,7 +15,8 @@ import type { AnyModel } from "./models.ts";
 
 /** Which strings are levels at all — the vocabulary. What a MODEL supports is
  *  `getSupportedThinkingLevels`. The `satisfies` anchor keeps this exhaustive against pi's union: a
- *  level pi adds becomes a type error here rather than a value `set_thinking` silently rejects. */
+ *  level pi adds becomes a type error here rather than a value `update({ thinkingLevel })` silently
+ *  rejects. */
 const ALL_THINKING_LEVELS = {
   off: true,
   minimal: true,
@@ -63,7 +64,7 @@ export interface SessionSettings {
   model: AnyModel;
   /** Already clamped to what {@link model} supports. */
   thinkingLevel: ThinkingLevel;
-  /** What `set_thinking` accepts for this session. */
+  /** What `update({ thinkingLevel })` accepts for this session. */
   availableThinkingLevels: string[];
   /** Recorded but not honored — only the execution path reports it (as a warn). */
   dropped?: { model?: string; thinkingLevel?: { recorded: string; running: string; known: boolean } };
@@ -112,7 +113,7 @@ export function resolveSessionSettings(
 
 /**
  * The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks.
- * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a `navigate`,
+ * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a leaf move,
  * and reading it flat would run the session on a setting it moved away from.
  *
  * A chain that is not intact THROWS. `getBranch()` stops where a parent is missing and answers the
