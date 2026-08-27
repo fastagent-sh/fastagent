@@ -50,7 +50,7 @@ import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
-import type { PiSessionRecordStore } from "./session-store.ts";
+import { type PiSessionRecordStore, isNavigable, publishedLeaf } from "./session-store.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -71,10 +71,10 @@ function textOf(content: unknown): string {
  * keeps its pi type as an open-set kind with an EMPTY payload — present so `parentId` chains and
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
  */
-function toSessionEntry(entry: PiSessionEntry): SessionEntry {
+function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
   const base = {
     id: entry.id,
-    parentId: entry.parentId ?? undefined,
+    parentId,
     timestamp: Date.parse(entry.timestamp),
   };
   if (entry.type === "message") {
@@ -113,14 +113,6 @@ function toSessionEntry(entry: PiSessionEntry): SessionEntry {
  * put the branch head off every conversation path. Withheld from the published plane and refused as
  * a target THROUGH THIS ONE PREDICATE, so a second exclusion cannot make the two disagree.
  */
-/** Every position a client may move the branch head to. `label` is metadata ABOUT an entry, not a
- *  position in the conversation, so it is neither published nor navigable — the client's rule stays
- *  "anything published is navigable". pi's own branch() is a pointer move and writes no record, so
- *  there is nothing else to exclude. */
-function isNavigable(entry: PiSessionEntry): boolean {
-  return entry.type !== "label";
-}
-
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
 /** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
@@ -319,7 +311,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async state(session: string): Promise<SessionState> {
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
-      const leafEntryId = opened ? (opened.getLeafId() ?? undefined) : undefined;
+      const leafEntryId = opened ? publishedLeaf(opened) : undefined;
       // What will RUN, not the raw record: a client steering a session needs the pair that executes.
       // Without a boundary there is no model to resolve against, and the fields are absent.
       // OBSERVATION IS TOTAL: an unreadable entry chain leaves the pair absent too (the same shape a
@@ -360,8 +352,26 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // would race any concurrent append into a leaf the snapshot cannot contain — a live turn
       // reading as a dangling head. This order makes the journal a superset of the leaf's chain,
       // which is what lets the published head be trusted as one of the published entries.
-      const leafEntryId = opened.getLeafId() ?? undefined;
-      const all = (opened.getEntries() as unknown as PiSessionEntry[]).filter(isNavigable).map(toSessionEntry);
+      const leafEntryId = publishedLeaf(opened);
+      const journal = opened.getEntries() as unknown as PiSessionEntry[];
+      // The published tree must be SELF-CONTAINED: a `parentId` pointing at an entry this plane does
+      // not publish (a label, one of our markers) would break the walk a client does from
+      // `leafEntryId` upward — it would stop at an id it cannot look up and report a short path.
+      // So a skipped entry is spliced out: its children point at the nearest published ancestor.
+      const byId = new Map(journal.map((e) => [e.id, e]));
+      const publishedParent = (entry: PiSessionEntry): string | undefined => {
+        let parent = entry.parentId ?? undefined;
+        while (parent) {
+          const found = byId.get(parent);
+          // A gap in the chain is left as a gap — `state()` reports it and the next invoke fails on
+          // it (design §7); inventing a parent here would hide a corrupt journal.
+          if (!found) return parent;
+          if (isNavigable(found)) return parent;
+          parent = found.parentId ?? undefined;
+        }
+        return undefined;
+      };
+      const all = journal.filter(isNavigable).map((e) => toSessionEntry(e, publishedParent(e)));
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);
@@ -571,7 +581,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       if (!entry || !isNavigable(entry)) {
         return invalid(
           entry
-            ? `entry "${patch.leafEntryId}" is a leaf-move record — entries() does not publish those, and they are not positions; move to the entry it points at`
+            ? `entry "${patch.leafEntryId}" is not a position — entries() publishes every id you can move to, and this is not one of them`
             : `entry "${patch.leafEntryId}" does not exist in session "${session}" — entries() lists the positions`,
         );
       }
@@ -615,8 +625,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         ...(patch.leafEntryId !== undefined ? { leafEntryId: patch.leafEntryId } : {}),
       });
     } catch (error) {
-      // Opening the record failed — nothing was written; the same patch may succeed on retry.
-      release();
+      // Opening the record failed — nothing was written; the same patch may succeed on retry. The
+      // lease is freed by the `finally` on the way out, once.
       return failed(error);
     } finally {
       release();
@@ -826,7 +836,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     // An id no client could then open: the empty string, `.` and `..` are not URL path segments
     // (isAddressableSession), so minting one would put a row in list() that nothing can address —
     // listed, unopenable by the client that just listed it.
-    if (!isAddressableSession(into.trim())) {
+    if (!isAddressableSession(into)) {
       return invalid(`${JSON.stringify(into)} cannot be a session id — the control plane could not address it`);
     }
     const source = await sessions.openIfExists(from);

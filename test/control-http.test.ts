@@ -1205,7 +1205,9 @@ describe("session control over HTTP (Phase 3)", () => {
         expect(() => remote.sessions.get(id)).toThrow(/cannot travel as a URL path segment/);
         // …and `fork`'s target is the same kind of path segment. Without this the local plane
         // answers invalid_command while the wire answers a 404 from a URL that normalised away.
-        expect(() => remote.sessions.fork({ from: "s", at: "e", into: id })).toThrow(
+        // It REJECTS rather than throwing: the method is typed `Promise`, and a caller may well have
+        // written `.catch()` or handed it to `Promise.all`.
+        await expect(remote.sessions.fork({ from: "s", at: "e", into: id })).rejects.toThrow(
           /cannot travel as a URL path segment/,
         );
         // …and the plane will not MINT one either: a fork target no client could open.

@@ -271,7 +271,10 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
       // PUT: the fork is idempotent, and so is the request that carries it. `into` becomes a path
       // segment exactly like `get`'s id, so it is refused on the same rule — without this the local
       // plane answers `invalid_command` while the wire answers 404 from a URL that normalised away.
-      fork: ({ from, at, into }: { from: string; at: string; into: string }) => {
+      // ASYNC, so the guard REJECTS rather than throwing out of a method typed `Promise`: a caller
+      // that wrote `.catch(…)` — or handed this to `Promise.all` — must not be surprised by a
+      // synchronous throw. (`get` may throw: it is synchronous by signature.)
+      fork: async ({ from, at, into }: { from: string; at: string; into: string }) => {
         if (!isAddressableSession(into)) {
           throw new Error(
             `session id ${JSON.stringify(into)} cannot travel as a URL path segment — this transport cannot address it`,

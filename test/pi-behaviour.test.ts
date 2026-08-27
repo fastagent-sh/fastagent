@@ -116,6 +116,32 @@ describe("pi behaviour the session store is built on", () => {
     expect((info as { modified: Date }).modified.getTime()).toBeLessThan(Date.now() - 1000);
   });
 
+  it("branch() writes NOTHING, and open() puts the leaf back on the file's last entry", async () => {
+    // The one this file was missing, and the defect it cost: a leaf move is RUNTIME state. The store
+    // anchors a move with an append for exactly this reason — without it `update({ leafEntryId })`
+    // emitted an event that `state()` contradicted a moment later, and the next turn hung off the
+    // old tip. Every test that covered the move used the in-memory store, which shares one handle.
+    const { dir, record } = await withRecord();
+    const first = record.getEntries()[0]?.id as string;
+    const tip = record.getLeafId();
+    expect(first).not.toBe(tip);
+
+    const before = record.getEntries().length;
+    record.branch(first);
+    expect(record.getLeafId()).toBe(first);
+    expect(record.getEntries()).toHaveLength(before); // the move is not a record
+
+    const reopened = SessionManager.open(record.getSessionFile() as string, dir);
+    expect(reopened.getLeafId()).toBe(tip); // …so reopening forgets it
+
+    // An append is what pins it: the new entry becomes the file's last, and its parent is the target.
+    record.branch(first);
+    record.appendCustomEntry("fastagent.probe", {});
+    const pinned = SessionManager.open(record.getSessionFile() as string, dir);
+    expect(pinned.getBranch().map((e) => e.id)).toContain(first);
+    expect(pinned.getBranch().map((e) => e.id)).not.toContain(tip);
+  });
+
   it("a NEW record is buffered in memory until its first assistant message", async () => {
     // Why the store writes the header itself (`publish`) before handing a record out: without it,
     // open-or-create is not idempotent — the second call cannot find the first call's record, and

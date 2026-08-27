@@ -184,7 +184,12 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 - `leafEntryId` moves the session's active leaf: the write verb for the tree `entries()` publishes,
   and how sibling branches come to exist (the next turn hangs off it). Every entry `entries()`
   publishes is a legal target — including boundary records the engine already leaves the leaf on —
-  and anything else rejects `invalid_command`. A move to where the leaf already is writes nothing.
+  and anything else rejects `invalid_command`. A move to where the head already is writes nothing.
+  A move that travels alone DOES write one record, and it has to: an engine's leaf can be runtime
+  state (pi's is — reopening a record puts it back on the file's last entry), so a move nothing
+  follows would be forgotten before the next turn, and `state()` would contradict the event the move
+  just emitted. That record is the implementation's own bookkeeping and is never published: what
+  `entries()` shows is a self-contained tree, every `parentId` resolving to something it also shows.
   Two deliberate omissions: no summarization of the branch being left (a model call,
   engine-flavoured, and not what moving a leaf means), and no move to the ROOT — "start from
   nothing" is a new session, not an emptied one.

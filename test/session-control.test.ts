@@ -1248,11 +1248,20 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // leaves the leaf sitting on one after every set_model.
     expect(await control.sessions.get("sNavKinds").update({ leafEntryId: user.id })).toEqual({ ok: true });
     expect(await control.sessions.get("sNavKinds").update({ leafEntryId: modelChange!.id })).toEqual({ ok: true });
-    // A move writes NO record — pi's branch() is a pointer move — so navigating cannot grow the
-    // session, and everything a client can see remains a position it can move to.
+    // A move DOES write one record — pi's branch() is a pointer move that survives nothing, so the
+    // store anchors it. That anchor is ours, not the conversation's: everything a client can see is
+    // still a position it can move to, and the bookkeeping is not published.
     const raw = (await sessions.openIfExists("sNavKinds"))?.getEntries() ?? [];
     const published = (await control.sessions.get("sNavKinds").entries()).entries.map((e) => e.id);
-    expect(raw.filter((e) => !published.includes(e.id))).toHaveLength(0);
+    const withheld = raw.filter((e) => !published.includes(e.id));
+    expect(withheld.length).toBeGreaterThan(0);
+    expect(withheld.every((e) => (e as { customType?: string }).customType?.startsWith("fastagent"))).toBe(true);
+    // …and the published tree stays self-contained: every parentId resolves to a published entry, so
+    // a client walking up from leafEntryId reaches the root rather than stopping at an id it cannot
+    // look up.
+    const entriesNow = (await control.sessions.get("sNavKinds").entries()).entries;
+    const ids = new Set(entriesNow.map((e) => e.id));
+    expect(entriesNow.every((e) => e.parentId === undefined || ids.has(e.parentId))).toBe(true);
     // An id that is not an entry at all is still a payload error.
     const rejected = await control.sessions.get("sNavKinds").update({ leafEntryId: "no-such-entry" });
     expect(rejected.ok).toBe(false);
@@ -1955,14 +1964,18 @@ describe("session control (Phase 4): session lifecycle", () => {
   });
 
   it("refuses a fork target no other route can address", async () => {
-    // `?session=` cannot carry the empty string — every session-keyed read answers 400 — so a
-    // session minted under it would sit in sessions() unopenable by the client that just listed it.
+    // A path segment cannot carry "", "." or ".." — URL normalisation eats them — so a session
+    // minted under one would sit in list() unopenable by the client that just listed it. Judged on
+    // the id as GIVEN: a trimmed copy would reject "  ", which is a perfectly legal segment, while
+    // accepting " . " and then writing an id nothing can open.
     const { control, sessions } = await makeBoundary([]);
     const parent = await sessions.openOrCreate("src-empty");
     const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
-    const rejected = await control.sessions.fork({ from: "src-empty", at: at, into: "  " });
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    for (const into of ["", ".", ".."]) {
+      const rejected = await control.sessions.fork({ from: "src-empty", at, into });
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    }
     expect((await control.sessions.list()).map((s) => s.session)).toEqual(["src-empty"]);
   });
 

@@ -12,6 +12,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   callerSessionId,
+  publishedLeaf,
   piInMemorySessionRecordStore,
   piSessionId,
   piSessionRecordStore,
@@ -223,6 +224,44 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     expect(await store.delete("room-fork")).toBe(true);
     expect(await store.openIfExists("room-fork")).toBeUndefined();
     expect(await store.delete("room-fork")).toBe(false); // gone is not an error, it is an answer
+  });
+
+  it("a leaf move survives reopening — on DISK, where pi forgets it", async () => {
+    // The gap every test missed: they all used the in-memory store, which shares one handle, so a
+    // move that pi drops on reopen looked durable. `dev`/`start`/`deploy` run the disk store.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-move-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const record = await store.openOrCreate("s1");
+    const first = record.appendMessage({ role: "user", content: "one", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage("a1"));
+    record.appendMessage({ role: "user", content: "two", timestamp: 3 });
+    const tip = record.appendMessage(fauxAssistantMessage("a2"));
+
+    const applied = await store.applyProperties("s1", { leafEntryId: first });
+    expect(applied?.landed).toEqual(["leafEntryId"]);
+    expect(applied?.leafEntryId).toBe(first);
+
+    // THE assertion: a fresh handle, which is what state(), entries() and the next turn all take.
+    const reopened = await store.openIfExists("s1");
+    expect(publishedLeaf(reopened as never)).toBe(first);
+    expect(reopened?.getBranch().map((e) => e.id)).not.toContain(tip); // the old branch is off the path
+
+    // Repeating the same move writes nothing more: a UI firing on every selection must not grow the
+    // session.
+    const size = () => (reopened?.getEntries() ?? []).length;
+    const before = size();
+    const again = await store.applyProperties("s1", { leafEntryId: first });
+    expect(again?.landed).toEqual(["leafEntryId"]);
+    expect((await store.openIfExists("s1"))?.getEntries().length).toBe(before);
+
+    // And a move that travels WITH another property needs no anchor of its own — the property is
+    // the anchor. (The head then sits on that property record, as it does after any boundary write.)
+    await store.applyProperties("s1", { leafEntryId: tip, thinkingLevel: "high" });
+    const after = await store.openIfExists("s1");
+    expect(after?.getBranch().map((e) => e.id)).toContain(tip); // the move stuck
+    expect(
+      after?.getEntries().filter((e) => (e as { customType?: string }).customType === "fastagent.leaf"),
+    ).toHaveLength(1); // still just the one from the solo move
   });
 
   it("a fork's leaf is the exchange it was taken at, not a metadata record", async () => {

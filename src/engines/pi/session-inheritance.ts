@@ -17,6 +17,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
+import { isInternalMarker } from "./session-store.ts";
 
 /** The custom-entry kind carrying "this record is a fork of X at Y" — a fact about the RECORD, like
  *  its name, not a part of the history. Its own entry rather than pi's header `parentSession`, which
@@ -244,9 +245,11 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         if (entry.thinkingLevel) child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
-        // The parent's own provenance is not the child's: copying it would make a fork of a fork
-        // claim its grandparent's branch point, and the idempotency check reads that value.
-        if (entry.customType && entry.customType !== FORK_PROVENANCE) {
+        // OUR markers describe the parent's record, not the thread's history: a copied provenance
+        // would make a fork of a fork claim its grandparent's branch point (the idempotency check
+        // reads that value), and a copied leaf anchor would pin the child's head to a position its
+        // own history never chose.
+        if (entry.customType && !isInternalMarker(entry)) {
           child.appendCustomEntry(entry.customType, entry.data);
         }
         break;
