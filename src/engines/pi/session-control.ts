@@ -915,6 +915,24 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               },
             };
           }
+          // BOTH ends of a fork. The source lease keeps the copy from reading a history a run is
+          // mid-write on; the DESTINATION lease is what makes "into does not exist" still true at
+          // the moment the record lands — an invoke creating it, or a second fork from a different
+          // source (whose source lease is a different key), otherwise slips between the check and
+          // the write, and two records under one id is what the id encoding exists to prevent.
+          // tryAcquire never blocks, so taking two cannot deadlock.
+          const releaseInto = command.type === "fork" ? b.lease.tryAcquire(command.into) : (): void => {};
+          if (!releaseInto) {
+            release();
+            return {
+              ok: false,
+              error: {
+                code: SESSION_BUSY_CODE,
+                message: `session "${command.type === "fork" ? command.into : session}" is busy — retry at idle`,
+                retryable: true,
+              },
+            };
+          }
           try {
             if (command.type === "fork") {
               await sessions.fork(session, command.fromEntryId, command.into);
@@ -938,6 +956,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
             };
           } finally {
+            releaseInto();
             release();
           }
           if (command.type === "delete") {

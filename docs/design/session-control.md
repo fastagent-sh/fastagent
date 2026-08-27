@@ -172,12 +172,13 @@ type SessionCommand =
   minted it, and a client that forks is about to `invoke` on the result anyway. A fork onto an id
   that already exists rejects `invalid_command` rather than merging two histories under one id.
   There is no separate `clone`: it is this command with the session's own `leafEntryId`. The fork
-  carries the source's NAME: on disk it cannot not — the `session_info` record sits on the copied
-  path — so the in-memory backend matches rather than being quietly different, and a client that
-  wants "(copy)" calls `set_name`. What it does NOT carry is the inheritance window: a new THREAD is
-  bounded by a mechanical compaction mark ([participant-model §5](participant-model.md)), while a
-  fork is the same user keeping their own history, and marking it would hide the very entries they
-  forked to keep.
+  carries the source's NAME — a fork of "Deploy notes" listing as untitled is a row a user cannot
+  place, and a client that wants "(copy)" calls `set_name`. What it does NOT carry is the inheritance
+  window: a new THREAD is bounded by a mechanical compaction mark
+  ([participant-model §5](participant-model.md)), while a fork is the same user keeping their own
+  history, and marking it would hide the very entries they forked to keep. Every entry `entries()`
+  publishes is forkable, the first user message included — "start over from what I asked" is the
+  fork a client makes most.
 - `set_name` sets the display name `sessions()` reports — a label, not an identity: the id stays the
   Caller's.
 - `delete` destroys the record. It is the plane's only IRREVERSIBLE command, and it is guarded by
@@ -441,6 +442,12 @@ FastAgent adapts pi's concepts, never proxies `pi --mode rpc` unchanged:
 deliberately small and MUST NOT grow into the interactive API. The line is not "how many methods" but
 WHICH KIND: every one of them is a whole-RECORD operation (find it, copy it, remove it, enumerate
 them). Reading or writing what is INSIDE a record stays behind the session the store hands back.
+
+Both backends copy a fork ENTRY BY ENTRY rather than at the file level. pi can copy a path into a new
+file, and the disk store used to, but that pair writes the intermediate only once the copied path
+holds an assistant message — so forking at a user entry produced a permanent failure the plane could
+only report as retryable. One copy path also means the two backends cannot drift on what a fork
+carries.
 
 `list` answers in CALLER ids, never storage names. The pi implementation encodes a Caller's id into a
 name pi accepts (`-1001234567890` → `s-1001234567890`), and that encoding is storage detail: a listing

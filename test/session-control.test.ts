@@ -1816,6 +1816,26 @@ describe("session control (Phase 4): session lifecycle", () => {
     expect(await sessions.openIfExists("busy")).toBeDefined(); // the delete never touched it
   });
 
+  it("fork leases BOTH ends: a busy destination is refused, not written over", async () => {
+    // The source lease alone leaves the destination unguarded — an invoke creating `into`, or a
+    // second fork from a DIFFERENT source (a different lease key), lands between "into does not
+    // exist" and the write.
+    const { control, sessions, lease } = await makeBoundary([]);
+    const parent = await sessions.openOrCreate("src");
+    const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    const holdingDestination = lease.tryAcquire("dst");
+    expect(holdingDestination).toBeTruthy();
+
+    const rejected = await control.dispatch("src", { type: "fork", fromEntryId: at, into: "dst" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(SESSION_BUSY_CODE);
+    expect(await sessions.openIfExists("dst")).toBeUndefined();
+
+    // Released, the same command goes through — the rejection was about timing, as `retryable` says.
+    (holdingDestination as () => void)();
+    expect(await control.dispatch("src", { type: "fork", fromEntryId: at, into: "dst" })).toEqual({ ok: true });
+  });
+
   it("without boundary wiring the lifecycle is gated off — and sessions() still reads", async () => {
     const { control, sessions } = await makeObserved([]);
     expect(control.capabilities().lifecycle).toBe(false);

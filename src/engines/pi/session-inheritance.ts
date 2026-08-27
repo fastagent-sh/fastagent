@@ -14,9 +14,8 @@
  * Every failure lands on "start empty + warn": a thread must not lose its first turn to an
  * inheritance edge.
  */
-import { unlinkSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 
 /** What a Caller names when a new session should start from an existing one. */
@@ -233,64 +232,11 @@ export function copyBranchForInheritance(parent: SessionManager, child: SessionM
   markInheritanceWindow(child);
 }
 
-/**
- * Fork `parent` into a record named `id`, copying the path up to entry `at`, in `stagingDir`.
- *
- * Two pi calls rather than one, because neither alone does it: `createBranchedSession` copies
- * exactly the path to an entry but names the result with a generated id, and `forkFrom` takes an id
- * but copies everything. The intermediate is deleted; it exists for one call.
- *
- * STAGED, not published: the caller finishes the record (crash reconciliation) and moves it into
- * place. Publishing here and finishing after would leave a half-prepared record under the id on any
- * later failure — and the fallback path would then create a SECOND record with the same id, making
- * which one a lookup finds a matter of directory order.
- *
- * Returns undefined when the parent has no file to fork from (a non-persisting backend).
+/*
+ * There is deliberately NO file-level fork here. pi can copy a path into a new file
+ * (`createBranchedSession` + `forkFrom`), and this used to, but that pair writes the intermediate
+ * only when the copied path contains an ASSISTANT message — forking at a user entry then handed
+ * `forkFrom` a path that does not exist, and the failure surfaced as a retryable one for a condition
+ * no retry can change. Copying entries is what the in-memory backend does anyway, so both backends
+ * now share these functions and one semantics; a fork is not hot enough to buy a second path back.
  */
-export function forkAt(options: {
-  parent: SessionManager;
-  id: string;
-  cwd: string;
-  stagingDir: string;
-  at: string;
-}): SessionManager | undefined {
-  const { parent, id, cwd, stagingDir: dir } = options;
-  let branched: string | undefined;
-  try {
-    branched = parent.createBranchedSession(options.at);
-    if (!branched) return undefined;
-    return SessionManager.forkFrom(branched, cwd, dir, { id });
-  } finally {
-    if (branched) {
-      try {
-        unlinkSync(branched);
-      } catch (error) {
-        // The intermediate is inert (it is never listed as this store's record), so a failed
-        // cleanup costs a stray file, not correctness — but silence would hide a full disk.
-        log.warn(`[fastagent] could not remove the intermediate fork ${branched}: ${String(error)}`);
-      }
-    }
-  }
-}
-
-/**
- * {@link forkAt} at the branch point the hints locate, plus the compaction mark that bounds what the
- * child's model sees. The mark is what makes this INHERITANCE rather than a copy: a lifecycle `fork`
- * is the same user continuing their own history, and bounding it there would hide the very entries
- * they forked to keep.
- *
- * Returns undefined when inheritance cannot be honored — the caller starts the session empty.
- */
-export function forkForInheritance(options: {
-  parent: SessionManager;
-  id: string;
-  cwd: string;
-  stagingDir: string;
-  branchHints?: string[];
-}): SessionManager | undefined {
-  const cut = inheritanceCut(options.parent, options.branchHints);
-  if (!cut) return undefined;
-  const child = forkAt({ ...options, at: cut.at });
-  if (child) markInheritanceWindow(child);
-  return child;
-}

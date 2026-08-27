@@ -16,8 +16,6 @@ import {
   type SessionInheritance,
   copyBranchForInheritance,
   copyBranchInto,
-  forkAt,
-  forkForInheritance,
   inheritanceCut,
 } from "./session-inheritance.ts";
 
@@ -140,6 +138,23 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   /** Where a forked record is finished before it becomes discoverable. A SUBDIRECTORY of the store,
    *  so `list()` (one level, `*.jsonl`) never sees a record that is still being prepared. */
   const staging = join(own, ".staging");
+  /** An empty record under `id`, ON DISK (see {@link publish}) and not yet discoverable. Copying
+   *  into it appends immediately, so a crash leaves a partial record in staging rather than a
+   *  complete-looking one under the id. */
+  const stage = (id: string): SessionManager => {
+    mkdirSync(staging, { recursive: true });
+    return publish(SessionManager.create(cwd, staging, { id }), staging);
+  };
+  /** Move a finished record into the store: one same-filesystem rename, so a reader sees the whole
+   *  thing or nothing at all. */
+  const publishStaged = (staged: SessionManager): SessionManager => {
+    const file = staged.getSessionFile();
+    if (!file) throw new Error(`staged record ${staged.getSessionId()} has no file to publish`);
+    mkdirSync(own, { recursive: true });
+    const target = join(own, basename(file));
+    renameSync(file, target);
+    return SessionManager.open(target, own);
+  };
   /** Fork the named parent into `id`, or answer undefined so the caller starts empty. Every failure
    *  is a warn: a thread must not lose its first turn to an inheritance edge. */
   const inheritInto = async (id: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
@@ -155,24 +170,14 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     }
     try {
       const parentDir = found.id === parentId ? own : root;
-      mkdirSync(staging, { recursive: true });
-      const staged = forkForInheritance({
-        // A parent that crashed mid tool-execution would otherwise pass its dangling tool_use down
-        // to the child, whose very first request the provider then rejects.
-        parent: reconcileInterruptedToolCalls(SessionManager.open(found.path, parentDir)),
-        id,
-        cwd,
-        stagingDir: staging,
-        branchHints: inherit.branchHints,
-      });
-      if (!staged) return undefined;
-      // Publish only once the record is complete: same-filesystem rename, so a reader sees the whole
-      // thing or nothing at all.
-      const stagedFile = staged.getSessionFile();
-      if (!stagedFile) return staged; // non-persisting backend: nothing to publish
-      const target = join(own, basename(stagedFile));
-      renameSync(stagedFile, target);
-      return SessionManager.open(target, own);
+      // A parent that crashed mid tool-execution would otherwise pass its dangling tool_use down
+      // to the child, whose very first request the provider then rejects.
+      const parent = reconcileInterruptedToolCalls(SessionManager.open(found.path, parentDir));
+      const cut = inheritanceCut(parent, inherit.branchHints);
+      if (!cut) return undefined;
+      const staged = stage(id);
+      copyBranchForInheritance(parent, staged, cut.at);
+      return publishStaged(staged);
     } catch (error) {
       // Unattributed on purpose: this spans reading the parent AND writing the child.
       log.warn(
@@ -225,9 +230,13 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
             updatedAt: r.modified.getTime(),
             messageCount: r.messageCount,
             // pi fills `firstMessage` with a literal "(no messages)" placeholder rather than an
-            // empty string, so the message COUNT is what says whether there is a preview at all —
-            // truthiness would hand a client a sentence to render as if a user had typed it.
-            ...(r.messageCount > 0 && r.firstMessage ? { preview: r.firstMessage.slice(0, PREVIEW_CHARS) } : {}),
+            // empty string, and it does so for any session whose first user message has no
+            // extractable TEXT — a caption-less photo opens plenty of them. The count cannot say
+            // that (it counts every message, this one included), so the sentinel is what to exclude:
+            // a client must not render pi's placeholder as if a user had typed it.
+            ...(r.firstMessage && r.firstMessage !== PI_NO_MESSAGES
+              ? { preview: r.firstMessage.slice(0, PREVIEW_CHARS) }
+              : {}),
           },
         ];
       });
@@ -239,23 +248,16 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       // that happens to check: two records under one id makes which one a lookup finds a matter of
       // directory order.
       if (await this.openIfExists(into)) throw new Error(`session "${into}" already exists`);
-      mkdirSync(staging, { recursive: true });
-      // Same staging discipline as inheritance: the fork is finished in `.staging` (which `list()`
-      // never sees, being a directory) and published by rename, so a reader finds a whole record or
-      // none. The parent is reconciled first for the same reason a thread inherits a reconciled
-      // one — a dangling tool_use copied into the child poisons its first request.
-      const staged = forkAt({
-        parent: reconcileInterruptedToolCalls(parent),
-        id: piSessionId(into),
-        cwd,
-        stagingDir: staging,
-        at,
-      });
-      if (!staged) throw new Error(`session "${from}" has no file to fork from`);
-      const stagedFile = staged.getSessionFile();
-      if (!stagedFile) throw new Error(`fork of "${from}" produced no file`);
-      mkdirSync(own, { recursive: true });
-      renameSync(stagedFile, join(own, basename(stagedFile)));
+      // NOT reconciled: the repair appends at the parent's LEAF, which a copy stopping at `at` can
+      // never reach — it would only write to the record being copied FROM. The child is reconciled
+      // on its own first open, like every other record.
+      const staged = stage(piSessionId(into));
+      copyBranchInto(parent, staged, at);
+      // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot
+      // place. A client that wants "(copy)" calls `set_name`.
+      const name = parent.getSessionName();
+      if (name) staged.appendSessionInfo(name);
+      publishStaged(staged);
     },
     async delete(sessionId) {
       const id = piSessionId(sessionId);
@@ -275,6 +277,10 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
 
 /** How much of the first message a list row carries. A row, not a transcript. */
 const PREVIEW_CHARS = 200;
+
+/** pi's placeholder for "no first user message text" — a sentinel STRING, not an empty one, so it
+ *  has to be excluded by value (`session-manager.js`: `firstMessage || "(no messages)"`). */
+const PI_NO_MESSAGES = "(no messages)";
 
 /**
  * Crash-safety reconciliation, run on every OPEN of an existing record.
@@ -459,7 +465,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // window: this is the same user keeping their own history, not a new thread bounded from a
       // parent's.
       const staged = SessionManager.inMemory(cwd, { id: piSessionId(into) });
-      copyBranchInto(reconcileInterruptedToolCalls(parent), staged, at);
+      copyBranchInto(parent, staged, at);
       // The name travels, because on disk it cannot NOT travel: pi copies the whole path, and the
       // `session_info` record sits on it. One behaviour for both backends beats a truthful-sounding
       // difference nobody can predict — a client that wants "(copy)" calls `set_name`.

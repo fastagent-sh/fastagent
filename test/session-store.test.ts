@@ -301,3 +301,66 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
     }
   });
 });
+
+describe("fork: the copy is a copy", () => {
+  it("forks at a USER entry — pi's file-level fork cannot, and the failure was permanent-but-retryable", async () => {
+    // pi writes a branched file only once the copied path holds an assistant message, so the old
+    // two-call fork handed `forkFrom` a path that did not exist. It surfaced as
+    // boundary_command_failed{retryable: true} for a condition no retry can change, on the exact
+    // entry a client forks from most: "start over from what I asked".
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-forkuser-"));
+    for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
+      const parent = await store.openOrCreate("room");
+      const at = parent.appendMessage({ role: "user", content: "the question", timestamp: 1 });
+      parent.appendMessage(fauxAssistantMessage("an answer to discard"));
+
+      await store.fork("room", at, "retry");
+      const child = await store.openIfExists("retry");
+      expect(child?.getBranch()).toHaveLength(1);
+      expect(JSON.stringify(child?.getBranch())).toContain("the question");
+      expect(JSON.stringify(child?.getBranch())).not.toContain("an answer to discard");
+    }
+  });
+
+  it("never writes to the record it copies FROM", async () => {
+    // The reconcile this used to run appends at the parent's LEAF — unreachable from a copy that
+    // stops at `at`, so it repaired nothing and durably mutated the source: a "copy" bumping the
+    // original's updatedAt and message count.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-forkpure-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const parent = await store.openOrCreate("room");
+    parent.appendMessage({ role: "user", content: "run the tool", timestamp: 1 });
+    const at = parent.appendMessage({
+      ...fauxAssistantMessage(""),
+      content: [{ type: "toolCall", id: "call-1", name: "doer", arguments: {} }],
+      stopReason: "toolUse",
+    } as never);
+
+    const before = (await store.list()).find((r) => r.session === "room");
+    await store.fork("room", at, "copy");
+    const after = (await store.list()).find((r) => r.session === "room");
+    expect(after?.messageCount).toBe(before?.messageCount); // the source is untouched by its own fork
+
+    // The child's dangling tool call is repaired on its own first open, like any other record.
+    const child = await store.openOrCreate("copy");
+    expect(JSON.stringify(child.getBranch())).toContain("interrupted-tool-call");
+  });
+
+  it("a first message with no TEXT still has no preview — the count cannot tell", async () => {
+    // A caption-less photo (telegram/feishu/slack open plenty of sessions this way): messageCount is
+    // 1, and pi's firstMessage is its "(no messages)" sentinel.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-imgpreview-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const session = await store.openOrCreate("photo");
+    session.appendMessage({
+      role: "user",
+      content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+      timestamp: 1,
+    } as never);
+    session.appendMessage(fauxAssistantMessage("nice picture"));
+
+    const row = (await store.list()).find((r) => r.session === "photo");
+    expect(row?.messageCount).toBeGreaterThan(0);
+    expect(row?.preview).toBeUndefined();
+  });
+});
