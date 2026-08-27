@@ -288,11 +288,24 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     openIfExists: openExisting,
     applyProperties: (sessionId, writes) => applyProperties(() => openExisting(sessionId), writes),
     async list() {
-      // THE PROBE, not a formality: pi's own list() catches every IO error and answers `[]`, so a
-      // permissions/hardware fault would arrive as "this deployment has no conversations" — the one
-      // conflation `sessions_unavailable` exists to prevent, and the reason that code cannot be left
-      // to pi's return value. An ABSENT directory is not a fault: no records is exactly `[]`.
-      const files = existsSync(own) ? readdirSync(own).filter((f) => f.endsWith(".jsonl")) : [];
+      // THE READ, done here so its failure is ours to report: pi's own list() catches every IO error
+      // and answers `[]`, so a permissions or hardware fault would arrive as "this deployment has no
+      // conversations" — the one conflation `sessions_unavailable` exists to prevent.
+      //
+      // No `exists` check in front of it, and no `statSync` either: BOTH swallow more than they look
+      // like they do. `existsSync` answers false for any stat failure (an unreadable ancestor reads
+      // as an empty store), and `statSync(…, { throwIfNoEntry: false })` returns undefined for
+      // ENOTDIR as well as ENOENT — measured, not assumed. Asking the operation itself leaves exactly
+      // one condition to special-case.
+      let files: string[];
+      try {
+        files = readdirSync(own).filter((f) => f.endsWith(".jsonl"));
+      } catch (error) {
+        // A directory that is not there is not a fault: no records is exactly `[]`. Anything else is
+        // a store this process cannot read, and it travels to the caller with its code intact.
+        if ((error as { code?: unknown }).code !== "ENOENT") throw error;
+        files = [];
+      }
       // A conversation list is POLLED, and building one costs a full parse of every record's jsonl
       // (pi reads each line and accumulates a search index we never ask for). The cheap question is
       // whether anything changed at all: one stat per file, and an idle deployment — which is what a

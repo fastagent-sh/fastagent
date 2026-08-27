@@ -616,9 +616,11 @@ is the only key the framework owns.
 
 Overrides persist in the session record and every later turn's fresh session binding applies them — on any
 serving path, channels included. One exception: a recorded thinking level the session's CURRENT
-model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. `update({ model })`
-re-records the clamped level, so `state()` and the execution agree and the client gets
-it in the same `state_changed`; the resolve keeps clamping as a BACKSTOP for what the boundary cannot
+model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. The clamp
+happens where the pair is RESOLVED (`resolveSessionSettings`), not by rewriting the journal — the
+recorded level is the user's preference and returns when the session moves back to a capable model —
+so `state()` and the execution agree and the client gets the clamped level in the same
+`state_changed`; the resolve keeps clamping as a BACKSTOP for what the boundary cannot
 see (a deployment whose CONFIGURED model changed between restarts), and there it warns server-side
 while `state()` reports the recorded level. Note the clamp's direction: it takes the lowest supported
 level at or above the recorded one and only falls back downward if nothing above exists — a gap

@@ -1,7 +1,7 @@
 /**
  * What a session is SET TO, and what it may be set to. Model and thinking level are ONE setting —
  * which levels exist is a property of the model — so they resolve together, here, and `state()`, the
- * `set_thinking` gate and the per-invoke binding all read this rather than deriving their own.
+ * `update({ thinkingLevel })` gate and the per-invoke binding all read this rather than deriving their own.
  *
  * Read-only by design. The durable record may hold a level the current model cannot do; that record
  * is the user's PREFERENCE, so resolving per read restores it when the session returns to a capable

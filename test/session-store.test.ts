@@ -3,7 +3,7 @@
  * share a record, and a conversation started by the harness path is continued rather than restarted.
  */
 import { writeFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { symlinkSync } from "node:fs";
@@ -341,6 +341,30 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
 });
 
 describe("the lifecycle primitives: the failure modes each one owes", () => {
+  it("an UNREACHABLE store rejects, however it is unreachable", async () => {
+    // Two shapes of the same fault, because the guards that look like they cover them do not: an
+    // ancestor that is not a directory, and (where the test user is not root) one that cannot be
+    // entered. `existsSync` answers false for both — an unreadable store would read as an empty one,
+    // which is the conflation `sessions_unavailable` exists to prevent — and
+    // `statSync(…, { throwIfNoEntry: false })` returns undefined for ENOTDIR too.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-unreachable-"));
+    await writeFile(join(dir, "sessions"), "a file where the store root should be\n");
+    await expect(piSessionRecordStore({ dir: "sessions", cwd: dir }).list()).rejects.toThrow(/ENOTDIR/);
+
+    // ABSENT is not unreachable: a store nobody has written to yet is exactly `[]`.
+    await expect(piSessionRecordStore({ dir: "never-used", cwd: dir }).list()).resolves.toEqual([]);
+
+    if (process.getuid?.() === 0) return; // root ignores the mode bits below
+    const locked = join(dir, "locked");
+    await mkdir(join(locked, "agent-session"), { recursive: true });
+    await chmod(locked, 0o000);
+    try {
+      await expect(piSessionRecordStore({ dir: "locked", cwd: dir }).list()).rejects.toThrow(/EACCES/);
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  });
+
   it("a store that cannot be READ rejects — pi's own list() answers [] on any IO error", async () => {
     // Why this probe exists at all: `[]` is the honest answer for a deployment with no sessions, so
     // a swallowed fault would render as "no conversations" in a GUI — the conflation the coded 503
