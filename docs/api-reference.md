@@ -603,7 +603,9 @@ const { agent, sessionControl } = await createPiAgentFromDir(dir, { sessionContr
 
 The same contract over the wire — for a Web panel, a desktop app, or `fastagent attach`. Server
 side, mount the bearer-authenticated routes (dev/start do this automatically when the config sets
-`sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json`):
+`sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json` — or using
+`FASTAGENT_CONTROL_TOKEN` when the environment sets it, which is how a deployed box gets a token its
+callers already know):
 
 ```ts
 import { createAgentService } from "@fastagent-sh/fastagent";

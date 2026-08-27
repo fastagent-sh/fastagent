@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentService } from "../src/engines/pi/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
@@ -104,6 +104,62 @@ describe("createAgentService", () => {
     expect((await stat(discovery)).mode & 0o777).toBe(0o600);
     await service.close();
     await expect(readFile(discovery, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("honours an injected control token — the deployed case, where a minted one is unreadable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-surface-injected-"));
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
+    );
+    await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
+    // Padded on purpose: a token pasted with a trailing newline must not become a token nobody else
+    // can spell — the caller holding the clean value would just get 401.
+    process.env.FASTAGENT_CONTROL_TOKEN = "  deployer-minted-0123456789\n";
+    try {
+      const service = await createAgentService(dir);
+      try {
+        expect(service.control?.token).toBe("deployer-minted-0123456789");
+        const res = await service.handler(
+          new Request("http://h/control/capabilities", {
+            headers: { authorization: "Bearer deployer-minted-0123456789" },
+          }),
+        );
+        expect(res.status).toBe(200);
+      } finally {
+        await service.close();
+      }
+      // SET BUT EMPTY is what a generated Compose file produces (`NAME: "${NAME:-}"`) for a secret the
+      // operator skipped. It must still serve — an empty token would throw at the plane — so it falls
+      // back to a mint, and the warning is the only thing telling the operator their token is not the
+      // box's. Without it the symptom is a bare 401 on every call.
+      process.env.FASTAGENT_CONTROL_TOKEN = "";
+      const logged: string[] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        logged.push(args.join(" "));
+      });
+      const blank = await createAgentService(dir);
+      try {
+        expect(blank.control?.token).toMatch(/[0-9a-f-]{36}/);
+        expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is set but empty/);
+      } finally {
+        await blank.close();
+      }
+      // A guessable token is ACCEPTED — the deployer owns the choice — but not silently: this plane
+      // steers and aborts runs, and the token is the whole of its auth.
+      logged.length = 0;
+      process.env.FASTAGENT_CONTROL_TOKEN = "changeme";
+      const weak = await createAgentService(dir);
+      try {
+        expect(weak.control?.token).toBe("changeme");
+        expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is 8 characters/);
+      } finally {
+        spy.mockRestore();
+        await weak.close();
+      }
+    } finally {
+      delete process.env.FASTAGENT_CONTROL_TOKEN;
+    }
   });
 
   it("a connection that dies after coming up makes health say so again", async () => {

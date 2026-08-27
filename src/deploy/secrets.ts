@@ -3,6 +3,7 @@
  * gate every target; optional channel values travel only when configured. Only the SET command differs
  * (`fly secrets import` vs `railway variables set`). The runbooks list both classes; `--run` reads local values.
  */
+import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
 
 /**
@@ -38,7 +39,18 @@ export function deploymentSecrets(
   // Dedup: a name already covered by the model key / a channel secret must not appear twice in the runbook.
   for (const name of extraSecrets) {
     if (!secrets.some((s) => s.name === name)) {
-      secrets.push({ name, hint: "declared in fastagent.config deploy.secrets", required: true });
+      const control = name === CONTROL_TOKEN_ENV;
+      secrets.push({
+        name,
+        hint: control
+          ? "the /control/* bearer token — mint one (uuidgen) and give the same value to callers"
+          : "declared in fastagent.config deploy.secrets",
+        // OPTIONAL, unlike every other extra: unset, the box mints a per-boot token and still serves,
+        // and every host with a shell can read it back out of control.json. Gating would stop deploys
+        // that work today to enforce a convenience — the pre-flight warning is where that argument
+        // belongs.
+        required: !control,
+      });
     }
   }
   return secrets;
@@ -125,7 +137,9 @@ export function assembleSecrets(input: {
     if (name in secrets || missingSecrets.includes(name)) continue; // already covered by model/channel — no dup
     const v = input.env[name];
     if (v) secrets[name] = v;
-    else missingSecrets.push(name); // declared in config but no local value — same .env remediation
+    // The control token is CARRIED, never gated — see {@link deploymentSecrets}: unset, the box mints
+    // one and serves; every other extra is declared as needed, so its absence is a stop.
+    else if (name !== CONTROL_TOKEN_ENV) missingSecrets.push(name);
   }
   return { secrets, missingSecrets, needsModelCredential };
 }

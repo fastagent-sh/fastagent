@@ -10,9 +10,10 @@
  * SECURITY: these routes carry steer/abort/set_model — a remote-control surface. The bearer token
  * is REQUIRED (there is no unauthenticated mode) and is the only auth the framework owns; anything
  * beyond a shared secret (principals, per-permission split, audit) is the wrapping host's job
- * (design §14). The serving process generates a per-boot token and writes it to
- * `<stateRoot>/control.json` for local discovery — filesystem permissions guard the token, and
- * the token guards the routes. How far those routes REACH is the bind address: all interfaces by
+ * (design §14). Locally the serving process generates a per-boot token and writes it to
+ * `<stateRoot>/control.json` for local discovery — filesystem permissions guard the token, and the
+ * token guards the routes. That premise is shared-filesystem: a deployment breaks it, so there the
+ * DEPLOYER supplies the token ({@link CONTROL_TOKEN_ENV}) and both sides know it. How far those routes REACH is the bind address: all interfaces by
  * default (containers require it), so the port is LAN-reachable and the mount warns accordingly —
  * `--bind 127.0.0.1` (or `http.host`) closes exactly that reach, and the warning goes quiet because
  * there is none left to state.
@@ -30,6 +31,12 @@ import { text } from "./respond.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
 const CONTROL_PREFIX = "/control";
+
+/** The token, when the DEPLOYER owns it rather than the box (`mountSessionControl` reads it, `deploy`
+ *  carries it). Declared here with the prefix because both are the plane's public names: the serving
+ *  side and the deploy side must spell it identically, and a rename that hits only one of them fails
+ *  silently — the box mints its own and every caller the runbook told gets a 401. */
+export const CONTROL_TOKEN_ENV = "FASTAGENT_CONTROL_TOKEN";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
 export interface WireEvent {

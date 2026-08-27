@@ -24,6 +24,7 @@ import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
+import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { isEnvKey } from "./secrets.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). Host-neutral advisories. */
@@ -141,18 +142,20 @@ export async function preflightDeploy(input: {
   }
 
   // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*`
-  // (steer/abort/set_model) rides the PUBLIC host URL — protected only by a per-boot bearer token
-  // minted INSIDE the container (`<stateRoot>/control.json`), which external consumers cannot read.
-  // Publicly reachable yet unusable is the worst of both; the tunnel path warns loudly and deploy
-  // must not be the silent second way to break the loopback trust story.
+  // (steer/abort/set_model) rides the PUBLIC host URL, protected only by the bearer token. The token
+  // travels as a deploy secret (see extraSecrets below) so the caller has it; the reach still warrants
+  // a warning — the tunnel path warns loudly and deploy must not be the silent second way to break the
+  // loopback trust story.
   if (config.sessionControl === true) {
     messages.push({
       level: "warn",
       text:
         `sessionControl: true — the deployed box serves /control/* (steer/abort/set_model) at its public URL, ` +
-        `protected only by a per-boot token written inside the container. Read the TOKEN from ` +
-        `<stateRoot>/control.json on the box (its url field is container-loopback — pair the token with the ` +
-        `public host URL: attach --url <public-url> --token …), or front the endpoint with real auth (design §14)`,
+        `protected only by a bearer token. Set ${CONTROL_TOKEN_ENV} (listed with the other secrets) and give the ` +
+        `same value to callers: attach --url <public-url> --token …. Unset, the box mints its own per boot — ` +
+        `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +
+        `url field is container-loopback) and replaced on every restart. Front the endpoint with real auth for ` +
+        `anything wider (design §14)`,
     });
   }
 
@@ -481,7 +484,12 @@ export async function preflightDeploy(input: {
   }
   // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
   // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
-  const extraSecrets = config.deploy?.secrets ?? [];
+  const extraSecrets = [...(config.deploy?.secrets ?? [])];
+  // The plane's bearer token is the DEPLOYMENT's secret, not the container's: minted inside the box it
+  // is unreadable from outside and replaced on every restart, which is what makes a public /control/*
+  // unusable. Carried like any declared secret — listed in the runbook, taken from the local env under
+  // --run, gated when absent (never minted: a value minted per deploy rotates under its holder).
+  if (config.sessionControl === true) extraSecrets.push(CONTROL_TOKEN_ENV);
   // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
   // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts. Don't suggest
   // --force here: it would overwrite the user's hand-written file.

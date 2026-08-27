@@ -468,6 +468,15 @@ route" (skew) rather than as a fault.
 
 ## 14. Security boundary
 
+**Who mints the token.** By default the serve mints one per boot and writes it to
+`<stateRoot>/control.json` (0600) — a LOCAL discovery channel whose trust boundary is filesystem
+permissions, which holds because `fastagent attach` and a desktop app share a filesystem with the
+serving process. A deployment removes that premise: a token minted inside the container is unreadable
+from outside and replaced on every restart, so the plane is publicly reachable yet unusable. There the
+deployer owns the secret — `FASTAGENT_CONTROL_TOKEN` is set as a deploy secret (`fastagent deploy`
+lists it whenever `sessionControl: true`), and the serve honours it instead of minting. It is not
+minted for you: a value minted per deploy rotates under whoever is holding it.
+
 A remotely exposed control plane MUST be wrapped by a host that enforces: an authenticated
 principal and per-session authorization; separated observe and dispatch permissions; allowed model
 and thinking-level policy; prompt and attachment size limits; opaque artifact references instead of
