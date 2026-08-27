@@ -176,15 +176,26 @@ export function mountSessionControl(
   // permissions, which works because both holders share a filesystem. A deployment removes that
   // premise — a token minted in the container is replaced every restart and reachable only by shelling
   // in — so there the deployer mints it and injects it here, like the wake/ingress secrets.
-  const injected = process.env[CONTROL_TOKEN_ENV];
+  // Trimmed on read, like `.env` values already are: a token pasted from a dashboard with a trailing
+  // newline would otherwise become the box's token verbatim, and every caller holding the clean value
+  // gets a bare 401 — the undiagnosable symptom, one character wide.
+  const injected = process.env[CONTROL_TOKEN_ENV]?.trim();
   // SET BUT EMPTY is the deployed default, not an edge case: the generated Compose topology writes
   // every secret as `NAME: "${NAME:-}"`, so an operator who skipped this one lands here. Falling back
   // silently would leave exactly the symptom the injection exists to remove — a token the caller does
   // not have — with nothing in the log to tell it apart from a deployment that never asked.
-  if (injected !== undefined && injected === "") {
+  if (injected === "") {
     log.warn(
       `[fastagent] ${CONTROL_TOKEN_ENV} is set but empty — minting a per-boot token instead; callers holding ` +
         "the deploy-time value will get 401 (set it, or read the minted one from control.json on the box)",
+    );
+  } else if (injected !== undefined && injected.length < 16) {
+    // Length is a crude proxy for entropy — sixteen `a`s pass. It is aimed at `changeme`, which this
+    // change makes newly dangerous: the plane went from unusable-in-a-deployment to usable by whoever
+    // holds this string, and the empty case is the only other thing that says anything.
+    log.warn(
+      `[fastagent] ${CONTROL_TOKEN_ENV} is ${injected.length} characters — it is the ONLY thing between ` +
+        "/control/* (steer/abort/set_model) and anyone who can reach the port; use a random value (uuidgen)",
     );
   }
   const token = injected || crypto.randomUUID();

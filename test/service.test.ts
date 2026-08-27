@@ -113,13 +113,17 @@ describe("createAgentService", () => {
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
-    process.env.FASTAGENT_CONTROL_TOKEN = "deployer-minted";
+    // Padded on purpose: a token pasted with a trailing newline must not become a token nobody else
+    // can spell — the caller holding the clean value would just get 401.
+    process.env.FASTAGENT_CONTROL_TOKEN = "  deployer-minted-0123456789\n";
     try {
       const service = await createAgentService(dir);
       try {
-        expect(service.control?.token).toBe("deployer-minted");
+        expect(service.control?.token).toBe("deployer-minted-0123456789");
         const res = await service.handler(
-          new Request("http://h/control/capabilities", { headers: { authorization: "Bearer deployer-minted" } }),
+          new Request("http://h/control/capabilities", {
+            headers: { authorization: "Bearer deployer-minted-0123456789" },
+          }),
         );
         expect(res.status).toBe(200);
       } finally {
@@ -139,8 +143,19 @@ describe("createAgentService", () => {
         expect(blank.control?.token).toMatch(/[0-9a-f-]{36}/);
         expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is set but empty/);
       } finally {
-        spy.mockRestore();
         await blank.close();
+      }
+      // A guessable token is ACCEPTED — the deployer owns the choice — but not silently: this plane
+      // steers and aborts runs, and the token is the whole of its auth.
+      logged.length = 0;
+      process.env.FASTAGENT_CONTROL_TOKEN = "changeme";
+      const weak = await createAgentService(dir);
+      try {
+        expect(weak.control?.token).toBe("changeme");
+        expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is 8 characters/);
+      } finally {
+        spy.mockRestore();
+        await weak.close();
       }
     } finally {
       delete process.env.FASTAGENT_CONTROL_TOKEN;
