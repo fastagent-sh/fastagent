@@ -66,6 +66,7 @@ import type {
   SessionEntries,
   SessionEvent,
   SessionState,
+  SessionSummary,
 } from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
@@ -73,10 +74,31 @@ import type {
  *  trouble branches on `status`, never on message prose. */
 export class ControlRequestError extends Error {
   readonly status: number;
-  constructor(status: number, body: string) {
+  /** The plane's own error code, when the reply carried one (`sessions()` is the only read that
+   *  does today — design §13). Absent for a plain-text rejection (401) or a proxy's page: a caller
+   *  distinguishing "this deployment cannot list sessions" from "the endpoint is unreachable" reads
+   *  THIS, not the status. */
+  readonly code?: string;
+  constructor(status: number, body: string, code?: string) {
     super(`control request failed: ${status} ${body}`);
     this.status = status;
+    if (code !== undefined) this.code = code;
   }
+}
+
+/** A non-2xx reply as an error, carrying the plane's code when the reply declared one. */
+async function controlError(res: Response): Promise<ControlRequestError> {
+  const body = await res.text();
+  if (!res.headers.get("content-type")?.includes("application/json")) return new ControlRequestError(res.status, body);
+  let parsed: { code?: unknown };
+  try {
+    parsed = JSON.parse(body) as typeof parsed;
+  } catch {
+    // The reply declared JSON and is not — a protocol fault worth seeing, but not worth losing the
+    // status over: both travel in one error rather than a bare SyntaxError from a rejection path.
+    return new ControlRequestError(res.status, `${body} (declared application/json but did not parse)`);
+  }
+  return new ControlRequestError(res.status, body, typeof parsed.code === "string" ? parsed.code : undefined);
 }
 
 /** Connection parameters shared by BOTH remote planes (`connectSessionControl` and
@@ -113,7 +135,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
   const PAYLOAD_TIMEOUT_MS = 60_000;
   const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
     const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+    if (!res.ok) throw await controlError(res);
     return (await res.json()) as T;
   };
 
@@ -139,6 +161,11 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
       }
     },
 
+    // Rejects when the deployment cannot enumerate its store — the coded 503 arrives as a
+    // ControlRequestError carrying `sessions_unavailable`, so a client can tell it from an
+    // unreachable endpoint instead of retrying forever.
+    sessions: () => get<SessionSummary[]>("/control/sessions", PAYLOAD_TIMEOUT_MS),
+
     state: (session) => get<SessionState>(`/control/state?session=${encodeURIComponent(session)}`),
 
     entries: (session, opts) =>
@@ -156,7 +183,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         body: JSON.stringify({ session, command }),
         signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
       });
-      if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+      if (!res.ok) throw await controlError(res);
       return (await res.json()) as Awaited<ReturnType<SessionControl["dispatch"]>>;
     },
 

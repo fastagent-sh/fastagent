@@ -223,7 +223,7 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
 }
 
 /**
- * Fork `parent` into a record named `id`, up to the branch point the hints locate, in `stagingDir`.
+ * Fork `parent` into a record named `id`, copying the path up to entry `at`, in `stagingDir`.
  *
  * Two pi calls rather than one, because neither alone does it: `createBranchedSession` copies
  * exactly the path to an entry but names the result with a generated id, and `forkFrom` takes an id
@@ -234,25 +234,21 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
  * later failure — and the fallback path would then create a SECOND record with the same id, making
  * which one a lookup finds a matter of directory order.
  *
- * Returns undefined when inheritance cannot be honored — the caller starts the session empty.
+ * Returns undefined when the parent has no file to fork from (a non-persisting backend).
  */
-export function forkForInheritance(options: {
+export function forkAt(options: {
   parent: SessionManager;
   id: string;
   cwd: string;
   stagingDir: string;
-  branchHints?: string[];
+  at: string;
 }): SessionManager | undefined {
   const { parent, id, cwd, stagingDir: dir } = options;
-  const cut = inheritanceCut(parent, options.branchHints);
-  if (!cut) return undefined;
   let branched: string | undefined;
   try {
-    branched = parent.createBranchedSession(cut.at);
-    if (!branched) return undefined; // a non-persisting parent has no file to fork from
-    const child = SessionManager.forkFrom(branched, cwd, dir, { id });
-    markInheritanceWindow(child);
-    return child;
+    branched = parent.createBranchedSession(options.at);
+    if (!branched) return undefined;
+    return SessionManager.forkFrom(branched, cwd, dir, { id });
   } finally {
     if (branched) {
       try {
@@ -264,4 +260,26 @@ export function forkForInheritance(options: {
       }
     }
   }
+}
+
+/**
+ * {@link forkAt} at the branch point the hints locate, plus the compaction mark that bounds what the
+ * child's model sees. The mark is what makes this INHERITANCE rather than a copy: a lifecycle `fork`
+ * is the same user continuing their own history, and bounding it there would hide the very entries
+ * they forked to keep.
+ *
+ * Returns undefined when inheritance cannot be honored — the caller starts the session empty.
+ */
+export function forkForInheritance(options: {
+  parent: SessionManager;
+  id: string;
+  cwd: string;
+  stagingDir: string;
+  branchHints?: string[];
+}): SessionManager | undefined {
+  const cut = inheritanceCut(options.parent, options.branchHints);
+  if (!cut) return undefined;
+  const child = forkAt({ ...options, at: cut.at });
+  if (child) markInheritanceWindow(child);
+  return child;
 }

@@ -557,6 +557,30 @@ a definition the server cannot read at all is a deployment fault with no truthfu
 the rejection carries no stable code (remotely: an uncoded non-2xx → `ControlRequestError`). Wrap the
 call, and expect no `error.code` to branch on.
 
+`sessions()` is the deployment's conversation list — `{ session, name?, createdAt, updatedAt,
+messageCount, preview? }` per record, with `session` being the id the CALLER minted (a channel's
+thread key, not a storage name). It is DEPLOYMENT-level: it answers for every session at once, so a
+multi-tenant facade in front of one deployment must not expose it (it does not need to — it already
+holds its own user→sessions mapping). It is the one read besides `commands()` that can REJECT, and
+unlike that one it carries a stable code: a store that cannot be enumerated answers
+`sessions_unavailable` (remotely: 503 with the code on `ControlRequestError.code`), because `[]`
+already means "no sessions".
+
+Lifecycle commands are whole-record writes, gated by `capabilities().lifecycle` and taking the same
+lease as a run:
+
+```ts
+await control.dispatch("s1", { type: "set_name", name: "Deploy notes" });          // the list's label
+await control.dispatch("s1", { type: "fork", fromEntryId: entryId, into: "s1-b" }); // copy history into a NEW session
+await control.dispatch("s1", { type: "delete" });                                   // irreversible
+```
+
+`fork` names its target: `into` is a Caller id like any other, so the plane invents nothing and a
+fork onto an existing session rejects `invalid_command` rather than merging two histories. Cloning is
+`fork` with the session's own `leafEntryId`. There is no `create` — `invoke` is what brings a session
+into being. `delete` ends the session's live `events()` streams; it is guarded by the same bearer
+token as every other command, which is the only key the framework owns.
+
 Boundary mutations run between runs, under the SAME lease (`session_busy` while a run is active,
 retryable at idle):
 

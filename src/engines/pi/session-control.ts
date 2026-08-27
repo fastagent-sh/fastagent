@@ -34,6 +34,7 @@ import {
   type SessionEvent,
   type SessionResult,
   type SessionState,
+  type SessionSummary,
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
@@ -298,9 +299,19 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // Gated on the boundary wiring for its LEASE, not its models: moving the leaf is a write,
         // and a write that races a run would hang the next turn off a stale branch.
         navigate: !!b,
+        // Same reason, one level up: fork/set_name/delete write whole RECORDS, so they take the
+        // lease too — a delete racing a run would pull the record out from under it.
+        lifecycle: !!b,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
+    },
+
+    async sessions(): Promise<SessionSummary[]> {
+      // The one read that may REJECT (design §13): `[]` is what a deployment with no sessions
+      // answers, so a store that cannot be read must not borrow that shape. The transport turns the
+      // throw into a coded non-2xx; nothing here swallows it.
+      return await sessions.list();
     },
 
     async state(session): Promise<SessionState> {
@@ -323,8 +334,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           log.warn(`[fastagent] session ${session}: settings unreadable (entry chain): ${String(error)}`);
         }
       }
+      const name = opened?.getSessionName();
       return {
         status: run ? "running" : compacting.has(session) ? "compacting" : "idle",
+        ...(name ? { name } : {}),
         ...(run ? { activeRunId: run.runId } : {}),
         ...(settings
           ? {
@@ -470,6 +483,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         case "compact":
         case "set_model":
         case "set_thinking":
+        case "set_name":
         case "navigate": {
           const b = boundary?.();
           if (!b) {
@@ -530,6 +544,23 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             apply = async (s) => {
               s.appendThinkingLevelChange(command.level);
               return { type: "state_changed", timestamp: Date.now(), data: { thinkingLevel: command.level } };
+            };
+          } else if (command.type === "set_name") {
+            // A name is the client's own label; the only thing that cannot be one is nothing.
+            // Rejected as a payload error, before the lease, like every other invalid value.
+            if (command.name.trim() === "") {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: "a session name cannot be empty",
+                  retryable: false,
+                },
+              };
+            }
+            apply = async (s) => {
+              s.appendSessionInfo(command.name);
+              return { type: "state_changed", timestamp: Date.now(), data: { name: command.name } };
             };
           } else if (command.type === "navigate") {
             apply = async (s) => {
@@ -800,8 +831,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 },
               };
             }
-            // Unreachable by construction: only set_model/set_thinking/navigate reach this branch,
-            // and all three assign `apply` in validation. Throw rather than silently skip (fail visibly).
+            // Unreachable by construction: every non-compact command in this branch assigns
+            // `apply` in validation. Throw rather than silently skip (fail visibly).
             if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
             emitOwn(session, await apply(fresh));
           } catch (error) {
@@ -813,6 +844,108 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           } finally {
             release();
+          }
+          return { ok: true };
+        }
+        case "fork":
+        case "delete": {
+          // WHOLE-RECORD commands. They take the same lease as every other write — a delete racing a
+          // run would pull the record out from under it, and a fork racing one would copy a history
+          // that is half a turn old — but they do not go through `apply`, which appends to a record
+          // both sides of these operations may not have.
+          const b = boundary?.();
+          if (!b) {
+            return {
+              ok: false,
+              error: {
+                code: UNSUPPORTED_CAPABILITY_CODE,
+                message: `command "${command.type}" is not supported by this runtime (no boundary wiring)`,
+                retryable: false,
+              },
+            };
+          }
+          const existing = await sessions.openIfExists(session);
+          if (!existing) {
+            return {
+              ok: false,
+              error: {
+                code: NO_SUCH_SESSION_CODE,
+                message: `session "${session}" does not exist`,
+                retryable: false,
+              },
+            };
+          }
+          if (command.type === "fork") {
+            // Both payload questions BEFORE the lease, as everywhere else. The entry predicate is
+            // the one `entries()` publishes by, so "everything published is forkable" holds by
+            // construction — the same argument `navigate` makes.
+            const entry = existing.getEntry(command.fromEntryId) as PiSessionEntry | undefined;
+            if (!entry || !isNavigable(entry)) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: `entry "${command.fromEntryId}" is not a forkable position in session "${session}" — entries() lists the ids`,
+                  retryable: false,
+                },
+              };
+            }
+            // A fork must never land ON an existing conversation: two histories under one id is the
+            // failure the id encoding exists to prevent. The client picks another `into` — permanent
+            // for THIS payload, which is what invalid_command means.
+            if (await sessions.openIfExists(command.into)) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: `session "${command.into}" already exists — fork mints nothing over a session that is already there`,
+                  retryable: false,
+                },
+              };
+            }
+          }
+          const release = b.lease.tryAcquire(session);
+          if (!release) {
+            return {
+              ok: false,
+              error: {
+                code: SESSION_BUSY_CODE,
+                message: "session busy: a run (or another boundary mutation) is in flight — retry at idle",
+                retryable: true,
+              },
+            };
+          }
+          try {
+            if (command.type === "fork") {
+              await sessions.fork(session, command.fromEntryId, command.into);
+            } else if (!(await sessions.delete(session))) {
+              // It was there before the lease and is gone now — the same real condition the
+              // pre-lease check answers, so the same code.
+              return {
+                ok: false,
+                error: {
+                  code: NO_SUCH_SESSION_CODE,
+                  message: `session "${session}" does not exist`,
+                  retryable: false,
+                },
+              };
+            }
+          } catch (error) {
+            // Nothing durable landed: the fork is staged and published by rename, and a delete that
+            // throws left the record in place.
+            return {
+              ok: false,
+              error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+            };
+          } finally {
+            release();
+          }
+          if (command.type === "delete") {
+            // The session is gone, so its live streams have nothing left to report: end them rather
+            // than hold connections open on a record that no longer exists. A client's reconnect
+            // then reads an empty `state()`, which is the truth.
+            for (const sub of [...(subscribers.get(session) ?? [])]) sub.close();
+            subscribers.delete(session);
           }
           return { ok: true };
         }

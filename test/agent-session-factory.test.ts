@@ -168,6 +168,9 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         return real.openOrCreate(id);
       },
       openIfExists: (id: string) => real.openIfExists(id),
+      list: () => real.list(),
+      fork: (from: string, at: string, into: string) => real.fork(from, at, into),
+      delete: (id: string) => real.delete(id),
     };
 
     const agent = await agentWith([record, record, record], {

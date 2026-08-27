@@ -6,9 +6,15 @@ import { writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { piInMemorySessionRecordStore, piSessionId, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
+import {
+  callerSessionId,
+  piInMemorySessionRecordStore,
+  piSessionId,
+  piSessionRecordStore,
+} from "../src/engines/pi/session-store.ts";
 
 /** What the built-in channels and a custom route() produce. */
 const CHANNEL_IDS = [
@@ -164,5 +170,63 @@ describe("a relative dir belongs to the workspace, not to the process", () => {
     expect(
       (await piSessionRecordStore({ dir: "sessions", cwd: workspace }).openIfExists("42"))?.getBranch(),
     ).toHaveLength(1);
+  });
+});
+
+describe("the lifecycle primitives (list / fork / delete)", () => {
+  it("lists CALLER ids, not record names — the encoding is a storage detail, decoded back on the way out", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-list-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    // A telegram group and a feishu thread: neither is a legal pi record name, which is the whole
+    // reason the encoding exists — and exactly why a listing must not report what is on disk.
+    for (const id of ["-1001234567890", "oc_9:thread/1"]) {
+      (await store.openOrCreate(id)).appendMessage({ role: "user", content: "hi", timestamp: 1 });
+    }
+    const listed = await store.list();
+    expect(listed.map((r) => r.session).sort()).toEqual(["-1001234567890", "oc_9:thread/1"]);
+    expect(listed.every((r) => r.messageCount === 1 && r.createdAt > 0)).toBe(true);
+  });
+
+  it("round-trips every id shape the encoding escapes", () => {
+    for (const id of ["42", "-1001234567890", "oc_9:thread/1", "a b", "emoji-🌤", "trailing-", "_", "s42"]) {
+      expect(callerSessionId(piSessionId(id))).toBe(id);
+    }
+    // Not ours to decode: the older spelling and anything else are left out of a listing rather
+    // than reported under a name no client could dial.
+    expect(callerSessionId("%2Dweird")).toBeUndefined();
+    expect(callerSessionId("s_ZZ")).toBeUndefined();
+  });
+
+  it("fork copies the history up to an entry; delete removes the record", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-fork-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const parent = await store.openOrCreate("room");
+    parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    const at = parent.appendMessage(fauxAssistantMessage("first answer"));
+    parent.appendMessage({ role: "user", content: "second", timestamp: 3 });
+    parent.appendMessage(fauxAssistantMessage("second answer"));
+
+    await store.fork("room", at, "room-fork");
+    const forked = await store.openIfExists("room-fork");
+    expect(forked?.getBranch().length).toBe(2); // up to `at`, not the parent's leaf
+    expect((await store.list()).map((r) => r.session).sort()).toEqual(["room", "room-fork"]);
+    // The parent is untouched by its own fork.
+    expect((await store.openIfExists("room"))?.getBranch().length).toBe(4);
+
+    expect(await store.delete("room-fork")).toBe(true);
+    expect(await store.openIfExists("room-fork")).toBeUndefined();
+    expect(await store.delete("room-fork")).toBe(false); // gone is not an error, it is an answer
+  });
+
+  it("in memory too: same three primitives, same semantics", async () => {
+    const store = piInMemorySessionRecordStore();
+    const parent = await store.openOrCreate("room");
+    const at = parent.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    parent.appendMessage({ role: "user", content: "second", timestamp: 2 });
+    await store.fork("room", at, "copy");
+    expect((await store.openIfExists("copy"))?.getBranch().length).toBe(1);
+    expect((await store.list()).map((r) => r.session).sort()).toEqual(["copy", "room"]);
+    expect(await store.delete("copy")).toBe(true);
+    expect(await store.list()).toHaveLength(1);
   });
 });

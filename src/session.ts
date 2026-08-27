@@ -20,6 +20,16 @@ export interface SessionControl {
    *  behavior diverge. `[]` is a complete answer, not a missing one; a definition the implementation
    *  cannot read at all is a deployment fault and MAY reject. */
   commands(): Promise<AgentCommand[]>;
+  /** Every session this DEPLOYMENT holds — what a GUI shows as its conversation list, and the only
+   *  route that is not keyed by a session. Deployment-level on purpose: a multi-tenant facade in
+   *  front of one deployment MUST NOT expose it, because it answers for every user at once. Such a
+   *  facade does not need it either — `Scope.session` is the Caller's own string, so it already
+   *  holds the mapping this would return (design §16).
+   *
+   *  The one read that MAY reject: `[]` is a complete answer for a deployment with no sessions, so
+   *  it would be a lie for a store that cannot be enumerated. The others stay TOTAL — their absent
+   *  fields are answers a control-less deployment gives too. */
+  sessions(): Promise<SessionSummary[]>;
   state(session: string): Promise<SessionState>;
   /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
    *  id", regardless of branch structure. Reconstructing the active path in a branched session is
@@ -52,6 +62,11 @@ export interface SessionCapabilities {
   /** Whether `set_thinking` is servable at all. WHICH levels is per-session — see
    *  {@link SessionState.availableThinkingLevels}. */
   thinkingLevel: boolean;
+  /** Whether the lifecycle commands (`fork` / `set_name` / `delete`) are servable. One gate for the
+   *  three because they stand or fall together: each is a WRITE against the record store under the
+   *  same lease, so a deployment that can serve one can serve all three. `sessions()` is NOT gated
+   *  here — it only reads, and a read has its own way to fail. */
+  lifecycle: boolean;
   /** Whether `navigate` is servable at all — `false` both when the engine's sessions are linear and
    *  when this deployment has no write path for them; either way the tree the contract publishes
    *  (`SessionEntry.parentId` + `SessionEntries.leafEntryId`) is read-only here. Named after its COMMAND, unlike the older gates (`manualCompaction` gates
@@ -119,9 +134,17 @@ export const NOTHING_TO_COMPACT_CODE = "nothing_to_compact";
  *  problem, not a run problem, and rejects with {@link UNSUPPORTED_CAPABILITY_CODE}.) */
 export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
+/** Stable error code for the ONE read that may fail: {@link SessionControl.sessions} against a store
+ *  it cannot enumerate. It does not ride a `SessionResult` — `sessions()` rejects, and a transport
+ *  carries this code in the error body of a non-2xx (design §13). `retryable: true`: the condition is
+ *  the store's availability, not the request. Every OTHER read stays total, so this is the whole of
+ *  the read failure vocabulary. */
+export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
+
 // ── Commands (control plane) ─────────────────────────────────────────────────
 
-/** Seven commands; deliberately NO `prompt` — starting work is the data plane's definition. */
+/** Ten commands; deliberately NO `prompt` — starting work is the data plane's definition, and no
+ *  command here creates a session from nothing (`fork` copies one that exists). */
 export type SessionCommand =
   | { type: "steer"; prompt: Prompt }
   | { type: "follow_up"; prompt: Prompt }
@@ -133,7 +156,20 @@ export type SessionCommand =
    *  `entries()` already publishes (and how sibling branches come to exist: the next turn hangs off
    *  the new leaf). Every entry `entries()` publishes is a legal target; a `targetId` that is not
    *  one rejects `invalid_command`. A boundary mutation otherwise: same lease as a run. */
-  | { type: "navigate"; targetId: string };
+  | { type: "navigate"; targetId: string }
+  /** Copy this session's history up to `fromEntryId` into a NEW session called `into` — the growth
+   *  verb beside `navigate`'s walk. `into` is the CALLER's id, minted the same way every other
+   *  session id is: the plane never invents one, and a repeat of the same fork is a rejection
+   *  (`invalid_command`) rather than a second record. Cloning is this command with the session's
+   *  own `leafEntryId`. */
+  | { type: "fork"; fromEntryId: string; into: string }
+  /** The session's display name — what `sessions()` reports and a conversation list shows. */
+  | { type: "set_name"; name: string }
+  /** Destroy the record. The plane's only IRREVERSIBLE command: it is guarded by the same bearer
+   *  token as everything else, which is the only key the framework owns (design §14). Live
+   *  `events()` streams for the session END; a later `state()` answers for a session that no longer
+   *  exists. */
+  | { type: "delete" };
 
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately
@@ -152,7 +188,23 @@ export type SessionResult =
 
 // ── State and durable entries (observation plane) ────────────────────────────
 
+/** One session in {@link SessionControl.sessions} — a conversation-list row, not a session's
+ *  contents. `session` is the CALLER's id (the string a channel minted), never a storage name. */
+export interface SessionSummary {
+  session: string;
+  /** Set by `set_name`; absent until then — a client showing a list falls back to `preview`. */
+  name?: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  /** First user message, truncated — enough for a list row, not a transcript. */
+  preview?: string;
+}
+
 export interface SessionState {
+  /** Set by `set_name`, so a client that opens a session directly gets the same label the list
+   *  showed. */
+  name?: string;
   /** `compacting` refers to Phase 2 MANUAL compaction at a session boundary. Automatic overflow
    *  compaction happens inside a run's activity window and reports as `running`. */
   status: "idle" | "running" | "compacting";

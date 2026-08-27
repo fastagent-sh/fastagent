@@ -6,21 +6,40 @@
  * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
  * READ path for existing conversations, not a second engine.
  */
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import { type SessionInheritance, copyBranchInto, forkForInheritance, inheritanceCut } from "./session-inheritance.ts";
+import type { SessionSummary } from "../../session.ts";
+import {
+  type SessionInheritance,
+  copyBranchInto,
+  forkAt,
+  forkForInheritance,
+  inheritanceCut,
+} from "./session-inheritance.ts";
 
 /** What the AgentSession L0 needs from a session backend: open-or-create by opaque id, plus the one
- *  creation option — where a NEW session starts from (session-inheritance.ts). */
+ *  creation option — where a NEW session starts from (session-inheritance.ts). The three lifecycle
+ *  primitives below it are the control plane's (design §12): each is a whole-RECORD operation, which
+ *  is why they live here rather than growing the interactive session API. */
 export interface PiSessionRecordStore {
   openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
   /** OPEN-EXISTING sibling: an unknown session answers undefined, never creates one — sessions are
    *  the data plane's monopoly. This is what the control plane reads and writes boundary records
    *  through, so a mutation on an unknown id is rejected rather than minted into a ghost record. */
   openIfExists(sessionId: string): Promise<SessionManager | undefined>;
+  /** Every record this store holds, in CALLER ids. Rejects when the store cannot be enumerated —
+   *  `[]` means "no sessions", so it must not double as "could not look". Answers the CONTRACT's row
+   *  type: the hub forwards it, and a second identical shape here would only be a thing to keep in
+   *  sync. */
+  list(): Promise<SessionSummary[]>;
+  /** Copy `from`'s history up to entry `at` into a new record named `into`. Throws on any failure:
+   *  a half-copied fork is never left in place, and the caller turns the throw into a coded result. */
+  fork(from: string, at: string, into: string): Promise<void>;
+  /** Destroy a record. `false` = there was none (the caller answers `no_such_session`). */
+  delete(sessionId: string): Promise<boolean>;
 }
 
 /**
@@ -54,6 +73,33 @@ export function piSessionId(sessionId: string): string {
   };
   const body = sessionId.replace(/[^A-Za-z0-9.-]/g, hex).replace(/[.-]$/, hex);
   return `s${body}`;
+}
+
+/**
+ * {@link piSessionId} backwards — what `list()` needs, because a session id belongs to the CALLER and
+ * a record name is storage detail. The encoding is self-describing (fixed widths, `_` escapes
+ * itself), so this is a decode rather than a guess; a name this store did not write (no `s` head, a
+ * truncated escape) answers undefined and is left out of the listing rather than reported under a
+ * name nobody can dial.
+ */
+export function callerSessionId(recordId: string): string | undefined {
+  if (!recordId.startsWith("s")) return undefined;
+  let out = "";
+  for (let i = 1; i < recordId.length; i++) {
+    const c = recordId[i] as string;
+    if (c !== "_") {
+      out += c;
+      continue;
+    }
+    const wide = recordId[i + 1] === "u";
+    const start = i + (wide ? 2 : 1);
+    const width = wide ? 4 : 2;
+    const hex = recordId.slice(start, start + width);
+    if (hex.length !== width || !/^[0-9A-F]+$/.test(hex)) return undefined;
+    out += String.fromCharCode(Number.parseInt(hex, 16));
+    i = start + width - 1;
+  }
+  return out;
 }
 
 /**
@@ -157,8 +203,65 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
       return legacy ? SessionManager.open(legacy.path, root) : undefined;
     },
+    async list() {
+      // THIS store's records only. A pre-existing record (the older spelling, in `root`) is still
+      // opened by id and continued — but that spelling cannot be decoded back to the Caller's id,
+      // and listing a row nobody can dial is worse than a row that is missing.
+      const records = await SessionManager.list(cwd, own);
+      return records.flatMap((r) => {
+        const session = callerSessionId(r.id);
+        if (!session) return [];
+        return [
+          {
+            session,
+            ...(r.name ? { name: r.name } : {}),
+            createdAt: r.created.getTime(),
+            updatedAt: r.modified.getTime(),
+            messageCount: r.messageCount,
+            ...(r.firstMessage ? { preview: r.firstMessage.slice(0, PREVIEW_CHARS) } : {}),
+          },
+        ];
+      });
+    },
+    async fork(from, at, into) {
+      const parent = await this.openIfExists(from);
+      if (!parent) throw new Error(`session "${from}" has no record`);
+      mkdirSync(staging, { recursive: true });
+      // Same staging discipline as inheritance: the fork is finished in `.staging` (which `list()`
+      // never sees, being a directory) and published by rename, so a reader finds a whole record or
+      // none. The parent is reconciled first for the same reason a thread inherits a reconciled
+      // one — a dangling tool_use copied into the child poisons its first request.
+      const staged = forkAt({
+        parent: reconcileInterruptedToolCalls(parent),
+        id: piSessionId(into),
+        cwd,
+        stagingDir: staging,
+        at,
+      });
+      if (!staged) throw new Error(`session "${from}" has no file to fork from`);
+      const stagedFile = staged.getSessionFile();
+      if (!stagedFile) throw new Error(`fork of "${from}" produced no file`);
+      mkdirSync(own, { recursive: true });
+      renameSync(stagedFile, join(own, basename(stagedFile)));
+    },
+    async delete(sessionId) {
+      const id = piSessionId(sessionId);
+      const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
+      const legacy = mine
+        ? undefined
+        : (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
+      const found = mine ?? legacy;
+      if (!found) return false;
+      // A record that cannot be deleted must not report success — the caller turns the throw into a
+      // coded failure, and the session is still there for the next attempt.
+      rmSync(found.path);
+      return true;
+    },
   };
 }
+
+/** How much of the first message a list row carries. A row, not a transcript. */
+const PREVIEW_CHARS = 200;
 
 /**
  * Crash-safety reconciliation, run on every OPEN of an existing record.
@@ -312,6 +415,37 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
     },
     async openIfExists(sessionId) {
       return live.get(sessionId);
+    },
+    async list() {
+      // No file metadata in memory: the timestamps that exist are the entries' own. A session with
+      // no entries yet reports the same instant for both, which is what "created, never used" is.
+      // No `preview`: the field is optional by contract, and digging a first user message out of
+      // pi's entry union would be more code here than the row is worth. The disk store, which is
+      // what a deployment lists, gets it from pi's own index for free.
+      return [...live].map(([session, record]) => {
+        const entries = record.getEntries() as { timestamp?: string; type?: string }[];
+        const times = entries.flatMap((e) => (e.timestamp ? [Date.parse(e.timestamp)] : []));
+        const name = record.getSessionName();
+        return {
+          session,
+          ...(name ? { name } : {}),
+          createdAt: times[0] ?? 0,
+          updatedAt: times[times.length - 1] ?? 0,
+          messageCount: entries.filter((e) => e.type === "message").length,
+        };
+      });
+    },
+    async fork(from, at, into) {
+      const parent = live.get(from);
+      if (!parent) throw new Error(`session "${from}" has no record`);
+      // Entry-by-entry, like the in-memory inheritance path: there is no file to fork. Registered
+      // only once complete, so a failure leaves no half-copied session behind.
+      const staged = SessionManager.inMemory(cwd, { id: piSessionId(into) });
+      copyBranchInto(reconcileInterruptedToolCalls(parent), staged, at);
+      live.set(into, staged);
+    },
+    async delete(sessionId) {
+      return live.delete(sessionId);
     },
   };
 }

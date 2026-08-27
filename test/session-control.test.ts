@@ -1217,6 +1217,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       getBranch: () => brokenEntries,
       getLeafId: () => "leaf",
       getEntry: (id: string) => brokenEntries.find((e) => e.id === id),
+      getSessionName: () => undefined,
     } as unknown as Awaited<ReturnType<PiSessionRecordStore["openIfExists"]>>;
     const { control } = createPiSessionControl({
       sessions: {
@@ -1224,6 +1225,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
         openOrCreate: async () => {
           throw new Error("the control plane never creates a session");
         },
+        list: async () => [],
+        fork: async () => {
+          throw new Error("not exercised here");
+        },
+        delete: async () => false,
       },
       boundary: () => ({
         lease: inProcessLease(),
@@ -1273,6 +1279,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
         openOrCreate: async () => {
           throw new Error("the control plane never creates a session");
         },
+        list: async () => [],
+        fork: async () => {
+          throw new Error("not exercised here");
+        },
+        delete: async () => false,
       },
       boundary: () => ({
         lease: inProcessLease(),
@@ -1716,5 +1727,109 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const result = await control.dispatch("sB5", { type: "set_model", model: "any/thing" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+  });
+});
+
+describe("session control (Phase 4): session lifecycle", () => {
+  it("sessions() lists the deployment's conversations, with the name set_name gave them", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("room-a");
+    await sessions.openOrCreate("room-b");
+    expect(await control.dispatch("room-a", { type: "set_name", name: "Deploy notes" })).toEqual({ ok: true });
+
+    const listed = await control.sessions();
+    expect(listed.map((s) => s.session).sort()).toEqual(["room-a", "room-b"]);
+    expect(listed.find((s) => s.session === "room-a")?.name).toBe("Deploy notes");
+    // The same label a client that opens the session directly sees — one setting, two surfaces.
+    expect((await control.state("room-a")).name).toBe("Deploy notes");
+    expect((await control.state("room-b")).name).toBeUndefined();
+  });
+
+  it("an empty name is a payload error, and nothing durable lands", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("room-c");
+    const rejected = await control.dispatch("room-c", { type: "set_name", name: "   " });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.state("room-c")).name).toBeUndefined();
+  });
+
+  it("fork copies history into a CALLER-named session; forking onto an existing one is refused", async () => {
+    const { control, sessions, agent } = await makeBoundary([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+    await drain(agent.invoke({ session: "src" }, { text: "first" }));
+    const at = (await control.entries("src")).leafEntryId as string;
+    await drain(agent.invoke({ session: "src" }, { text: "second" }));
+
+    expect(await control.dispatch("src", { type: "fork", fromEntryId: at, into: "branch" })).toEqual({ ok: true });
+    // The fork holds the history up to the branch point, and the source keeps everything.
+    expect((await control.entries("branch")).entries.length).toBeLessThan(
+      (await control.entries("src")).entries.length,
+    );
+    expect((await control.sessions()).map((s) => s.session).sort()).toEqual(["branch", "src"]);
+
+    // Two histories under one id is the failure the whole id encoding exists to prevent.
+    const collision = await control.dispatch("src", { type: "fork", fromEntryId: at, into: "branch" });
+    expect(collision.ok).toBe(false);
+    if (!collision.ok) expect(collision.error.code).toBe(INVALID_COMMAND_CODE);
+    // An entry that is not a published position is a payload error too.
+    const nowhere = await control.dispatch("src", { type: "fork", fromEntryId: "nope", into: "b2" });
+    expect(nowhere.ok).toBe(false);
+    if (!nowhere.ok) expect(nowhere.error.code).toBe(INVALID_COMMAND_CODE);
+    expect(await sessions.openIfExists("b2")).toBeUndefined(); // rejected BEFORE anything landed
+  });
+
+  it("delete removes the record and ENDS its live streams — a stream over a deleted session is a lie", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("doomed");
+    const seen: string[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("doomed")) seen.push(ev.type);
+    })();
+
+    expect(await control.dispatch("doomed", { type: "delete" })).toEqual({ ok: true });
+    await watching; // the iterator ENDS rather than hanging on a session that no longer exists
+    expect(await sessions.openIfExists("doomed")).toBeUndefined();
+    expect(await control.sessions()).toHaveLength(0);
+    // A second delete is not an error to retry — it is an answer about a session that is gone.
+    const again = await control.dispatch("doomed", { type: "delete" });
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error.code).toBe(NO_SUCH_SESSION_CODE);
+  });
+
+  it("lifecycle writes take the SAME lease as a run: busy rejects, and the record is untouched", async () => {
+    const gate = makeGate();
+    const { control, agent, sessions } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("done")],
+      { tools: [gate.tool] },
+    );
+    await sessions.openOrCreate("busy");
+    const running = drive(agent, "busy");
+    await waitForToolStarted(control, "busy");
+
+    for (const command of [{ type: "set_name" as const, name: "while running" }, { type: "delete" as const }]) {
+      const rejected = await control.dispatch("busy", command);
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe(SESSION_BUSY_CODE);
+    }
+    gate.release();
+    await running;
+    expect(await sessions.openIfExists("busy")).toBeDefined(); // the delete never touched it
+  });
+
+  it("without boundary wiring the lifecycle is gated off — and sessions() still reads", async () => {
+    const { control, sessions } = await makeObserved([]);
+    expect(control.capabilities().lifecycle).toBe(false);
+    await sessions.openOrCreate("read-only");
+    for (const command of [
+      { type: "set_name" as const, name: "x" },
+      { type: "fork" as const, fromEntryId: "e", into: "y" },
+      { type: "delete" as const },
+    ]) {
+      const rejected = await control.dispatch("read-only", command);
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+    }
+    // Listing only reads, so it is not gated with the writes.
+    expect((await control.sessions()).map((s) => s.session)).toEqual(["read-only"]);
   });
 });

@@ -19,7 +19,13 @@
  * there is none left to state.
  */
 import type { ImageRef, Prompt } from "../agent.ts";
-import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
+import {
+  INVALID_COMMAND_CODE,
+  SESSIONS_UNAVAILABLE_CODE,
+  type SessionCommand,
+  type SessionControl,
+  type SessionEvent,
+} from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
@@ -158,7 +164,10 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
     compact: true,
     set_model: true,
     set_thinking: true,
+    set_name: true,
     navigate: true,
+    fork: true,
+    delete: true,
   };
   void _commandDriftGuard;
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -210,6 +219,14 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
       return typeof c.level === "string" ? { type: "set_thinking", level: c.level } : undefined;
     case "navigate":
       return typeof c.targetId === "string" ? { type: "navigate", targetId: c.targetId } : undefined;
+    case "set_name":
+      return typeof c.name === "string" ? { type: "set_name", name: c.name } : undefined;
+    case "fork":
+      return typeof c.fromEntryId === "string" && typeof c.into === "string"
+        ? { type: "fork", fromEntryId: c.fromEntryId, into: c.into }
+        : undefined;
+    case "delete":
+      return { type: "delete" };
     default:
       return undefined;
   }
@@ -276,6 +293,19 @@ export function controlPlaneRoutes(
     "GET /control/capabilities": guard(() => json(control.capabilities())),
 
     "GET /control/commands": guard(async () => json(await control.commands())),
+
+    // The DEPLOYMENT's conversation list — the one route not keyed by a session, and the one read
+    // that may fail: `[]` is what an empty deployment answers, so a store that cannot be enumerated
+    // gets a coded non-2xx instead. 503 + the code, because the alternative (#309's lesson) is a
+    // client that can only classify a bare 500 as "the endpoint is unreachable" and burns its
+    // reconnect budget on a condition reconnecting cannot fix.
+    "GET /control/sessions": guard(async () => {
+      try {
+        return json(await control.sessions());
+      } catch (error) {
+        return json({ code: SESSIONS_UNAVAILABLE_CODE, message: String(error), retryable: true }, 503);
+      }
+    }),
 
     "GET /control/state": guard(async (_req, url) => {
       const session = sessionParam(url);

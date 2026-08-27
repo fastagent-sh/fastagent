@@ -18,7 +18,7 @@ import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/eng
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { router, serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
-import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
+import { SESSIONS_UNAVAILABLE_CODE, UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
 const TOKEN = "test-token";
@@ -1124,6 +1124,45 @@ describe("session control over HTTP (Phase 3)", () => {
   it("createControlPlane refuses to mount without a token", async () => {
     const { control } = await fauxControlledAgent([]);
     expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);
+  });
+
+  it("sessions() travels: the deployment's list, isomorphic local and remote", async () => {
+    const served = await serveControl();
+    try {
+      await drain(served.agent.invoke({ session: "sList" }, { text: "hi" }));
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      expect(await remote.sessions()).toEqual(await served.localControl.sessions());
+      expect((await remote.sessions()).map((s) => s.session)).toEqual(["sList"]);
+    } finally {
+      await served.close();
+    }
+  });
+
+  it("a store that cannot be enumerated answers a CODED 503, not a bare 500", async () => {
+    // #309's lesson, one route over: an uncoded failure is indistinguishable from an unreachable
+    // endpoint, so a client burns its reconnect budget on a condition reconnecting cannot fix.
+    const { control } = await fauxControlledAgent([]);
+    const broken: typeof control = {
+      ...control,
+      sessions: async () => {
+        throw new Error("the store is unavailable");
+      },
+    };
+    const server = serveNode(router({}, [createControlPlane(broken, { token: TOKEN })]), { port: 0 });
+    const port = await server.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/control/sessions`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, retryable: true });
+
+      // And the client can READ that code — the whole point of carrying it on the wire.
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      await expect(remote.sessions()).rejects.toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, status: 503 });
+    } finally {
+      await server.close();
+    }
   });
 });
 
