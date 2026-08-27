@@ -1329,6 +1329,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
           throw new Error("not exercised here");
         },
         delete: async () => false,
+        applyProperties: async () => {
+          throw new Error("validation rejects before any write is asked for");
+        },
       },
       boundary: () => ({
         lease: inProcessLease(),
@@ -1384,6 +1387,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
           throw new Error("not exercised here");
         },
         delete: async () => false,
+        // The store's answer for a record it WROTE but whose resulting path it cannot walk: the
+        // position landed, the path is absent (design §7 leaves what that means to the caller).
+        applyProperties: async (_id, writes) => {
+          if (writes.leafEntryId !== undefined) leafId = writes.leafEntryId;
+          return { landed: ["leafEntryId" as const], leafEntryId: leafId };
+        },
       },
       boundary: () => ({
         lease: inProcessLease(),

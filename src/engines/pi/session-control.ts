@@ -604,100 +604,65 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     // (design §9).
     const release = b.lease.tryAcquire(session);
     if (!release) return busy();
+    let applied: Awaited<ReturnType<PiSessionRecordStore["applyProperties"]>>;
     try {
-      // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could be a
-      // stale snapshot of a run that completed in the window — appending to it would hang the
-      // property off an outdated leaf.
-      const fresh = await sessions.openIfExists(session);
-      if (!fresh) return noSuchSession(session); // vanished in the window: same condition, same code
-      // ORDER MATTERS: the leaf moves first, so the properties below it land on the branch the
-      // client asked for rather than the one it just left.
-      //
-      // Each write is its own journal entry — pi has no "append these four at once" — so `landed`
-      // tracks what actually made it. A throw partway through is a real state (a full disk between
-      // two appends), and the report after it is built from the RECORD rather than from the patch:
-      // claiming a rollback pi cannot perform would be the one lie a client cannot recover from.
-      const landed: SessionUpdateField[] = [];
-      let writeError: unknown;
-      try {
-        if (patch.leafEntryId !== undefined) {
-          // A move to where the leaf already is writes nothing: pi journals a move as a `leaf`
-          // record, so a repeated patch (a client retry, a UI firing on every selection) would
-          // otherwise grow the session by a record no plane publishes. It still COUNTS as landed —
-          // the leaf is where the client asked for it.
-          if (fresh.getLeafId() !== patch.leafEntryId) fresh.branch(patch.leafEntryId);
-          landed.push("leafEntryId");
-        }
-        if (model) {
-          fresh.appendModelChange(model.provider, model.id);
-          landed.push("model");
-        }
-        if (patch.thinkingLevel !== undefined) {
-          fresh.appendThinkingLevelChange(patch.thinkingLevel);
-          landed.push("thinkingLevel");
-        }
-        if (patch.name !== undefined) {
-          fresh.appendSessionInfo(patch.name);
-          landed.push("name");
-        }
-      } catch (error) {
-        // Held, not rethrown: what already landed still has to be reported before this becomes a
-        // failure, and the report is the only way a client learns the record moved.
-        writeError = error;
-      }
-
-      // The event. `name` and the settings pair are READ BACK rather than echoed — pi collapses
-      // newlines in a name, a new model can change which thinking level executes, and a moved leaf
-      // can drop an override that used to apply — because `state()` and `list()` report what is
-      // recorded, and the event must not carry anything they would disagree with. `leafEntryId` is
-      // the exception, and can be: `branch()` validates and then sets, so its postcondition IS the
-      // requested id, and a read-back could only re-report what the call already established.
-      if (landed.length > 0) {
-        let settings: ReturnType<typeof resolveSessionSettings> | undefined;
-        try {
-          settings = resolveSessionSettings(activePath(fresh), b.models, b.defaults);
-        } catch (error) {
-          // The writes are already durable, so an unreadable chain must NOT read as "nothing took
-          // effect": report the position without the settings and let the next invoke — which walks
-          // the same path — be where the broken chain surfaces.
-          log.warn(`[fastagent] session ${session}: updated, settings unreadable: ${String(error)}`);
-        }
-        const name = fresh.getSessionName();
-        emitOwn(session, {
-          type: "state_changed",
-          timestamp: Date.now(),
-          data: {
-            ...(landed.includes("leafEntryId") ? { leafEntryId: patch.leafEntryId as string } : {}),
-            ...(settings && landed.some((f) => f !== "name")
-              ? {
-                  model: `${settings.model.provider}/${settings.model.id}`,
-                  thinkingLevel: settings.thinkingLevel,
-                }
-              : {}),
-            ...(landed.includes("name") && name ? { name } : {}),
-          },
-        });
-      }
-      if (writeError !== undefined) {
-        // `boundary_command_failed` means nothing durable landed. When something did, the client
-        // needs a different sentence — and the fields, so it knows what its retry would repeat.
-        return landed.length === 0
-          ? failed(writeError)
-          : {
-              ok: false,
-              error: {
-                code: PARTIAL_UPDATE_CODE,
-                message: `applied ${landed.join(", ")}, then failed: ${String(writeError)} — read state() before retrying`,
-                retryable: false,
-              },
-            };
-      }
+      // HOW a record takes a property — order, the leaf pointer, the name pi rewrites — is the
+      // store's to know. This asks for the writes and is told what landed.
+      applied = await sessions.applyProperties(session, {
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
+        ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
+        ...(patch.leafEntryId !== undefined ? { leafEntryId: patch.leafEntryId } : {}),
+      });
     } catch (error) {
-      // Opening the record under the lease failed — nothing was written; the same patch may succeed
-      // on retry.
+      // Opening the record failed — nothing was written; the same patch may succeed on retry.
+      release();
       return failed(error);
     } finally {
       release();
+    }
+    if (!applied) return noSuchSession(session); // vanished in the window: same condition, same code
+
+    if (applied.landed.length > 0) {
+      // ONE event for the patch, built from what the RECORD holds. The settings pair rides along
+      // whenever anything but the name changed: model and thinking level are one setting, and a
+      // moved leaf can drop an override that used to apply.
+      let settings: ReturnType<typeof resolveSessionSettings> | undefined;
+      if (applied.path) {
+        try {
+          settings = resolveSessionSettings(applied.path, b.models, b.defaults);
+        } catch (error) {
+          // Already durable, so an unresolvable pair must NOT read as "nothing took effect": report
+          // the position without it and let the next invoke — which walks the same path — be where
+          // the fault surfaces.
+          log.warn(`[fastagent] session ${session}: updated, settings unresolvable: ${String(error)}`);
+        }
+      }
+      emitOwn(session, {
+        type: "state_changed",
+        timestamp: Date.now(),
+        data: {
+          ...(applied.landed.includes("leafEntryId") ? { leafEntryId: applied.leafEntryId as string } : {}),
+          ...(settings && applied.landed.some((f) => f !== "name")
+            ? { model: `${settings.model.provider}/${settings.model.id}`, thinkingLevel: settings.thinkingLevel }
+            : {}),
+          ...(applied.landed.includes("name") && applied.name ? { name: applied.name } : {}),
+        },
+      });
+    }
+    if (applied.failure !== undefined) {
+      // `boundary_command_failed` means nothing durable landed. When something did, the client needs
+      // a different sentence — and the fields, so it knows what its retry would repeat.
+      return applied.landed.length === 0
+        ? failed(applied.failure)
+        : {
+            ok: false,
+            error: {
+              code: PARTIAL_UPDATE_CODE,
+              message: `applied ${applied.landed.join(", ")}, then failed: ${String(applied.failure)} — read state() before retrying`,
+              retryable: false,
+            },
+          };
     }
     return { ok: true };
   };

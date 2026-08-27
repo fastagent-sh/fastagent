@@ -459,10 +459,22 @@ FastAgent adapts pi's concepts, never proxies `pi --mode rpc` unchanged:
 
 ## 12. Storage boundary
 
-`PiSessionRecordStore` (`openOrCreate` / `openIfExists` + `list` / `fork` / `delete`) stays
-deliberately small and MUST NOT grow into the interactive API. The line is not "how many methods" but
-WHICH KIND: every one of them is a whole-RECORD operation (find it, copy it, remove it, enumerate
-them). Reading or writing what is INSIDE a record stays behind the session the store hands back.
+`PiSessionRecordStore` MUST NOT grow into the interactive API, and the line is not "how many methods"
+but WHICH KIND: whole-RECORD operations (find, enumerate, copy, remove, write properties) belong
+here; what happens INSIDE a turn stays behind the session the store hands back.
+
+**It hands a `SessionManager` to exactly two callers** — the turn binding and the READ path — and to
+nothing that writes. That was learned rather than designed: while the control plane wrote properties
+by calling pi's append methods itself, it had to know pi's rules to do it (every append advances the
+single leaf pointer, so write order decides where a fork's head lands; `appendSessionInfo` rewrites
+the name it is given; a fresh record buffers in memory until its first assistant message). Those
+facts were then half-known in two modules, and the same one would be got wrong twice. `applyProperties`
+exists so each is known once: the caller supplies a VALIDATED patch (what a model spec means is its
+business, not the store's) and is told what LANDED and what the record now holds.
+
+The behaviours themselves are pinned in `test/pi-behaviour.test.ts`, which asserts them against pi
+rather than against us — each one was a defect before it was a test, and a pi upgrade that changes an
+answer turns that file red instead of a channel three layers away.
 
 Both backends copy a fork ENTRY BY ENTRY rather than at the file level. pi can copy a path into a new
 file, and the disk store used to, but that pair writes the intermediate only once the copied path

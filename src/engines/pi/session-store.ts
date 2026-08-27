@@ -11,7 +11,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import type { SessionSummary } from "../../session.ts";
+import type { SessionSummary, SessionUpdateField } from "../../session.ts";
+import { type OverrideEntryLike, activePath } from "./session-settings.ts";
 import {
   type SessionInheritance,
   stampProvenance,
@@ -20,16 +21,35 @@ import {
   inheritanceCut,
 } from "./session-inheritance.ts";
 
-/** What the AgentSession L0 needs from a session backend: open-or-create by opaque id, plus the one
- *  creation option — where a NEW session starts from (session-inheritance.ts). The three lifecycle
- *  primitives below it are the control plane's (design §12): each is a whole-RECORD operation, which
- *  is why they live here rather than growing the interactive session API. */
+/**
+ * The session RECORDS, as operations rather than as pi handles.
+ *
+ * The distinction is the point. `openOrCreate`/`openIfExists` hand out a live `SessionManager` for
+ * the two things that genuinely need one — driving a turn, and reading a session's contents — and
+ * everything else is a whole-record operation implemented HERE. That line was drawn after the
+ * lifecycle work: when the control plane wrote properties by calling pi's append methods itself, it
+ * had to know pi's rules to do it (every append advances the single leaf pointer, so order decides
+ * where a fork's head lands; `appendSessionInfo` rewrites the name it is given; a record buffers in
+ * memory until its first assistant message). Every caller learning those separately is how the same
+ * fact ended up half-known in two modules — so they are known once, here.
+ */
 export interface PiSessionRecordStore {
   openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
   /** OPEN-EXISTING sibling: an unknown session answers undefined, never creates one — sessions are
-   *  the data plane's monopoly. This is what the control plane reads and writes boundary records
-   *  through, so a mutation on an unknown id is rejected rather than minted into a ghost record. */
+   *  the data plane's monopoly. The READ path (state/entries) and the turn binding use this; the
+   *  write path does not, because a caller holding a handle is a caller learning pi's rules. */
   openIfExists(sessionId: string): Promise<SessionManager | undefined>;
+  /**
+   * Write session properties, in the order pi's leaf pointer requires, and report what LANDED.
+   *
+   * Each property is its own journal entry — pi has no "append these together" — so a failure
+   * partway is a real state, and this answers it rather than pretending a rollback happened. The
+   * caller supplies an already-VALIDATED patch (a model resolved to provider+id, a level this model
+   * accepts): what belongs here is how a record is written, not what a value means.
+   *
+   * `undefined` = no such record (it vanished between the caller's check and this call).
+   */
+  applyProperties(sessionId: string, writes: PropertyWrites): Promise<AppliedProperties | undefined>;
   /** Every record this store holds, in CALLER ids. Rejects when the store cannot be enumerated —
    *  `[]` means "no sessions", so it must not double as "could not look". Answers the CONTRACT's row
    *  type: the hub forwards it, and a second identical shape here would only be a thing to keep in
@@ -42,6 +62,32 @@ export interface PiSessionRecordStore {
   fork(from: string, at: string, into: string, provenance: string): Promise<void>;
   /** Destroy a record. `false` = there was none (the caller answers `no_such_session`). */
   delete(sessionId: string): Promise<boolean>;
+}
+
+/** A validated property patch, in the shape a RECORD takes it: the model already resolved to the
+ *  provider + id pi's append wants, so this layer never asks what a model spec means. */
+export interface PropertyWrites {
+  name?: string;
+  model?: { provider: string; id: string };
+  thinkingLevel?: string;
+  leafEntryId?: string;
+}
+
+/** What a property write actually did, and what the record holds after it. */
+interface AppliedProperties {
+  /** In write order. A field asked for but absent here did not land. */
+  landed: SessionUpdateField[];
+  /** Why the rest stopped, if anything did. The caller turns this into a coded result; the record
+   *  already reflects `landed`. */
+  failure?: unknown;
+  /** The record AFTER the writes — what the caller reports, rather than echoing the request. pi
+   *  rewrites a name (newlines collapse, ends trim), so the request is not what was stored. */
+  name?: string;
+  leafEntryId?: string;
+  /** The active path after the writes, for a caller that resolves settings against a model registry
+   *  this layer has no business knowing. Absent when the chain cannot be walked — the caller decides
+   *  what an unreadable chain means (design §7); it is never silently a short path. */
+  path?: OverrideEntryLike[];
 }
 
 /**
@@ -240,6 +286,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return publish(SessionManager.create(cwd, own, { id }), own);
     },
     openIfExists: openExisting,
+    applyProperties: (sessionId, writes) => applyProperties(() => openExisting(sessionId), writes),
     async list() {
       // THE PROBE, not a formality: pi's own list() catches every IO error and answers `[]`, so a
       // permissions/hardware fault would arrive as "this deployment has no conversations" — the one
@@ -336,6 +383,71 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       rmSync(found.path);
       return true;
     },
+  };
+}
+
+/**
+ * The property write, for both backends: the ONE place that knows how pi records a property.
+ *
+ * ORDER IS THE POINT. pi has a single leaf pointer and every append advances it, so the leaf ends up
+ * wherever the last write landed — which is why the move goes FIRST (the properties below it must
+ * hang off the branch the caller asked for, not the one it left) and why a fork writes its metadata
+ * before its history (session-store's `fork`). The handle is opened HERE, inside the caller's lease:
+ * one taken earlier could be a snapshot of a run that finished in the window, and appending to it
+ * would hang the property off a stale leaf.
+ */
+async function applyProperties(
+  open: () => Promise<SessionManager | undefined>,
+  writes: PropertyWrites,
+): Promise<AppliedProperties | undefined> {
+  const record = await open();
+  if (!record) return undefined;
+  const landed: SessionUpdateField[] = [];
+  let failure: unknown;
+  try {
+    if (writes.leafEntryId !== undefined) {
+      // A move to where the leaf already is writes nothing: pi journals a move as a `leaf` record,
+      // so a repeated write (a client retry, a UI firing on every selection) would otherwise grow
+      // the session by a record no plane publishes. It still COUNTS as landed — the leaf is where
+      // the caller asked for it.
+      if (record.getLeafId() !== writes.leafEntryId) record.branch(writes.leafEntryId);
+      landed.push("leafEntryId");
+    }
+    if (writes.model) {
+      record.appendModelChange(writes.model.provider, writes.model.id);
+      landed.push("model");
+    }
+    if (writes.thinkingLevel !== undefined) {
+      record.appendThinkingLevelChange(writes.thinkingLevel);
+      landed.push("thinkingLevel");
+    }
+    if (writes.name !== undefined) {
+      record.appendSessionInfo(writes.name);
+      landed.push("name");
+    }
+  } catch (error) {
+    // Held, not rethrown: what already landed still has to be reported, and the report is the only
+    // way a caller learns the record moved.
+    failure = error;
+  }
+  // READ BACK, never echo: pi rewrites a name (newlines collapse, ends trim), and the settings a
+  // path resolves to can change under a moved leaf. The caller reports THIS, so `state()` and
+  // `list()` cannot disagree with what it said.
+  const name = record.getSessionName();
+  let path: OverrideEntryLike[] | undefined;
+  try {
+    path = activePath(record);
+  } catch (error) {
+    // An unreadable chain is the caller's decision (design §7), not a silent short path. The writes
+    // are already durable either way.
+    log.warn(`[fastagent] session ${record.getSessionId()}: written, active path unreadable: ${String(error)}`);
+  }
+  return {
+    landed,
+    ...(failure !== undefined ? { failure } : {}),
+    ...(name ? { name } : {}),
+    ...(record.getLeafId() ? { leafEntryId: record.getLeafId() as string } : {}),
+    ...(path ? { path } : {}),
   };
 }
 
@@ -499,6 +611,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
     async openIfExists(sessionId) {
       return live.get(sessionId);
     },
+    applyProperties: (sessionId, writes) => applyProperties(async () => live.get(sessionId), writes),
     async list() {
       // No file metadata in memory: the timestamps that exist are the entries' own. A session with
       // no entries yet reports the same instant for both, which is what "created, never used" is.
