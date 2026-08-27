@@ -158,18 +158,15 @@ export function callerSessionId(recordId: string): string | undefined {
  * each header and would make a renamed agent directory look like an empty store (see
  * {@link recordFiles}).
  *
- * A record written before this store existed keeps ITS id (the older path spelled them differently),
- * so the scan accepts either: a conversation that predates this store is continued rather than
- * silently restarted as an empty one. Nothing is rewritten on disk.
- *
  * NEW records live in a subdirectory of their own, because the two engines cannot share a namespace:
  * both spell ids into `[A-Za-z0-9._-]`, so neither can claim a prefix the other cannot produce, and
  * a directory holding both would have names that belong to two conversations at once — in whichever
  * direction it is read. Separate directories make each side's own injectivity sufficient.
  *
- * A PRE-EXISTING record is still continued in place: it is looked up by the older spelling, which is
- * injective on its own terms, and appended to where it lies. Both spellings are the same v3 jsonl,
- * so a conversation started before this store keeps going rather than restarting empty.
+ * A PRE-EXISTING record is continued in place: looked up by the older spelling, which is injective
+ * on its own terms, and appended to where it lies. Both spellings are the same v3 jsonl, so a
+ * conversation started before this store keeps going rather than restarting empty. Nothing on disk
+ * is rewritten.
  *
  * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
  * the serving path provides — the single-writer lease is taken before any store call, so no two
@@ -189,12 +186,12 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   /** Where a forked record is finished before it becomes discoverable. A SUBDIRECTORY of the store,
    *  so `list()` (one level, `*.jsonl`) never sees a record that is still being prepared. */
   const staging = join(own, ".staging");
-  /** An empty record under `id`, ON DISK (see {@link publish}) and not yet discoverable. Copying
+  /** An empty record under `id`, ON DISK (see {@link materialize}) and not yet discoverable. Copying
    *  into it appends immediately, so a crash leaves a partial record in staging rather than a
    *  complete-looking one under the id. */
   const stage = (id: string): SessionManager => {
     mkdirSync(staging, { recursive: true });
-    return publish(SessionManager.create(cwd, staging, { id }), staging);
+    return materialize(SessionManager.create(cwd, staging, { id }), staging);
   };
   /** Fill a staged record and move it in — or leave nothing behind. The partial file is deleted on
    *  the way out and the failure is rethrown untouched: `fork` turns it into a coded result and
@@ -209,11 +206,10 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     let published: string | undefined;
     try {
       fill(staged);
-      // INSIDE the try: publishing is a mkdir + rename, and both can fail (EACCES, a store root on
-      // another filesystem). A finished record stranded in staging is the same accumulation as a
-      // partial one — nothing reads that directory either way. NOT covered by a test: the tests
-      // reach the fill failure by making a copy throw, and no equivalent injection point exists for
-      // rename without mocking node:fs for the whole file.
+      // Publishing is a mkdir + rename, and both can fail (EACCES, a store root on another
+      // filesystem) — a finished record stranded in staging is the same accumulation as a partial
+      // one. NOT covered by a test: the tests reach a fill failure by making a copy throw, and there
+      // is no equivalent injection point for rename without mocking node:fs for the whole file.
       published = publishStaged(staged);
       return SessionManager.open(published, own);
     } catch (error) {
@@ -234,13 +230,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   /** Fork the named parent into `id`, or answer undefined so the caller starts empty. Every failure
    *  is a warn: a thread must not lose its first turn to an inheritance edge. */
   const inheritInto = async (id: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
-    const parentId = piSessionId(inherit.parentSession);
-    // The store's own directory, like every other lookup here: pi's listing filters by the cwd in
-    // each header, so a renamed agent directory made a named parent unfindable — the thread then
-    // started empty beside a conversation that was sitting right there.
-    const found =
-      recordFiles(own).find((f) => f.id === parentId) ??
-      recordFiles(root).find((f) => f.id === legacySessionId(inherit.parentSession));
+    const found = locate(inherit.parentSession);
     if (!found) {
       log.warn(
         `[fastagent] session "${id}" names parent "${inherit.parentSession}", which has no record — starting empty`,
@@ -248,10 +238,9 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return undefined;
     }
     try {
-      const parentDir = found.id === parentId ? own : root;
       // A parent that crashed mid tool-execution would otherwise pass its dangling tool_use down
       // to the child, whose very first request the provider then rejects.
-      const parent = reconcileInterruptedToolCalls(SessionManager.open(found.path, parentDir));
+      const parent = reconcileInterruptedToolCalls(SessionManager.open(found.path, found.dir));
       const cut = inheritanceCut(parent, inherit.branchHints);
       if (!cut) return undefined;
       return fillStaged(id, (staged) => copyBranchForInheritance(parent, staged, cut.at));
@@ -266,21 +255,26 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   /** The unreadable records the last listing reported, so a polled endpoint states the condition
    *  once rather than once a second. */
   let lastUnreadable = "";
+  /** WHERE a session's record is, under either spelling — the one lookup every caller shares, so a
+   *  fix to it (this store's own directory rather than pi's cwd-filtered listing) cannot reach three
+   *  of the four. */
+  const locate = (sessionId: string): { path: string; dir: string } | undefined => {
+    const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
+    if (mine) return { path: mine.path, dir: own };
+    const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
+    return legacy ? { path: legacy.path, dir: root } : undefined;
+  };
   /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
    *  broken by a caller that spreads this object into another one. */
   const openExisting = async (sessionId: string): Promise<SessionManager | undefined> => {
-    const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
-    if (mine) return SessionManager.open(mine.path, own);
-    const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
-    return legacy ? SessionManager.open(legacy.path, root) : undefined;
+    const found = locate(sessionId);
+    return found ? SessionManager.open(found.path, found.dir) : undefined;
   };
   return {
     async openOrCreate(sessionId, inherit) {
+      const found = locate(sessionId);
+      if (found) return reconcileInterruptedToolCalls(SessionManager.open(found.path, found.dir));
       const id = piSessionId(sessionId);
-      const mine = recordFiles(own).find((f) => f.id === id);
-      if (mine) return reconcileInterruptedToolCalls(SessionManager.open(mine.path, own));
-      const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
-      if (legacy) return reconcileInterruptedToolCalls(SessionManager.open(legacy.path, root));
       mkdirSync(own, { recursive: true });
       // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which
       // is what makes it one-time by construction.
@@ -288,7 +282,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         const inherited = await inheritInto(id, inherit);
         if (inherited) return inherited;
       }
-      return publish(SessionManager.create(cwd, own, { id }), own);
+      return materialize(SessionManager.create(cwd, own, { id }), own);
     },
     openIfExists: openExisting,
     applyProperties: (sessionId, writes) => applyProperties(() => openExisting(sessionId), writes),
@@ -359,8 +353,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       });
     },
     async delete(sessionId) {
-      const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
-      const found = mine ?? recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
+      const found = locate(sessionId);
       if (!found) return false;
       // A record that cannot be deleted must not report success — the caller turns the throw into a
       // coded failure, and the session is still there for the next attempt.
@@ -417,12 +410,11 @@ async function applyProperties(
     // way a caller learns the record moved.
     failure = error;
   }
-  // THE ANCHOR, and it runs whatever happened above. pi's `branch()` writes nothing — the leaf is
-  // runtime state, and `open()` puts it back on the file's last entry — so a move that no other
-  // write followed is forgotten the moment anything reopens the record: `state()` would contradict
-  // the event this patch just emitted, and the next turn would hang off the old tip. Inside the try
-  // it was skipped exactly when a later property threw, which is the case that reports a MOVE as
-  // landed. Appending anything pins the move, so this appends only when nothing else already did.
+  // THE ANCHOR, outside the try so a failed property write cannot skip it — that is precisely the
+  // case reporting a MOVE as landed. pi's `branch()` writes nothing (the leaf is runtime state, and
+  // `open()` puts it back on the file's last entry), so a move nothing followed is forgotten the
+  // moment anything reopens the record. Appending anything pins it; this appends only when nothing
+  // else in the patch already did.
   if (moved && record.getLeafId() === writes.leafEntryId) {
     try {
       record.appendCustomEntry(LEAF_ANCHOR, {});
@@ -644,7 +636,7 @@ const OWN_RECORDS_DIR = "agent-session";
  * Writing pi's OWN header (`getHeader()`, not a hand-built literal) and reopening puts the manager
  * on its normal "file exists" path, where every append lands immediately.
  */
-function publish(session: SessionManager, dir: string): SessionManager {
+function materialize(session: SessionManager, dir: string): SessionManager {
   const file = session.getSessionFile();
   if (!file || existsSync(file)) return session; // in-memory, or already on disk
   const header = session.getHeader();

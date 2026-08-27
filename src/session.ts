@@ -6,12 +6,11 @@
  * The plane model: `invoke` is the only data plane (no run exists without an invoke); a session's
  * ACTIONS modulate the run an invoke drives; `state`/`entries`/`events` observe, strictly read-only.
  *
- * The shape follows the question each call answers, not the transport that carries it. A session's
- * PROPERTIES (name, model, thinking level, where its leaf points) are updated; things that HAPPEN to
- * a run (steer, abort, compact) are actions; the set of sessions is a collection. Folding all three
- * into one `dispatch(session, command)` — which is what this once was — made a client spell the
- * session id on every call and read `{ type: "delete" }` as something dispatched INTO a session that
- * is about to stop existing.
+ * The shape follows the question each call answers, not the transport that carries it: a session's
+ * PROPERTIES (name, model, thinking level, where its leaf points) are updated, things that HAPPEN to
+ * a run (steer, abort, compact) are actions, and the set of sessions is a collection. One verb over
+ * all three would make a client spell the session id on every call and read "delete" as something
+ * dispatched INTO a session that is about to stop existing.
  */
 import type { Json, Prompt } from "./agent.ts";
 

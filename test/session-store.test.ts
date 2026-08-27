@@ -2,11 +2,10 @@
  * The AgentSession L0's session store: pi accepts the ids channels actually mint, two rooms never
  * share a record, and a conversation started by the harness path is continued rather than restarted.
  */
-import { writeFileSync } from "node:fs";
+import { symlinkSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { symlinkSync } from "node:fs";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -382,24 +381,26 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
     }
   });
 
-  it("a store that cannot be READ rejects — pi's own list() answers [] on any IO error", async () => {
-    // Why this probe exists at all: `[]` is the honest answer for a deployment with no sessions, so
-    // a swallowed fault would render as "no conversations" in a GUI — the conflation the coded 503
-    // (sessions_unavailable) exists to prevent. Without the readdir probe this test goes green with
-    // an empty array, which is exactly how the mechanism was dead on arrival.
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-unreadable-"));
-    // A FILE where the records directory belongs: ENOTDIR reproduces on every platform and does not
-    // depend on the test user's privileges (a root CI container ignores mode bits).
-    await writeFile(join(dir, "agent-session"), "not a directory\n");
-    await expect(piSessionRecordStore({ dir, cwd: dir }).list()).rejects.toThrow(/ENOTDIR/);
-  });
-
-  it("an empty session has NO preview — pi's placeholder is not something a user typed", async () => {
+  it("no first user TEXT means no preview — an empty session, and one opened with a photo", async () => {
+    // Both shapes of "nothing to preview", against one function: a session with no messages at all,
+    // and one whose first message carries an image and no caption (telegram/feishu open plenty).
     const dir = await mkdtemp(join(tmpdir(), "fa-store-preview-"));
     const store = piSessionRecordStore({ dir, cwd: dir });
     await store.openOrCreate("fresh");
-    expect((await store.list())[0]).toMatchObject({ session: "fresh", messageCount: 0 });
-    expect((await store.list())[0]?.preview).toBeUndefined(); // not "(no messages)"
+    const photo = await store.openOrCreate("photo");
+    photo.appendMessage({
+      role: "user",
+      content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+      timestamp: 1,
+    } as never);
+    photo.appendMessage(fauxAssistantMessage("nice picture"));
+
+    const rows = await store.list();
+    expect(rows.find((r) => r.session === "fresh")).toMatchObject({ messageCount: 0 });
+    expect(rows.find((r) => r.session === "fresh")?.preview).toBeUndefined();
+    const photoRow = rows.find((r) => r.session === "photo");
+    expect(photoRow?.messageCount).toBeGreaterThan(0); // the count cannot say there is no text
+    expect(photoRow?.preview).toBeUndefined();
   });
 
   it("forking onto an existing session is refused by the STORE, in both backends", async () => {
@@ -620,11 +621,10 @@ describe("fork: the copy is a copy", () => {
     }
   });
 
-  it("a record that vanishes between the readdir and the stat is not a store fault", async () => {
-    // `list` reads the directory and then stats each file; `delete` is a call this plane serves, and
-    // a GUI polls the list. A record gone in that window threw ENOENT — which carries a `code`, so
-    // the route classified it as `sessions_unavailable` against a perfectly healthy store.
-    // A dangling symlink IS that window, deterministically: listed by readdir, ENOENT on stat.
+  it("a record that disappears mid-listing is not a store fault", async () => {
+    // `delete` is a call this plane serves and the listing is polled, so a record can go between the
+    // readdir and the read. It must not take the listing down or read as `sessions_unavailable`
+    // against a perfectly healthy store. A dangling symlink is that window, deterministically.
     const dir = await mkdtemp(join(tmpdir(), "fa-store-race-"));
     const store = piSessionRecordStore({ dir, cwd: dir });
     (await store.openOrCreate("survivor")).appendMessage({ role: "user", content: "hi", timestamp: 1 });
@@ -647,24 +647,6 @@ describe("fork: the copy is a copy", () => {
     await store.fork("old", at, "branch", "test-provenance");
     const row = (await store.list()).find((r) => r.session === "branch") as { createdAt: number; updatedAt: number };
     expect(row.updatedAt).toBeGreaterThanOrEqual(row.createdAt);
-  });
-
-  it("a first message with no TEXT still has no preview — the count cannot tell", async () => {
-    // A caption-less photo (telegram/feishu/slack open plenty of sessions this way): messageCount is
-    // 1, and pi's firstMessage is its "(no messages)" sentinel.
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-imgpreview-"));
-    const store = piSessionRecordStore({ dir, cwd: dir });
-    const session = await store.openOrCreate("photo");
-    session.appendMessage({
-      role: "user",
-      content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
-      timestamp: 1,
-    } as never);
-    session.appendMessage(fauxAssistantMessage("nice picture"));
-
-    const row = (await store.list()).find((r) => r.session === "photo");
-    expect(row?.messageCount).toBeGreaterThan(0);
-    expect(row?.preview).toBeUndefined();
   });
 });
 

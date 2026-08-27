@@ -242,9 +242,9 @@ export function copyBranchForInheritance(parent: SessionManager, child: SessionM
 
 /*
  * There is deliberately NO file-level fork here. pi can copy a path into a new file
- * (`createBranchedSession` + `forkFrom`), and this used to, but that pair writes the intermediate
- * only when the copied path contains an ASSISTANT message — forking at a user entry then handed
- * `forkFrom` a path that does not exist, and the failure surfaced as a retryable one for a condition
- * no retry can change. Copying entries is what the in-memory backend does anyway, so both backends
- * now share these functions and one semantics; a fork is not hot enough to buy a second path back.
+ * (`createBranchedSession` + `forkFrom`), but that pair writes the intermediate only when the copied
+ * path contains an ASSISTANT message — so forking at a user entry hands `forkFrom` a path that does
+ * not exist, and the failure reads as retryable for a condition no retry can change. Copying entries
+ * is what a backend with no file to fork has to do anyway, so both share these functions and one
+ * semantics; a fork is not hot enough to buy a second path back.
  */
