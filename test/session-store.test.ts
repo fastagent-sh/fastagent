@@ -346,6 +346,21 @@ describe("fork: the copy is a copy", () => {
     expect(JSON.stringify(child.getBranch())).toContain("interrupted-tool-call");
   });
 
+  it("a fork never lists as modified BEFORE it existed", async () => {
+    // The copied entries carry the SOURCE's timestamps, and pi reads "modified" off the last one —
+    // so a branch made today sorted into whenever the original was written, which is the one column
+    // a conversation list orders by.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-forktime-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const parent = await store.openOrCreate("old");
+    parent.appendMessage({ role: "user", content: "asked long ago", timestamp: 1 });
+    const at = parent.appendMessage({ ...fauxAssistantMessage("answered long ago"), timestamp: 2 } as never);
+
+    await store.fork("old", at, "branch");
+    const row = (await store.list()).find((r) => r.session === "branch") as { createdAt: number; updatedAt: number };
+    expect(row.updatedAt).toBeGreaterThanOrEqual(row.createdAt);
+  });
+
   it("a first message with no TEXT still has no preview — the count cannot tell", async () => {
     // A caption-less photo (telegram/feishu/slack open plenty of sessions this way): messageCount is
     // 1, and pi's firstMessage is its "(no messages)" sentinel.

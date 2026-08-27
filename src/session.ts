@@ -24,7 +24,7 @@ export interface SessionControl {
    *  route that is not keyed by a session. Deployment-level on purpose: a multi-tenant facade in
    *  front of one deployment MUST NOT expose it, because it answers for every user at once. Such a
    *  facade does not need it either — `Scope.session` is the Caller's own string, so it already
-   *  holds the mapping this would return (design §16).
+   *  holds the mapping this would return (design §5).
    *
    *  The one read that MAY reject: `[]` is a complete answer for a deployment with no sessions, so
    *  it would be a lie for a store that cannot be enumerated. The others stay TOTAL — their absent

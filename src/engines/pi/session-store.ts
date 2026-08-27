@@ -248,7 +248,11 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
             session,
             ...(r.name ? { name: r.name } : {}),
             createdAt: r.created.getTime(),
-            updatedAt: r.modified.getTime(),
+            // NEVER before `createdAt`. pi derives "modified" from the last entry's own timestamp,
+            // and a fork's entries carry the SOURCE conversation's — rewriting them would falsify
+            // history, so a fresh branch would otherwise sort into last week. The record's own
+            // creation is the floor: nothing about it is older than itself.
+            updatedAt: Math.max(r.modified.getTime(), r.created.getTime()),
             messageCount: r.messageCount,
             // pi fills `firstMessage` with a literal "(no messages)" placeholder rather than an
             // empty string, and it does so for any session whose first user message has no
