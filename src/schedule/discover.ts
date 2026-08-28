@@ -4,9 +4,8 @@
  * named from its filename. This is the FILE producer of scheduled invocations (the author's, declarative,
  * git-tracked, deploy-guaranteed); the agent's `wake` tool is the second producer.
  */
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../loader.ts";
+import { type ModuleLoadFailure, loadModuleDir, moduleInventory } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { cronError } from "./cron.ts";
 import type { LoadedSchedule, Schedule } from "./schedule.ts";
@@ -16,17 +15,8 @@ import type { LoadedSchedule, Schedule } from "./schedule.ts";
  *  since it also reports broken files and next instants). */
 export async function discoverScheduleFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "schedules");
-  let names: string[];
-  try {
-    names = await readdir(join(dir, "schedules"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  return names
-    .filter(isModuleFile)
-    .map((n) => n.replace(/\.(ts|js|mjs)$/, ""))
-    .sort();
+  const { entries } = await moduleInventory(join(dir, "schedules"));
+  return entries.map((entry) => entry.name);
 }
 
 /**

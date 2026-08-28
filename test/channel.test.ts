@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
 import { loadChannels, discoverChannelFiles, inspectChannels } from "../src/channels/discover.ts";
+import { log } from "../src/log.ts";
 
 // loadChannels only forwards the ctx to the factory; these factories ignore it.
 const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
@@ -268,7 +269,51 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     await writeFile(join(dir, "channels", "telegram.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "slack.ts.disabled"), "not imported\n");
+    // A DIRECTORY passes the name test on its own. Every reader of channels/ has to answer this the
+    // same way loadModuleDir does, or `info` lists a channel the serve never mounts.
+    await mkdir(join(dir, "channels", "feishu.ts"));
     expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
+  });
+
+  it("orders by the NAME a consumer sees, not by filename", async () => {
+    // `-` sorts before `.`, so filename order gives ["a-b", "a"] while name order gives ["a", "a-b"].
+    // The inventory sorts by name so no consumer re-sorts; a github/telegram pair cannot tell the
+    // two apart, which is why this pair exists.
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(join(dir, "channels", "a.ts"), "export default () => ({});\n");
+    await writeFile(join(dir, "channels", "a-b.ts"), "export default () => ({});\n");
+    expect(await discoverChannelFiles(dir)).toEqual(["a", "a-b"]);
+  });
+
+  it("a SYMLINKED channel file is skipped, and says why", async () => {
+    // Not a gap to close: assertInsideAgentDir guards the channels DIRECTORY, nothing guards the
+    // entries in it, so following a link would import code from anywhere on the box past the very
+    // check that exists to stop that. Skipping is the boundary — the warning is what keeps an
+    // author from staring at a channel that silently does not exist.
+    const dir = await freshDir();
+    const outside = await freshDir();
+    await writeFile(join(outside, "telegram.ts"), "export default () => ({});\n");
+    await mkdir(join(dir, "channels"));
+    await symlink(join(outside, "telegram.ts"), join(dir, "channels", "telegram.ts"));
+    const said: string[] = [];
+    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
+    try {
+      const loaded = await loadChannels(dir, { agent: {} as never, stateRoot: dir });
+      expect(loaded.routeChannels).toEqual([]);
+      expect(said.join("\n")).toContain("symlink");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a channels/ that is a FILE is a mistake, not an agent without channels", async () => {
+    // ENOENT means "this agent declares no channels". ENOTDIR means the author put a FILE where the
+    // directory goes — reading that as "no channels" serves a deployment that silently ignores what
+    // they wrote. service.test.ts pins the same verdict for `schedules`.
+    const dir = await freshDir();
+    await writeFile(join(dir, "channels"), "not a directory\n");
+    await expect(discoverChannelFiles(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
   });
 
   it("enforces containment on its OWN path: rejects a channels/ symlink escaping the workspace", async () => {

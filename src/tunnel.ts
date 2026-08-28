@@ -7,9 +7,8 @@
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
-import { basename, extname, join } from "node:path";
-import { isModuleFile } from "./loader.ts";
+import { join } from "node:path";
+import { moduleInventory } from "./loader.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
@@ -130,23 +129,20 @@ function lastErrorLine(tail: string): string {
   return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
 }
 
-/** Channel basenames present in `<dir>/channels/`. What counts as a module file is {@link isModuleFile}
- *  — the same predicate discovery uses, so the tunnel cannot register a set the serve did not mount. */
-function channelBasenames(dir: string): string[] {
+/** Channel basenames present in `<dir>/channels/` — {@link moduleInventory}, the same reading the
+ *  serve loads from, so the tunnel cannot register a set the deployment does not have.
+ *
+ *  The one thing it does differently is the FAILURE: `announceWebhooks` is void-called with no
+ *  unhandledRejection handler, so a throw here would take the serve down. It reports and continues
+ *  — silence would hide exactly the fault this scan exists to feed (a `channels/` that cannot be
+ *  read registers nothing while the tunnel announces its public URL). */
+async function channelBasenames(dir: string): Promise<string[]> {
   const channels = join(dir, "channels");
   try {
-    return readdirSync(channels)
-      .filter(isModuleFile)
-      .map((n) => basename(n, extname(n)));
+    const { entries } = await moduleInventory(channels);
+    return entries.map((entry) => entry.name);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // No channels/ is the ordinary case. Anything else is a directory we cannot read, and returning
-    // "no channels" for it registers no webhooks while the tunnel reports itself up — the failure
-    // this function exists to feed, hidden. It cannot THROW (announceWebhooks is void-called with no
-    // unhandledRejection handler, so it would take the serve down), so it says so and continues.
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      log.warn(`[fastagent] --tunnel: cannot read ${channels}: ${(error as Error).message} — no webhooks registered`);
-    }
+    log.warn(`[fastagent] --tunnel: cannot read ${channels}: ${(error as Error).message} — no webhooks registered`);
     return [];
   }
 }
@@ -174,7 +170,7 @@ export async function announceWebhooks(
   }
   // Serving passes the validated route-channel subset. The basename fallback preserves the public
   // helper's behavior for callers that did not assemble channels first.
-  const routeChannels = opts.routeChannels ?? channelBasenames(dir);
+  const routeChannels = opts.routeChannels ?? (await channelBasenames(dir));
   if (routeChannels.length === 0) return;
   // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before
   // its origin connects, and the automatic registrars poll /health before configuring the platform (the

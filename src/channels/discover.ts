@@ -5,11 +5,10 @@
  * Engine-neutral, and living here rather than under `engines/` because of it: reading `channels/*.ts`
  * is the Channel contract plus a directory, with no engine in sight.
  */
-import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
 import { assertRouteKey, routeKeysConflict } from "./serve.ts";
-import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../loader.ts";
+import { type ModuleLoadFailure, loadModuleDir, moduleInventory } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
@@ -77,17 +76,8 @@ export async function inspectChannels(dir: string): Promise<{
  */
 export async function discoverChannelFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "channels");
-  let names: string[];
-  try {
-    names = await readdir(join(dir, "channels"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  return names
-    .filter(isModuleFile)
-    .map((name) => name.replace(/\.(ts|js|mjs)$/, ""))
-    .sort();
+  const { entries } = await moduleInventory(join(dir, "channels"));
+  return entries.map((entry) => entry.name);
 }
 
 function validateRoutes(value: unknown, label: string): [string, (req: Request) => Response | Promise<Response>][] {

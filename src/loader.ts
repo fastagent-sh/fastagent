@@ -1,18 +1,100 @@
 /**
  * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`,
- * `schedules/`, config). Pure node stdlib — engine-neutral, so it lives at the top level: the schedule
- * discovery (src/schedule/) must not reach into `engines/` for what is plain filesystem/import plumbing.
+ * `schedules/`, config). Node stdlib plus the logger — engine-neutral, so it lives at the top level:
+ * the schedule discovery (src/schedule/) must not reach into `engines/` for what is plain
+ * filesystem/import plumbing.
  */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { log } from "./log.ts";
 
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 
 /** Whether `name` is an importable agent module (a discovery candidate, not a type declaration). */
-export function isModuleFile(name: string): boolean {
+function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
+}
+
+/** The name a module is known by: its basename without the extension. */
+function moduleName(fileName: string): string {
+  return basename(fileName, extname(fileName));
+}
+
+/** One module file a directory declares. `name` is what the domain knows it by; nothing is imported
+ *  to produce this. */
+export interface InventoryEntry {
+  /** Basename without extension — the authoritative name for tools/channels/schedules. */
+  name: string;
+  /** "tools/foo.ts"-style label for errors and collisions. */
+  label: string;
+  file: string;
+}
+
+/** An entry whose NAME says module and whose kind says otherwise. Data, not a log line: the loader
+ *  warns, `info` could show it, and a test can assert it. */
+export interface SkippedEntry {
+  label: string;
+  /** Why it is not loadable, in words an author can act on. */
+  why: string;
+}
+
+/**
+ * WHAT A CODE-INPUT DIRECTORY DECLARES — the single answer to "which files here are modules",
+ * without importing any of them.
+ *
+ * It exists because four consumers need that answer and only one of them may import: the loader
+ * below, `fastagent info`'s channel listing, `--tunnel`'s webhook registration, and the deploy
+ * pre-flight's schedule probe. When they each read the directory themselves they disagreed — on
+ * what counts as a module file, on how to strip the extension, on which errno means "no such
+ * directory" — and a fix had to be applied in four places, which is why the fourth kept being
+ * missed. There is one reading now; what to DO with a failure stays with the caller, because that
+ * genuinely differs (the loader throws, the tunnel cannot).
+ *
+ * A missing directory is an empty inventory. Everything else throws, ENOTDIR included: `channels`
+ * and `schedules` are named directories, so the path existing as a FILE is a mistake in the agent
+ * rather than an agent without one (`service.test.ts` pins that for `schedules`). `paths.ts` folds
+ * ENOTDIR into its empty scan for the opposite reason — it asks which children HAPPEN to be agent
+ * dirs, where a file simply is not one. `not_found` is a non-Node runtime's ENOENT.
+ *
+ * SYMLINKS ARE SKIPPED, and that is a boundary rather than an oversight: `assertInsideAgentDir`
+ * guards the code-input DIRECTORY against escaping the definition, and nothing guards the entries
+ * inside it, so following a link would import from anywhere on the box past the very check meant to
+ * prevent it. Do not "fix" this by following them — report them, which is what `skipped` is for.
+ */
+export async function moduleInventory(subDir: string): Promise<{
+  entries: InventoryEntry[];
+  skipped: SkippedEntry[];
+}> {
+  let dirents: Dirent[];
+  try {
+    dirents = await readdir(subDir, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "not_found") return { entries: [], skipped: [] };
+    throw new Error(`cannot read ${subDir}: ${(error as Error).message}`);
+  }
+  const sub = basename(subDir);
+  const entries: InventoryEntry[] = [];
+  const skipped: SkippedEntry[] = [];
+  // Sorted by the NAME a consumer sees, so none of them re-sorts and none can disagree about order.
+  // Filename breaks a tie: `foo.js` and `foo.ts` both read as `foo`, and the domain loaders document
+  // that the FIRST wins — deciding that here keeps it from depending on readdir's order.
+  const byName = (a: Dirent, b: Dirent): number =>
+    moduleName(a.name).localeCompare(moduleName(b.name)) || a.name.localeCompare(b.name);
+  for (const dirent of dirents.sort(byName)) {
+    if (!isModuleFile(dirent.name)) continue;
+    const label = `${sub}/${dirent.name}`;
+    if (dirent.isFile()) {
+      entries.push({ name: moduleName(dirent.name), label, file: join(subDir, dirent.name) });
+    } else if (dirent.isSymbolicLink()) {
+      skipped.push({ label, why: "a symlink — code inputs must be real files inside the agent dir" });
+    } else {
+      skipped.push({ label, why: dirent.isDirectory() ? "a directory, not a file" : "not a regular file" });
+    }
+  }
+  return { entries, skipped };
 }
 
 export interface DiscoveredModule {
@@ -36,33 +118,25 @@ export interface ModuleLoadFailure {
 }
 
 /**
- * Import every module file in `subDir`, sorted by name. Missing dir returns none. A file that fails to
- * IMPORT is collected into `failures` (with {@link moduleLoadHint}) rather than thrown, so the caller can
- * report every bad file and apply domain policy; `loadTools`/`loadChannels` add validation failures the
- * same way. (A missing DIRECTORY still returns empty; an unreadable directory still throws
- * — that's not a per-file problem.)
+ * Import every module the directory declares ({@link moduleInventory}). A file that fails to IMPORT
+ * is collected into `failures` (with {@link moduleLoadHint}) rather than thrown, so the caller can
+ * report every bad file and apply domain policy; `loadTools`/`loadChannels` add validation failures
+ * the same way.
+ *
+ * Skipped entries are warned HERE rather than returned: this is the path where an author finds out
+ * their channel does not exist, and the inventory's other two consumers only list names.
  */
 export async function loadModuleDir(
   subDir: string,
 ): Promise<{ modules: DiscoveredModule[]; failures: ModuleLoadFailure[] }> {
-  let entries: Dirent[];
-  try {
-    entries = await readdir(subDir, { withFileTypes: true });
-  } catch (error) {
-    const e = error as NodeJS.ErrnoException;
-    if (e.code === "ENOENT" || e.code === "not_found") return { modules: [], failures: [] };
-    throw new Error(`cannot read ${subDir}: ${(error as Error).message}`);
-  }
-  const sub = basename(subDir);
+  const { entries, skipped } = await moduleInventory(subDir);
+  for (const { label, why } of skipped) log.warn(`[fastagent] ${label} is ${why} — not loaded`);
   const modules: DiscoveredModule[] = [];
   const failures: ModuleLoadFailure[] = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isFile() || !isModuleFile(entry.name)) continue;
-    const file = join(subDir, entry.name);
-    const label = `${sub}/${entry.name}`;
+  for (const { name, label, file } of entries) {
     try {
       const mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
-      modules.push({ name: basename(entry.name, extname(entry.name)), label, file, mod });
+      modules.push({ name, label, file, mod });
     } catch (error) {
       failures.push({
         label,
