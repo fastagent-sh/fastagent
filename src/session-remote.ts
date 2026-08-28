@@ -59,13 +59,17 @@ function idleWatchdog(abort: AbortController): ReadWatch {
     stop: () => clearInterval(timer),
   };
 }
+import { isAddressableSession } from "./session.ts";
 import type {
   AgentCommand,
+  Session,
   SessionCapabilities,
-  SessionControl,
   SessionEntries,
   SessionEvent,
+  SessionControl,
+  SessionResult,
   SessionState,
+  SessionSummary,
 } from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
@@ -73,10 +77,31 @@ import type {
  *  trouble branches on `status`, never on message prose. */
 export class ControlRequestError extends Error {
   readonly status: number;
-  constructor(status: number, body: string) {
+  /** The plane's own error code, when the reply carried one (`sessions()` is the only read that
+   *  does today — design §13). Absent for a plain-text rejection (401) or a proxy's page: a caller
+   *  distinguishing "this deployment cannot list sessions" from "the endpoint is unreachable" reads
+   *  THIS, not the status. */
+  readonly code?: string;
+  constructor(status: number, body: string, code?: string) {
     super(`control request failed: ${status} ${body}`);
     this.status = status;
+    if (code !== undefined) this.code = code;
   }
+}
+
+/** A non-2xx reply as an error, carrying the plane's code when the reply declared one. */
+async function controlError(res: Response): Promise<ControlRequestError> {
+  const body = await res.text();
+  if (!res.headers.get("content-type")?.includes("application/json")) return new ControlRequestError(res.status, body);
+  let parsed: { code?: unknown };
+  try {
+    parsed = JSON.parse(body) as typeof parsed;
+  } catch {
+    // The reply declared JSON and is not — a protocol fault worth seeing, but not worth losing the
+    // status over: both travel in one error rather than a bare SyntaxError from a rejection path.
+    return new ControlRequestError(res.status, `${body} (declared application/json but did not parse)`);
+  }
+  return new ControlRequestError(res.status, body, typeof parsed.code === "string" ? parsed.code : undefined);
 }
 
 /** Connection parameters shared by BOTH remote planes (`connectSessionControl` and
@@ -113,11 +138,109 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
   const PAYLOAD_TIMEOUT_MS = 60_000;
   const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
     const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+    if (!res.ok) throw await controlError(res);
     return (await res.json()) as T;
   };
 
   const capabilities = await get<SessionCapabilities>("/control/capabilities");
+  const eventsOf = (session: string): AsyncIterable<SessionEvent> => {
+    // Each ITERATION opens its own connection (gen/abort created inside asyncIterator), matching
+    // the local hub's "every iteration is a fresh subscription" — a shared single-use generator
+    // would make the second for-await silently empty, breaking local/remote isomorphism.
+    // The abort controller lives OUTSIDE the generator: a consumer's `return()`/`break` while the
+    // generator is suspended on a quiet SSE read must abort the fetch FIRST — an async generator's
+    // own finally only runs after the pending await settles, which a silent stream never does.
+    const openStream = (abort: AbortController) =>
+      (async function* iterate(): AsyncGenerator<SessionEvent> {
+        // Armed BEFORE the fetch: the connect phase (headers never arriving from a black-holed
+        // endpoint) is otherwise a window no timeout covers — the same watchdog terminates it,
+        // with headers-arrival counting as the first sign of life.
+        const watchdog = idleWatchdog(abort);
+        watchdog.arm(); // the connect await is a pending read
+        try {
+          const res = await fetchFn(`${base}/control/sessions/${encodeURIComponent(session)}/events`, {
+            headers,
+            signal: abort.signal,
+          });
+          watchdog.disarm(); // headers arrived
+          if (!res.ok) {
+            // The error body is a pending read too — a half-dead tunnel serving 4xx headers then
+            // black-holing the body must not hang the round outside every budget. Re-armed: the
+            // watchdog aborts the read and the round fails with the dead-connection diagnosis.
+            watchdog.arm();
+            throw new ControlRequestError(res.status, await res.text());
+          }
+          if (!res.body) throw new Error("control events: response has no body");
+          let nextSeq = 0;
+          for await (const data of sseData(res.body, watchdog)) {
+            // Parse discipline, same as the other two wire planes (dispatch parses, invoke
+            // classifies drift): a non-JSON or non-envelope payload is PROTOCOL MISMATCH —
+            // thrown, so a consumer's failure budget applies — never misdiagnosed as an
+            // in-transit gap whose remedy (reconnect) can never fix it.
+            let wire: WireEvent;
+            try {
+              // The ONE envelope type (control.ts's WireEvent) — an inline shape would let the
+              // envelope drift server-side while this cast silently kept the old fields.
+              wire = JSON.parse(data) as WireEvent;
+            } catch (parseError) {
+              throw new Error(
+                `control events: non-JSON data on the stream (${String(parseError)}) — protocol mismatch?`,
+              );
+            }
+            if (typeof wire.seq !== "number" || typeof wire.event !== "object" || wire.event === null) {
+              throw new Error("control events: malformed envelope — the endpoint does not speak this protocol version");
+            }
+            // Envelope checks — consumed HERE. (epoch is not compared: it cannot change within
+            // one connection — see the header note.) A gap THROWS like a protocol mismatch: the
+            // consumer's failure path (budget, its own io) owns the diagnostic — a library-level
+            // log would bypass consumer output discipline, and a silent clean end would be
+            // indistinguishable from the server closing normally.
+            if (wire.seq !== nextSeq) {
+              throw new Error(
+                `control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — events were lost in transit; resync via entries()`,
+              );
+            }
+            nextSeq = wire.seq + 1;
+            yield wire.event;
+          }
+        } catch (error) {
+          if (abort.signal.aborted) {
+            if (watchdog.stale()) {
+              throw new Error(
+                `control events: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
+              );
+            }
+            return; // the consumer walked away — clean end, not an error
+          }
+          throw error;
+        } finally {
+          watchdog.stop();
+        }
+      })();
+    return {
+      [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+        const abort = new AbortController();
+        // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a
+        // generator suspended on a quiet stream read.
+        return abortFirstIterator(openStream(abort), () => abort.abort());
+      },
+    };
+  };
+
+  /** A write that answers a `SessionResult`: the result rides HTTP 200 either way (`ok: false` is a
+   *  protocol answer, not a transport failure), so a non-2xx here is a REAL transport/auth fault. */
+  const write = async (path: string, method: string, body?: unknown): Promise<SessionResult> => {
+    const res = await fetchFn(`${base}${path}`, {
+      method,
+      headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
+    });
+    if (!res.ok) throw await controlError(res);
+    return (await res.json()) as SessionResult;
+  };
+
+  const id = (session: string) => encodeURIComponent(session);
 
   return {
     capabilities: () => capabilities,
@@ -139,111 +262,64 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
       }
     },
 
-    state: (session) => get<SessionState>(`/control/state?session=${encodeURIComponent(session)}`),
+    sessions: {
+      // Rejects when the deployment cannot enumerate its store — the coded 503 arrives as a
+      // ControlRequestError carrying `sessions_unavailable`, so a client can tell it from an
+      // unreachable endpoint instead of retrying forever.
+      list: () => get<SessionSummary[]>("/control/sessions", PAYLOAD_TIMEOUT_MS),
 
-    entries: (session, opts) =>
-      get<SessionEntries>(
-        `/control/entries?session=${encodeURIComponent(session)}${
-          opts?.since !== undefined ? `&since=${encodeURIComponent(opts.since)}` : ""
-        }`,
-        PAYLOAD_TIMEOUT_MS, // the download-direction payload call — see the constant's note
-      ),
+      // PUT: the fork is idempotent, and so is the request that carries it. `into` becomes a path
+      // segment exactly like `get`'s id, so it is refused on the same rule — without this the local
+      // plane answers `invalid_command` while the wire answers 404 from a URL that normalised away.
+      // ASYNC, so the guard REJECTS rather than throwing out of a method typed `Promise`: a caller
+      // that wrote `.catch(…)` — or handed this to `Promise.all` — must not be surprised by a
+      // synchronous throw. (`get` may throw: it is synchronous by signature.)
+      fork: async ({ from, at, into }: { from: string; at: string; into: string }) => {
+        if (!isAddressableSession(into)) {
+          throw new Error(
+            `session id ${JSON.stringify(into)} cannot travel as a URL path segment — this transport cannot address it`,
+          );
+        }
+        return write(`/control/sessions/${id(into)}`, "PUT", { from, at });
+      },
 
-    async dispatch(session, command) {
-      const res = await fetchFn(`${base}/control/dispatch`, {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
-        body: JSON.stringify({ session, command }),
-        signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
-      });
-      if (!res.ok) throw new ControlRequestError(res.status, await res.text());
-      return (await res.json()) as Awaited<ReturnType<SessionControl["dispatch"]>>;
-    },
-
-    events(session): AsyncIterable<SessionEvent> {
-      // Each ITERATION opens its own connection (gen/abort created inside asyncIterator), matching
-      // the local hub's "every iteration is a fresh subscription" — a shared single-use generator
-      // would make the second for-await silently empty, breaking local/remote isomorphism.
-      // The abort controller lives OUTSIDE the generator: a consumer's `return()`/`break` while the
-      // generator is suspended on a quiet SSE read must abort the fetch FIRST — an async generator's
-      // own finally only runs after the pending await settles, which a silent stream never does.
-      const openStream = (abort: AbortController) =>
-        (async function* iterate(): AsyncGenerator<SessionEvent> {
-          // Armed BEFORE the fetch: the connect phase (headers never arriving from a black-holed
-          // endpoint) is otherwise a window no timeout covers — the same watchdog terminates it,
-          // with headers-arrival counting as the first sign of life.
-          const watchdog = idleWatchdog(abort);
-          watchdog.arm(); // the connect await is a pending read
-          try {
-            const res = await fetchFn(`${base}/control/events?session=${encodeURIComponent(session)}`, {
-              headers,
-              signal: abort.signal,
-            });
-            watchdog.disarm(); // headers arrived
-            if (!res.ok) {
-              // The error body is a pending read too — a half-dead tunnel serving 4xx headers then
-              // black-holing the body must not hang the round outside every budget. Re-armed: the
-              // watchdog aborts the read and the round fails with the dead-connection diagnosis.
-              watchdog.arm();
-              throw new ControlRequestError(res.status, await res.text());
-            }
-            if (!res.body) throw new Error("control events: response has no body");
-            let nextSeq = 0;
-            for await (const data of sseData(res.body, watchdog)) {
-              // Parse discipline, same as the other two wire planes (dispatch parses, invoke
-              // classifies drift): a non-JSON or non-envelope payload is PROTOCOL MISMATCH —
-              // thrown, so a consumer's failure budget applies — never misdiagnosed as an
-              // in-transit gap whose remedy (reconnect) can never fix it.
-              let wire: WireEvent;
-              try {
-                // The ONE envelope type (control.ts's WireEvent) — an inline shape would let the
-                // envelope drift server-side while this cast silently kept the old fields.
-                wire = JSON.parse(data) as WireEvent;
-              } catch (parseError) {
-                throw new Error(
-                  `control events: non-JSON data on the stream (${String(parseError)}) — protocol mismatch?`,
-                );
-              }
-              if (typeof wire.seq !== "number" || typeof wire.event !== "object" || wire.event === null) {
-                throw new Error(
-                  "control events: malformed envelope — the endpoint does not speak this protocol version",
-                );
-              }
-              // Envelope checks — consumed HERE. (epoch is not compared: it cannot change within
-              // one connection — see the header note.) A gap THROWS like a protocol mismatch: the
-              // consumer's failure path (budget, its own io) owns the diagnostic — a library-level
-              // log would bypass consumer output discipline, and a silent clean end would be
-              // indistinguishable from the server closing normally.
-              if (wire.seq !== nextSeq) {
-                throw new Error(
-                  `control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — events were lost in transit; resync via entries()`,
-                );
-              }
-              nextSeq = wire.seq + 1;
-              yield wire.event;
-            }
-          } catch (error) {
-            if (abort.signal.aborted) {
-              if (watchdog.stale()) {
-                throw new Error(
-                  `control events: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
-                );
-              }
-              return; // the consumer walked away — clean end, not an error
-            }
-            throw error;
-          } finally {
-            watchdog.stop();
-          }
-        })();
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
-          const abort = new AbortController();
-          // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a
-          // generator suspended on a quiet stream read.
-          return abortFirstIterator(openStream(abort), () => abort.abort());
-        },
-      };
+      // The local hub's handle is a pure binding; so is this one — an id and the transport above it.
+      // Nothing is FETCHED here, which is what keeps the two isomorphic. What is checked is the one
+      // thing the wire cannot express: `.` and `..` survive `encodeURIComponent` and are then
+      // normalised away by URL parsing, so every call on such a handle would arrive at a DIFFERENT
+      // route — `.` reads as the collection (200 JSON, which the SSE reader ends as a silently empty
+      // stream) and `..` as a 404 the local plane answers normally. Refused at the binding, where a
+      // caller can see it, rather than once per call in a place it looks like a server answer.
+      get: (session: string): Session => {
+        if (!isAddressableSession(session)) {
+          throw new Error(
+            `session id ${JSON.stringify(session)} cannot travel as a URL path segment — this transport cannot address it`,
+          );
+        }
+        return {
+          id: session,
+          state: () => get<SessionState>(`/control/sessions/${id(session)}`),
+          entries: (options) =>
+            get<SessionEntries>(
+              `/control/sessions/${id(session)}/entries${
+                options?.since !== undefined ? `?since=${encodeURIComponent(options.since)}` : ""
+              }`,
+              PAYLOAD_TIMEOUT_MS, // the download-direction payload call — see the constant's note
+            ),
+          events: () => eventsOf(session),
+          update: (patch) => write(`/control/sessions/${id(session)}`, "PATCH", patch),
+          steer: (prompt) => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "steer", prompt }),
+          followUp: (prompt) =>
+            write(`/control/sessions/${id(session)}/actions`, "POST", { type: "follow_up", prompt }),
+          abort: () => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "abort" }),
+          compact: (options) =>
+            write(`/control/sessions/${id(session)}/actions`, "POST", {
+              type: "compact",
+              ...(options?.instructions !== undefined ? { instructions: options.instructions } : {}),
+            }),
+          delete: () => write(`/control/sessions/${id(session)}`, "DELETE"),
+        };
+      },
     },
   };
 }

@@ -195,7 +195,7 @@ export function mountSessionControl(
     // holds this string, and the empty case is the only other thing that says anything.
     log.warn(
       `[fastagent] ${CONTROL_TOKEN_ENV} is ${injected.length} characters — it is the ONLY thing between ` +
-        "/control/* (steer/abort/set_model) and anyone who can reach the port; use a random value (uuidgen)",
+        "/control/* (steer, stop, rewrite a session) and anyone who can reach the port; use a random value (uuidgen)",
     );
   }
   const token = injected || crypto.randomUUID();
@@ -228,7 +228,7 @@ export function mountSessionControl(
       if (options.tunnel) {
         // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
         log.warn(
-          "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +
+          "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
             "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
         );
       }

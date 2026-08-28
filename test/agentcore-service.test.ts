@@ -65,9 +65,9 @@ describe("mountAgentcoreService", () => {
     try {
       expect(service.control?.token).toBeTruthy();
       // Unauthenticated is 401, not 404: the plane owns the prefix and answers for it.
-      expect((await service.handler(new Request("http://h/control/state"))).status).toBe(401);
+      expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(401);
       const ok = await service.handler(
-        new Request("http://h/control/state?session=s1", {
+        new Request("http://h/control/sessions/s1", {
           headers: { authorization: `Bearer ${service.control!.token}` },
         }),
       );
@@ -82,7 +82,7 @@ describe("mountAgentcoreService", () => {
     const service = await mountAgentcoreService(await open(await agentDir()));
     try {
       expect(service.control).toBeUndefined();
-      expect((await service.handler(new Request("http://h/control/state"))).status).toBe(404);
+      expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
       await service.close();
     }

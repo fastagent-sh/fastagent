@@ -1,7 +1,7 @@
 /**
  * A thread starts from what the room knew (participant-model.md §5), on the AgentSession engine.
  */
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -143,22 +143,27 @@ describe("inheritance edges", () => {
     const cwd = process.cwd();
     const store = await roomWithHistory(dir, cwd);
 
-    // The fork blows up after the intermediate exists but before anything is published. The thread
-    // must fall back to an empty session AND leave exactly one record behind — a half-prepared one
-    // under the same id would make which record a later lookup finds a matter of directory order.
-    const forkFrom = vi.spyOn(SessionManager, "forkFrom").mockImplementation(() => {
-      throw new Error("disk full while forking");
+    // The copy blows up midway — after the staged record exists on disk, before it is published.
+    // The thread must fall back to an empty session AND leave exactly one record behind: a
+    // half-prepared one under the same id would make which record a later lookup finds a matter of
+    // directory order. (Staging is what buys that: the partial file is in a subdirectory `list()`
+    // does not read, and only a completed record is renamed into place.)
+    const append = vi.spyOn(SessionManager.prototype, "appendMessage").mockImplementation(() => {
+      throw new Error("disk full while copying");
     });
     let thread: SessionManager;
     try {
       thread = await store.openOrCreate("thread-5", { parentSession: "room" });
     } finally {
-      forkFrom.mockRestore();
+      append.mockRestore();
     }
 
     expect(thread.getBranch()).toHaveLength(0); // started empty, as the fallback promises
     const named = (await SessionManager.list(cwd, join(dir, "agent-session"))).filter((r) => r.id === "sthread-5");
     expect(named).toHaveLength(1);
+    // …and staging is EMPTY: the partial file is removed on the way out. Nothing ever reads that
+    // directory, so a file left per failed attempt would accumulate until someone looked.
+    expect(await readdir(join(dir, "agent-session", ".staging"))).toEqual([]);
 
     // And the thread is usable afterwards: the second open continues THAT record, not a third one.
     thread.appendMessage({ role: "user", content: "after the failure", timestamp: 9 });

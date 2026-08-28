@@ -1,7 +1,7 @@
 /**
  * What a session is SET TO, and what it may be set to. Model and thinking level are ONE setting —
  * which levels exist is a property of the model — so they resolve together, here, and `state()`, the
- * `set_thinking` gate and the per-invoke binding all read this rather than deriving their own.
+ * `update({ thinkingLevel })` gate and the per-invoke binding all read this rather than deriving their own.
  *
  * Read-only by design. The durable record may hold a level the current model cannot do; that record
  * is the user's PREFERENCE, so resolving per read restores it when the session returns to a capable
@@ -15,7 +15,8 @@ import type { AnyModel } from "./models.ts";
 
 /** Which strings are levels at all — the vocabulary. What a MODEL supports is
  *  `getSupportedThinkingLevels`. The `satisfies` anchor keeps this exhaustive against pi's union: a
- *  level pi adds becomes a type error here rather than a value `set_thinking` silently rejects. */
+ *  level pi adds becomes a type error here rather than a value `update({ thinkingLevel })` silently
+ *  rejects. */
 const ALL_THINKING_LEVELS = {
   off: true,
   minimal: true,
@@ -63,7 +64,7 @@ export interface SessionSettings {
   model: AnyModel;
   /** Already clamped to what {@link model} supports. */
   thinkingLevel: ThinkingLevel;
-  /** What `set_thinking` accepts for this session. */
+  /** What `update({ thinkingLevel })` accepts for this session. */
   availableThinkingLevels: string[];
   /** Recorded but not honored — only the execution path reports it (as a warn). */
   dropped?: { model?: string; thinkingLevel?: { recorded: string; running: string; known: boolean } };
@@ -112,7 +113,7 @@ export function resolveSessionSettings(
 
 /**
  * The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks.
- * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a `navigate`,
+ * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a leaf move,
  * and reading it flat would run the session on a setting it moved away from.
  *
  * A chain that is not intact THROWS. `getBranch()` stops where a parent is missing and answers the
@@ -120,8 +121,10 @@ export function resolveSessionSettings(
  * turn silently on assembly defaults. The caller decides what to do with the fault (state() reports
  * the settings as absent, dispatch answers with a code); what it must not do is guess.
  */
-export function activePath(record: SessionManager): OverrideEntryLike[] {
-  const path = record.getBranch();
+export function activePath(record: SessionManager, from?: string): OverrideEntryLike[] {
+  // `from` asks a different question: the path a leaf move is ABOUT to make active, which a caller
+  // validating a patch needs before the move exists. Absent, it is the session's current path.
+  const path = record.getBranch(from);
   const root = path[0] as { id?: string; parentId?: string | null } | undefined;
   if (root?.parentId != null) {
     throw new Error(`session entry "${root.parentId}" is missing from the journal (parent of "${root.id}")`);

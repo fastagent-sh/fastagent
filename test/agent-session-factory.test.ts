@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { collect } from "../src/collect.ts";
 import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { type PropertyWrites, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
@@ -168,6 +168,10 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         return real.openOrCreate(id);
       },
       openIfExists: (id: string) => real.openIfExists(id),
+      list: () => real.list(),
+      fork: (from: string, at: string, into: string, provenance: string) => real.fork(from, at, into, provenance),
+      delete: (id: string) => real.delete(id),
+      applyProperties: (id: string, writes: PropertyWrites) => real.applyProperties(id, writes),
     };
 
     const agent = await agentWith([record, record, record], {
