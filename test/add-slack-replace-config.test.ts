@@ -138,10 +138,25 @@ describe("add slack --replace-config", () => {
       configTokenExpiresAt: 1,
     });
     prompts.passwordAnswers.push("xoxe.xoxp-new", "xoxe-new");
-    await expect(run()).rejects.toThrow(/SENTINEL: setup server reached/);
+    // Collected into an array rather than read off `spy.mock.calls` afterwards: `mockRestore()`
+    // clears the recorded calls, so an assertion below the restore reads an empty list — silently,
+    // and a `not.toContain` written that way would pass forever.
+    const printed: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args) => {
+      printed.push(args.join(" "));
+    });
+    try {
+      await expect(run()).rejects.toThrow(/SENTINEL: setup server reached/);
+    } finally {
+      spy.mockRestore();
+    }
     expect(prompts.select).not.toHaveBeenCalled();
     const state = await readState();
     expect(state.configToken).toBe("xoxe.xoxp-new");
     expect(state.configRefreshToken).toBe("xoxe-new");
+    // The page the operator is about to paste a token FROM. `openExternalUrl` swallows its spawn
+    // error, so on a headless box this line is the only way to reach it — asserted on what the
+    // operator actually sees, not on the source text that produces it.
+    expect(printed.join("\n")).toContain("https://api.slack.com/apps");
   });
 });
