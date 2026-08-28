@@ -7,8 +7,9 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { Agent, AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
 import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
@@ -86,7 +87,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
       // createControlPlane() call that could drift from it: "every control route requires the token" has
       // to fail when a NEW route forgets `guard`, which a literal array cannot do.
-      expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
+      expect(served.routeKeys).toContain("GET /control/commands"); // the sweep sees the whole table
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
         // OPTIONS is the ONE unauthenticated method here, and deliberately so: a preflight cannot
@@ -291,6 +292,37 @@ describe("session control over HTTP (Phase 3)", () => {
       errors.mockRestore();
       server.close();
     }
+  });
+
+  it("both hand-kept route tables list every route the plane mounts", () => {
+    // TWO copies of the route list exist outside the code: \u00a713, which the multi-tenant facade in
+    // \u00a714 is written against (a route missing there is a route nobody guards), and the curl table in
+    // api-reference, which is what a non-TypeScript client builds from. Both are derived from the
+    // mount here, so adding a route without documenting it fails in whichever copy forgot it.
+    const section = (file: string, from: string, to: string): string => {
+      const doc = readFileSync(new URL(`../docs/${file}`, import.meta.url), "utf8");
+      const start = doc.indexOf(from);
+      const end = doc.indexOf(to, start + 1);
+      // Renumbering or retitling either bound would leave `slice` scanning past the table, turning
+      // this into a check that passes on text it never read.
+      expect([start, end], `${file}: could not locate the table between ${from} and ${to}`).not.toContain(-1);
+      return doc.slice(start, end);
+    };
+    const documented = (text: string): Set<string> =>
+      new Set(
+        [...text.matchAll(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/control\/\S*)/gm)].map(
+          ([, method, path]) => `${method} ${(path as string).replace("{id}", "{session}")}`,
+        ),
+      );
+    const tables = {
+      "design/session-control.md \u00a713": documented(section("design/session-control.md", "## 13.", "## 14.")),
+      "api-reference.md (curl)": documented(section("api-reference.md", "a `curl` away", "```\n\n")),
+    };
+    // `agent` is what mounts the data-plane route, so the table must be built WITH one.
+    const agent: Agent = { invoke: () => (async function* () {})() };
+    const mounted = Object.keys(controlPlaneRoutes(handleControl({}), { token: TOKEN, agent }));
+    for (const [where, listed] of Object.entries(tables))
+      for (const key of mounted) expect(listed, `${key} is mounted but missing from ${where}`).toContain(key);
   });
 
   it("local and remote are isomorphic: capabilities/state/entries/dispatch answer identically", async () => {

@@ -673,6 +673,8 @@ included — within the action body cap (1 MiB, with base64 inflation counted; o
 The wire is RESTful and mechanical, so a non-TypeScript client is a `curl` away:
 
 ```
+GET    /control/capabilities                   what this deployment allows
+GET    /control/commands                       the agent's skills
 GET    /control/sessions                       list
 PUT    /control/sessions/{id}                  {from, at} — fork (idempotent)
 GET    /control/sessions/{id}                  state
@@ -681,6 +683,7 @@ DELETE /control/sessions/{id}
 GET    /control/sessions/{id}/entries          ?since=
 GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
+POST   /control/invoke                         the DATA plane: {session, text} — SSE, starts a run
 ```
 
 `{id}` is percent-encoded, so a Telegram group is `/control/sessions/tg%3A-1001234567890` — session
