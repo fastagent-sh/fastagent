@@ -1,7 +1,8 @@
 /**
  * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`,
- * `schedules/`, config). Pure node stdlib — engine-neutral, so it lives at the top level: the schedule
- * discovery (src/schedule/) must not reach into `engines/` for what is plain filesystem/import plumbing.
+ * `schedules/`, config). Node stdlib plus the logger — engine-neutral, so it lives at the top level:
+ * the schedule discovery (src/schedule/) must not reach into `engines/` for what is plain
+ * filesystem/import plumbing.
  */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -14,6 +15,11 @@ const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 /** Whether `name` is an importable agent module (a discovery candidate, not a type declaration). */
 function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
+}
+
+/** The name a module is known by: its basename without the extension. */
+function moduleName(fileName: string): string {
+  return basename(fileName, extname(fileName));
 }
 
 /** One module file a directory declares. `name` is what the domain knows it by; nothing is imported
@@ -38,11 +44,12 @@ export interface SkippedEntry {
  * WHAT A CODE-INPUT DIRECTORY DECLARES — the single answer to "which files here are modules",
  * without importing any of them.
  *
- * It exists because three consumers need that answer and only one of them may import: the loader
- * below, `fastagent info`'s listing, and `--tunnel`'s webhook registration. When they each read the
- * directory themselves they disagreed — on what counts as a module file, on how to strip the
- * extension, on which errno means "no such directory" — and every fix had to be applied three
- * times. There is one reading now; what to DO with a failure stays with the caller, because that
+ * It exists because four consumers need that answer and only one of them may import: the loader
+ * below, `fastagent info`'s channel listing, `--tunnel`'s webhook registration, and the deploy
+ * pre-flight's schedule probe. When they each read the directory themselves they disagreed — on
+ * what counts as a module file, on how to strip the extension, on which errno means "no such
+ * directory" — and a fix had to be applied in four places, which is why the fourth kept being
+ * missed. There is one reading now; what to DO with a failure stays with the caller, because that
  * genuinely differs (the loader throws, the tunnel cannot).
  *
  * A missing directory is an empty inventory. Everything else throws, ENOTDIR included: `channels`
@@ -71,11 +78,16 @@ export async function moduleInventory(subDir: string): Promise<{
   const sub = basename(subDir);
   const entries: InventoryEntry[] = [];
   const skipped: SkippedEntry[] = [];
-  for (const dirent of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+  // Sorted by the NAME a consumer sees, so none of them re-sorts and none can disagree about order.
+  // Filename breaks a tie: `foo.js` and `foo.ts` both read as `foo`, and the domain loaders document
+  // that the FIRST wins — deciding that here keeps it from depending on readdir's order.
+  const byName = (a: Dirent, b: Dirent): number =>
+    moduleName(a.name).localeCompare(moduleName(b.name)) || a.name.localeCompare(b.name);
+  for (const dirent of dirents.sort(byName)) {
     if (!isModuleFile(dirent.name)) continue;
     const label = `${sub}/${dirent.name}`;
     if (dirent.isFile()) {
-      entries.push({ name: basename(dirent.name, extname(dirent.name)), label, file: join(subDir, dirent.name) });
+      entries.push({ name: moduleName(dirent.name), label, file: join(subDir, dirent.name) });
     } else if (dirent.isSymbolicLink()) {
       skipped.push({ label, why: "a symlink — code inputs must be real files inside the agent dir" });
     } else {

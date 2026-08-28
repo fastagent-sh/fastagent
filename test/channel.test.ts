@@ -275,6 +275,17 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
   });
 
+  it("orders by the NAME a consumer sees, not by filename", async () => {
+    // `-` sorts before `.`, so filename order gives ["a-b", "a"] while name order gives ["a", "a-b"].
+    // The inventory sorts by name so no consumer re-sorts; a github/telegram pair cannot tell the
+    // two apart, which is why this pair exists.
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(join(dir, "channels", "a.ts"), "export default () => ({});\n");
+    await writeFile(join(dir, "channels", "a-b.ts"), "export default () => ({});\n");
+    expect(await discoverChannelFiles(dir)).toEqual(["a", "a-b"]);
+  });
+
   it("a SYMLINKED channel file is skipped, and says why", async () => {
     // Not a gap to close: assertInsideAgentDir guards the channels DIRECTORY, nothing guards the
     // entries in it, so following a link would import code from anywhere on the box past the very

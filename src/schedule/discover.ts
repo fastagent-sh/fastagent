@@ -16,7 +16,7 @@ import type { LoadedSchedule, Schedule } from "./schedule.ts";
 export async function discoverScheduleFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "schedules");
   const { entries } = await moduleInventory(join(dir, "schedules"));
-  return entries.map((entry) => entry.name).sort();
+  return entries.map((entry) => entry.name);
 }
 
 /**
