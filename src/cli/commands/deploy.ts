@@ -585,26 +585,29 @@ async function runDeployDocker(
     extraSecrets,
     env: deployEnvironment(agentDir, channels),
   });
+  // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
+  // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
+  // Installed BEFORE the driver, which is what reaches the registrars now.
+  installProxyFetch();
   const outcome = await deployDockerRun(
     { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
     spawnRunner("docker", workspace),
     (message) => console.error(`[fastagent] ${message}`),
+    undefined,
+    undefined,
+    (tunnelUrl) =>
+      announceWebhooks(agentDir, tunnelUrl, {
+        openUrl: openExternalUrl,
+        routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
+        stateRoot: resolveStateRoot(agentDir),
+      }),
   );
-  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
-
   const compose = `docker compose -f ${composeFile}`;
-  console.error(`[fastagent] running${outcome.url ? ` → ${outcome.url}` : ""}`);
+  if (outcome.url) console.error(`[fastagent] running → ${outcome.url}`);
   console.error(`[fastagent] logs: ${compose} logs -f agent`);
   console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
+  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   if (outcome.tunnelUrl) {
-    // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
-    // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
-    installProxyFetch();
-    await announceWebhooks(agentDir, outcome.tunnelUrl, {
-      openUrl: openExternalUrl,
-      routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
-      stateRoot: resolveStateRoot(agentDir),
-    });
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
         `restarts, re-run this deploy so webhooks receive the new URL`,

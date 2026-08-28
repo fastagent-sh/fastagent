@@ -86,6 +86,53 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(withoutTunnel.commands()).not.toContain("compose -f fastagent.compose.yml up -d --build");
   });
 
+  it("gates when a webhook registration terminally fails, and still reports where Compose is", async () => {
+    // The parity fix: fly/railway/agentcore all gate on their registrars, and docker could not,
+    // because registration happened above this layer — where no outcome was available to gate on.
+    // exit 0 there tells a caller the deployment is reachable while a channel cannot receive a
+    // message. The URLs ride along with the gate: Compose IS up, so the operator needs both.
+    const { docker } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const gated = await deployDockerRun(
+      plan({ requireTunnel: true }),
+      docker,
+      () => {},
+      healthy,
+      async () => "https://blue-cat.trycloudflare.com",
+      async () => [
+        { kind: "telegram", outcome: "failed" },
+        { kind: "github", outcome: "manual" },
+      ],
+    );
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) {
+      expect(gated.gate).toMatch(/telegram/);
+      expect(gated.tunnelUrl).toBe("https://blue-cat.trycloudflare.com");
+    }
+  });
+
+  it("does not gate when every registrar succeeded or needs a human", async () => {
+    const { docker } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const out = await deployDockerRun(
+      plan({ requireTunnel: true }),
+      docker,
+      () => {},
+      healthy,
+      async () => "https://blue-cat.trycloudflare.com",
+      // `manual` must NOT gate: re-running can never clear it, so an unclearable gate would spin a
+      // coding agent forever (registration-gate.ts states this).
+      async () => [{ kind: "github", outcome: "manual" }],
+    );
+    expect(out.ok).toBe(true);
+  });
+
   it("passes secret values through the child environment, never argv", async () => {
     const { docker, calls } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\n" };

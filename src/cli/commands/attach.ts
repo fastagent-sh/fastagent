@@ -658,7 +658,7 @@ function withCursor(error: unknown, cursor: string | undefined): Error {
 }
 
 /** The cursor a failed round reached, if it recorded one. */
-export function roundCursor(error: unknown): string | undefined {
+function roundCursor(error: unknown): string | undefined {
   return (error as { attachCursor?: string }).attachCursor;
 }
 
