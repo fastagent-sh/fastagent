@@ -15,6 +15,22 @@ export function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
 }
 
+/**
+ * Whether a directory entry IS one — the name test plus `isFile()`, which travel together: a
+ * DIRECTORY called `telegram.ts` passes the name alone, and every reader of `channels/` has to
+ * reach the same verdict or they disagree about what the deployment serves (the loader would skip
+ * it, `info` would list it, `--tunnel` would register a webhook for it).
+ */
+export function isModuleEntry(entry: Dirent): boolean {
+  return entry.isFile() && isModuleFile(entry.name);
+}
+
+/** The name a discovered module is known by: the basename without its extension. Derived from the
+ *  filename rather than a second copy of {@link MODULE_EXTS} as a regex. */
+export function moduleName(fileName: string): string {
+  return basename(fileName, extname(fileName));
+}
+
 export interface DiscoveredModule {
   /** Basename without extension — the authoritative name for tools/channels. */
   name: string;
@@ -57,12 +73,12 @@ export async function loadModuleDir(
   const modules: DiscoveredModule[] = [];
   const failures: ModuleLoadFailure[] = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isFile() || !isModuleFile(entry.name)) continue;
+    if (!isModuleEntry(entry)) continue;
     const file = join(subDir, entry.name);
     const label = `${sub}/${entry.name}`;
     try {
       const mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
-      modules.push({ name: basename(entry.name, extname(entry.name)), label, file, mod });
+      modules.push({ name: moduleName(entry.name), label, file, mod });
     } catch (error) {
       failures.push({
         label,

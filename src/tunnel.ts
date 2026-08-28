@@ -8,8 +8,8 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { basename, extname, join } from "node:path";
-import { isModuleFile } from "./loader.ts";
+import { join } from "node:path";
+import { isModuleEntry, moduleName } from "./loader.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
@@ -138,8 +138,8 @@ function channelBasenames(dir: string): string[] {
   const channels = join(dir, "channels");
   try {
     return readdirSync(channels, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && isModuleFile(entry.name))
-      .map((entry) => basename(entry.name, extname(entry.name)));
+      .filter(isModuleEntry)
+      .map((entry) => moduleName(entry.name));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // No channels/ is the ordinary case. Anything else is a directory we cannot read, and returning

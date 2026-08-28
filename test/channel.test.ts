@@ -268,6 +268,9 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     await writeFile(join(dir, "channels", "telegram.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "slack.ts.disabled"), "not imported\n");
+    // A DIRECTORY passes the name test on its own. Every reader of channels/ has to answer this the
+    // same way loadModuleDir does, or `info` lists a channel the serve never mounts.
+    await mkdir(join(dir, "channels", "feishu.ts"));
     expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
   });
 
