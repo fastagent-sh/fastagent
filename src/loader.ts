@@ -31,6 +31,23 @@ export function moduleName(fileName: string): string {
   return basename(fileName, extname(fileName));
 }
 
+/**
+ * Whether a read failure means "there is no such directory" — the ordinary case for an agent that
+ * ships no `channels/`. Every reader agrees on THIS half; what to do with everything else is theirs
+ * (the loader and `info` throw, the tunnel warns — it is void-called, so a throw takes the serve
+ * down).
+ *
+ * ENOTDIR is deliberately NOT here. `channels`/`schedules` are named directories; the path existing
+ * as a FILE is a mistake in the agent, not an agent without one, and `service.test.ts` pins that a
+ * `schedules` file must reject rather than serve as if nothing was declared. (`paths.ts` folds
+ * ENOTDIR into its empty scan for the opposite reason: it is asking which children happen to be
+ * agent dirs, where a file is simply not one.) `not_found` is a non-Node runtime's ENOENT.
+ */
+export function isMissingDir(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "not_found";
+}
+
 export interface DiscoveredModule {
   /** Basename without extension — the authoritative name for tools/channels. */
   name: string;
@@ -65,8 +82,7 @@ export async function loadModuleDir(
   try {
     entries = await readdir(subDir, { withFileTypes: true });
   } catch (error) {
-    const e = error as NodeJS.ErrnoException;
-    if (e.code === "ENOENT" || e.code === "not_found") return { modules: [], failures: [] };
+    if (isMissingDir(error)) return { modules: [], failures: [] };
     throw new Error(`cannot read ${subDir}: ${(error as Error).message}`);
   }
   const sub = basename(subDir);

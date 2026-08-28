@@ -274,6 +274,15 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
   });
 
+  it("a channels/ that is a FILE is a mistake, not an agent without channels", async () => {
+    // ENOENT means "this agent declares no channels". ENOTDIR means the author put a FILE where the
+    // directory goes — reading that as "no channels" serves a deployment that silently ignores what
+    // they wrote. service.test.ts pins the same verdict for `schedules`.
+    const dir = await freshDir();
+    await writeFile(join(dir, "channels"), "not a directory\n");
+    await expect(discoverChannelFiles(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
+  });
+
   it("enforces containment on its OWN path: rejects a channels/ symlink escaping the workspace", async () => {
     // info goes through this, not loadChannels — the boundary guard must hold here independently.
     const dir = await freshDir();

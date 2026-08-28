@@ -360,8 +360,32 @@ describe("tunnel: announceWebhooks", () => {
     try {
       await announceWebhooks(dir, "https://x.trycloudflare.com");
       expect(said.join("\n")).not.toContain("github:");
+      // The positive half, in the same test: without it the assertion above passes for any reason
+      // the announcement never happens — including github's line moving off `log.info`, which would
+      // retire this guard silently.
+      said.length = 0;
+      await rm(join(dir, "channels", "github.ts"), { recursive: true });
+      await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
+      await announceWebhooks(dir, "https://x.trycloudflare.com");
+      expect(said.join("\n")).toContain("github:");
     } finally {
       info.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a channels/ that is a FILE is reported, not read as 'no channels'", async () => {
+    // ENOTDIR is the author putting a file where the directory goes. #381 folded it in with ENOENT
+    // and said nothing — the same silence this scan exists to break, for a case that IS a mistake.
+    const dir = await mkdtemp(join(tmpdir(), "fa-tunnel-notdir-"));
+    await writeFile(join(dir, "channels"), "not a directory\n");
+    const said: string[] = [];
+    const warn = vi.spyOn(log, "warn").mockImplementation((message) => void said.push(message));
+    try {
+      await announceWebhooks(dir, "https://x.trycloudflare.com");
+      expect(said.join("\n")).toContain("cannot read");
+    } finally {
+      warn.mockRestore();
       await rm(dir, { recursive: true, force: true });
     }
   });

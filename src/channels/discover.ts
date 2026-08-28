@@ -10,7 +10,7 @@ import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
 import { assertRouteKey, routeKeysConflict } from "./serve.ts";
-import { type ModuleLoadFailure, isModuleEntry, loadModuleDir, moduleName } from "../loader.ts";
+import { type ModuleLoadFailure, isMissingDir, isModuleEntry, loadModuleDir, moduleName } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
@@ -82,7 +82,7 @@ export async function discoverChannelFiles(dir: string): Promise<string[]> {
   try {
     entries = await readdir(join(dir, "channels"), { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if (isMissingDir(error)) return [];
     throw error;
   }
   return entries

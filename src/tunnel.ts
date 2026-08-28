@@ -9,7 +9,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { isModuleEntry, moduleName } from "./loader.ts";
+import { isMissingDir, isModuleEntry, moduleName } from "./loader.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
@@ -131,7 +131,7 @@ function lastErrorLine(tail: string): string {
 }
 
 /** Channel basenames present in `<dir>/channels/`. Both halves of the test match what actually
- *  LOADS a channel (`loadModuleDir`): a real file, and {@link isModuleFile}. `isFile()` is not
+ *  LOADS a channel (`loadModuleDir`): {@link isModuleEntry}, both halves. `isFile()` is not
  *  pedantry here — a directory named `telegram.ts` passes the name test, and registering a webhook
  *  for a channel the serve never mounted is the same wrong answer as missing one. */
 function channelBasenames(dir: string): string[] {
@@ -141,12 +141,11 @@ function channelBasenames(dir: string): string[] {
       .filter(isModuleEntry)
       .map((entry) => moduleName(entry.name));
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
     // No channels/ is the ordinary case. Anything else is a directory we cannot read, and returning
     // "no channels" for it registers no webhooks while the tunnel reports itself up — the failure
     // this function exists to feed, hidden. It cannot THROW (announceWebhooks is void-called with no
     // unhandledRejection handler, so it would take the serve down), so it says so and continues.
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
+    if (!isMissingDir(error)) {
       log.warn(`[fastagent] --tunnel: cannot read ${channels}: ${(error as Error).message} — no webhooks registered`);
     }
     return [];
