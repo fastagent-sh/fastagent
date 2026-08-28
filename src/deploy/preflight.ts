@@ -13,14 +13,12 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
-import type { FastagentConfig } from "../engines/pi/config.ts";
-import { resolveAuthPath } from "../engines/pi/config.ts";
-import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
+import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
+import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists } from "../paths.ts";
 import { inspectChannels } from "../channels/discover.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
-import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
@@ -142,7 +140,7 @@ export async function preflightDeploy(input: {
   }
 
   // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*`
-  // (steer/abort/set_model) rides the PUBLIC host URL, protected only by the bearer token. The token
+  // (steer, stop, rewrite or delete a session) rides the PUBLIC host URL, protected only by the bearer token. The token
   // travels as a deploy secret (see extraSecrets below) so the caller has it; the reach still warrants
   // a warning — the tunnel path warns loudly and deploy must not be the silent second way to break the
   // loopback trust story.
@@ -150,7 +148,7 @@ export async function preflightDeploy(input: {
     messages.push({
       level: "warn",
       text:
-        `sessionControl: true — the deployed box serves /control/* (steer/abort/set_model) at its public URL, ` +
+        `sessionControl: true — the deployed box serves /control/* (steer, stop, rewrite or delete a session) at its public URL, ` +
         `protected only by a bearer token. Set ${CONTROL_TOKEN_ENV} (listed with the other secrets) and give the ` +
         `same value to callers: attach --url <public-url> --token …. Unset, the box mints its own per boot — ` +
         `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +

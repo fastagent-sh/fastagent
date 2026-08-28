@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
 import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
-import { NO_ACTIVE_RUN_CODE, type SessionCommand, type SessionControl } from "../src/session.ts";
+import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";
 import { type SlackChannelOptions, type SlackEventEnvelope, slackChannel, verifySlackSignature } from "../src/slack.ts";
 
 const SECRET = "slack-signing-secret";
@@ -813,16 +813,20 @@ describe("Slack sessions, context, and thread participation", () => {
 
 describe("Slack stop command", () => {
   const fakeControl = (result: { ok: true } | { code: string }) => {
-    const dispatched: { session: string; command: SessionCommand }[] = [];
+    const aborted: string[] = [];
     const control = {
-      dispatch: async (session: string, command: SessionCommand) => {
-        dispatched.push({ session, command });
-        return "ok" in result
-          ? { ok: true as const }
-          : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+      sessions: {
+        get: (session: string) => ({
+          abort: async () => {
+            aborted.push(session);
+            return "ok" in result
+              ? { ok: true as const }
+              : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+          },
+        }),
       },
     } as unknown as SessionControl;
-    return { control, dispatched };
+    return { control, aborted };
   };
   const invoked: string[] = [];
   const agent: Agent = {
@@ -836,12 +840,12 @@ describe("Slack stop command", () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const { control, dispatched } = fakeControl({ ok: true });
+    const { control, aborted } = fakeControl({ ok: true });
     const { handler, turnsIdle } = mount(agent, {}, root(), control);
     const res = await handler(signedRequest(message("10.0", { channel: "D1", channel_type: "im", text: "Stop!" })));
     expect(res.status).toBe(200);
     await turnsIdle();
-    expect(dispatched).toEqual([{ session: "slack:T1:D1:10.0", command: { type: "abort" } }]);
+    expect(aborted).toEqual(["slack:T1:D1:10.0"]);
     expect(invoked).toEqual([]); // a control action, never a turn
     expect(slackBodies(fetchMock, "chat.postMessage").map((b) => b.text)).toEqual(["⏹ Stopped."]);
   });

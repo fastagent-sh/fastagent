@@ -44,8 +44,8 @@ export default channel;
 ```
 
 The mount context also carries `control?: SessionControl` when the serve runs with
-`sessionControl: true` — the session-control hub, for dispatch-style channel features (the built-in
-channels map a user "stop" onto `dispatch(session, { type: "abort" })`). It is absent otherwise;
+`sessionControl: true` — the session-control hub, for channel features that act on a live run (the built-in
+channels map a user "stop" onto `control.sessions.get(session).abort()`). It is absent otherwise;
 degrade visibly, never silently.
 
 `fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`. A function export is called synchronously with the assembled agent and must return a non-empty `Routes` object; an object export must implement `{ name, connect(ctx, signal) }` and return `{ ready, closed }`. `ready` settles once the first usable connection is up; when the signal aborts before that, it must still settle (resolution then means cancellation — the server skips ready-side effects once the signal is aborted — and it must never hang). `closed` resolves after abort-driven shutdown and rejects on terminal transport failure. Long-connection adapters own reconnects and translate the framework's `AbortSignal` into their transport's close operation. Any enabled channel that fails to load fails serving. Rename a file to `<name>.ts.disabled` when it should remain present but disabled.

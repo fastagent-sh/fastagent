@@ -4,8 +4,7 @@ import { join } from "node:path";
 import type { AuthInteraction, Credential, Provider } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
-import type { IoOption, LoginIO } from "../src/engines/pi/login.ts";
-import { loginFlow } from "../src/engines/pi/login.ts";
+import { type IoOption, type LoginIO, loginFlow } from "../src/engines/pi/login.ts";
 
 // The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
 // so these tests exercise the actual persist/corruption semantics. Only the providers' login flow

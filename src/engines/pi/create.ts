@@ -10,10 +10,19 @@
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
  */
-import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
-import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+  formatSkillsForSystemPrompt,
+  type ExecutionEnv,
+  type Skill,
+  type ThinkingLevel,
+} from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createCodingTools, createPowerShellTool, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
+import {
+  createCodingTools,
+  createPowerShellTool,
+  createReadOnlyTools,
+  type ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
@@ -33,7 +42,6 @@ import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
 import { piAgentSessionFactory } from "./agent-session-factory.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 

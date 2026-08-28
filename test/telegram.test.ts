@@ -10,7 +10,7 @@ import {
   telegramEnvelope,
 } from "../src/telegram.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
-import { NO_ACTIVE_RUN_CODE, type SessionCommand, type SessionControl } from "../src/session.ts";
+import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
 function replyingAgent(reply = "") {
@@ -1786,16 +1786,20 @@ describe("telegram /stop command", () => {
   const okFetch = () =>
     vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 9 } }), { status: 200 }));
   const fakeControl = (result: { ok: true } | { code: string }) => {
-    const dispatched: { session: string; command: SessionCommand }[] = [];
+    const aborted: string[] = [];
     const control = {
-      dispatch: async (session: string, command: SessionCommand) => {
-        dispatched.push({ session, command });
-        return "ok" in result
-          ? { ok: true as const }
-          : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+      sessions: {
+        get: (session: string) => ({
+          abort: async () => {
+            aborted.push(session);
+            return "ok" in result
+              ? { ok: true as const }
+              : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+          },
+        }),
       },
     } as unknown as SessionControl;
-    return { control, dispatched };
+    return { control, aborted };
   };
   const stopUpdate = (text: string): TelegramUpdate => ({
     update_id: 77,
@@ -1813,10 +1817,10 @@ describe("telegram /stop command", () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const { control, dispatched } = fakeControl({ ok: true });
+    const { control, aborted } = fakeControl({ ok: true });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", control });
     expect((await ch(tgRequest(stopUpdate("/stop")))).status).toBe(200);
-    expect(dispatched).toEqual([{ session: "42", command: { type: "abort" } }]);
+    expect(aborted).toEqual(["42"]);
     expect(invoked).toEqual([]);
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(
       ([, init]) => JSON.parse(String(init.body)) as { text?: string },
@@ -1828,14 +1832,14 @@ describe("telegram /stop command", () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const { control, dispatched } = fakeControl({ code: NO_ACTIVE_RUN_CODE });
+    const { control, aborted } = fakeControl({ code: NO_ACTIVE_RUN_CODE });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
     await ch(tgRequest(stopUpdate("/stop@otherbot"))); // routed as a normal turn, not a stop
     await flush();
-    expect(dispatched).toEqual([]);
+    expect(aborted).toEqual([]);
     expect(invoked).toHaveLength(1);
     await ch(tgRequest(stopUpdate("/stop@mybot")));
-    expect(dispatched).toEqual([{ session: "42", command: { type: "abort" } }]);
+    expect(aborted).toEqual(["42"]);
     const noHub = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT" });
     await noHub(tgRequest(stopUpdate("/stop")));
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(

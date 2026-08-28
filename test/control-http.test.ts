@@ -7,8 +7,9 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { Agent, AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
 import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
@@ -18,7 +19,7 @@ import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/eng
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { router, serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
-import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
+import { SESSIONS_UNAVAILABLE_CODE, UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
 const TOKEN = "test-token";
@@ -63,6 +64,16 @@ async function serveControl() {
   };
 }
 
+/** A control whose per-session calls are the ones given — the handle shape, faked. `attachRound`
+ *  takes a SessionControl and reaches a session through it, so a fake has to have that shape too. */
+function handleControl(session: Record<string, unknown>): never {
+  return {
+    capabilities: () => ({}) as never,
+    commands: async () => [],
+    sessions: { list: async () => [], fork: async () => ({ ok: true }), get: () => session },
+  } as never;
+}
+
 async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const out: AgentEvent[] = [];
   for await (const e of events) out.push(e);
@@ -76,13 +87,13 @@ describe("session control over HTTP (Phase 3)", () => {
       // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
       // createControlPlane() call that could drift from it: "every control route requires the token" has
       // to fail when a NEW route forgets `guard`, which a literal array cannot do.
-      expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
+      expect(served.routeKeys).toContain("GET /control/commands"); // the sweep sees the whole table
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
         // OPTIONS is the ONE unauthenticated method here, and deliberately so: a preflight cannot
         // carry a token. Asserted below rather than skipped silently.
         if (method === "OPTIONS") continue;
-        const url = `${served.url}${path}?session=s`;
+        const url = `${served.url}${path.replace("{session}", "s")}?session=s`;
         expect((await fetch(url, { method, body: method === "POST" ? "{}" : undefined })).status).toBe(401);
         expect(
           (
@@ -117,7 +128,7 @@ describe("session control over HTTP (Phase 3)", () => {
     try {
       // DERIVED from what the server MOUNTS, like the 401 sweep: a route added later cannot ship
       // browser-unreachable, and a POST route is checked as a POST route.
-      expect(served.routeKeys).toContain("POST /control/dispatch");
+      expect(served.routeKeys).toContain("POST /control/sessions/{session}/actions");
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
         if (method === "OPTIONS") continue;
@@ -131,7 +142,7 @@ describe("session control over HTTP (Phase 3)", () => {
           .map((k) => k.split(" ")[0] as string)
           .filter((m) => m !== "OPTIONS"); // OPTIONS is derived, and compared out of `advertised` too
         // No token — a preflight cannot carry credentials, which is its entire purpose.
-        const res = await fetch(`${served.url}${path}`, {
+        const res = await fetch(`${served.url}${path.replace("{session}", "s")}`, {
           method: "OPTIONS",
           headers: {
             origin: "http://localhost:5173",
@@ -165,7 +176,7 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(origin(await fetch(`${served.url}/control/capabilities`))).toBe("*");
       // 400 (authenticated, missing param) and 200 alike.
       const auth = { authorization: `Bearer ${TOKEN}` };
-      expect(origin(await fetch(`${served.url}/control/state`, { headers: auth }))).toBe("*");
+      expect(origin(await fetch(`${served.url}/control/sessions/s`, { headers: auth }))).toBe("*");
       expect(origin(await fetch(`${served.url}/control/capabilities`, { headers: auth }))).toBe("*");
       // SSE too — the long-lived route a GUI actually renders from. Asserted at the handler, not
       // over the wire: a quiet session sends no chunk, and Node withholds response headers until
@@ -174,7 +185,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // Through the PLANE, not the bare handler: CORS is a property of the plane's exit now, so
       // reaching past it would assert nothing about what a browser receives.
       const plane = mountControlPlane(controlPlaneRoutes(control, { token: TOKEN })).handler;
-      const sse = await plane(new Request("http://x/control/events?session=s", { headers: auth }));
+      const sse = await plane(new Request("http://x/control/sessions/s/events", { headers: auth }));
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
       expect(origin(sse)).toBe("*");
       await sse.body?.cancel();
@@ -203,11 +214,11 @@ describe("session control over HTTP (Phase 3)", () => {
     try {
       // An unknown path under the prefix, and a known path under a method it does not serve.
       expect(await browserWouldSend("GET", "/control/nonexistent")).toBe(true);
-      expect(await browserWouldSend("GET", "/control/dispatch")).toBe(true);
+      expect(await browserWouldSend("GET", "/control/sessions/s/actions")).toBe(true);
       // ...and only because the gate opens do the plane's own answers become readable.
       const auth = { authorization: `Bearer ${TOKEN}` };
       expect((await fetch(`${served.url}/control/nonexistent`, { headers: auth })).status).toBe(404);
-      expect((await fetch(`${served.url}/control/dispatch`, { headers: auth })).status).toBe(405);
+      expect((await fetch(`${served.url}/control/sessions/sW/actions`, { headers: auth })).status).toBe(405);
     } finally {
       served.close();
     }
@@ -226,7 +237,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const unknown = await fetch(`${served.url}/control/nonexistent`, { headers: auth });
       expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: "*" });
       // 2. A known path under a method it does not serve.
-      const wrongMethod = await fetch(`${served.url}/control/dispatch`, { headers: auth });
+      const wrongMethod = await fetch(`${served.url}/control/sessions/sW/actions`, { headers: auth });
       expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: "*" });
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
@@ -241,7 +252,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // 4. A percent-encoded spelling is a DIFFERENT path, answered like any other unknown one —
       //    and still readably. Paths are matched as they arrive: decoding them first would undo the
       //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client
-      //    sends these (the remote client percent-encodes session ids, which travel in the query).
+      //    sends these (the remote client percent-encodes session ids into a path segment).
       const encoded = await fetch(`${served.url}/control/%63apabilities`, { headers: auth });
       expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: "*" });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
@@ -283,6 +294,37 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("both hand-kept route tables list every route the plane mounts", () => {
+    // TWO copies of the route list exist outside the code: \u00a713, which the multi-tenant facade in
+    // \u00a714 is written against (a route missing there is a route nobody guards), and the curl table in
+    // api-reference, which is what a non-TypeScript client builds from. Both are derived from the
+    // mount here, so adding a route without documenting it fails in whichever copy forgot it.
+    const section = (file: string, from: string, to: string): string => {
+      const doc = readFileSync(new URL(`../docs/${file}`, import.meta.url), "utf8");
+      const start = doc.indexOf(from);
+      const end = doc.indexOf(to, start + 1);
+      // Renumbering or retitling either bound would leave `slice` scanning past the table, turning
+      // this into a check that passes on text it never read.
+      expect([start, end], `${file}: could not locate the table between ${from} and ${to}`).not.toContain(-1);
+      return doc.slice(start, end);
+    };
+    const documented = (text: string): Set<string> =>
+      new Set(
+        [...text.matchAll(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/control\/\S*)/gm)].map(
+          ([, method, path]) => `${method} ${(path as string).replace("{id}", "{session}")}`,
+        ),
+      );
+    const tables = {
+      "design/session-control.md \u00a713": documented(section("design/session-control.md", "## 13.", "## 14.")),
+      "api-reference.md (curl)": documented(section("api-reference.md", "a `curl` away", "```\n\n")),
+    };
+    // `agent` is what mounts the data-plane route, so the table must be built WITH one.
+    const agent: Agent = { invoke: () => (async function* () {})() };
+    const mounted = Object.keys(controlPlaneRoutes(handleControl({}), { token: TOKEN, agent }));
+    for (const [where, listed] of Object.entries(tables))
+      for (const key of mounted) expect(listed, `${key} is mounted but missing from ${where}`).toContain(key);
+  });
+
   it("local and remote are isomorphic: capabilities/state/entries/dispatch answer identically", async () => {
     const served = await serveControl();
     try {
@@ -291,25 +333,30 @@ describe("session control over HTTP (Phase 3)", () => {
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
       expect(await remote.commands()).toEqual(await served.localControl.commands());
-      expect(await remote.state("sW")).toEqual(await served.localControl.state("sW"));
-      const [remoteEntries, localEntries] = [await remote.entries("sW"), await served.localControl.entries("sW")];
+      expect(await remote.sessions.get("sW").state()).toEqual(await served.localControl.sessions.get("sW").state());
+      const [remoteEntries, localEntries] = [
+        await remote.sessions.get("sW").entries(),
+        await served.localControl.sessions.get("sW").entries(),
+      ];
       expect(remoteEntries).toEqual(localEntries);
       // Cursor round-trips through the query string.
       const since = localEntries.entries[0]?.id as string;
-      expect(await remote.entries("sW", { since })).toEqual(await served.localControl.entries("sW", { since }));
+      expect(await remote.sessions.get("sW").entries({ since })).toEqual(
+        await served.localControl.sessions.get("sW").entries({ since }),
+      );
 
       // dispatch round-trips SessionResult — including the pre-acceptance rejection shape.
-      const bad = await remote.dispatch("sW", { type: "steer", prompt: { text: "x" } });
+      const bad = await remote.sessions.get("sW").steer({ text: "x" });
       expect(bad.ok).toBe(false);
       if (!bad.ok) expect(bad.error.code).toBeTruthy();
-      const applied = await remote.dispatch("sW", { type: "set_thinking", level: "low" });
+      const applied = await remote.sessions.get("sW").update({ thinkingLevel: "low" });
       expect(applied).toEqual({ ok: true });
-      expect((await remote.state("sW")).thinkingLevel).toBe("low");
-      // navigate carries a field of its own, so its wire shape needs a POSITIVE round trip: a typo
+      expect((await remote.sessions.get("sW").state()).thinkingLevel).toBe("low");
+      // A leaf move carries a field of its own, so its wire shape needs a POSITIVE round trip: a typo
       // in the field name would otherwise ship green behind the malformed-command assertions.
       const target = localEntries.entries.find((e) => e.kind === "user")?.id as string;
-      expect(await remote.dispatch("sW", { type: "navigate", targetId: target })).toEqual({ ok: true });
-      expect((await remote.state("sW")).leafEntryId).toBe(target);
+      expect(await remote.sessions.get("sW").update({ leafEntryId: target })).toEqual({ ok: true });
+      expect((await remote.sessions.get("sW").state()).leafEntryId).toBe(target);
     } finally {
       served.close();
     }
@@ -357,7 +404,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
       const seen: SessionEvent[] = [];
       const watching = (async () => {
-        for await (const ev of remote.events("sE")) {
+        for await (const ev of remote.sessions.get("sE").events()) {
           seen.push(ev);
           if (ev.type === "run_settled") break;
         }
@@ -390,7 +437,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const served = await serveControl();
     try {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
-      const iterator = remote.events("sL")[Symbol.asyncIterator]();
+      const iterator = remote.sessions.get("sL").events()[Symbol.asyncIterator]();
       const first = iterator.next(); // establishes the connection; the stream never produces
       await new Promise((r) => setTimeout(r, 100));
       // The old failure mode on both sides was a permanent hang here (generator return queued
@@ -398,7 +445,7 @@ describe("session control over HTTP (Phase 3)", () => {
       await iterator.return?.(undefined);
       // The full promise of the name: the PENDING next() settles too (done), never hangs.
       await expect(first).resolves.toMatchObject({ done: true });
-      expect((await remote.state("sL")).status).toBe("idle");
+      expect((await remote.sessions.get("sL").state()).status).toBe("idle");
     } finally {
       served.close();
     }
@@ -424,10 +471,10 @@ describe("session control over HTTP (Phase 3)", () => {
     const port = await server.listening;
     try {
       const post = (command: unknown) =>
-        fetch(`http://127.0.0.1:${port}/control/dispatch`, {
+        fetch(`http://127.0.0.1:${port}/control/sessions/sImg/actions`, {
           method: "POST",
           headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-          body: JSON.stringify({ session: "sImg", command }),
+          body: JSON.stringify(command),
         }).then((r) => r.json() as Promise<{ ok: boolean; error?: { code: string } }>);
       const result = await post({
         type: "steer",
@@ -487,10 +534,13 @@ describe("session control over HTTP (Phase 3)", () => {
   it("an unknown wire command type gets a protocol-level invalid_command, not a broken body", async () => {
     const served = await serveControl();
     try {
-      const res = await fetch(`${served.url}/control/dispatch`, {
+      const res = await fetch(`${served.url}/control/sessions/sW/actions`, {
         method: "POST",
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-        body: JSON.stringify({ session: "sX", command: { type: "make_coffee" } }),
+        // An actual unknown TYPE, not a malformed envelope: the body moved to the action itself
+        // when the route did, and sending the old wrapper tested the wrong branch — the runtime
+        // default arm went uncovered while the name said otherwise.
+        body: JSON.stringify({ type: "make_coffee" }),
       });
       expect(res.status).toBe(200);
       const result = (await res.json()) as { ok: boolean; error?: { code: string } };
@@ -508,7 +558,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const remoteAgent = connectAgent({ url: served.url, token: TOKEN });
       const seen: SessionEvent[] = [];
       const watching = (async () => {
-        for await (const ev of remote.events("sRD")) {
+        for await (const ev of remote.sessions.get("sRD").events()) {
           seen.push(ev);
           if (ev.type === "run_settled") break;
         }
@@ -548,10 +598,10 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(res.status).toBe(404);
       // A boundary-less hub still speaks the protocol on the wire: a boundary command answers
       // HTTP 200 + unsupported_capability, never a transport error.
-      const dispatch = await fetch(`http://127.0.0.1:${port}/control/dispatch`, {
+      const dispatch = await fetch(`http://127.0.0.1:${port}/control/sessions/s/actions`, {
         method: "POST",
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-        body: JSON.stringify({ session: "s", command: { type: "compact" } }),
+        body: JSON.stringify({ type: "compact" }),
       });
       expect(dispatch.status).toBe(200);
       const result = (await dispatch.json()) as { ok: boolean; error?: { code: string } };
@@ -583,7 +633,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // reports as a run-level error — noise that trains everyone to ignore the real ones.
       const eventsAttempt = expect(
         (async () => {
-          for await (const _ of remote.events("s")) void _;
+          for await (const _ of remote.sessions.get("s").events()) void _;
         })(),
       ).rejects.toThrow(/dead connection/);
       const agentAttempt = drain(
@@ -623,7 +673,7 @@ describe("session control over HTTP (Phase 3)", () => {
     fakeTimers.useFakeTimers();
     try {
       const remote = await connectSessionControl({ url: "http://x", token: "t", fetchFn });
-      const iterator = remote.events("s")[Symbol.asyncIterator]();
+      const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
       feed.enqueue(wire(0, { type: "run_started", timestamp: 1, data: {} }));
       expect(((await iterator.next()).value as SessionEvent).type).toBe("run_started");
       // The consumer pauses far past the idle limit — no pending read, watchdog disarmed.
@@ -644,9 +694,9 @@ describe("session control over HTTP (Phase 3)", () => {
     // are called directly (no socket) so fake timers drive the interval.
     const fakeTimers = await import("vitest").then((m) => m.vi);
     const hang = () => new Promise<never>(() => {}); // a stream with no events — quiet, alive
-    const quietControl = {
+    const quietControl = handleControl({
       events: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
-    } as never;
+    });
     const quietAgent = {
       invoke: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
     } as never;
@@ -654,11 +704,11 @@ describe("session control over HTTP (Phase 3)", () => {
     const auth = { authorization: `Bearer ${TOKEN}` };
     fakeTimers.useFakeTimers();
     try {
-      const eventsRoute = routes["GET /control/events"];
+      const eventsRoute = routes["GET /control/sessions/{session}/events"];
       const invokeRoute = routes["POST /control/invoke"];
       if (!eventsRoute || !invokeRoute) throw new Error("routes missing");
       for (const [name, res] of [
-        ["events", await eventsRoute(new Request("http://x/control/events?session=s", { headers: auth }))],
+        ["events", await eventsRoute(new Request("http://x/control/sessions/s/events", { headers: auth }), "s")],
         [
           "invoke",
           await invokeRoute(
@@ -667,6 +717,7 @@ describe("session control over HTTP (Phase 3)", () => {
               headers: { ...auth, "content-type": "application/json" },
               body: JSON.stringify({ session: "s", text: "hi" }),
             }),
+            "",
           ),
         ],
       ] as const) {
@@ -706,7 +757,7 @@ describe("session control over HTTP (Phase 3)", () => {
     for (const body of ['data: {"hello":"world"}\n\n', "data: not json at all\n\n"]) {
       const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn: makeFetch(body) });
       const iterate = async () => {
-        for await (const _ of remote.events("s")) void _;
+        for await (const _ of remote.sessions.get("s").events()) void _;
       };
       await expect(iterate()).rejects.toThrow(/protocol/);
     }
@@ -737,7 +788,7 @@ describe("session control over HTTP (Phase 3)", () => {
     // The gap THROWS (same discipline as protocol mismatch) after yielding everything before it:
     // the consumer's failure path owns the diagnostic and its budget ticks.
     const iterate = async () => {
-      for await (const ev of remote.events("s")) seen.push(ev.type);
+      for await (const ev of remote.sessions.get("s").events()) seen.push(ev.type);
     };
     await expect(iterate()).rejects.toThrow(/sequence gap/);
     expect(seen).toEqual(["run_started"]);
@@ -761,7 +812,7 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(mounted.mounts.map((m) => m.prefix)).toEqual(["/control"]);
       // Collision is PREFIX-level: the plane owns everything under it, so a channel route landing
       // anywhere beneath is shadowed — including a path the plane does not itself serve.
-      expect(() => mountSessionControl({ "/control/dispatch": () => new Response("x") }, control, stateRoot)).toThrow(
+      expect(() => mountSessionControl({ "/control/sessions": () => new Response("x") }, control, stateRoot)).toThrow(
         /collide with the session control plane/,
       );
       // A path the plane does NOT serve is the sharper case: string equality misses it, and the
@@ -974,8 +1025,7 @@ describe("session control over HTTP (Phase 3)", () => {
         yield { type: "run_started", timestamp: 0, runId: "rL", data: {} };
       },
     });
-    const fake = {
-      capabilities: () => ({}) as never,
+    const fake = handleControl({
       state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
       entries: async () =>
         ({
@@ -983,8 +1033,7 @@ describe("session control over HTTP (Phase 3)", () => {
           leafEntryId: "e1",
         }) as never,
       events: eagerEvents,
-      dispatch: async () => ({ ok: true }) as never,
-    };
+    });
     const buffered = await attachRound(fake as never, "s", undefined, io, 25);
     expect(buffered.sawProgress).toBe(true); // a live event arrived
     // Contiguity: the whole replay block (and the state line) precede the buffered live output.
@@ -999,13 +1048,14 @@ describe("session control over HTTP (Phase 3)", () => {
     // Failure path: buffered live output is released, not lost, before the error propagates.
     const lines2: string[] = [];
     const io2 = { ...io, println: (l: string) => lines2.push(l), warn: (l: string) => lines2.push(`W:${l}`) };
-    const failing = {
-      ...fake,
+    const failing = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      events: eagerEvents,
       entries: async () => {
         await new Promise((r) => setTimeout(r, 30)); // let the eager event land in the buffer first
         throw new Error("backfill 500");
       },
-    };
+    });
     await expect(attachRound(failing as never, "s", undefined, io2, 1)).rejects.toThrow(/backfill 500/);
     expect(lines2).toContain("── run rL started ──");
   });
@@ -1029,16 +1079,14 @@ describe("session control over HTTP (Phase 3)", () => {
     const quietEvents = (): AsyncIterable<never> => ({
       [Symbol.asyncIterator]: async function* () {},
     });
-    const fake = {
-      capabilities: () => ({}) as never,
+    const fake = handleControl({
       state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
-      entries: async (_s: string, opts?: { since?: string }) => {
+      entries: async (opts?: { since?: string }) => {
         expect(opts?.since).toBe("e1"); // the cursor travels into the backfill
         return entriesPage as never;
       },
       events: quietEvents,
-      dispatch: async () => ({ ok: true }) as never,
-    };
+    });
     const round = await attachRound(fake as never, "s", "e1", io, 1);
     expect(round.cursor).toBe("e3"); // advanced by append order
     expect(round.sawProgress).toBe(true); // the backfill delivered records
@@ -1052,22 +1100,22 @@ describe("session control over HTTP (Phase 3)", () => {
 
     // A 401 from the stream is the round's 401 — thrown, not warn-and-retried.
     const auth = new ControlRequestError(401, "unauthorized");
-    const failing = {
-      ...fake,
+    const failing = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
       entries: async () => ({ entries: [] }) as never,
       events: () => ({
         [Symbol.asyncIterator]: () => ({
           next: (): Promise<IteratorResult<never>> => Promise.reject(auth),
         }),
       }),
-    };
+    });
     await expect(attachRound(failing as never, "s", undefined, io, 1)).rejects.toBe(auth);
 
     // A backfill failure closes the round's OWN subscription before propagating — a retrying
     // caller must never stack a second concurrent stream.
     let returned = false;
-    const leaky = {
-      ...fake,
+    const leaky = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
       entries: async () => {
         throw new Error("transient 500");
       },
@@ -1088,14 +1136,13 @@ describe("session control over HTTP (Phase 3)", () => {
           }),
         };
       },
-    };
+    });
     await expect(attachRound(leaky as never, "s", undefined, io, 1)).rejects.toThrow(/transient 500/);
     expect(returned).toBe(true);
 
     // The SAME discipline for a state() re-check failure — the round's stream must close too.
     let returned2 = false;
-    const stateFails = {
-      ...fake,
+    const stateFails = handleControl({
       entries: async () => ({ entries: [] }) as never,
       state: async () => {
         throw new Error("state 500");
@@ -1116,14 +1163,195 @@ describe("session control over HTTP (Phase 3)", () => {
           }),
         };
       },
-    };
+    });
     await expect(attachRound(stateFails as never, "s", undefined, io, 1)).rejects.toThrow(/state 500/);
     expect(returned2).toBe(true);
+  });
+
+  it("a malformed id segment is a 404 from the PLANE, not a throw past its boundary", async () => {
+    // `decodeURIComponent` throws on a bad escape, and the match runs BEFORE the try that guards the
+    // handlers — so this used to leave the boundary entirely: no CORS headers, no log, and a
+    // rejected promise for an embedder mounting the handler directly. The query-parameter form this
+    // replaced decoded leniently and could not throw, which is what made it a regression.
+    const { control } = await fauxControlledAgent([]);
+    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    for (const path of ["/control/sessions/100%", "/control/sessions/%E0%A4%A/entries"]) {
+      const res = await plane(new Request(`http://x${path}`));
+      expect(res.status).toBe(404);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*"); // it left through the exit
+    }
+  });
+
+  it("a malformed body is a 400, never a 500 — including the ones that are not objects", async () => {
+    const { control } = await fauxControlledAgent([]);
+    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    // `JSON.parse("null")` is null: reaching into it unguarded turned a malformed request into an
+    // internal error the client cannot act on.
+    for (const body of ["null", '"a string"', "42"]) {
+      const res = await plane(new Request("http://x/control/sessions/abc", { method: "PUT", headers: auth, body }));
+      expect(res.status).toBe(400);
+    }
+    // The PATCH parser already answered a protocol-level rejection for these; it still must.
+    const patched = await plane(
+      new Request("http://x/control/sessions/abc", { method: "PATCH", headers: auth, body: "null" }),
+    );
+    expect(patched.status).toBe(200);
+    expect(await patched.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
+  });
+
+  it("PATCH with an unknown field is refused at the wire, not answered ok with nothing written", async () => {
+    // A client typo — or a newer client talking to an older serve — otherwise reads success for a
+    // patch that set nothing. The action parser rejects an unknown `type` for the same reason.
+    const { control } = await fauxControlledAgent([]);
+    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    // The code is the SAME one the in-process path answers: the wire must not be where a client
+    // loses the difference between "drop that field" and "fix that value".
+    const unknownField = await plane(
+      new Request("http://x/control/sessions/s", { method: "PATCH", headers: auth, body: '{"nmae":"typo"}' }),
+    );
+    expect(unknownField.status).toBe(200);
+    expect(await unknownField.json()).toMatchObject({
+      ok: false,
+      error: { code: UNSUPPORTED_CAPABILITY_CODE, message: expect.stringContaining("nmae") },
+    });
+    // A wrong VALUE type is the other answer — a malformed payload, not a missing feature.
+    const wrongType = await plane(
+      new Request("http://x/control/sessions/s", { method: "PATCH", headers: auth, body: '{"name":42}' }),
+    );
+    expect(await wrongType.json()).toMatchObject({ ok: false, error: { code: "invalid_command" } });
+  });
+
+  it("an id that is not a path segment fails VISIBLY, instead of addressing its neighbour", async () => {
+    // Moving the id from `?session=` into a path segment subjects it to URL normalisation, which
+    // `encodeURIComponent` does not prevent (the spec normalises `%2E` too). Measured before the
+    // guard: `.` arrived as `/control/sessions` — 200 JSON, which the SSE reader ended as a silently
+    // EMPTY event stream — and `..` arrived as `/control/` → 404, while the local hub answered a
+    // normal state for the same id. Two different ways to lie, so the transport refuses instead.
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      for (const id of ["", ".", ".."]) {
+        // At the BINDING, not once per call: a caller sees it where it made the mistake.
+        expect(() => remote.sessions.get(id)).toThrow(/cannot travel as a URL path segment/);
+        // …and `fork`'s target is the same kind of path segment. Without this the local plane
+        // answers invalid_command while the wire answers a 404 from a URL that normalised away.
+        // It REJECTS rather than throwing: the method is typed `Promise`, and a caller may well have
+        // written `.catch()` or handed it to `Promise.all`.
+        await expect(remote.sessions.fork({ from: "s", at: "e", into: id })).rejects.toThrow(
+          /cannot travel as a URL path segment/,
+        );
+        // …and the plane will not MINT one either: a fork target no client could open.
+        const forked = await served.localControl.sessions.fork({ from: "s", at: "e", into: id });
+        expect(forked.ok).toBe(false);
+        if (!forked.ok) expect(forked.error.code).toBe("invalid_command");
+      }
+    } finally {
+      served.close();
+    }
   });
 
   it("createControlPlane refuses to mount without a token", async () => {
     const { control } = await fauxControlledAgent([]);
     expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);
+  });
+
+  it("sessions.list() travels: the deployment's list, isomorphic local and remote", async () => {
+    const served = await serveControl();
+    try {
+      await drain(served.agent.invoke({ session: "sList" }, { text: "hi" }));
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      expect(await remote.sessions.list()).toEqual(await served.localControl.sessions.list());
+      expect((await remote.sessions.list()).map((s) => s.session)).toEqual(["sList"]);
+    } finally {
+      await served.close();
+    }
+  });
+
+  it("a store FAULT is a coded 503; anything else is a 500 the operator can see", async () => {
+    // #309's lesson, one route over: an uncoded failure is indistinguishable from an unreachable
+    // endpoint, so a client burns its reconnect budget on a condition reconnecting cannot fix. The
+    // inverse matters too — a bug of OURS answered `retryable: true` would have it poll forever.
+    const { control } = await fauxControlledAgent([]);
+    const ioError = Object.assign(new Error("EACCES: permission denied, scandir '/data/.state'"), { code: "EACCES" });
+    const broken = (thrown: unknown): typeof control => ({
+      ...control,
+      sessions: {
+        ...control.sessions,
+        list: async () => {
+          throw thrown;
+        },
+      },
+    });
+    const logged: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation((line: string) => void logged.push(line));
+    try {
+      const faulty = serveNode(router({}, [createControlPlane(broken(ioError), { token: TOKEN })]), { port: 0 });
+      const faultyPort = await faulty.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${faultyPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, retryable: true });
+        expect(logged.join("\n")).toMatch(/EACCES/); // and the operator sees it, not just the client
+
+        // And the client can READ that code — the whole point of carrying it on the wire.
+        const remote = await connectSessionControl({ url: `http://127.0.0.1:${faultyPort}`, token: TOKEN });
+        await expect(remote.sessions.list()).rejects.toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, status: 503 });
+      } finally {
+        await faulty.close();
+      }
+
+      // A TypeError from our own row building is a BUG: it goes back to the plane's boundary, which
+      // logs it and answers 500 — never `retryable: true`, which would have a client poll forever.
+      const buggy = serveNode(
+        router({}, [createControlPlane(broken(new TypeError("rows.map is not a function")), { token: TOKEN })]),
+        { port: 0 },
+      );
+      const buggyPort = await buggy.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${buggyPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(500);
+        expect(logged.join("\n")).toMatch(/rows\.map is not a function/);
+      } finally {
+        await buggy.close();
+      }
+
+      // Node's OWN argument validation throws TypeErrors carrying a string `code`, so "has a code"
+      // was not the test the comment above claims: an errno SHAPE is.
+      const nodeBug = Object.assign(new TypeError('The "path" argument must be of type string'), {
+        code: "ERR_INVALID_ARG_TYPE",
+      });
+      const misread = serveNode(router({}, [createControlPlane(broken(nodeBug), { token: TOKEN })]), { port: 0 });
+      const misreadPort = await misread.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${misreadPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(500);
+      } finally {
+        await misread.close();
+      }
+
+      // And a thrown null reaches the boundary as ITSELF, not as a TypeError from reading `.code`.
+      const nothing = serveNode(router({}, [createControlPlane(broken(null), { token: TOKEN })]), { port: 0 });
+      const nothingPort = await nothing.listening;
+      try {
+        const res = await fetch(`http://127.0.0.1:${nothingPort}/control/sessions`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.status).toBe(500);
+        expect(logged.join("\n")).not.toMatch(/Cannot read propert/);
+      } finally {
+        await nothing.close();
+      }
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

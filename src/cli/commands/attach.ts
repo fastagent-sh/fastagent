@@ -16,9 +16,15 @@ import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
-import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
+import {
+  NO_ACTIVE_RUN_CODE,
+  type AgentCommand,
+  type SessionControl,
+  type SessionEntry,
+  type SessionEvent,
+  type SessionState,
+} from "../../session.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
-import type { AgentCommand, SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface AttachOptions {
@@ -160,7 +166,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       try {
         if (!endpoint) endpoint = discover(dir); // discovered: the first read shares the budget
         const connected = await connectSessionControl(endpoint);
-        return { control: connected, state: await connected.state(sessionArg) };
+        return { control: connected, state: await connected.sessions.get(sessionArg).state() };
       } catch (error) {
         const decision = decideRound(errorFacts(error), {
           discovered,
@@ -207,7 +213,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       // ABORTED_CODE: a deliberate stop from ANY client (this attach's /abort, another attach, a
       // Web panel) — the settled line reports it either way; no source discrimination here.
     }
-    // session_busy = the LEASE is held — by another run OR a boundary mutation (compact/set_model
+    // session_busy = the LEASE is held — by another run OR a boundary mutation (compact/update
     // contend on the same lease); "a run started" would be a guess, and "steer it" bad advice
     // against a compact. State the lease fact, promise nothing.
     if (sawBusy) console.log("[session busy — another run or a boundary operation holds it; try again shortly]");
@@ -222,13 +228,14 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       void answerSlashInput(trimmed, control, (l) => console.log(l));
       return;
     }
-    const command =
-      trimmed === "/abort" ? ({ type: "abort" } as const) : ({ type: "steer", prompt: { text: trimmed } } as const);
-    void control.dispatch(sessionArg, command).then(
+    const stopping = trimmed === "/abort";
+    const label = stopping ? "abort" : "steer";
+    const session = control.sessions.get(sessionArg);
+    void (stopping ? session.abort() : session.steer({ text: trimmed })).then(
       (result) => {
         if (result.ok) {
-          console.log(`[${command.type} accepted]`);
-        } else if (command.type === "steer" && result.error.code === NO_ACTIVE_RUN_CODE) {
+          console.log(`[${label} accepted]`);
+        } else if (!stopping && result.error.code === NO_ACTIVE_RUN_CODE) {
           // The invoke stream attach holds IS this run's driver (design: disconnect = cancel), so
           // unlike channel-started runs, this one dies with the attach. Say so up front.
           // Intent, not fact: admission may still fail (session_busy — the lease could be held
@@ -237,10 +244,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
           console.log("[no active run — trying to start one; if it starts, detaching (Ctrl+C) cancels it]");
           void startRun(trimmed).catch((error) => console.log(`[prompt failed: ${String(error)}]`));
         } else {
-          console.log(`[${command.type} rejected: ${result.error.code} — ${result.error.message}]`);
+          console.log(`[${label} rejected: ${result.error.code} — ${result.error.message}]`);
         }
       },
-      (error) => console.log(`[${command.type} failed: ${String(error)}]`),
+      (error: unknown) => console.log(`[${label} failed: ${String(error)}]`),
     );
   });
 
@@ -459,7 +466,7 @@ export interface AttachIo {
 }
 
 /**
- * The backfill slice REDUCED TO THE ACTIVE PATH — a session is a tree (a `navigate`, or a
+ * The backfill slice REDUCED TO THE ACTIVE PATH — a session is a tree (a leaf move, or a
  * compaction, leaves sibling branches behind), and printing the slice raw renders the abandoned
  * branch interleaved with the live one as if it were one conversation. Reachability is computed
  * backwards from the leaf; an entry whose parent lies BEFORE the slice is path-connected by
@@ -471,7 +478,7 @@ export function activePathSlice(entries: SessionEntry[], leafEntryId: string | u
   if (leafEntryId === undefined) return entries;
   const byId = new Map(entries.map((e) => [e.id, e]));
   // An append always moves the leaf, so a leaf BEHIND the slice means every entry in it was
-  // appended and then abandoned — a navigate backwards with no new turn since. Nothing here is on
+  // appended and then abandoned — a leaf move backwards with no new turn since. Nothing here is on
   // the active path.
   if (!byId.has(leafEntryId)) return [];
   const onPath = new Set<string>();
@@ -552,7 +559,7 @@ export async function attachRound(
   // The round HOLDS its subscription's iterator: one round = one stream, on every path — a
   // backfill failure must close it before propagating, or the caller's retry round would stack a
   // second concurrent stream interleaving the same session's output.
-  const iterator = control.events(session)[Symbol.asyncIterator]();
+  const iterator = control.sessions.get(session).events()[Symbol.asyncIterator]();
   // Live output is BUFFERED while the replay block prints, then flushed — the drain runs
   // concurrently with the backfill, and interleaving raw deltas into the labeled replay would make
   // both unreadable; the [end of replay] label is only honest if the block is contiguous.
@@ -596,7 +603,7 @@ export async function attachRound(
   let next = cursor;
   let sawBackfill = false;
   try {
-    const backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+    const backfill = await control.sessions.get(session).entries(cursor !== undefined ? { since: cursor } : undefined);
     sawBackfill = backfill.entries.length > 0;
     // Advance by APPEND ORDER (the last returned record), never by leafEntryId: `since` is an
     // append-position cursor (design §7), and a leaf that sits before later appends (abandoned
@@ -619,7 +626,7 @@ export async function attachRound(
     }
     // The protocol's reconnect step the replay cannot cover: status changes while away are
     // LIVE-only events (state_changed before a restart is neither replayed nor re-emitted).
-    const now = await control.state(session);
+    const now = await control.sessions.get(session).state();
     io.println(`[live — ${now.status}${now.activeRunId ? ` (run ${now.activeRunId})` : ""}]`);
   } catch (error) {
     release(); // buffered live output must not be lost on the failure path

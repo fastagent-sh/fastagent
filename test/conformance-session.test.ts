@@ -17,8 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { collect } from "../src/collect.ts";
-import { AgentFailure } from "../src/collect.ts";
+import { collect, AgentFailure } from "../src/collect.ts";
 import { describe, expect, it } from "vitest";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";

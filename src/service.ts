@@ -22,13 +22,12 @@ import { classifyBind, clientHost } from "./bind.ts";
 import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
-import { parseRouteKey, pathUnderPrefix } from "./channels/serve.ts";
+import { parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
-import { type PrefixMount, router } from "./channels/serve.ts";
 import { log, reportModuleLoadFailures } from "./log.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
@@ -195,7 +194,7 @@ export function mountSessionControl(
     // holds this string, and the empty case is the only other thing that says anything.
     log.warn(
       `[fastagent] ${CONTROL_TOKEN_ENV} is ${injected.length} characters — it is the ONLY thing between ` +
-        "/control/* (steer/abort/set_model) and anyone who can reach the port; use a random value (uuidgen)",
+        "/control/* (steer, stop, rewrite a session) and anyone who can reach the port; use a random value (uuidgen)",
     );
   }
   const token = injected || crypto.randomUUID();
@@ -228,7 +227,7 @@ export function mountSessionControl(
       if (options.tunnel) {
         // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
         log.warn(
-          "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +
+          "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
             "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
         );
       }

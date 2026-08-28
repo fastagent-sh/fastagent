@@ -14,10 +14,10 @@
  * Every failure lands on "start empty + warn": a thread must not lose its first turn to an
  * inheritance edge.
  */
-import { unlinkSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
+import { isPlaneMarker } from "./session-markers.ts";
 
 /** What a Caller names when a new session should start from an existing one. */
 export interface SessionInheritance {
@@ -187,6 +187,10 @@ export function inheritanceCut(parent: SessionManager, branchHints?: string[]): 
  * Copy the parent's path up to `at` into `child`, entry by entry — what a backend with no FILE to
  * fork has to do instead. Kinds pi models as facts about an entry rather than positions (labels,
  * the session name) are not copied: they describe the parent's record, not the thread's history.
+ *
+ * The COPY only. Bounding what the child's model sees is {@link markInheritanceWindow}, which only
+ * {@link copyBranchForInheritance} applies: a lifecycle fork that marked a window would hide the
+ * exact entries its user forked to keep.
  */
 export function copyBranchInto(parent: SessionManager, child: SessionManager, at: string): void {
   for (const raw of parent.getBranch(at)) {
@@ -213,55 +217,34 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         if (entry.thinkingLevel) child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
-        if (entry.customType) child.appendCustomEntry(entry.customType, entry.data);
+        // The plane's markers describe the parent's RECORD, not the thread's history: a copied
+        // provenance would make a fork of a fork claim its grandparent's branch point (the
+        // idempotency check reads that value), and a copied leaf anchor would pin the child's head
+        // to a position its own history never chose. Every other custom entry is history and travels
+        // — the engine's tool-activation delta above all, since the copied assistant messages call
+        // the tools it records.
+        if (entry.customType && !isPlaneMarker(entry)) {
+          child.appendCustomEntry(entry.customType, entry.data);
+        }
         break;
       default:
         break; // label / session_info / branch_summary: the parent's facts, not the thread's history
     }
   }
+}
+
+/** {@link copyBranchInto} plus the inheritance window — what a new THREAD gets and a fork does not.
+ *  Both backends call THIS one, so neither can drift on where a child's context begins. */
+export function copyBranchForInheritance(parent: SessionManager, child: SessionManager, at: string): void {
+  copyBranchInto(parent, child, at);
   markInheritanceWindow(child);
 }
 
-/**
- * Fork `parent` into a record named `id`, up to the branch point the hints locate, in `stagingDir`.
- *
- * Two pi calls rather than one, because neither alone does it: `createBranchedSession` copies
- * exactly the path to an entry but names the result with a generated id, and `forkFrom` takes an id
- * but copies everything. The intermediate is deleted; it exists for one call.
- *
- * STAGED, not published: the caller finishes the record (crash reconciliation) and moves it into
- * place. Publishing here and finishing after would leave a half-prepared record under the id on any
- * later failure — and the fallback path would then create a SECOND record with the same id, making
- * which one a lookup finds a matter of directory order.
- *
- * Returns undefined when inheritance cannot be honored — the caller starts the session empty.
+/*
+ * There is deliberately NO file-level fork here. pi can copy a path into a new file
+ * (`createBranchedSession` + `forkFrom`), but that pair writes the intermediate only when the copied
+ * path contains an ASSISTANT message — so forking at a user entry hands `forkFrom` a path that does
+ * not exist, and the failure reads as retryable for a condition no retry can change. Copying entries
+ * is what a backend with no file to fork has to do anyway, so both share these functions and one
+ * semantics; a fork is not hot enough to buy a second path back.
  */
-export function forkForInheritance(options: {
-  parent: SessionManager;
-  id: string;
-  cwd: string;
-  stagingDir: string;
-  branchHints?: string[];
-}): SessionManager | undefined {
-  const { parent, id, cwd, stagingDir: dir } = options;
-  const cut = inheritanceCut(parent, options.branchHints);
-  if (!cut) return undefined;
-  let branched: string | undefined;
-  try {
-    branched = parent.createBranchedSession(cut.at);
-    if (!branched) return undefined; // a non-persisting parent has no file to fork from
-    const child = SessionManager.forkFrom(branched, cwd, dir, { id });
-    markInheritanceWindow(child);
-    return child;
-  } finally {
-    if (branched) {
-      try {
-        unlinkSync(branched);
-      } catch (error) {
-        // The intermediate is inert (it is never listed as this store's record), so a failed
-        // cleanup costs a stray file, not correctness — but silence would hide a full disk.
-        log.warn(`[fastagent] could not remove the intermediate fork ${branched}: ${String(error)}`);
-      }
-    }
-  }
-}

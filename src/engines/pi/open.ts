@@ -20,8 +20,7 @@ import {
 } from "./config.ts";
 import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
-import type { PiAssemblyParts } from "./create.ts";
-import { createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
+import { type PiAssemblyParts, createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
@@ -29,8 +28,7 @@ import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
-import type { ToolCollision } from "./tool.ts";
-import type { MountedTool } from "./tool.ts";
+import type { ToolCollision, MountedTool } from "./tool.ts";
 
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -235,7 +233,7 @@ export async function createPiAgentFromDir(
         },
         // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
         // and never cross the data plane's observer seam — without this, an audit tap wired here
-        // would miss exactly the mutations it most needs to see (set_model).
+        // would miss exactly the mutations it most needs to see (`update({ model })`).
         tap: caller ? (session, event) => caller(session, event) : undefined,
       })
     : undefined;

@@ -8,9 +8,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
-import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
+import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
 
-import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
+import {
+  SUBSCRIBER_BUFFER_CAP,
+  createPiSessionControl,
+  type PiBoundaryWiring,
+} from "../src/engines/pi/session-control.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
@@ -21,15 +25,15 @@ import {
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
   NO_SUCH_SESSION_CODE,
+  PARTIAL_UPDATE_CODE,
   RUN_COMMAND_FAILED_CODE,
   UNSUPPORTED_CAPABILITY_CODE,
   type SessionEntry,
   type SessionEvent,
+  type StateChangedEvent,
+  type SessionControl,
 } from "../src/session.ts";
-import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
-import type { SessionControl } from "../src/session.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -60,7 +64,7 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 /** Collect the observation stream concurrently with a run; stop once `run_settled` arrives. */
 async function watchUntilSettled(control: SessionControl, session: string) {
   const seen: SessionEvent[] = [];
-  for await (const ev of control.events(session)) {
+  for await (const ev of control.sessions.get(session).events()) {
     seen.push(ev);
     if (ev.type === "run_settled") break;
   }
@@ -168,7 +172,7 @@ describe("session control (Phase 1): observation plane", () => {
     ]);
     const events: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB")) {
+      for await (const ev of control.sessions.get("sB").events()) {
         events.push(ev);
         if (ev.type === "run_settled") break;
       }
@@ -191,17 +195,20 @@ describe("session control (Phase 1): observation plane", () => {
   it("state(): running with activeRunId during the run, idle with a leaf after it", async () => {
     const { agent, control } = await makeObserved([fauxAssistantMessage("ok")]);
     // Unknown session: idle, empty — and NOT created by observing it (read-only plane).
-    expect(await control.state("nope")).toEqual({ status: "idle", pending: { steering: 0, followUp: 0 } });
+    expect(await control.sessions.get("nope").state()).toEqual({
+      status: "idle",
+      pending: { steering: 0, followUp: 0 },
+    });
 
     const iter = agent.invoke({ session: "sS" }, { text: "hi" })[Symbol.asyncIterator]();
     await iter.next();
-    const during = await control.state("sS");
+    const during = await control.sessions.get("sS").state();
     expect(during.status).toBe("running");
     expect(during.activeRunId).toBeTruthy();
     while (!(await iter.next()).done) {
       /* drain */
     }
-    const after = await control.state("sS");
+    const after = await control.sessions.get("sS").state();
     expect(after.status).toBe("idle");
     expect(after.activeRunId).toBeUndefined();
     expect(after.leafEntryId).toBeTruthy();
@@ -213,11 +220,11 @@ describe("session control (Phase 1): observation plane", () => {
       fauxAssistantMessage("final answer"),
     ]);
     // Unknown session reads as empty — and does not spring into existence.
-    expect(await control.entries("ghost")).toEqual({ entries: [] });
+    expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
     expect(await sessions.openIfExists("ghost")).toBeUndefined();
 
     await drain(agent.invoke({ session: "sE" }, { text: "question" }));
-    const all = await control.entries("sE");
+    const all = await control.sessions.get("sE").entries();
     const kinds = all.entries.map((e) => e.kind);
     expect(kinds).toContain("user");
     expect(kinds).toContain("assistant");
@@ -231,9 +238,9 @@ describe("session control (Phase 1): observation plane", () => {
 
     // Cursor: entries after `since` only; unknown cursor falls back to full backfill.
     const mid = all.entries[1]?.id as string;
-    const after = await control.entries("sE", { since: mid });
+    const after = await control.sessions.get("sE").entries({ since: mid });
     expect(after.entries).toEqual(all.entries.slice(2));
-    const unknown = await control.entries("sE", { since: "no-such-id" });
+    const unknown = await control.sessions.get("sE").entries({ since: "no-such-id" });
     expect(unknown.entries).toEqual(all.entries);
   });
 
@@ -347,8 +354,11 @@ describe("session control (Phase 1): observation plane", () => {
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
       // The control is live over this workspace's (jsonl) store: read-only observation works
       // without a single model call, and an unknown session stays uncreated.
-      expect(await control.state("ghost")).toEqual({ status: "idle", pending: { steering: 0, followUp: 0 } });
-      expect(await control.entries("ghost")).toEqual({ entries: [] });
+      expect(await control.sessions.get("ghost").state()).toEqual({
+        status: "idle",
+        pending: { steering: 0, followUp: 0 },
+      });
+      expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
       expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
       // Not requested → not built.
       const plain = await createPiAgentFromDir(dir, {});
@@ -399,25 +409,22 @@ describe("session control (Phase 1): observation plane", () => {
     }
   });
 
-  it("dispatch(): boundary mutations still reject with unsupported_capability; run commands on idle reject with no_active_run", async () => {
+  it("without boundary wiring: writes reject unsupported_capability, and run actions on an idle session reject no_active_run", async () => {
     const { control } = await makeObserved([]);
-    const compact = await control.dispatch("sD", { type: "compact" });
+    const compact = await control.sessions.get("sD").compact();
     expect(compact.ok).toBe(false);
     if (!compact.ok) expect(compact.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
     // steer/follow_up/abort on an idle session: rejected BEFORE acceptance with the stable code.
-    for (const cmd of [
-      { type: "steer", prompt: { text: "x" } },
-      { type: "follow_up", prompt: { text: "x" } },
-      { type: "abort" },
-    ] as const) {
-      const r = await control.dispatch("sD", cmd);
+    const idle = control.sessions.get("sD");
+    for (const attempt of [() => idle.steer({ text: "x" }), () => idle.followUp({ text: "x" }), () => idle.abort()]) {
+      const r = await attempt();
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error.code).toBe(NO_ACTIVE_RUN_CODE);
     }
     const caps = control.capabilities();
     expect(caps.steering).toBe(true);
     expect(caps.followUp).toBe(true);
-    expect(caps.manualCompaction).toBe(false);
+    expect(caps.compaction).toBe(false);
   });
 });
 
@@ -481,7 +488,7 @@ function drive(
 /** Wait until the control plane reports an active run for the session. */
 async function waitForRunning(control: SessionControl, session: string) {
   for (let i = 0; i < 200; i++) {
-    const s = await control.state(session);
+    const s = await control.sessions.get(session).state();
     if (s.status === "running" && s.activeRunId) return s.activeRunId;
     await new Promise((r) => setTimeout(r, 5));
   }
@@ -490,7 +497,7 @@ async function waitForRunning(control: SessionControl, session: string) {
 
 /** Wait until the given tool is executing (its started event was observed). */
 async function waitForToolStarted(control: SessionControl, session: string) {
-  for await (const ev of control.events(session)) {
+  for await (const ev of control.sessions.get(session).events()) {
     if (ev.type === "tool_started") return;
     if (ev.type === "run_settled") throw new Error("run settled before the tool started");
   }
@@ -507,14 +514,14 @@ describe("session control (Phase 2a): run modulation", () => {
     const runId = await waitForRunning(control, "s2a");
     await toolRunning;
 
-    const result = await control.dispatch("s2a", { type: "steer", prompt: { text: "actually, do it differently" } });
+    const result = await control.sessions.get("s2a").steer({ text: "actually, do it differently" });
     expect(result).toEqual({ ok: true, runId });
     // Queue visibility while the steer is pending (the gate still holds the run). Poll: the
     // contract says "queued", not "queue_update delivered synchronously before dispatch resolves".
-    for (let i = 0; i < 200 && (await control.state("s2a")).pending.steering !== 1; i++) {
+    for (let i = 0; i < 200 && (await control.sessions.get("s2a").state()).pending.steering !== 1; i++) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    expect((await control.state("s2a")).pending.steering).toBe(1);
+    expect((await control.sessions.get("s2a").state()).pending.steering).toBe(1);
 
     gate.release();
     const events = await invoked;
@@ -526,7 +533,7 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(text).toContain("steered answer");
     expect(events.at(-1)).toEqual({ type: "completed" });
     // After settle the queue state is gone with the run.
-    const after = await control.state("s2a");
+    const after = await control.sessions.get("s2a").state();
     expect(after.status).toBe("idle");
     expect(after.pending).toEqual({ steering: 0, followUp: 0 });
   });
@@ -539,7 +546,7 @@ describe("session control (Phase 2a): run modulation", () => {
     ]);
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("s2b")) {
+      for await (const ev of control.sessions.get("s2b").events()) {
         seen.push(ev);
         if (ev.type === "run_settled") break;
       }
@@ -549,7 +556,7 @@ describe("session control (Phase 2a): run modulation", () => {
     // Wait for the tool to be executing before queueing the follow-up.
     while (!seen.some((e) => e.type === "tool_started")) await new Promise((r) => setTimeout(r, 5));
 
-    const result = await control.dispatch("s2b", { type: "follow_up", prompt: { text: "and then summarize" } });
+    const result = await control.sessions.get("s2b").followUp({ text: "and then summarize" });
     expect(result.ok).toBe(true);
     gate.release();
     const events = await invoked;
@@ -617,7 +624,7 @@ describe("session control (Phase 2a): run modulation", () => {
     });
     const invoked = drive(agent, "sSetup");
     await waitForRunning(control, "sSetup"); // run_started observed; the session is still being built
-    const pending = control.dispatch("sSetup", { type: "steer", prompt: { text: "late" } });
+    const pending = control.sessions.get("sSetup").steer({ text: "late" });
     releaseFactory(); // → factory throws → gate rejects → the pending dispatch learns it
     const result = await pending;
     expect(result.ok).toBe(false);
@@ -633,7 +640,7 @@ describe("session control (Phase 2a): run modulation", () => {
     const { control, observer } = createPiSessionControl({
       sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
     });
-    const iterator = control.events("sSlow")[Symbol.asyncIterator]();
+    const iterator = control.sessions.get("sSlow").events()[Symbol.asyncIterator]();
     const first = iterator.next(); // registration is synchronous at next() entry; the pull now stalls
     observer("sSlow", { type: "run_started", timestamp: 0, runId: "r", data: {} });
     await first; // the first event flows; the consumer never pulls again after this
@@ -650,7 +657,7 @@ describe("session control (Phase 2a): run modulation", () => {
     }
     expect(drained).toBeLessThanOrEqual(SUBSCRIBER_BUFFER_CAP);
     // Released, not wedged: a FRESH subscription on the same session works and receives new events.
-    const fresh = control.events("sSlow")[Symbol.asyncIterator]();
+    const fresh = control.sessions.get("sSlow").events()[Symbol.asyncIterator]();
     const next = fresh.next();
     observer("sSlow", { type: "run_settled", timestamp: 1, runId: "r", data: { status: "completed" } });
     expect(((await next) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
@@ -661,7 +668,7 @@ describe("session control (Phase 2a): run modulation", () => {
     const { control, observer } = createPiSessionControl({
       sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
     });
-    const iterable = control.events("sReIter");
+    const iterable = control.sessions.get("sReIter").events();
     // First iteration: consume one event, then walk away.
     const first = iterable[Symbol.asyncIterator]();
     const p1 = first.next();
@@ -680,7 +687,7 @@ describe("session control (Phase 2a): run modulation", () => {
     const { control, observer } = createPiSessionControl({
       sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
     });
-    const iterator = control.events("sConc")[Symbol.asyncIterator]();
+    const iterator = control.sessions.get("sConc").events()[Symbol.asyncIterator]();
     const n1 = iterator.next(); // registers synchronously, then awaits
     const n2 = iterator.next(); // a second pending pull — must not overwrite the first's waiter
     observer("sConc", { type: "run_started", timestamp: 0, runId: "rA", data: {} });
@@ -691,13 +698,13 @@ describe("session control (Phase 2a): run modulation", () => {
     await iterator.return?.(undefined);
   }, 5_000);
 
-  it("the hub's own last line: an unknown command type (in-process misuse) answers invalid_command", async () => {
-    // The transport's parseWireCommand intercepts wire input first; this default branch is the
-    // LAST line for in-process callers casting past the union — it must answer, never undefined.
+  it("an update naming nothing this runtime knows is a payload error, not a silent no-op", async () => {
+    // The transport's parseWireUpdate drops unknown KEYS at the wire; an in-process caller casting
+    // past the type reaches the hub, which must answer rather than quietly write nothing.
     const { control } = await makeObserved([]);
-    const result = await control.dispatch("sD", { type: "make_coffee" } as never);
+    const result = await control.sessions.get("sD").update({ model: "nope/nothing" } as never);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
+    if (!result.ok) expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE); // no boundary wiring here
   });
 
   it("an observation-only run (no controls) rejects with unsupported_capability, not a run code", async () => {
@@ -705,8 +712,8 @@ describe("session control (Phase 2a): run modulation", () => {
     const { control, observer } = createPiSessionControl({ sessions });
     // run_started without controls — the observer seam permits observation-only registration.
     observer("sObs", { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} });
-    expect((await control.state("sObs")).status).toBe("running"); // state truthfully reports the run
-    const result = await control.dispatch("sObs", { type: "steer", prompt: { text: "x" } });
+    expect((await control.sessions.get("sObs").state()).status).toBe("running"); // state truthfully reports the run
+    const result = await control.sessions.get("sObs").steer({ text: "x" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       // Capability problem (permanent for this wiring) — NOT no_active_run (would poll forever)
@@ -730,7 +737,7 @@ describe("session control (Phase 2a): run modulation", () => {
         abort: async () => {},
       },
     );
-    const result = await control.dispatch("sRefuse", { type: "steer", prompt: { text: "x" } });
+    const result = await control.sessions.get("sRefuse").steer({ text: "x" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe(RUN_COMMAND_FAILED_CODE);
@@ -742,7 +749,7 @@ describe("session control (Phase 2a): run modulation", () => {
     const { agent, control, gate } = await makeGated([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("s2c")) {
+      for await (const ev of control.sessions.get("s2c").events()) {
         seen.push(ev);
         if (ev.type === "run_settled") break;
       }
@@ -751,7 +758,7 @@ describe("session control (Phase 2a): run modulation", () => {
     await waitForRunning(control, "s2c");
     while (!seen.some((e) => e.type === "tool_started")) await new Promise((r) => setTimeout(r, 5));
 
-    const result = await control.dispatch("s2c", { type: "abort" });
+    const result = await control.sessions.get("s2c").abort();
     expect(result.ok).toBe(true);
     void gate; // never released — abort must cut through the blocked tool
     const events = await invoked;
@@ -766,7 +773,7 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(settledData).toMatchObject({ status: "aborted" });
     expect(settledData.error?.message).toBeTruthy();
     // The session is reusable: back to idle, not poisoned.
-    expect((await control.state("s2c")).status).toBe("idle");
+    expect((await control.sessions.get("s2c").state()).status).toBe("idle");
   });
 });
 
@@ -786,32 +793,34 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("capabilities carry only what is SESSIONLESS: the registry has a list, thinking levels do not", async () => {
     const { control, sessions, spec } = await makeBoundary([]);
     const caps = control.capabilities();
-    expect(caps.manualCompaction).toBe(true);
-    expect(caps.modelSelection ? caps.modelSelection.allowedModels : []).toContain(spec); // deployment fact
-    expect(caps.thinkingLevel).toBe(true); // per-session set rides state()
+    expect(caps.compaction).toBe(true);
+    expect(caps.allowedModels ?? []).toContain(spec); // deployment fact
+    expect(caps.updatable).toContain("thinkingLevel"); // per-session set rides state()
     await sessions.openOrCreate("sCaps");
-    expect((await control.state("sCaps")).availableThinkingLevels).toContain("high");
+    expect((await control.sessions.get("sCaps").state()).availableThinkingLevels).toContain("high");
   });
 
   it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
     // default faux: reasoning false
     const { control, sessions } = await fauxControlledAgent([]);
-    expect(control.capabilities().thinkingLevel).toBe(true); // servable — WHICH levels is per-session
+    expect(control.capabilities().updatable).toContain("thinkingLevel"); // servable — WHICH levels is per-session
     await sessions.openOrCreate("sNR");
-    expect((await control.state("sNR")).availableThinkingLevels).toEqual(["off"]);
+    expect((await control.sessions.get("sNR").state()).availableThinkingLevels).toEqual(["off"]);
     // The lie this replaces: ok: true, a durable entry, and no effect on the run.
-    const rejected = await control.dispatch("sNR", { type: "set_thinking", level: "high" });
+    const rejected = await control.sessions.get("sNR").update({ thinkingLevel: "high" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
-    expect((await control.entries("sNR")).entries.map((e) => e.kind)).not.toContain("thinking_level_change");
-    expect(await control.dispatch("sNR", { type: "set_thinking", level: "off" })).toEqual({ ok: true });
+    expect((await control.sessions.get("sNR").entries()).entries.map((e) => e.kind)).not.toContain(
+      "thinking_level_change",
+    );
+    expect(await control.sessions.get("sNR").update({ thinkingLevel: "off" })).toEqual({ ok: true });
   });
 
   it("a reasoning model still rejects a level it has no mapping for (xhigh/max need one)", async () => {
     const { control, sessions } = await makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
     await sessions.openOrCreate("sMax");
-    expect((await control.state("sMax")).availableThinkingLevels).not.toContain("max");
-    const rejected = await control.dispatch("sMax", { type: "set_thinking", level: "max" });
+    expect((await control.sessions.get("sMax").state()).availableThinkingLevels).not.toContain("max");
+    const rejected = await control.sessions.get("sMax").update({ thinkingLevel: "max" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
   });
@@ -823,17 +832,97 @@ describe("session control (Phase 2b): boundary mutations", () => {
     });
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
     await sessions.openOrCreate("sAuth");
-    expect(await control.dispatch("sAuth", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
+    expect(await control.sessions.get("sAuth").update({ model: `${plain.provider}/${plain.id}` })).toEqual({
       ok: true,
     });
     // state() moved WITH the session — the levels it offers are the new model's …
-    const after = await control.state("sAuth");
+    const after = await control.sessions.get("sAuth").state();
     expect(after.model).toBe(`${plain.provider}/${plain.id}`);
     expect(after.availableThinkingLevels).toEqual(["off"]);
     // … and the dispatch rejects exactly what that list excludes: one authority, two surfaces.
-    const rejected = await control.dispatch("sAuth", { type: "set_thinking", level: "high" });
+    const rejected = await control.sessions.get("sAuth").update({ thinkingLevel: "high" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+  });
+
+  it("a multi-field patch applies together and reports once", async () => {
+    // The headline of the reshaped API, and it had no test: four properties used to be four
+    // commands, so nothing exercised them arriving as one.
+    const { control, sessions, faux } = await fauxControlledAgent([], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      modelId: "plain",
+    });
+    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
+    await sessions.openOrCreate("sPatch");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("sPatch").events()) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+
+    const spec = `${thinker.provider}/${thinker.id}`;
+    expect(
+      await control.sessions.get("sPatch").update({ model: spec, thinkingLevel: "high", name: "Both at once" }),
+    ).toEqual({ ok: true });
+    await watching;
+
+    // ONE event for the patch, carrying every field it set — and a TYPED consumer can read them:
+    // `name` rode the event while the declared type omitted it, so every client needed a cast.
+    expect(seen.filter((e) => e.type === "state_changed")).toHaveLength(1);
+    const changed = seen.at(-1) as StateChangedEvent;
+    const named: string | undefined = changed.data.name;
+    expect(named).toBe("Both at once");
+    expect(changed.data).toEqual({ model: spec, thinkingLevel: "high", name: "Both at once" });
+    const after = await control.sessions.get("sPatch").state();
+    expect(after).toMatchObject({ model: spec, thinkingLevel: "high", name: "Both at once" });
+
+    // And a patch that fails VALIDATION leaves nothing behind — the property that makes ok:false
+    // safe to retry.
+    const rejected = await control.sessions.get("sPatch").update({ name: "changed", model: "nope/nothing" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.sessions.get("sPatch").state()).name).toBe("Both at once");
+  });
+
+  it("a patch that fails BETWEEN writes says what landed — it cannot claim a rollback pi has no way to do", async () => {
+    // Properties are separate journal entries, so a failure partway is a real state. The old
+    // contract text ("nothing durable landed") would have been a lie a client cannot recover from.
+    const { control, sessions } = await makeBoundary([]);
+    const record = await sessions.openOrCreate("sPartial");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("sPartial").events()) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+    // The name is written LAST; failing it leaves the thinking level durable.
+    const appendName = vi.spyOn(record, "appendSessionInfo").mockImplementation(() => {
+      throw new Error("ENOSPC: no space left on device");
+    });
+    const result = await control.sessions.get("sPartial").update({ thinkingLevel: "high", name: "never lands" });
+    appendName.mockRestore();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(PARTIAL_UPDATE_CODE);
+      expect(result.error.message).toMatch(/applied thinkingLevel/);
+      expect(result.error.retryable).toBe(false); // re-sending would re-apply what landed
+    }
+    await watching;
+    // The event reports the record as it NOW is: the level that landed, not the name that did not.
+    expect(seen.at(-1)?.data).toMatchObject({ thinkingLevel: "high" });
+    expect((seen.at(-1)?.data as { name?: string } | undefined)?.name).toBeUndefined();
+    expect((await control.sessions.get("sPartial").state()).thinkingLevel).toBe("high");
+  });
+
+  it("an update naming a field this serve does not know is refused, not silently ignored", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("sUnknown");
+    const rejected = await control.sessions.get("sUnknown").update({ nmae: "typo" } as never);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
 
   it("set_model RE-RECORDS a level the new model cannot do, so state and the run never disagree", async () => {
@@ -848,16 +937,16 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
     await sessions.openOrCreate("sDemote");
-    expect(await control.dispatch("sDemote", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sDemote").update({ thinkingLevel: "high" })).toEqual({ ok: true });
 
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sDemote")) {
+      for await (const ev of control.sessions.get("sDemote").events()) {
         seen.push(ev);
         if (ev.type === "state_changed") break;
       }
     })();
-    expect(await control.dispatch("sDemote", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
+    expect(await control.sessions.get("sDemote").update({ model: `${plain.provider}/${plain.id}` })).toEqual({
       ok: true,
     });
     await watching;
@@ -868,16 +957,18 @@ describe("session control (Phase 2b): boundary mutations", () => {
       model: `${plain.provider}/${plain.id}`,
       thinkingLevel: "off",
     });
-    const state = await control.state("sDemote");
+    const state = await control.sessions.get("sDemote").state();
     expect(state.thinkingLevel).toBe("off"); // …and state agrees with what the run will do
     // A model that CAN do the recorded level is left alone: no spurious demotion, no second entry.
     await sessions.openOrCreate("sKeep");
-    expect(await control.dispatch("sKeep", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
-    expect(await control.dispatch("sKeep", { type: "set_model", model: `${thinker.provider}/${thinker.id}` })).toEqual({
+    expect(await control.sessions.get("sKeep").update({ thinkingLevel: "high" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sKeep").update({ model: `${thinker.provider}/${thinker.id}` })).toEqual({
       ok: true,
     });
-    expect((await control.state("sKeep")).thinkingLevel).toBe("high");
-    expect((await control.entries("sKeep")).entries.filter((e) => e.kind === "thinking_level_change")).toHaveLength(1);
+    expect((await control.sessions.get("sKeep").state()).thinkingLevel).toBe("high");
+    expect(
+      (await control.sessions.get("sKeep").entries()).entries.filter((e) => e.kind === "thinking_level_change"),
+    ).toHaveLength(1);
   });
 
   it("a cut parent chain is refused by BOTH planes, not just the control one", () => {
@@ -915,14 +1006,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
     await sessions.openOrCreate("sOne");
-    expect(await control.dispatch("sOne", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
-    expect(await control.dispatch("sOne", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
+    expect(await control.sessions.get("sOne").update({ thinkingLevel: "high" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sOne").update({ model: `${plain.provider}/${plain.id}` })).toEqual({
       ok: true,
     });
 
     const opened = await sessions.openIfExists("sOne");
     const entries = (opened?.getEntries() ?? []) as Parameters<typeof resolveSessionSettings>[0];
-    const state = await control.state("sOne");
+    const state = await control.sessions.get("sOne").state();
     const executed = resolveSessionSettings(entries, models, { model: thinker, thinkingLevel: "medium" });
 
     // The record keeps the PREFERENCE — nothing rewrote it …
@@ -932,12 +1023,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(state.thinkingLevel).toBe("off");
     expect(executed.thinkingLevel).toBe("off");
     expect(state.availableThinkingLevels).toEqual(["off"]);
-    expect(await control.dispatch("sOne", { type: "set_thinking", level: "high" })).toMatchObject({ ok: false });
+    expect(await control.sessions.get("sOne").update({ thinkingLevel: "high" })).toMatchObject({ ok: false });
     // Back to a capable model: the preference returns, unsent.
-    expect(await control.dispatch("sOne", { type: "set_model", model: `${thinker.provider}/${thinker.id}` })).toEqual({
+    expect(await control.sessions.get("sOne").update({ model: `${thinker.provider}/${thinker.id}` })).toEqual({
       ok: true,
     });
-    expect((await control.state("sOne")).thinkingLevel).toBe("high");
+    expect((await control.sessions.get("sOne").state()).thinkingLevel).toBe("high");
   });
 
   it("the clamp we borrow resolves a GAP upward, not down", async () => {
@@ -961,18 +1052,22 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await drain(agent.invoke({ session: "sB1" }, { text: "hi" })); // session exists
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB1")) {
+      for await (const ev of control.sessions.get("sB1").events()) {
         seen.push(ev);
         if (seen.filter((e) => e.type === "state_changed").length === 2) break;
       }
     })();
-    expect(await control.dispatch("sB1", { type: "set_model", model: spec })).toEqual({ ok: true });
-    expect(await control.dispatch("sB1", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB1").update({ model: spec })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB1").update({ thinkingLevel: "high" })).toEqual({ ok: true });
     await watching;
-    // set_model reports both halves — a new model can change which level executes.
-    expect(seen.map((e) => e.data)).toEqual([{ model: spec, thinkingLevel: "medium" }, { thinkingLevel: "high" }]);
+    // Both halves, every time: model and thinking level are ONE setting (a new model can change
+    // which level executes), so an update to either reports the pair the next turn will run on.
+    expect(seen.map((e) => e.data)).toEqual([
+      { model: spec, thinkingLevel: "medium" },
+      { model: spec, thinkingLevel: "high" },
+    ]);
     // Durable: the overrides live in the session record (open-set kinds on the entries plane).
-    const kinds = (await control.entries("sB1")).entries.map((e) => e.kind);
+    const kinds = (await control.sessions.get("sB1").entries()).entries.map((e) => e.kind);
     expect(kinds).toContain("model_change");
     expect(kinds).toContain("thinking_level_change");
     // And the fresh-harness resolve applies them: the recorded thinking level rides the next turn.
@@ -997,30 +1092,31 @@ describe("session control (Phase 2b): boundary mutations", () => {
     ]);
     await drain(agent.invoke({ session: "sNav" }, { text: "first" }));
     await drain(agent.invoke({ session: "sNav" }, { text: "second" }));
-    const before = (await control.entries("sNav")).entries;
+    const before = (await control.sessions.get("sNav").entries()).entries;
     const target = before.find((e) => e.kind === "assistant") as SessionEntry;
-    expect((await control.state("sNav")).leafEntryId).not.toBe(target.id);
+    expect((await control.sessions.get("sNav").state()).leafEntryId).not.toBe(target.id);
 
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sNav")) {
+      for await (const ev of control.sessions.get("sNav").events()) {
         seen.push(ev);
         if (ev.type === "state_changed") break;
       }
     })();
-    expect(await control.dispatch("sNav", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNav").update({ leafEntryId: target.id })).toEqual({ ok: true });
     await watching;
     // The settings ride along: a move can change which model/level the next turn runs on.
     expect(seen.at(-1)?.data).toMatchObject({ leafEntryId: target.id, thinkingLevel: "medium" });
-    expect((await control.state("sNav")).leafEntryId).toBe(target.id);
+    expect((await control.sessions.get("sNav").state()).leafEntryId).toBe(target.id);
 
     // The point of moving a leaf: the next turn hangs off the target, creating a sibling branch —
     // the second turn's records stay in the repository but leave the active path.
     await drain(agent.invoke({ session: "sNav" }, { text: "third" }));
-    const after = (await control.entries("sNav")).entries;
+    const after = (await control.sessions.get("sNav").entries()).entries;
     const byId = new Map(after.map((e) => [e.id, e]));
     const path: string[] = [];
-    for (let id = (await control.state("sNav")).leafEntryId; id; id = byId.get(id)?.parentId) path.unshift(id);
+    for (let id = (await control.sessions.get("sNav").state()).leafEntryId; id; id = byId.get(id)?.parentId)
+      path.unshift(id);
     expect(path).toContain(target.id);
     expect(after.map((e) => e.id)).toEqual(expect.arrayContaining(before.map((e) => e.id))); // nothing deleted
     // Everything the old branch recorded past the target is off the active path now — still in the
@@ -1052,19 +1148,21 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const dflt = faux.getModel("default-model") as NonNullable<ReturnType<typeof faux.getModel>>;
 
     await drain(agent.invoke({ session: "sNavLeak" }, { text: "hi" }));
-    const target = (await control.entries("sNavLeak")).entries.find((e) => e.kind === "user") as SessionEntry;
+    const target = (await control.sessions.get("sNavLeak").entries()).entries.find(
+      (e) => e.kind === "user",
+    ) as SessionEntry;
     const spec = `${other.provider}/${other.id}`;
-    expect(await control.dispatch("sNavLeak", { type: "set_model", model: spec })).toEqual({ ok: true });
-    expect((await control.state("sNavLeak")).model).toBe(spec);
+    expect(await control.sessions.get("sNavLeak").update({ model: spec })).toEqual({ ok: true });
+    expect((await control.sessions.get("sNavLeak").state()).model).toBe(spec);
     // Move back to a point BEFORE the override was recorded: it is off the active path now.
     const moved = (async () => {
-      for await (const ev of control.events("sNavLeak")) if (ev.type === "state_changed") return ev;
+      for await (const ev of control.sessions.get("sNavLeak").events()) if (ev.type === "state_changed") return ev;
     })();
-    expect(await control.dispatch("sNavLeak", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavLeak").update({ leafEntryId: target.id })).toEqual({ ok: true });
     // The event says so too — a client tracking the model from the stream must not show the one the
     // next turn will not use.
     expect((await moved)?.data).toMatchObject({ leafEntryId: target.id, model: `${dflt.provider}/${dflt.id}` });
-    expect((await control.state("sNavLeak")).model).toBe(`${dflt.provider}/${dflt.id}`); // assembly default
+    expect((await control.sessions.get("sNavLeak").state()).model).toBe(`${dflt.provider}/${dflt.id}`); // assembly default
     await drain(agent.invoke({ session: "sNavLeak" }, { text: "again" }));
     expect(ranWith).toBe(dflt.id); // and the RUN agrees with what state() reports
   });
@@ -1082,14 +1180,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
       [echoTool],
     );
     await drain(agent.invoke({ session: "sNavDangle" }, { text: "call it" }));
-    const callEntry = (await control.entries("sNavDangle")).entries.find(
+    const callEntry = (await control.sessions.get("sNavDangle").entries()).entries.find(
       (e) => e.kind === "assistant" && (e.data as { toolCalls?: unknown[] }).toolCalls,
     ) as SessionEntry;
-    expect(await control.dispatch("sNavDangle", { type: "navigate", targetId: callEntry.id })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavDangle").update({ leafEntryId: callEntry.id })).toEqual({ ok: true });
     const events = await drain(agent.invoke({ session: "sNavDangle" }, { text: "continue" }));
     // The repair itself, not just a green run: the new branch carries a synthetic result for the
     // call whose real one is off-path — without it a real provider rejects the transcript.
-    const path = (await control.entries("sNavDangle")).entries;
+    const path = (await control.sessions.get("sNavDangle").entries()).entries;
     const repaired = path.filter(
       (e) => e.kind === "tool" && (e.data as { toolCallId?: string; isError?: boolean }).toolCallId === "e1",
     );
@@ -1108,35 +1206,35 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // firing on every selection) would otherwise grow the session by records no plane publishes.
     const { agent, control, sessions } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sNavNoop" }, { text: "hi" }));
-    const leaf = (await control.state("sNavNoop")).leafEntryId as string;
+    const leaf = (await control.sessions.get("sNavNoop").state()).leafEntryId as string;
     const size = async () => ((await (await sessions.openIfExists("sNavNoop"))?.getEntries()) ?? []).length;
     const before = await size();
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sNavNoop")) {
+      for await (const ev of control.sessions.get("sNavNoop").events()) {
         seen.push(ev);
         if (ev.type === "state_changed") break;
       }
     })();
-    expect(await control.dispatch("sNavNoop", { type: "navigate", targetId: leaf })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavNoop").update({ leafEntryId: leaf })).toEqual({ ok: true });
     await watching;
     // The event still travels: it reports the resulting POSITION, not that a record was written —
     // a concurrent client whose dispatch lost the race must not have to poll to learn where it is.
     expect(seen.at(-1)?.data).toMatchObject({ leafEntryId: leaf });
     expect(await size()).toBe(before);
-    expect((await control.state("sNavNoop")).leafEntryId).toBe(leaf);
+    expect((await control.sessions.get("sNavNoop").state()).leafEntryId).toBe(leaf);
   });
 
   it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
     const { agent, control } = await makeBoundary([fauxAssistantMessage("ok")]);
-    expect(control.capabilities().navigate).toBe(true);
+    expect(control.capabilities().updatable.includes("leafEntryId")).toBe(true);
     await drain(agent.invoke({ session: "sNavBad" }, { text: "hi" }));
-    const leafBefore = (await control.state("sNavBad")).leafEntryId;
-    const unknownEntry = await control.dispatch("sNavBad", { type: "navigate", targetId: "nope" });
+    const leafBefore = (await control.sessions.get("sNavBad").state()).leafEntryId;
+    const unknownEntry = await control.sessions.get("sNavBad").update({ leafEntryId: "nope" });
     expect(unknownEntry.ok).toBe(false);
     if (!unknownEntry.ok) expect(unknownEntry.error.code).toBe(INVALID_COMMAND_CODE);
-    expect((await control.state("sNavBad")).leafEntryId).toBe(leafBefore); // rejected before acceptance
-    const unknownSession = await control.dispatch("sGhost", { type: "navigate", targetId: "x" });
+    expect((await control.sessions.get("sNavBad").state()).leafEntryId).toBe(leafBefore); // rejected before acceptance
+    const unknownSession = await control.sessions.get("sGhost").update({ leafEntryId: "x" });
     expect(unknownSession.ok).toBe(false);
     if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
   });
@@ -1144,24 +1242,33 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
     const { agent, control, sessions, spec } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sNavKinds" }, { text: "hi" }));
-    expect(await control.dispatch("sNavKinds", { type: "set_model", model: spec })).toEqual({ ok: true });
-    const entries = (await control.entries("sNavKinds")).entries;
+    expect(await control.sessions.get("sNavKinds").update({ model: spec })).toEqual({ ok: true });
+    const entries = (await control.sessions.get("sNavKinds").entries()).entries;
     const modelChange = entries.find((e) => e.kind === "model_change");
     const user = entries.find((e) => e.kind === "user") as SessionEntry;
     // Move away, then back onto the boundary record: it is a legitimate target — the engine itself
     // leaves the leaf sitting on one after every set_model.
-    expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: user.id })).toEqual({ ok: true });
-    expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: modelChange!.id })).toEqual({ ok: true });
-    // A move writes NO record — pi's branch() is a pointer move — so navigating cannot grow the
-    // session, and everything a client can see remains a position it can move to.
+    expect(await control.sessions.get("sNavKinds").update({ leafEntryId: user.id })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavKinds").update({ leafEntryId: modelChange!.id })).toEqual({ ok: true });
+    // A move DOES write one record — pi's branch() is a pointer move that survives nothing, so the
+    // store anchors it. That anchor is ours, not the conversation's: everything a client can see is
+    // still a position it can move to, and the bookkeeping is not published.
     const raw = (await sessions.openIfExists("sNavKinds"))?.getEntries() ?? [];
-    const published = (await control.entries("sNavKinds")).entries.map((e) => e.id);
-    expect(raw.filter((e) => !published.includes(e.id))).toHaveLength(0);
+    const published = (await control.sessions.get("sNavKinds").entries()).entries.map((e) => e.id);
+    const withheld = raw.filter((e) => !published.includes(e.id));
+    expect(withheld.length).toBeGreaterThan(0);
+    expect(withheld.every((e) => (e as { customType?: string }).customType?.startsWith("fastagent"))).toBe(true);
+    // …and the published tree stays self-contained: every parentId resolves to a published entry, so
+    // a client walking up from leafEntryId reaches the root rather than stopping at an id it cannot
+    // look up.
+    const entriesNow = (await control.sessions.get("sNavKinds").entries()).entries;
+    const ids = new Set(entriesNow.map((e) => e.id));
+    expect(entriesNow.every((e) => e.parentId === undefined || ids.has(e.parentId))).toBe(true);
     // An id that is not an entry at all is still a payload error.
-    const rejected = await control.dispatch("sNavKinds", { type: "navigate", targetId: "no-such-entry" });
+    const rejected = await control.sessions.get("sNavKinds").update({ leafEntryId: "no-such-entry" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
-    expect((await control.state("sNavKinds")).leafEntryId).toBe(modelChange!.id);
+    expect((await control.sessions.get("sNavKinds").state()).leafEntryId).toBe(modelChange!.id);
   });
 
   it("navigate takes the run lease: mid-run it is session_busy, and the live branch stays put", async () => {
@@ -1173,18 +1280,20 @@ describe("session control (Phase 2b): boundary mutations", () => {
       { tools: [gate.tool] },
     );
     await drain(agent.invoke({ session: "sNavBusy" }, { text: "hi" })); // a settled turn to aim at
-    const target = (await control.entries("sNavBusy")).entries.find((e) => e.kind === "user") as SessionEntry;
-    const leafBefore = (await control.state("sNavBusy")).leafEntryId;
+    const target = (await control.sessions.get("sNavBusy").entries()).entries.find(
+      (e) => e.kind === "user",
+    ) as SessionEntry;
+    const leafBefore = (await control.sessions.get("sNavBusy").state()).leafEntryId;
 
     const invoked = drive(agent, "sNavBusy");
     await waitForRunning(control, "sNavBusy");
-    const busy = await control.dispatch("sNavBusy", { type: "navigate", targetId: target.id });
+    const busy = await control.sessions.get("sNavBusy").update({ leafEntryId: target.id });
     expect(busy.ok).toBe(false);
     if (!busy.ok) expect(busy.error.code).toBe(SESSION_BUSY_CODE);
-    expect((await control.state("sNavBusy")).leafEntryId).toBe(leafBefore); // the run's branch untouched
+    expect((await control.sessions.get("sNavBusy").state()).leafEntryId).toBe(leafBefore); // the run's branch untouched
     gate.release();
     await invoked;
-    expect(await control.dispatch("sNavBusy", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavBusy").update({ leafEntryId: target.id })).toEqual({ ok: true });
   });
 
   it("a compaction bounds the model context, not the settings history", async () => {
@@ -1192,15 +1301,16 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // override recorded before one is a preference, and it still governs the session after it.
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
     await drain(agent.invoke({ session: "sNavCompact" }, { text: "tell me things" }));
-    expect(await control.dispatch("sNavCompact", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavCompact").update({ thinkingLevel: "high" })).toEqual({ ok: true });
     await withCompactableHistory(agent, "sNavCompact");
     const finished = (async () => {
-      for await (const ev of control.events("sNavCompact")) if (ev.type === "compaction_finished") return ev;
+      for await (const ev of control.sessions.get("sNavCompact").events())
+        if (ev.type === "compaction_finished") return ev;
     })();
-    expect(await control.dispatch("sNavCompact", { type: "compact" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sNavCompact").compact()).toEqual({ ok: true });
     expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
-    expect((await control.entries("sNavCompact")).entries.map((e) => e.kind)).toContain("compaction");
-    expect((await control.state("sNavCompact")).thinkingLevel).toBe("high");
+    expect((await control.sessions.get("sNavCompact").entries()).entries.map((e) => e.kind)).toContain("compaction");
+    expect((await control.sessions.get("sNavCompact").state()).thinkingLevel).toBe("high");
   });
 
   it("a gap above the leaf leaves the settings absent; observation stays total, dispatch carries the code", async () => {
@@ -1217,12 +1327,21 @@ describe("session control (Phase 2b): boundary mutations", () => {
       getBranch: () => brokenEntries,
       getLeafId: () => "leaf",
       getEntry: (id: string) => brokenEntries.find((e) => e.id === id),
+      getSessionName: () => undefined,
     } as unknown as Awaited<ReturnType<PiSessionRecordStore["openIfExists"]>>;
     const { control } = createPiSessionControl({
       sessions: {
         openIfExists: async () => broken,
         openOrCreate: async () => {
           throw new Error("the control plane never creates a session");
+        },
+        list: async () => [],
+        fork: async () => {
+          throw new Error("not exercised here");
+        },
+        delete: async () => false,
+        applyProperties: async () => {
+          throw new Error("validation rejects before any write is asked for");
         },
       },
       boundary: () => ({
@@ -1234,16 +1353,16 @@ describe("session control (Phase 2b): boundary mutations", () => {
         defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
       }),
     });
-    const state = await control.state("sBroken");
+    const state = await control.sessions.get("sBroken").state();
     expect(state.status).toBe("idle");
     expect(state.leafEntryId).toBe("leaf");
     expect(state.model).toBeUndefined(); // unreadable, not silently defaulted
     expect(state.thinkingLevel).toBeUndefined();
-    const entries = await control.entries("sBroken");
+    const entries = await control.sessions.get("sBroken").entries();
     expect(entries.entries.map((e) => e.id)).toEqual(["leaf"]);
     expect(entries.leafEntryId).toBe("leaf");
     // dispatch NEVER rejects, whatever the chain does: the transport promises a SessionResult.
-    const rejected = await control.dispatch("sBroken", { type: "set_thinking", level: "high" });
+    const rejected = await control.sessions.get("sBroken").update({ thinkingLevel: "high" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
   });
@@ -1265,6 +1384,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       branch: (id: string) => {
         leafId = id;
       },
+      getSessionName: () => undefined,
     } as unknown as Awaited<ReturnType<PiSessionRecordStore["openIfExists"]>>;
     const seen: SessionEvent[] = [];
     const { control } = createPiSessionControl({
@@ -1272,6 +1392,17 @@ describe("session control (Phase 2b): boundary mutations", () => {
         openIfExists: async () => broken,
         openOrCreate: async () => {
           throw new Error("the control plane never creates a session");
+        },
+        list: async () => [],
+        fork: async () => {
+          throw new Error("not exercised here");
+        },
+        delete: async () => false,
+        // The store's answer for a record it WROTE but whose resulting path it cannot walk: the
+        // position landed, the path is absent (design §7 leaves what that means to the caller).
+        applyProperties: async (_id, writes) => {
+          if (writes.leafEntryId !== undefined) leafId = writes.leafEntryId;
+          return { landed: ["leafEntryId" as const], leafEntryId: leafId };
         },
       },
       boundary: () => ({
@@ -1284,15 +1415,15 @@ describe("session control (Phase 2b): boundary mutations", () => {
       }),
       tap: (_session, event) => seen.push(event),
     });
-    expect(await control.dispatch("sBrokenMove", { type: "navigate", targetId: "a" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sBrokenMove").update({ leafEntryId: "a" })).toEqual({ ok: true });
     expect(leafId).toBe("a"); // the move is durable …
     expect(seen.at(-1)?.data).toEqual({ leafEntryId: "a" }); // … and reported, settings absent
   });
 
   it("navigate without boundary wiring is gated off, not silently linear", async () => {
     const { control } = await makeObserved([]);
-    expect(control.capabilities().navigate).toBe(false);
-    const rejected = await control.dispatch("sNavCap", { type: "navigate", targetId: "x" });
+    expect(control.capabilities().updatable.includes("leafEntryId")).toBe(false);
+    const rejected = await control.sessions.get("sNavCap").update({ leafEntryId: "x" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
@@ -1352,10 +1483,10 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("set_model rejects an unknown spec before acceptance (invalid_command)", async () => {
     const { control } = await makeBoundary([]);
-    const result = await control.dispatch("sB2", { type: "set_model", model: "ghost/model" });
+    const result = await control.sessions.get("sB2").update({ model: "ghost/model" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
-    const bad = await control.dispatch("sB2", { type: "set_thinking", level: "ultra" });
+    const bad = await control.sessions.get("sB2").update({ thinkingLevel: "ultra" });
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.error.code).toBe(INVALID_COMMAND_CODE);
   });
@@ -1370,7 +1501,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
     const invoked = drive(agent, "sB3");
     await waitForRunning(control, "sB3");
-    const busy = await control.dispatch("sB3", { type: "set_model", model: spec });
+    const busy = await control.sessions.get("sB3").update({ model: spec });
     expect(busy.ok).toBe(false);
     if (!busy.ok) {
       expect(busy.error.code).toBe(SESSION_BUSY_CODE);
@@ -1378,7 +1509,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     }
     gate.release();
     await invoked;
-    expect(await control.dispatch("sB3", { type: "set_model", model: spec })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB3").update({ model: spec })).toEqual({ ok: true });
   });
 
   it("compact is accept-fast: ok on admission, outcome via compaction_finished, then lease free", async () => {
@@ -1386,23 +1517,23 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await withCompactableHistory(agent, "sB4");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB4")) {
+      for await (const ev of control.sessions.get("sB4").events()) {
         seen.push(ev);
         if (ev.type === "compaction_finished") break;
       }
     })();
     // Acceptance is not outcome: the dispatch answers on ADMISSION (a compaction is a full model
     // call — a remote client's request timeout must not race it).
-    const result = await control.dispatch("sB4", { type: "compact" });
+    const result = await control.sessions.get("sB4").compact();
     expect(result).toEqual({ ok: true });
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     const finished = seen.at(-1)?.data as { summary: string };
     expect(finished.summary).toBeTruthy();
     // finished ⇒ the lease is free and the record is durable — the ordering the server guarantees.
-    const kinds = (await control.entries("sB4")).entries.map((e) => e.kind);
+    const kinds = (await control.sessions.get("sB4").entries()).entries.map((e) => e.kind);
     expect(kinds).toContain("compaction");
-    expect((await control.state("sB4")).status).toBe("idle");
+    expect((await control.sessions.get("sB4").state()).status).toBe("idle");
   });
 
   it("while a compaction is in flight the lease is held: state() compacting, dispatch session_busy", async () => {
@@ -1421,25 +1552,25 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await withCompactableHistory(agent, "sB8");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB8")) {
+      for await (const ev of control.sessions.get("sB8").events()) {
         seen.push(ev);
         if (ev.type === "compaction_finished") break;
       }
     })();
-    expect(await control.dispatch("sB8", { type: "compact" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB8").compact()).toEqual({ ok: true });
     // In flight: status reports compacting and the lease rejects other boundary work.
-    for (let i = 0; i < 100 && (await control.state("sB8")).status !== "compacting"; i++) {
+    for (let i = 0; i < 100 && (await control.sessions.get("sB8").state()).status !== "compacting"; i++) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    expect((await control.state("sB8")).status).toBe("compacting");
-    const busy = await control.dispatch("sB8", { type: "set_thinking", level: "low" });
+    expect((await control.sessions.get("sB8").state()).status).toBe("compacting");
+    const busy = await control.sessions.get("sB8").update({ thinkingLevel: "low" });
     expect(busy.ok).toBe(false);
     if (!busy.ok) expect(busy.error.code).toBe(SESSION_BUSY_CODE);
     releaseSummary();
     await watching;
     // finished ⇒ lease free and status recovered.
-    expect((await control.state("sB8")).status).toBe("idle");
-    expect(await control.dispatch("sB8", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+    expect((await control.sessions.get("sB8").state()).status).toBe("idle");
+    expect(await control.sessions.get("sB8").update({ thinkingLevel: "low" })).toEqual({ ok: true });
   });
 
   it("nothing-to-compact is a pre-acceptance rejection, not a finished{error} dressed as failure", async () => {
@@ -1449,12 +1580,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await sessions.openOrCreate("sEmpty"); // exists but has no compactable history
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sEmpty")) {
+      for await (const ev of control.sessions.get("sEmpty").events()) {
         seen.push(ev);
         if (ev.type === "state_changed") break; // the sentinel dispatched after the rejection
       }
     })();
-    const result = await control.dispatch("sEmpty", { type: "compact" });
+    const result = await control.sessions.get("sEmpty").compact();
     expect(result.ok).toBe(false);
     if (!result.ok) {
       // Its OWN code (not boundary_command_failed): a client must machine-distinguish "give up"
@@ -1462,9 +1593,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
       expect(result.error.code).toBe(NOTHING_TO_COMPACT_CODE);
       expect(result.error.retryable).toBe(false); // state-dependent: succeeds once the session grows
     }
-    expect((await control.state("sEmpty")).status).toBe("idle");
+    expect((await control.sessions.get("sEmpty").state()).status).toBe("idle");
     // Lease free (the sentinel): a boundary mutation succeeds right after the rejection…
-    expect(await control.dispatch("sEmpty", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sEmpty").update({ thinkingLevel: "low" })).toEqual({ ok: true });
     await watching;
     // …and the event stream carries ONLY it — no compaction bounds ever fired.
     expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
@@ -1478,19 +1609,19 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await withCompactableHistory(agent, "sB10");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB10")) {
+      for await (const ev of control.sessions.get("sB10").events()) {
         seen.push(ev);
-        if (ev.type === "compaction_started") await control.dispatch("sB10", { type: "abort" });
+        if (ev.type === "compaction_started") await control.sessions.get("sB10").abort();
         if (ev.type === "compaction_finished") break;
       }
     })();
 
-    expect(await control.dispatch("sB10", { type: "compact" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB10").compact()).toEqual({ ok: true });
     await watching;
 
     expect(seen.at(-1)?.data).toEqual({ aborted: true });
-    expect((await control.entries("sB10")).entries.map((e) => e.kind)).not.toContain("compaction");
-    expect((await control.state("sB10")).status).toBe("idle"); // the lease came back
+    expect((await control.sessions.get("sB10").entries()).entries.map((e) => e.kind)).not.toContain("compaction");
+    expect((await control.sessions.get("sB10").state()).status).toBe("idle"); // the lease came back
   });
 
   it("an abort that arrives BEFORE pi can be aborted is still applied", async () => {
@@ -1502,22 +1633,22 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await withCompactableHistory(agent, "sB11");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB11")) {
+      for await (const ev of control.sessions.get("sB11").events()) {
         seen.push(ev);
         if (ev.type === "compaction_started") {
           // Fire several aborts back to back, the first synchronously with the event.
-          void control.dispatch("sB11", { type: "abort" });
-          void control.dispatch("sB11", { type: "abort" });
+          void control.sessions.get("sB11").abort();
+          void control.sessions.get("sB11").abort();
         }
         if (ev.type === "compaction_finished") break;
       }
     })();
 
-    expect(await control.dispatch("sB11", { type: "compact" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB11").compact()).toEqual({ ok: true });
     await watching;
 
     expect(seen.at(-1)?.data).toEqual({ aborted: true });
-    expect((await control.entries("sB11")).entries.map((e) => e.kind)).not.toContain("compaction");
+    expect((await control.sessions.get("sB11").entries()).entries.map((e) => e.kind)).not.toContain("compaction");
   });
 
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
@@ -1539,26 +1670,26 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await withCompactableHistory(agent, "sB9");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB9")) {
+      for await (const ev of control.sessions.get("sB9").events()) {
         seen.push(ev);
         if (ev.type === "compaction_finished") break;
       }
     })();
-    expect(await control.dispatch("sB9", { type: "compact" })).toEqual({ ok: true });
-    for (let i = 0; i < 100 && (await control.state("sB9")).status !== "compacting"; i++) {
+    expect(await control.sessions.get("sB9").compact()).toEqual({ ok: true });
+    for (let i = 0; i < 100 && (await control.sessions.get("sB9").state()).status !== "compacting"; i++) {
       await new Promise((r) => setTimeout(r, 5));
     }
     // The door: abort routes to the compaction's harness — answering no_active_run against a
     // state() that says "compacting" would be a lie.
-    expect(await control.dispatch("sB9", { type: "abort" })).toEqual({ ok: true });
+    expect(await control.sessions.get("sB9").abort()).toEqual({ ok: true });
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     // A deliberate stop reads as aborted, NOT error — the same vocabulary split as
     // run_settled{status: "aborted"}; a client's own abort must not render as a failure.
     expect(seen.at(-1)?.data).toEqual({ aborted: true });
     // Converged: lease free, status recovered, nothing stuck.
-    expect((await control.state("sB9")).status).toBe("idle");
-    expect(await control.dispatch("sB9", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+    expect((await control.sessions.get("sB9").state()).status).toBe("idle");
+    expect(await control.sessions.get("sB9").update({ thinkingLevel: "low" })).toEqual({ ok: true });
   });
 
   it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
@@ -1569,22 +1700,22 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await withCompactableHistory(agent, "sB6");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
-      for await (const ev of control.events("sB6")) {
+      for await (const ev of control.sessions.get("sB6").events()) {
         seen.push(ev);
         if (ev.type === "compaction_finished") break; // bounds contract: failure must still close
       }
     })();
-    const result = await control.dispatch("sB6", { type: "compact" });
+    const result = await control.sessions.get("sB6").compact();
     expect(result).toEqual({ ok: true }); // accept-fast: admission succeeded; the OUTCOME fails
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     const closed = seen.at(-1)?.data as { error?: string };
     expect(closed.error).toBeTruthy();
     // Nothing durable landed, and neither the lease nor the compacting flag is stuck.
-    const kinds = (await control.entries("sB6")).entries.map((e) => e.kind);
+    const kinds = (await control.sessions.get("sB6").entries()).entries.map((e) => e.kind);
     expect(kinds).not.toContain("compaction");
-    expect((await control.state("sB6")).status).toBe("idle");
-    const retry = await control.dispatch("sB6", { type: "set_thinking", level: "low" });
+    expect((await control.sessions.get("sB6").state()).status).toBe("idle");
+    const retry = await control.sessions.get("sB6").update({ thinkingLevel: "low" });
     expect(retry.ok).toBe(true); // the lease was released
 
     // PRE-acceptance failure (binding the session) still rejects with boundary_command_failed —
@@ -1602,7 +1733,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       },
     };
     const { control: broken } = createPiSessionControl({ sessions, boundary: () => boundary });
-    const pre = await broken.dispatch("sPre", { type: "compact" });
+    const pre = await broken.sessions.get("sPre").compact();
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
     expect(lease.tryAcquire("sPre")).not.toBeNull(); // released on the pre-acceptance path
@@ -1612,13 +1743,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // Reporting the raw record made "no override" indistinguishable from "no model".
     const { agent, control, spec } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sB7" }, { text: "hi" }));
-    const fresh = await control.state("sB7");
+    const fresh = await control.sessions.get("sB7").state();
     expect(fresh.model).toBe(spec); // the assembly default, named — not absent
     expect(fresh.thinkingLevel).toBe("medium");
     expect(fresh.availableThinkingLevels).toContain("high");
-    await control.dispatch("sB7", { type: "set_model", model: spec });
-    await control.dispatch("sB7", { type: "set_thinking", level: "high" });
-    const state = await control.state("sB7");
+    await control.sessions.get("sB7").update({ model: spec });
+    await control.sessions.get("sB7").update({ thinkingLevel: "high" });
+    const state = await control.sessions.get("sB7").state();
     expect(state.model).toBe(spec);
     expect(state.thinkingLevel).toBe("high");
   });
@@ -1639,7 +1770,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const first = await drain(agent.invoke({ session: "sE2E" }, { text: "hi" }));
     expect(first.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-a");
 
-    expect(await control.dispatch("sE2E", { type: "set_model", model: `${faux.provider.id}/faux-b` })).toEqual({
+    expect(await control.sessions.get("sE2E").update({ model: `${faux.provider.id}/faux-b` })).toEqual({
       ok: true,
     });
     const second = await drain(agent.invoke({ session: "sE2E" }, { text: "again" }));
@@ -1650,7 +1781,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const { control, observer } = createPiSessionControl({
       sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
     });
-    const iterator = control.events("sQuiet")[Symbol.asyncIterator]();
+    const iterator = control.sessions.get("sQuiet").events()[Symbol.asyncIterator]();
     const pending = iterator.next(); // registers; the stream never produces
     await new Promise((r) => setTimeout(r, 20));
     await iterator.return?.(undefined); // the old bug: this hung forever behind the quiet pull
@@ -1658,7 +1789,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // Released: a later event for that session finds no subscriber to buffer into — push must not
     // throw, and a NEW subscription starts empty (nothing buffered against the dead one).
     observer("sQuiet", { type: "run_started", timestamp: Date.now(), runId: "r9", data: {} });
-    const fresh = control.events("sQuiet")[Symbol.asyncIterator]();
+    const fresh = control.sessions.get("sQuiet").events()[Symbol.asyncIterator]();
     const race = await Promise.race([fresh.next(), new Promise((r) => setTimeout(() => r("empty"), 50))]);
     expect(race).toBe("empty"); // the pre-subscription event was not buffered anywhere
     await fresh.return?.(undefined);
@@ -1689,7 +1820,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       // Seed a session WITHOUT a model call: boundary mutations need an existing session, and the
       // observer tap must then see the hub-generated state_changed — the audit-tap guarantee.
       await opened.sessions.openOrCreate("sTap");
-      const result = await control.dispatch("sTap", { type: "set_thinking", level: "low" });
+      const result = await control.sessions.get("sTap").update({ thinkingLevel: "low" });
       expect(result.ok).toBe(true);
       expect(seen).toContain("state_changed");
     } finally {
@@ -1699,11 +1830,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
     const { control, sessions, spec } = await makeBoundary([]);
-    const result = await control.dispatch("ghost", { type: "set_model", model: spec });
+    const result = await control.sessions.get("ghost").update({ model: spec });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(NO_SUCH_SESSION_CODE);
     expect(await sessions.openIfExists("ghost")).toBeUndefined(); // no ghost record landed
-    const compact = await control.dispatch("ghost", { type: "compact" });
+    const compact = await control.sessions.get("ghost").compact();
     expect(compact.ok).toBe(false);
     if (!compact.ok) expect(compact.error.code).toBe(NO_SUCH_SESSION_CODE);
   });
@@ -1711,10 +1842,201 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("without boundary wiring the commands stay gated off and rejected", async () => {
     const { control } = await makeObserved([]); // observation + run modulation only
     const caps = control.capabilities();
-    expect(caps.manualCompaction).toBe(false);
-    expect(caps.modelSelection).toBe(false);
-    const result = await control.dispatch("sB5", { type: "set_model", model: "any/thing" });
+    expect(caps.compaction).toBe(false);
+    expect(caps.allowedModels).toBeUndefined();
+    const result = await control.sessions.get("sB5").update({ model: "any/thing" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+  });
+});
+
+describe("session control (Phase 4): session lifecycle", () => {
+  it("sessions.list() reports the deployment's conversations, with the name update({ name }) gave them", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("room-a");
+    await sessions.openOrCreate("room-b");
+    expect(await control.sessions.get("room-a").update({ name: "Deploy notes" })).toEqual({ ok: true });
+
+    const listed = await control.sessions.list();
+    expect(listed.map((s) => s.session).sort()).toEqual(["room-a", "room-b"]);
+    expect(listed.find((s) => s.session === "room-a")?.name).toBe("Deploy notes");
+    // The same label a client that opens the session directly sees — one setting, two surfaces.
+    expect((await control.sessions.get("room-a").state()).name).toBe("Deploy notes");
+    expect((await control.sessions.get("room-b").state()).name).toBeUndefined();
+  });
+
+  it("the name event carries the RECORDED name, not the payload", async () => {
+    // pi collapses newlines and trims, so echoing the payload would hand a client tracking the
+    // event stream a label neither state() nor sessions() ever confirms.
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("room-n");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("room-n").events()) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+    expect(await control.sessions.get("room-n").update({ name: "  Deploy\nnotes  " })).toEqual({ ok: true });
+    await watching;
+    const recorded = (await control.sessions.get("room-n").state()).name;
+    expect(recorded).toBe("Deploy notes");
+    expect(seen.at(-1)?.data).toEqual({ name: recorded });
+    expect((await control.sessions.list()).find((x) => x.session === "room-n")?.name).toBe(recorded);
+  });
+
+  it("an empty name is a payload error, and nothing durable lands", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("room-c");
+    const rejected = await control.sessions.get("room-c").update({ name: "   " });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.sessions.get("room-c").state()).name).toBeUndefined();
+  });
+
+  it("fork is IDEMPOTENT: the same fork twice is one record, a different history is a conflict", async () => {
+    const { control, sessions, agent } = await makeBoundary([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+    await drain(agent.invoke({ session: "src" }, { text: "first" }));
+    const at = (await control.sessions.get("src").entries()).leafEntryId as string;
+    await drain(agent.invoke({ session: "src" }, { text: "second" }));
+    const later = (await control.sessions.get("src").entries()).leafEntryId as string;
+
+    expect(await control.sessions.fork({ from: "src", at, into: "branch" })).toEqual({ ok: true });
+    // The fork holds the history up to the branch point, and the source keeps everything.
+    expect((await control.sessions.get("branch").entries()).entries.length).toBeLessThan(
+      (await control.sessions.get("src").entries()).entries.length,
+    );
+    expect((await control.sessions.list()).map((s) => s.session).sort()).toEqual(["branch", "src"]);
+
+    // THE RETRY: a client whose response was lost sends the same request again. It must not get a
+    // second record, and it must not get an error about a session it created itself.
+    expect(await control.sessions.fork({ from: "src", at, into: "branch" })).toEqual({ ok: true });
+    expect((await control.sessions.list()).map((s) => s.session).sort()).toEqual(["branch", "src"]);
+
+    // A DIFFERENT history under that id is a conflict, not a retry — same id, different content is
+    // what the id would then be lying about.
+    const conflict = await control.sessions.fork({ from: "src", at: later, into: "branch" });
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) expect(conflict.error.code).toBe(INVALID_COMMAND_CODE);
+
+    // An entry that is not a published position is a payload error too.
+    const nowhere = await control.sessions.fork({ from: "src", at: "nope", into: "b2" });
+    expect(nowhere.ok).toBe(false);
+    if (!nowhere.ok) expect(nowhere.error.code).toBe(INVALID_COMMAND_CODE);
+    expect(await sessions.openIfExists("b2")).toBeUndefined(); // rejected BEFORE anything landed
+  });
+
+  it("delete removes the record and ENDS its live streams — a stream over a deleted session is a lie", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    await sessions.openOrCreate("doomed");
+    const seen: string[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("doomed").events()) seen.push(ev.type);
+    })();
+
+    expect(await control.sessions.get("doomed").delete()).toEqual({ ok: true });
+    await watching; // the iterator ENDS rather than hanging on a session that no longer exists
+    expect(await sessions.openIfExists("doomed")).toBeUndefined();
+    expect(await control.sessions.list()).toHaveLength(0);
+    // A second delete is not an error to retry — it is an answer about a session that is gone.
+    const again = await control.sessions.get("doomed").delete();
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error.code).toBe(NO_SUCH_SESSION_CODE);
+  });
+
+  it("lifecycle writes take the SAME lease as a run: busy rejects, and the record is untouched", async () => {
+    const gate = makeGate();
+    const { control, agent, sessions } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("done")],
+      { tools: [gate.tool] },
+    );
+    await sessions.openOrCreate("busy");
+    const running = drive(agent, "busy");
+    await waitForToolStarted(control, "busy");
+
+    const busySession = control.sessions.get("busy");
+    for (const attempt of [() => busySession.update({ name: "while running" }), () => busySession.delete()]) {
+      const rejected = await attempt();
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe(SESSION_BUSY_CODE);
+    }
+    gate.release();
+    await running;
+    expect(await sessions.openIfExists("busy")).toBeDefined(); // the delete never touched it
+  });
+
+  it("refuses a fork target no other route can address", async () => {
+    // A path segment cannot carry "", "." or ".." — URL normalisation eats them — so a session
+    // minted under one would sit in list() unopenable by the client that just listed it. Judged on
+    // the id as GIVEN: a trimmed copy would reject "  ", which is a perfectly legal segment, while
+    // accepting " . " and then writing an id nothing can open.
+    const { control, sessions } = await makeBoundary([]);
+    const parent = await sessions.openOrCreate("src-empty");
+    const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    for (const into of ["", ".", ".."]) {
+      const rejected = await control.sessions.fork({ from: "src-empty", at, into });
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    }
+    expect((await control.sessions.list()).map((s) => s.session)).toEqual(["src-empty"]);
+  });
+
+  it("a target taken inside the lease window is a PAYLOAD error, not a retryable failure", async () => {
+    // The pre-lease check cannot be the last word: a session created between it and the write is
+    // still there when the record lands. Re-asked under the lease, so the client hears "pick another
+    // id" once instead of retrying an id that will never be free.
+    const base = piInMemorySessionRecordStore();
+    let asked = 0;
+    const racing: PiSessionRecordStore = {
+      ...base,
+      openIfExists: async (id) => (id === "dst" && asked++ === 0 ? undefined : base.openIfExists(id)),
+    };
+    const { control } = await fauxControlledAgent([], { sessions: racing });
+    const parent = await base.openOrCreate("src");
+    const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    await base.openOrCreate("dst"); // taken — but the FIRST look (pre-lease) answers absent
+
+    const rejected = await control.sessions.fork({ from: "src", at: at, into: "dst" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE); // not boundary_command_failed
+    expect((await base.openIfExists("dst"))?.getBranch()).toHaveLength(0); // and nothing was written over
+  });
+
+  it("fork leases BOTH ends: a busy destination is refused, not written over", async () => {
+    // The source lease alone leaves the destination unguarded — an invoke creating `into`, or a
+    // second fork from a DIFFERENT source (a different lease key), lands between "into does not
+    // exist" and the write.
+    const { control, sessions, lease } = await makeBoundary([]);
+    const parent = await sessions.openOrCreate("src");
+    const at = parent.appendMessage({ role: "user", content: "q", timestamp: 1 });
+    const holdingDestination = lease.tryAcquire("dst");
+    expect(holdingDestination).toBeTruthy();
+
+    const rejected = await control.sessions.fork({ from: "src", at: at, into: "dst" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(SESSION_BUSY_CODE);
+    expect(await sessions.openIfExists("dst")).toBeUndefined();
+
+    // Released, the same command goes through — the rejection was about timing, as `retryable` says.
+    (holdingDestination as () => void)();
+    expect(await control.sessions.fork({ from: "src", at: at, into: "dst" })).toEqual({ ok: true });
+  });
+
+  it("without boundary wiring the lifecycle is gated off — and sessions() still reads", async () => {
+    const { control, sessions } = await makeObserved([]);
+    expect(control.capabilities().fork).toBe(false);
+    await sessions.openOrCreate("read-only");
+    const readOnly = control.sessions.get("read-only");
+    for (const attempt of [
+      () => readOnly.update({ name: "x" }),
+      () => control.sessions.fork({ from: "read-only", at: "e", into: "y" }),
+      () => readOnly.delete(),
+    ]) {
+      const rejected = await attempt();
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+    }
+    // Listing only reads, so it is not gated with the writes.
+    expect((await control.sessions.list()).map((s) => s.session)).toEqual(["read-only"]);
   });
 });
