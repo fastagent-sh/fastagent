@@ -235,7 +235,7 @@ export async function createPiAgentFromDir(
         },
         // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
         // and never cross the data plane's observer seam — without this, an audit tap wired here
-        // would miss exactly the mutations it most needs to see (set_model).
+        // would miss exactly the mutations it most needs to see (`update({ model })`).
         tap: caller ? (session, event) => caller(session, event) : undefined,
       })
     : undefined;

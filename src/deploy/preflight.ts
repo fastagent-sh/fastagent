@@ -142,7 +142,7 @@ export async function preflightDeploy(input: {
   }
 
   // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*`
-  // (steer/abort/set_model) rides the PUBLIC host URL, protected only by the bearer token. The token
+  // (steer, stop, rewrite or delete a session) rides the PUBLIC host URL, protected only by the bearer token. The token
   // travels as a deploy secret (see extraSecrets below) so the caller has it; the reach still warrants
   // a warning — the tunnel path warns loudly and deploy must not be the silent second way to break the
   // loopback trust story.
@@ -150,7 +150,7 @@ export async function preflightDeploy(input: {
     messages.push({
       level: "warn",
       text:
-        `sessionControl: true — the deployed box serves /control/* (steer/abort/set_model) at its public URL, ` +
+        `sessionControl: true — the deployed box serves /control/* (steer, stop, rewrite or delete a session) at its public URL, ` +
         `protected only by a bearer token. Set ${CONTROL_TOKEN_ENV} (listed with the other secrets) and give the ` +
         `same value to callers: attach --url <public-url> --token …. Unset, the box mints its own per boot — ` +
         `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +

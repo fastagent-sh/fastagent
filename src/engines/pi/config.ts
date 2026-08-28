@@ -43,7 +43,7 @@ export interface FastagentConfig {
   selfSchedule?: boolean;
   /**
    * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch —
-   * steer/abort/compact/set_model…) for remote consumers: a Web panel, a desktop app, `fastagent
+   * steer/abort/compact + session properties and lifecycle) for remote consumers: a Web panel, a desktop app, `fastagent
    * attach`. Default off (it is a remote-control surface). When on, `dev`/`start` generate a
    * per-boot bearer token and write `<stateRoot>/control.json` for local discovery. The serve
    * binds all interfaces by default, so the routes are LAN-reachable with the token as the only
