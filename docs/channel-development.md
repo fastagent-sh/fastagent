@@ -44,7 +44,7 @@ export default channel;
 ```
 
 The mount context also carries `control?: SessionControl` when the serve runs with
-`sessionControl: true` — the session-control hub, for dispatch-style channel features (the built-in
+`sessionControl: true` — the session-control hub, for channel features that act on a live run (the built-in
 channels map a user "stop" onto `control.sessions.get(session).abort()`). It is absent otherwise;
 degrade visibly, never silently.
 

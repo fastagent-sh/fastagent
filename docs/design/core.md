@@ -223,8 +223,8 @@ capability that needs durable narrowing must change the resolve semantics here f
 
 This per-invoke assembly remains the only data plane. A client that needs mid-run control, live
 observation, or reconnectable history uses the optional [session control plane](session-control.md):
-session-scoped observe/modulate methods beside `invoke` — never a second way to start work, and
-never resident process state as the source of continuity.
+a session's own observe/act/update calls beside `invoke`, plus the deployment's session list — never
+a second way to start work, and never resident process state as the source of continuity.
 
 ## 4. Event translation and terminal discipline
 
