@@ -1,22 +1,17 @@
 /**
  * ONE definition, two consumption shapes: the served `Agent` (dev/start/invoke) and chat's resident
- * `AgentSessionRuntime`. They share the front half (`resolveAgentAssembly` — placement, config,
- * model spec, tools, auth) and diverge after it ON PURPOSE: serving re-reads the definition per
- * invoke and assembles the whole prompt itself, chat takes a startup snapshot and lets pi append
- * skills and env. That divergence is the design; what must NOT diverge is what the definition SAYS.
+ * `AgentSessionRuntime`. The split is deliberate and documented where it is made — `AgentAssembly`
+ * in open.ts marks the shared front half, and session-builder.ts's FIDELITY block lists what chat
+ * injects to match serving: prompt, skills, tools, models, auth.
  *
- * This file is the check on that. It exists because the divergence has bitten once already — chat
- * authenticated against the machine-global `~/.pi` while serving used the project's own credentials
- * (fixed in #255, which unified the front half) — and because the git history says the cost is
- * ongoing rather than historical: of the last 14 commits touching the builder, 13 changed two or
- * more assembly files and 10 changed both `create.ts` and `session-builder.ts`. Every capability
- * added so far has had to be wired into both consumers by hand, with nothing but review catching a
- * miss. A capability wired into serving alone does not fail to compile and does not fail any test
- * that asks about serving; it just quietly is not there in chat.
+ * session-builder.test.ts already covers all five. What it cannot do is notice that the OTHER side
+ * moved: it asserts chat's ABSOLUTE values (the active set equals these seven names, the level is
+ * "high"), so a capability added to serving alone leaves those assertions true and chat quietly
+ * without it. The history says that is the live risk — of the last 14 commits touching the builder,
+ * 13 changed two or more assembly files — every capability so far wired into both by hand.
  *
- * So: assert the SHARED facts here, and leave the deliberate differences alone. When this file goes
- * red, the question to ask is "did I wire the new capability into both?" — not "how do I make the
- * assertion pass".
+ * So these tests take the expectation FROM the serving assembly. Nothing here is hard-coded that
+ * serving could move. When it goes red, the question is "did I wire the new capability into both?"
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
