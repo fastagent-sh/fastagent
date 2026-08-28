@@ -1,16 +1,16 @@
 /**
- * The pi implementation of the session control plane: observation (`state`/`entries`/`events`,
- * design Phase 1) and run modulation (`dispatch`: steer/follow_up/abort, Phase 2a) over
- * invoke-driven runs. `createPiSessionControl` returns the neutral `SessionControl` plus the
- * {@link SessionObserver} to plug into the invoke pipeline (`createPiAgent({ observer })`)
- * — the hub derives everything from the rich event stream (plus the {@link RunControls} the
- * run_started event carries), holds no durable state of its own, and never writes: durable truth
- * stays in the session repository (read via {@link PiSessionRecordStore}), live truth in the events the
- * data plane emits, modulation in the controls the data plane registers.
+ * The pi implementation of the session control plane. `createPiSessionControl` returns the neutral
+ * `SessionControl` plus the {@link SessionObserver} to plug into the invoke pipeline
+ * (`createPiAgent({ observer })`).
  *
- * The plane's writes (`update`, `compact`, `fork`, `delete`) take the same lease as runs;
- * without boundary wiring they are rejected before acceptance with `unsupported_capability` — a
- * client gating on `capabilities()` never sends them.
+ * It holds no durable state of its own: live truth comes from the event stream (plus the
+ * {@link RunControls} a `run_started` carries), durable truth from {@link PiSessionRecordStore} —
+ * which is also what performs every write, so how a record takes a property is not knowledge this
+ * file has. What it owns is the vocabulary: capability gating, the lease, error codes, and the
+ * events its own writes emit.
+ *
+ * Writes take the same lease as runs. Without boundary wiring they reject before acceptance with
+ * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import { prepareCompaction } from "@earendil-works/pi-agent-core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -519,15 +519,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   };
 
   /**
-   * Set durable properties, as ONE patch: validate everything, take the lease once, write, emit one
-   * `state_changed`.
+   * {@link Session.update} — validate the whole patch, take the lease once, hand the writes to the
+   * store, report what landed.
    *
-   * VALIDATION is all-or-nothing — a rejected patch leaves nothing behind, which is what makes
-   * `ok: false` safe to retry. The WRITES are not one operation: pi records each property as its own
-   * journal entry, so a failure between them (a full disk, a revoked permission) leaves the earlier
-   * ones durable. That case does not pretend otherwise: the event reports what the record actually
-   * holds and the error names the field that failed, so a client reads its way back to the truth
-   * instead of believing a rollback that did not happen.
+   * Everything before the lease is validation, which is what makes a rejected patch leave nothing
+   * behind. What a value MEANS is decided here (a model spec against the registry, a level against
+   * the model it lands on); how a record takes it is the store's.
    */
   const updateOf = async (session: string, patch: SessionUpdate): Promise<SessionResult> => {
     // Keys, not values: a field this runtime does not know must not be silently skipped — that is a

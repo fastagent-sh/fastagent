@@ -7,9 +7,8 @@
  * connections dropping, so no one fences on it), `seq` (per-connection monotonic, detects loss in
  * transit).
  *
- * SECURITY: these routes steer and stop runs, and rewrite session properties — a remote-control
- * surface. The bearer token
- * is REQUIRED (there is no unauthenticated mode) and is the only auth the framework owns; anything
+ * SECURITY: these routes steer and stop runs, rewrite session properties, and delete records — a
+ * remote-control surface. The bearer token is REQUIRED (there is no unauthenticated mode) and is the only auth the framework owns; anything
  * beyond a shared secret (principals, per-permission split, audit) is the wrapping host's job
  * (design §14). Locally the serving process generates a per-boot token and writes it to
  * `<stateRoot>/control.json` for local discovery — filesystem permissions guard the token, and the

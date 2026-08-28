@@ -1,16 +1,14 @@
 /**
  * Session control plane — the engine-neutral serving extension beside Agent Handler
- * (docs/design/session-control.md). Pure types, zero dependencies; importing any engine
- * implementation here is forbidden, exactly like agent.ts.
+ * (docs/design/session-control.md). Zero dependencies, no engine import, exactly like agent.ts.
  *
- * The plane model: `invoke` is the only data plane (no run exists without an invoke); a session's
- * ACTIONS modulate the run an invoke drives; `state`/`entries`/`events` observe, strictly read-only.
- *
- * The shape follows the question each call answers, not the transport that carries it: a session's
- * PROPERTIES (name, model, thinking level, where its leaf points) are updated, things that HAPPEN to
- * a run (steer, abort, compact) are actions, and the set of sessions is a collection. One verb over
- * all three would make a client spell the session id on every call and read "delete" as something
- * dispatched INTO a session that is about to stop existing.
+ * `invoke` remains the only data plane: no run exists without one. Everything here observes a run,
+ * modulates it, or manages the records it leaves behind — and the shape follows which of those a
+ * call is, not the transport that carries it. A session's PROPERTIES (name, model, thinking level,
+ * where its leaf points) are updated; things that HAPPEN to a run (steer, abort, compact) are
+ * actions; the set of sessions is a collection. One verb over all three would make a client spell
+ * the session id on every call and read "delete" as something dispatched INTO a session that is
+ * about to stop existing.
  */
 import type { Json, Prompt } from "./agent.ts";
 
@@ -256,11 +254,9 @@ export const NOTHING_TO_COMPACT_CODE = "nothing_to_compact";
  *  and rejects with {@link UNSUPPORTED_CAPABILITY_CODE}.) */
 export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
-/** Stable error code for the ONE read that may fail: {@link SessionCollection.list} against a store
- *  it cannot enumerate. It does not ride a `SessionResult` — `sessions()` rejects, and a transport
- *  carries this code in the error body of a non-2xx (design §13). `retryable: true`: the condition is
- *  the store's availability, not the request. Every OTHER read stays total, so this is the whole of
- *  the read failure vocabulary. */
+/** What {@link SessionCollection.list} rejects with — the only read that can (see it for why). Not a
+ *  `SessionResult`: it REJECTS, and a transport carries this code in the error body of a non-2xx
+ *  (design §13). `retryable: true` — the condition is the store's availability, not the request. */
 export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
 
 /** Stable `SessionResult.error.code` for a multi-field {@link Session.update} that wrote some of its
