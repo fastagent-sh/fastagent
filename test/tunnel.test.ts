@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmodSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { log } from "../src/log.ts";
 import { newSlackOnboardingState } from "../src/channels/slack/onboard.ts";
 import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
 import { announceWebhooks, parseTunnelUrl, startCloudflareTunnel } from "../src/tunnel.ts";
@@ -345,5 +347,28 @@ describe("tunnel: announceWebhooks", () => {
 
     expect(setWebhookCount(fetchMock)).toBe(1); // permanent error → no retry
     expect(errs.some((e) => /Register manually/.test(e))).toBe(true);
+  });
+
+  // chmod is the only way to reach this branch, and it does not bite as root (root reads any
+  // directory) or on Windows. Skipped rather than faked there: a guard that cannot run its own case
+  // should say so instead of passing quietly.
+  const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
+  it.skipIf(!canDenyRead)("reports an unreadable channels/ instead of reading it as 'no channels'", async () => {
+    // Returning [] for a directory it could not read registers no webhooks while the tunnel reports
+    // itself up — the exact failure this scan exists to feed, made invisible.
+    const dir = await mkdtemp(join(tmpdir(), "fa-tunnel-eacces-"));
+    const channels = join(dir, "channels");
+    await mkdir(channels);
+    await writeFile(join(channels, "telegram.ts"), "export default () => ({});\n");
+    chmodSync(channels, 0o000);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await announceWebhooks(dir, "https://x.trycloudflare.com");
+      expect(warn.mock.calls.flat().join("\n")).toContain(`cannot read ${channels}`);
+    } finally {
+      chmodSync(channels, 0o755);
+      warn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

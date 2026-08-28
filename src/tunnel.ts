@@ -8,7 +8,8 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, extname, join } from "node:path";
+import { isModuleFile } from "./loader.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
@@ -129,13 +130,23 @@ function lastErrorLine(tail: string): string {
   return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
 }
 
-/** Channel basenames present in `<dir>/channels/`. */
+/** Channel basenames present in `<dir>/channels/`. What counts as a module file is {@link isModuleFile}
+ *  — the same predicate discovery uses, so the tunnel cannot register a set the serve did not mount. */
 function channelBasenames(dir: string): string[] {
+  const channels = join(dir, "channels");
   try {
-    return readdirSync(join(dir, "channels"))
-      .filter((n) => /\.(ts|js|mjs)$/.test(n) && !n.endsWith(".d.ts"))
-      .map((n) => n.replace(/\.(ts|js|mjs)$/, ""));
-  } catch {
+    return readdirSync(channels)
+      .filter(isModuleFile)
+      .map((n) => basename(n, extname(n)));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // No channels/ is the ordinary case. Anything else is a directory we cannot read, and returning
+    // "no channels" for it registers no webhooks while the tunnel reports itself up — the failure
+    // this function exists to feed, hidden. It cannot THROW (announceWebhooks is void-called with no
+    // unhandledRejection handler, so it would take the serve down), so it says so and continues.
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      log.warn(`[fastagent] --tunnel: cannot read ${channels}: ${(error as Error).message} — no webhooks registered`);
+    }
     return [];
   }
 }
