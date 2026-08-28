@@ -7,6 +7,7 @@ import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { log } from "./log.ts";
 
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 
@@ -20,9 +21,27 @@ export function isModuleFile(name: string): boolean {
  * DIRECTORY called `telegram.ts` passes the name alone, and every reader of `channels/` has to
  * reach the same verdict or they disagree about what the deployment serves (the loader would skip
  * it, `info` would list it, `--tunnel` would register a webhook for it).
+ *
+ * `isFile()` is false for a SYMLINK, and that is load-bearing rather than incidental:
+ * `assertInsideAgentDir` guards the code-input DIRECTORY (`channels`, `tools`, `skills`) against
+ * escaping the definition, and nothing guards the entries inside it. A symlinked
+ * `channels/telegram.ts` would import code from anywhere on the box, past the containment check
+ * that exists to prevent exactly that. Do not "fix" this by following links — skipping is the
+ * boundary; {@link describeSkipped} is what keeps it from being silent.
  */
 export function isModuleEntry(entry: Dirent): boolean {
   return entry.isFile() && isModuleFile(entry.name);
+}
+
+/** Why a module-looking entry was skipped, or undefined when it was not one to begin with. An
+ *  author who names a file like a channel and gets nothing needs the reason at the moment it is
+ *  ignored — the alternative is a channel that silently does not exist. */
+function describeSkipped(entry: Dirent): string | undefined {
+  if (isModuleEntry(entry) || !isModuleFile(entry.name)) return undefined;
+  if (entry.isSymbolicLink()) {
+    return "a symlink — code inputs must be real files inside the agent dir (a link could import from anywhere)";
+  }
+  return entry.isDirectory() ? "a directory, not a file" : "not a regular file";
 }
 
 /** The name a discovered module is known by: the basename without its extension. Derived from the
@@ -89,7 +108,11 @@ export async function loadModuleDir(
   const modules: DiscoveredModule[] = [];
   const failures: ModuleLoadFailure[] = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!isModuleEntry(entry)) continue;
+    if (!isModuleEntry(entry)) {
+      const why = describeSkipped(entry);
+      if (why) log.warn(`[fastagent] ${sub}/${entry.name} is ${why} — not loaded`);
+      continue;
+    }
     const file = join(subDir, entry.name);
     const label = `${sub}/${entry.name}`;
     try {

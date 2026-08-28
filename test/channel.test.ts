@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
 import { loadChannels, discoverChannelFiles, inspectChannels } from "../src/channels/discover.ts";
+import { log } from "../src/log.ts";
 
 // loadChannels only forwards the ctx to the factory; these factories ignore it.
 const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
@@ -272,6 +273,27 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     // same way loadModuleDir does, or `info` lists a channel the serve never mounts.
     await mkdir(join(dir, "channels", "feishu.ts"));
     expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
+  });
+
+  it("a SYMLINKED channel file is skipped, and says why", async () => {
+    // Not a gap to close: assertInsideAgentDir guards the channels DIRECTORY, nothing guards the
+    // entries in it, so following a link would import code from anywhere on the box past the very
+    // check that exists to stop that. Skipping is the boundary — the warning is what keeps an
+    // author from staring at a channel that silently does not exist.
+    const dir = await freshDir();
+    const outside = await freshDir();
+    await writeFile(join(outside, "telegram.ts"), "export default () => ({});\n");
+    await mkdir(join(dir, "channels"));
+    await symlink(join(outside, "telegram.ts"), join(dir, "channels", "telegram.ts"));
+    const said: string[] = [];
+    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
+    try {
+      const loaded = await loadChannels(dir, { agent: {} as never, stateRoot: dir });
+      expect(loaded.routeChannels).toEqual([]);
+      expect(said.join("\n")).toContain("symlink");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a channels/ that is a FILE is a mistake, not an agent without channels", async () => {
