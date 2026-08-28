@@ -349,9 +349,6 @@ describe("tunnel: announceWebhooks", () => {
     expect(errs.some((e) => /Register manually/.test(e))).toBe(true);
   });
 
-  // chmod is the only way to reach this branch, and it does not bite as root (root reads any
-  // directory) or on Windows. Skipped rather than faked there: a guard that cannot run its own case
-  // should say so instead of passing quietly.
   it("a DIRECTORY named like a channel file is not a channel", async () => {
     // The name test alone passes for `github.ts/` — and announcing a webhook for a channel the serve
     // never mounted is the same wrong answer as missing one. `loadModuleDir` checks isFile(); so does
@@ -369,6 +366,9 @@ describe("tunnel: announceWebhooks", () => {
     }
   });
 
+  // chmod is the only way to reach this branch, and it does not bite as root (root reads any
+  // directory) or on Windows. Skipped rather than faked there: a guard that cannot run its own case
+  // should say so instead of passing quietly.
   const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
   it.skipIf(!canDenyRead)("reports an unreadable channels/ instead of reading it as 'no channels'", async () => {
     // Returning [] for a directory it could not read registers no webhooks while the tunnel reports
