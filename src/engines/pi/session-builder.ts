@@ -46,7 +46,7 @@ import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
-import { log } from "../../log.ts";
+import { log, reportModuleLoadFailures } from "../../log.ts";
 import {
   type ReadonlySessionManager,
   type ToolActivation,
@@ -55,7 +55,6 @@ import {
   turnContext,
 } from "./tool-context.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
-import { reportModuleLoadFailures } from "../../log.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
 export interface BuildSessionRuntimeOptions {

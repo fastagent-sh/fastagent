@@ -6,8 +6,7 @@
  * pi-specific is opening a DIRECTORY into one, which is why this shortcut lives here and the
  * assembly does not. A second engine ships its own opener and reuses `mountAgentService` unchanged.
  */
-import type { AgentService, MountAgentServiceOptions } from "../../service.ts";
-import { mountAgentService } from "../../service.ts";
+import { type AgentService, type MountAgentServiceOptions, mountAgentService } from "../../service.ts";
 import { createPiAgentFromDir } from "./open.ts";
 
 export interface CreateAgentServiceOptions extends MountAgentServiceOptions {
