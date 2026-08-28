@@ -130,14 +130,16 @@ function lastErrorLine(tail: string): string {
   return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
 }
 
-/** Channel basenames present in `<dir>/channels/`. What counts as a module file is {@link isModuleFile}
- *  — the same predicate discovery uses, so the tunnel cannot register a set the serve did not mount. */
+/** Channel basenames present in `<dir>/channels/`. Both halves of the test match what actually
+ *  LOADS a channel (`loadModuleDir`): a real file, and {@link isModuleFile}. `isFile()` is not
+ *  pedantry here — a directory named `telegram.ts` passes the name test, and registering a webhook
+ *  for a channel the serve never mounted is the same wrong answer as missing one. */
 function channelBasenames(dir: string): string[] {
   const channels = join(dir, "channels");
   try {
-    return readdirSync(channels)
-      .filter(isModuleFile)
-      .map((n) => basename(n, extname(n)));
+    return readdirSync(channels, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && isModuleFile(entry.name))
+      .map((entry) => basename(entry.name, extname(entry.name)));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // No channels/ is the ordinary case. Anything else is a directory we cannot read, and returning

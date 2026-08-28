@@ -352,6 +352,23 @@ describe("tunnel: announceWebhooks", () => {
   // chmod is the only way to reach this branch, and it does not bite as root (root reads any
   // directory) or on Windows. Skipped rather than faked there: a guard that cannot run its own case
   // should say so instead of passing quietly.
+  it("a DIRECTORY named like a channel file is not a channel", async () => {
+    // The name test alone passes for `github.ts/` — and announcing a webhook for a channel the serve
+    // never mounted is the same wrong answer as missing one. `loadModuleDir` checks isFile(); so does
+    // this, or the two disagree about what the deployment serves.
+    const dir = await mkdtemp(join(tmpdir(), "fa-tunnel-dirch-"));
+    await mkdir(join(dir, "channels", "github.ts"), { recursive: true });
+    const said: string[] = [];
+    const info = vi.spyOn(log, "info").mockImplementation((message) => void said.push(message));
+    try {
+      await announceWebhooks(dir, "https://x.trycloudflare.com");
+      expect(said.join("\n")).not.toContain("github:");
+    } finally {
+      info.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
   it.skipIf(!canDenyRead)("reports an unreadable channels/ instead of reading it as 'no channels'", async () => {
     // Returning [] for a directory it could not read registers no webhooks while the tunnel reports
