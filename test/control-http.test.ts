@@ -1225,7 +1225,7 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);
   });
 
-  it("sessions() travels: the deployment's list, isomorphic local and remote", async () => {
+  it("sessions.list() travels: the deployment's list, isomorphic local and remote", async () => {
     const served = await serveControl();
     try {
       await drain(served.agent.invoke({ session: "sList" }, { text: "hi" }));

@@ -407,7 +407,7 @@ describe("session control (Phase 1): observation plane", () => {
     }
   });
 
-  it("dispatch(): boundary mutations still reject with unsupported_capability; run commands on idle reject with no_active_run", async () => {
+  it("without boundary wiring: writes reject unsupported_capability, and run actions on an idle session reject no_active_run", async () => {
     const { control } = await makeObserved([]);
     const compact = await control.sessions.get("sD").compact();
     expect(compact.ok).toBe(false);
@@ -1849,7 +1849,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
 });
 
 describe("session control (Phase 4): session lifecycle", () => {
-  it("sessions() lists the deployment's conversations, with the name set_name gave them", async () => {
+  it("sessions.list() reports the deployment's conversations, with the name update({ name }) gave them", async () => {
     const { control, sessions } = await makeBoundary([]);
     await sessions.openOrCreate("room-a");
     await sessions.openOrCreate("room-b");
@@ -1863,7 +1863,7 @@ describe("session control (Phase 4): session lifecycle", () => {
     expect((await control.sessions.get("room-b").state()).name).toBeUndefined();
   });
 
-  it("the set_name event carries the RECORDED name, not the payload", async () => {
+  it("the name event carries the RECORDED name, not the payload", async () => {
     // pi collapses newlines and trims, so echoing the payload would hand a client tracking the
     // event stream a label neither state() nor sessions() ever confirms.
     const { control, sessions } = await makeBoundary([]);

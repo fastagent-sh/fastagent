@@ -567,10 +567,10 @@ unlike that one it carries a stable code: a store that cannot be enumerated answ
 `sessions_unavailable` (remotely: 503 with the code on `ControlRequestError.code`), because `[]`
 already means "no sessions".
 
-Building that list costs a full read of every record, so an unchanged store answers from the last
-build (one `stat` per record decides). A poll against an idle deployment is therefore cheap; one
-against a deployment mid-turn rebuilds. Refresh on a timer if you like — but drive the open
-conversation from `events()`, not from re-listing.
+Building that list reads and parses EVERY record, every call — there is no cache (one was tried and
+deleted: it missed on every poll of a busy deployment, since each append moves the file). Measured at
+20 ms for 100 sessions / 8 MB, and it yields to the event loop between records, so a timer refresh is
+fine at human intervals. Drive the OPEN conversation from `events()` rather than by re-listing.
 
 Writes run between runs, under the SAME lease (`session_busy` while a run is active, retryable at
 idle). A session's PROPERTIES are one patch — `update` validates every field before writing any, so a

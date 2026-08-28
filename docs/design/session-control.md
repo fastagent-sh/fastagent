@@ -539,8 +539,10 @@ POST   /control/invoke                         the DATA plane
   disagree.
 - **Actions and patches ride plain HTTP request/response** — the request correlation the design once
   sketched as a `WireCommand.id` is implicit in HTTP itself. Bodies are parsed field by field at the
-  boundary (never cast through), and an unknown key is dropped at the wire rather than reaching the
-  hub.
+  boundary (never cast through). An unknown key is REJECTED there, not dropped: silently ignoring it
+  answers `ok: true` for a patch that set nothing, which is what a client typo and a newer client
+  talking to an older serve both look like. It rejects with the same `unsupported_capability` the
+  in-process path answers, naming the field.
 - A `SessionResult` rides HTTP **200 either way**: `ok: false` is a protocol-level answer (rejected
   before acceptance), not a transport failure. A non-2xx means the transport or auth failed — or,
   for the one read that may reject, that the store could not be enumerated.
@@ -581,7 +583,7 @@ authorization, content-type`, and allowed METHODS **per path**. Each value is fo
   cannot know the origins of the GUIs that will manage it (the asymmetry [§14](#14-security-boundary)
   settles).
 - `content-type` because only three values are safelisted and `application/json` is not among them:
-  a browser POSTing to `dispatch`/`invoke` names it in the preflight, so allowing just
+  a browser POSTing to `…/actions`, `PATCH`, `PUT` or `invoke` names it in the preflight, so allowing just
   `authorization` leaves precisely the WRITE routes unreachable while every read works.
 - Per-path methods, PLUS whatever the preflight asks for. The advertised set describes what the
   path serves, but a preflight is a gate applied before the request exists: refusing there means the
@@ -596,11 +598,14 @@ route" (skew) rather than as a fault.
 
 **When a read cannot be total.** `state`/`entries`/`events` are TOTAL: their absent fields are shapes
 a control-less deployment answers with too, which is what lets a client rely on them for reconnect.
-`sessions()` is the first read where that is impossible — `[]` is the honest answer for a deployment
-with no sessions, so a store that cannot be enumerated must not borrow it. That costs the engine a
-PROBE rather than a pass-through: pi's own session listing catches every IO error and answers `[]`,
-so the store checks the records directory itself before asking — a mechanism trusted to surface a
-fault it never sees is worse than none, because it stops anyone from looking. The rule, decided once for
+`sessions.list()` is the first read where that is impossible — `[]` is the honest answer for a deployment
+with no sessions, so a store that cannot be enumerated must not borrow it. That costs the engine
+more than a pass-through: pi's own session listing catches every IO error and answers `[]`, so the
+store reads the records directory itself and lets that read fail, treating only "the directory is not
+there" as an empty store. (Guarding it instead was tried twice and was wrong both times —
+`existsSync` answers false for any stat failure, and `statSync`'s `throwIfNoEntry: false` returns
+undefined for ENOTDIR as well as ENOENT. A mechanism trusted to surface a fault it never sees is
+worse than none, because it stops anyone from looking.) The rule, decided once for
 every read that follows: a read that CAN be total stays total; one that cannot REJECTS, and the
 transport carries the same error shape a `SessionResult` does (`{ code, message, retryable }`) on a
 non-2xx — `sessions_unavailable` + 503 here. The in-process contract keeps its return types; the
