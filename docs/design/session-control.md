@@ -643,7 +643,9 @@ Four properties make the pass-through safe. Each is load-bearing — remove one 
 the facade to understand what it forwards:
 
 - **Every CONTROL call names its session in the URL** — one path segment, percent-encoded (§13), so
-  the facade routes on a prefix. The DATA plane is the exception that costs the most to learn late:
+  the facade routes on a prefix. It must compare the DECODED segment against its own mapping, because
+  that is what the plane addresses: `%61bc` and `abc` are one session, and a Feishu id containing `/`
+  never matches raw. The DATA plane is the exception that costs the most to learn late:
   `POST /control/invoke` names its session in the BODY (see the trap below).
 - **`events` subscribes per session** rather than filtering a global stream, so a tenant cannot
   observe another's run by holding a connection open.
@@ -671,10 +673,13 @@ through as-is. `GET /control/sessions` must NOT be exposed — it returns every 
 deployment (§5), and a facade already holds the per-user mapping that a filtered list would return,
 so it should answer from that instead of forwarding. And the deployment's own port must not be
 reachable by end users: the bearer token is deployment-wide, so a user who can reach past the facade
-holds every session. A same-host facade wants `--bind 127.0.0.1` — with one consequence to plan for:
-the plane and the channel webhooks share one server and one bind, so loopback takes Telegram/Feishu/
-Slack ingress off the network too (and is refused outright with `--tunnel`). Either proxy those paths
-through the facade as well, or keep the port public and put the facade in front of it elsewhere.
+holds every session. A same-host facade wants `--bind 127.0.0.1`, with two consequences to plan for.
+The plane and the channel webhooks share one server and one bind, so loopback takes Telegram/Feishu/
+Slack ingress off the network too — either proxy those paths through the facade as well, or keep the
+port public and put the facade in front of it elsewhere. And `--tunnel` is ALLOWED with that bind
+(cloudflared dials the name `localhost`, which `127.0.0.1` answers), so nothing stops the two being
+combined — but the tunnel republishes the port on a public URL, which is precisely what the loopback
+bind was for. A facade deployment does not use both.
 
 A remotely exposed control plane MUST be wrapped by a host that enforces: an authenticated
 principal and per-session authorization; separated observe and write permissions; allowed model
