@@ -14,6 +14,17 @@ import { fileURLToPath } from "node:url";
  */
 const srcDir = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 
+/** Every .ts under src/ — for the checks that read source text rather than the import graph. */
+function walkSources(dir: string = srcDir): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkSources(p));
+    else if (e.name.endsWith(".ts")) out.push(p);
+  }
+  return out;
+}
+
 function staticPackageGraph(entryRel: string): Set<string> {
   const visited = new Set<string>();
   const packages = new Set<string>();
@@ -250,6 +261,36 @@ describe("the contracts depend on nothing", () => {
     // ...and neither neutral layer names an engine (the engine-neutrality suite above covers this
     // for core; node now carries the assembly, so it needs the same bar).
     expect([...staticPackageGraph("node.ts")].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
+  });
+
+  it("every openExternalUrl call prints the URL too — the headless fallback it depends on", () => {
+    // `openExternalUrl` swallows its spawn error (no browser on a server is normal), so a caller
+    // that does not ALSO print the URL leaves a headless operator staring at a prompt with no way
+    // to reach the page. The function's own doc states the obligation; nothing enforced it, and one
+    // of the six call sites had already lost it — the Slack resume path, which then asks the
+    // operator to paste a token from a page they were never shown.
+    const outputs = /console\.(?:error|log|warn)\(|clackLog\.\w+\(/;
+    const offenders: string[] = [];
+    for (const file of walkSources()) {
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((line, i) => {
+        const call = line.match(/openExternalUrl\((\w+)\)/);
+        if (!call) return;
+        const arg = call[1] as string;
+        const window = lines.slice(Math.max(0, i - 12), i).join("\n");
+        const printed = window.search(outputs);
+        // A HEURISTIC, and worth naming as one: it asks that some output call precede the open and
+        // that the argument appear after it. That catches the real miss — an open with nothing
+        // printed at all — and it would pass an alias (`const u = url` under a print of `url`),
+        // which is fine, since that one did print the URL. What it cannot see is an output call
+        // printing an UNRELATED string near an open; proving that needs an AST, and this guard is
+        // not worth one.
+        if (printed === -1 || !window.slice(printed).includes(arg)) {
+          offenders.push(`${relative(srcDir, file)}:${i + 1} opens ${arg} without printing it`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("...and the mechanism that serves them depends on one, for the node bridge only", () => {
