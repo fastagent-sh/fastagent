@@ -585,35 +585,45 @@ async function runDeployDocker(
     extraSecrets,
     env: deployEnvironment(agentDir, channels),
   });
-  // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
-  // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
-  // Installed BEFORE the driver, which is what reaches the registrars now.
-  installProxyFetch();
   const outcome = await deployDockerRun(
-    { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
+    {
+      composeFile,
+      port,
+      secrets,
+      missingSecrets,
+      needsModelCredential,
+      requireTunnel,
+      announce: (tunnelUrl) =>
+        announceWebhooks(agentDir, tunnelUrl, {
+          openUrl: openExternalUrl,
+          routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
+          stateRoot: resolveStateRoot(agentDir),
+        }),
+    },
     spawnRunner("docker", workspace),
     (message) => console.error(`[fastagent] ${message}`),
-    undefined,
-    undefined,
-    (tunnelUrl) =>
-      announceWebhooks(agentDir, tunnelUrl, {
-        openUrl: openExternalUrl,
-        routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
-        stateRoot: resolveStateRoot(agentDir),
-      }),
   );
   const compose = `docker compose -f ${composeFile}`;
+  // Compose reached "up" iff the driver could report where it is. The gates before that point
+  // (no Docker CLI, no daemon, missing secrets) must not be preceded by `docker compose logs`
+  // instructions for containers that do not exist; the health-check gate names its own logs command.
+  const isUp = outcome.ok || outcome.url !== undefined || outcome.tunnelUrl !== undefined;
   if (outcome.url) console.error(`[fastagent] running → ${outcome.url}`);
-  console.error(`[fastagent] logs: ${compose} logs -f agent`);
-  console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
-  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
+  if (isUp) {
+    console.error(`[fastagent] logs: ${compose} logs -f agent`);
+    console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
+  }
+  // BEFORE failStartup: a registration gate says "re-run this deploy", and a re-run rebuilds the
+  // tunnel service — the operator needs to know the URL will be a different one, or they will read
+  // the retry as re-registering the same address.
   if (outcome.tunnelUrl) {
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
         `restarts, re-run this deploy so webhooks receive the new URL`,
     );
-    return;
   }
+  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
+  if (outcome.tunnelUrl) return;
   const paths = dockerWebhookPaths(channels.filter((kind) => !longConnectionChannels.includes(kind)));
   if (paths.length > 0) {
     console.error(

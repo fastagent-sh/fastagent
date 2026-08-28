@@ -21,6 +21,10 @@ export interface DockerRunPlan {
   missingSecrets: string[];
   /** Neither an env-key credential nor a readable auth.json is available. */
   needsModelCredential: boolean;
+  /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar
+   *  answered. REQUIRED, not optional: an absent one would delete this whole step in silence, which
+   *  is the failure this driver's gate exists to end. A topology with no tunnel never calls it. */
+  announce: DockerAnnounce;
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
   requireTunnel: boolean;
 }
@@ -33,7 +37,7 @@ export type DockerRunOutcome =
 
 /** Register the deployment's webhooks against its public URL, reporting what each registrar
  *  answered. Injected so the driver stays free of channel specifics — and so a test can fail one. */
-export type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
+type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
 
 export type DockerHealthProbe = (healthUrl: string) => Promise<boolean>;
 export type DockerTunnelUrlProbe = (
@@ -88,7 +92,6 @@ export async function deployDockerRun(
   log: (message: string) => void,
   healthProbe: DockerHealthProbe = defaultHealthProbe,
   tunnelUrlProbe: DockerTunnelUrlProbe = defaultTunnelUrlProbe,
-  announce?: DockerAnnounce,
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
@@ -197,11 +200,9 @@ export async function deployDockerRun(
   // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer
   // that owns the outcome, so it is the layer that can gate on one. While it sat above, docker was
   // the one target whose `--run` could exit 0 with a webhook that never registered.
-  if (announce) {
-    const reg = registrationGate(log, `re-run this deploy to retry registration (Compose is already up)`);
-    for (const { kind, outcome } of await announce(tunnelUrl)) reg.track(kind, outcome);
-    const blocked = reg.gate();
-    if (blocked) return { ok: false, gate: blocked, url, tunnelUrl };
-  }
+  const reg = registrationGate(log, `re-run this deploy to retry registration (Compose is already up)`);
+  for (const { kind, outcome } of await plan.announce(tunnelUrl)) reg.track(kind, outcome);
+  const blocked = reg.gate();
+  if (blocked) return { ok: false, gate: blocked, url, tunnelUrl };
   return { ok: true, url, tunnelUrl };
 }

@@ -24,6 +24,7 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   missingSecrets: [],
   needsModelCredential: false,
   requireTunnel: false,
+  announce: async () => [],
   ...override,
 });
 
@@ -97,15 +98,17 @@ describe("deploy/docker/run: local Compose journey", () => {
       return {};
     });
     const gated = await deployDockerRun(
-      plan({ requireTunnel: true }),
+      plan({
+        requireTunnel: true,
+        announce: async () => [
+          { kind: "telegram", outcome: "failed" },
+          { kind: "github", outcome: "manual" },
+        ],
+      }),
       docker,
       () => {},
       healthy,
       async () => "https://blue-cat.trycloudflare.com",
-      async () => [
-        { kind: "telegram", outcome: "failed" },
-        { kind: "github", outcome: "manual" },
-      ],
     );
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
@@ -121,14 +124,13 @@ describe("deploy/docker/run: local Compose journey", () => {
       return {};
     });
     const out = await deployDockerRun(
-      plan({ requireTunnel: true }),
+      // `manual` must NOT gate: re-running can never clear it, so an unclearable gate would spin a
+      // coding agent forever (registration-gate.ts states this).
+      plan({ requireTunnel: true, announce: async () => [{ kind: "github", outcome: "manual" }] }),
       docker,
       () => {},
       healthy,
       async () => "https://blue-cat.trycloudflare.com",
-      // `manual` must NOT gate: re-running can never clear it, so an unclearable gate would spin a
-      // coding agent forever (registration-gate.ts states this).
-      async () => [{ kind: "github", outcome: "manual" }],
     );
     expect(out.ok).toBe(true);
   });
