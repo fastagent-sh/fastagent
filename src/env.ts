@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
 import { log } from "./log.ts";
 import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 

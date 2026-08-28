@@ -16,9 +16,15 @@ import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
-import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
+import {
+  NO_ACTIVE_RUN_CODE,
+  type AgentCommand,
+  type SessionControl,
+  type SessionEntry,
+  type SessionEvent,
+  type SessionState,
+} from "../../session.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
-import type { AgentCommand, SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface AttachOptions {

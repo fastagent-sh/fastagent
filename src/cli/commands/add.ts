@@ -9,11 +9,8 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { dotEnvPath, loadDotEnv } from "../../env.ts";
-import { resolveStateRoot } from "../../paths.ts";
-import { SECRETS_DIRNAME } from "../../paths.ts";
+import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath, exists } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
-import { isUnderDir } from "../../paths.ts";
-import { displayPath } from "../../paths.ts";
 import {
   type ChannelKind,
   type GroupBehavior,
@@ -25,7 +22,6 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "../../scaffold/add-channel.ts";
-import { exists } from "../../paths.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 

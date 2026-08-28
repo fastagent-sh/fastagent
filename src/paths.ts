@@ -16,8 +16,7 @@
  * modules depend on it for something the engine has no say in.
  */
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
-import { access } from "node:fs/promises";
-import { realpath } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
