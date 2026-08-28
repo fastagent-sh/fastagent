@@ -7,6 +7,7 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
@@ -86,7 +87,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
       // createControlPlane() call that could drift from it: "every control route requires the token" has
       // to fail when a NEW route forgets `guard`, which a literal array cannot do.
-      expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
+      expect(served.routeKeys).toContain("GET /control/commands"); // the sweep sees the whole table
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
         // OPTIONS is the ONE unauthenticated method here, and deliberately so: a preflight cannot
@@ -290,6 +291,29 @@ describe("session control over HTTP (Phase 3)", () => {
     } finally {
       errors.mockRestore();
       server.close();
+    }
+  });
+
+  it("\u00a713's route table lists every route the plane mounts", async () => {
+    // The design doc's table is a hand-kept copy, and the multi-tenant facade in \u00a714 is written
+    // AGAINST it: a facade author reads that table to decide what to authorise and what to pass
+    // through, so a route missing from it is a route nobody guards. Derived from the mount, so
+    // adding one without documenting it fails here.
+    const doc = readFileSync(new URL("../docs/design/session-control.md", import.meta.url), "utf8");
+    const table = doc.slice(doc.indexOf("## 13."), doc.indexOf("## 14."));
+    const documented = new Set(
+      [...table.matchAll(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/control\/\S*)/gm)].map(
+        ([, method, path]) => `${method} ${(path as string).replace("{id}", "{session}")}`,
+      ),
+    );
+    const served = await serveControl();
+    try {
+      for (const key of served.routeKeys) {
+        if (key.startsWith("OPTIONS ")) continue; // CORS preflight, not a call a facade forwards
+        expect(documented, `${key} is mounted but missing from \u00a713`).toContain(key);
+      }
+    } finally {
+      await served.close();
     }
   });
 

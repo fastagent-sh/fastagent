@@ -632,6 +632,46 @@ every entry and abort every run; `delete` adds that the loss is permanent. A dep
 per-principal destructive policy owes it at the wrapping host, which is where this section already
 puts authorisation.
 
+**The multi-tenant facade.** That wrapping host has one shape worth naming, because the plane was
+built to make it possible and none of it is visible from the route list. N users behind one
+deployment, each reaching only their own sessions: the facade authenticates its user, reads the
+session id out of the request, checks it against its OWN user→session mapping, and forwards to the
+deployment with the deployment token. It never parses a command, and it gains no new capability when
+the plane does.
+
+Four properties make the pass-through safe. Each is load-bearing — remove one and the pattern needs
+the facade to understand what it forwards:
+
+- **Every call that touches user data names its session, and names it in the URL** — one path
+  segment, percent-encoded (§13). The facade routes on a prefix instead of parsing bodies.
+- **`events` subscribes per session** rather than filtering a global stream, so a tenant cannot
+  observe another's run by holding a connection open.
+- **The lease is per session** (§5.2), so a busy tenant answers `session_busy` to itself alone.
+- **Authentication and extraction are separate in the plane itself.** The bearer guard authenticates;
+  taking the id out of the path is extraction and enforces nothing. There is no per-session
+  permission inside to half-configure and get wrong — the facade owns that question whole.
+
+**The trap: the path says where a call WRITES, the body says where it READS.** Two calls take a
+second session id, and neither one is in the URL:
+
+| Call | Checked by a facade reading the path | Also needs checking |
+|---|---|---|
+| `POST /control/invoke` | — (the session is in the BODY, not the path) | `session` AND `parentSession` — the latter inherits the parent's history into the new session |
+| `PUT /control/sessions/{id}` | `{id}`, the fork's destination | `from` in the body — the history's SOURCE |
+
+A facade that authorises only what it finds in the path lets a user read any conversation on the
+deployment by naming it as a `parentSession` or a fork `from`. Both are extension fields on a call
+whose primary id checks out, which is exactly where an ownership check is not looked for. `invoke` is
+doubly easy to miss: it is the DATA plane, so a facade written around "the control routes" may not
+guard it at all — and it is the one that WRITES.
+
+The rest sorts cleanly: `capabilities` and `commands` are agent-level with no user data and pass
+through as-is. `GET /control/sessions` must NOT be exposed — it returns every session on the
+deployment (§5), and a facade already holds the per-user mapping that a filtered list would return,
+so it should answer from that instead of forwarding. And the deployment's own port must not be
+reachable by end users: the bearer token is deployment-wide, so a user who can reach past the facade
+holds every session. A same-host facade wants `--bind 127.0.0.1`.
+
 A remotely exposed control plane MUST be wrapped by a host that enforces: an authenticated
 principal and per-session authorization; separated observe and write permissions; allowed model
 and thinking-level policy; prompt and attachment size limits; opaque artifact references instead of
