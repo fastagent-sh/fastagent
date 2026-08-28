@@ -9,7 +9,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { Agent, AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
 import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
@@ -294,27 +294,27 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
-  it("\u00a713's route table lists every route the plane mounts", async () => {
+  it("\u00a713's route table lists every route the plane mounts", () => {
     // The design doc's table is a hand-kept copy, and the multi-tenant facade in \u00a714 is written
     // AGAINST it: a facade author reads that table to decide what to authorise and what to pass
     // through, so a route missing from it is a route nobody guards. Derived from the mount, so
     // adding one without documenting it fails here.
     const doc = readFileSync(new URL("../docs/design/session-control.md", import.meta.url), "utf8");
-    const table = doc.slice(doc.indexOf("## 13."), doc.indexOf("## 14."));
+    const start = doc.indexOf("## 13.");
+    const end = doc.indexOf("## 14.");
+    // Renumbering either heading would leave `slice(start, -1)` scanning the whole document, turning
+    // this into a check that passes on a table it never read.
+    expect([start, end]).not.toContain(-1);
     const documented = new Set(
-      [...table.matchAll(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/control\/\S*)/gm)].map(
+      [...doc.slice(start, end).matchAll(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/control\/\S*)/gm)].map(
         ([, method, path]) => `${method} ${(path as string).replace("{id}", "{session}")}`,
       ),
     );
-    const served = await serveControl();
-    try {
-      for (const key of served.routeKeys) {
-        if (key.startsWith("OPTIONS ")) continue; // CORS preflight, not a call a facade forwards
-        expect(documented, `${key} is mounted but missing from \u00a713`).toContain(key);
-      }
-    } finally {
-      await served.close();
-    }
+    // No server: the route table is what `controlPlaneRoutes` returns, and it is synchronous.
+    // `agent` is what mounts the data-plane route, so the table must be built WITH one.
+    const agent: Agent = { invoke: () => (async function* () {})() };
+    const mounted = Object.keys(controlPlaneRoutes(handleControl({}), { token: TOKEN, agent }));
+    for (const key of mounted) expect(documented, `${key} is mounted but missing from \u00a713`).toContain(key);
   });
 
   it("local and remote are isomorphic: capabilities/state/entries/dispatch answer identically", async () => {

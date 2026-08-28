@@ -642,11 +642,12 @@ the plane does.
 Four properties make the pass-through safe. Each is load-bearing — remove one and the pattern needs
 the facade to understand what it forwards:
 
-- **Every call that touches user data names its session, and names it in the URL** — one path
-  segment, percent-encoded (§13). The facade routes on a prefix instead of parsing bodies.
+- **Every CONTROL call names its session in the URL** — one path segment, percent-encoded (§13), so
+  the facade routes on a prefix. The DATA plane is the exception that costs the most to learn late:
+  `POST /control/invoke` names its session in the BODY (see the trap below).
 - **`events` subscribes per session** rather than filtering a global stream, so a tenant cannot
   observe another's run by holding a connection open.
-- **The lease is per session** (§5.2), so a busy tenant answers `session_busy` to itself alone.
+- **The lease is per session** (§9), so a busy tenant answers `session_busy` to itself alone.
 - **Authentication and extraction are separate in the plane itself.** The bearer guard authenticates;
   taking the id out of the path is extraction and enforces nothing. There is no per-session
   permission inside to half-configure and get wrong — the facade owns that question whole.
@@ -670,7 +671,10 @@ through as-is. `GET /control/sessions` must NOT be exposed — it returns every 
 deployment (§5), and a facade already holds the per-user mapping that a filtered list would return,
 so it should answer from that instead of forwarding. And the deployment's own port must not be
 reachable by end users: the bearer token is deployment-wide, so a user who can reach past the facade
-holds every session. A same-host facade wants `--bind 127.0.0.1`.
+holds every session. A same-host facade wants `--bind 127.0.0.1` — with one consequence to plan for:
+the plane and the channel webhooks share one server and one bind, so loopback takes Telegram/Feishu/
+Slack ingress off the network too (and is refused outright with `--tunnel`). Either proxy those paths
+through the facade as well, or keep the port public and put the facade in front of it elsewhere.
 
 A remotely exposed control plane MUST be wrapped by a host that enforces: an authenticated
 principal and per-session authorization; separated observe and write permissions; allowed model
