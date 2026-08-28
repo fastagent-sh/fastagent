@@ -18,7 +18,7 @@
  * `--bind 127.0.0.1` (or `http.host`) closes exactly that reach, and the warning goes quiet because
  * there is none left to state.
  */
-import type { ImageRef, Prompt } from "../agent.ts";
+import type { ImageRef, Prompt, Agent } from "../agent.ts";
 import {
   INVALID_COMMAND_CODE,
   SESSIONS_UNAVAILABLE_CODE,
@@ -30,7 +30,6 @@ import {
   UPDATE_FIELDS,
 } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
-import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
 import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { log } from "../log.ts";

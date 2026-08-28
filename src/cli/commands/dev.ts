@@ -8,11 +8,10 @@ import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
 
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
-import { reportModuleLoadFailures } from "../../log.ts";
+import { reportModuleLoadFailures, setLogLevel } from "../../log.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService } from "../../service.ts";
-import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";

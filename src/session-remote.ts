@@ -59,17 +59,17 @@ function idleWatchdog(abort: AbortController): ReadWatch {
     stop: () => clearInterval(timer),
   };
 }
-import { isAddressableSession } from "./session.ts";
-import type {
-  AgentCommand,
-  Session,
-  SessionCapabilities,
-  SessionEntries,
-  SessionEvent,
-  SessionControl,
-  SessionResult,
-  SessionState,
-  SessionSummary,
+import {
+  isAddressableSession,
+  type AgentCommand,
+  type Session,
+  type SessionCapabilities,
+  type SessionEntries,
+  type SessionEvent,
+  type SessionControl,
+  type SessionResult,
+  type SessionState,
+  type SessionSummary,
 } from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a

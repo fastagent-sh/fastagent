@@ -7,10 +7,9 @@
  */
 import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
-import { DEFAULT_AGENT_DIRNAME, SECRETS_DIRNAME, agentsAt } from "../../paths.ts";
+import { DEFAULT_AGENT_DIRNAME, SECRETS_DIRNAME, agentsAt, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { agentDirName, agentDirNameError, scaffoldAgent } from "../../scaffold/init.ts";
-import { displayPath } from "../../paths.ts";
 import { failStartup, failUsage } from "../fail.ts";
 
 export interface InitOptions {
