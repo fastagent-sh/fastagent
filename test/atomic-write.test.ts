@@ -3,8 +3,7 @@
  * copies of it drifted apart across the codebase (two identical, two with different temp names and
  * different permission handling).
  */
-import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";

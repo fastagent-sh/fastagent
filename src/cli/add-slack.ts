@@ -161,6 +161,7 @@ export async function onboardSlackInternalApp(input: {
       action = answer;
     }
     if (action === "replace-config") {
+      console.error(`[fastagent] generate a fresh App Configuration Token pair at ${CONFIG_TOKEN_URL}`);
       openExternalUrl(CONFIG_TOKEN_URL);
       state = {
         ...state,

@@ -15,8 +15,7 @@
  */
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
-import { loadSkills } from "@earendil-works/pi-agent-core";
+import { type ExecutionEnv, type Skill, type SkillDiagnostic, loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";

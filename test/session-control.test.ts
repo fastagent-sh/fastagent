@@ -8,9 +8,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
-import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
+import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
 
-import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
+import {
+  SUBSCRIBER_BUFFER_CAP,
+  createPiSessionControl,
+  type PiBoundaryWiring,
+} from "../src/engines/pi/session-control.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
@@ -27,11 +31,9 @@ import {
   type SessionEntry,
   type SessionEvent,
   type StateChangedEvent,
+  type SessionControl,
 } from "../src/session.ts";
-import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
-import type { SessionControl } from "../src/session.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { makeFaux } from "./faux.ts";
 

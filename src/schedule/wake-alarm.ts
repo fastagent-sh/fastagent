@@ -25,8 +25,7 @@ import { readFileSync } from "node:fs";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { scheduleFile, writeScheduleFile } from "./state.ts";
-import type { Wakeup } from "./wakeups.ts";
-import { listWakeups } from "./wakeups.ts";
+import { type Wakeup, listWakeups } from "./wakeups.ts";
 
 /** The forwarder's reserved wake-alarm path — never forwarded to channel routes. */
 export const WAKE_ALARM_PATH = "/__fastagent/wake-alarm";

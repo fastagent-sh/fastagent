@@ -22,13 +22,12 @@ import { classifyBind, clientHost } from "./bind.ts";
 import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
-import { parseRouteKey, pathUnderPrefix } from "./channels/serve.ts";
+import { parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
-import { type PrefixMount, router } from "./channels/serve.ts";
 import { log, reportModuleLoadFailures } from "./log.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 

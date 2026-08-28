@@ -12,8 +12,7 @@
  * Writes take the same lease as runs. Without boundary wiring they reject before acceptance with
  * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
-import { prepareCompaction } from "@earendil-works/pi-agent-core";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { prepareCompaction, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
@@ -43,14 +42,12 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import { forkProvenance } from "./session-markers.ts";
-import type { RunControls, SessionObserver } from "./turn-kit.ts";
-import type { Lease } from "./turn-kit.ts";
+import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
+import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
-import { isNavigable, publishedLeaf } from "./session-markers.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
