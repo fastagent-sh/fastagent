@@ -9,6 +9,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { join } from "node:path";
 import { moduleInventory } from "./loader.ts";
+import type { RegistrationOutcome } from "./channels/registration.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
@@ -151,12 +152,20 @@ async function channelBasenames(dir: string): Promise<string[]> {
  * Print the public URL and wire up first-party webhook channels found under `dir` (the agent
  * ROOT): Telegram and Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config
  * token; GitHub and a manually scaffolded Slack app receive explicit console URLs.
+ *
+ * Returns what each registrar ANSWERED, because two kinds of caller need different things from a
+ * failure. `dev`/`start` are long-running: a webhook that did not register is a logged problem, not
+ * a reason to stop serving, and they void this. `deploy … --run` is a command that exits, and an
+ * exit 0 there tells its caller the deployment is reachable — so it feeds these through
+ * `registrationGate`, exactly as the fly/railway/agentcore runners feed their own registrar calls
+ * (docker used to be the one host that could not, because this returned nothing).
  */
 export async function announceWebhooks(
   dir: string,
   baseUrl: string,
   opts: { openUrl?: (url: string) => void; routeChannels?: string[]; stateRoot?: string } = {},
-): Promise<void> {
+): Promise<{ kind: string; outcome: RegistrationOutcome }[]> {
+  const registrations: { kind: string; outcome: RegistrationOutcome }[] = [];
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
     loadDotEnv(dir); // webhook registrars read channel credentials from .env
@@ -171,21 +180,28 @@ export async function announceWebhooks(
   // Serving passes the validated route-channel subset. The basename fallback preserves the public
   // helper's behavior for callers that did not assemble channels first.
   const routeChannels = opts.routeChannels ?? (await channelBasenames(dir));
-  if (routeChannels.length === 0) return;
+  if (routeChannels.length === 0) return registrations;
   // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before
   // its origin connects, and the automatic registrars poll /health before configuring the platform (the
   // same wait the deploy runners rely on). GitHub needs no wait — the operator adds that webhook by hand.
-  if (routeChannels.includes("telegram")) await registerTelegramWebhook(baseUrl);
+  const track = (kind: string, outcome: RegistrationOutcome): void => {
+    registrations.push({ kind, outcome });
+  };
+  if (routeChannels.includes("telegram")) track("telegram", await registerTelegramWebhook(baseUrl));
   if (routeChannels.includes("github")) {
     log.info(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
+    track("github", "manual"); // always a human step — the console line above IS the instruction
   }
   if (routeChannels.includes("slack")) {
-    await registerSlackWebhook(baseUrl, {
-      stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
-      log: (message) => log.info(message),
-    });
+    track(
+      "slack",
+      await registerSlackWebhook(baseUrl, {
+        stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
+        log: (message) => log.info(message),
+      }),
+    );
   }
   // feishu/lark register programmatically too (application-v7 config PATCH — telegram-setWebhook
   // parity), once per mounted kind (each kind is its own app with its own credentials); the registrar
@@ -193,6 +209,7 @@ export async function announceWebhooks(
   const feishuOptions = {
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };
-  if (routeChannels.includes("feishu")) await registerFeishuWebhook(baseUrl, "feishu", feishuOptions);
-  if (routeChannels.includes("lark")) await registerFeishuWebhook(baseUrl, "lark", feishuOptions);
+  if (routeChannels.includes("feishu")) track("feishu", await registerFeishuWebhook(baseUrl, "feishu", feishuOptions));
+  if (routeChannels.includes("lark")) track("lark", await registerFeishuWebhook(baseUrl, "lark", feishuOptions));
+  return registrations;
 }

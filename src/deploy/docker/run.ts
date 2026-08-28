@@ -5,6 +5,8 @@
  */
 import { waitForHealth } from "../../channels/wait-health.ts";
 import { parseTunnelUrl } from "../../tunnel.ts";
+import type { RegistrationOutcome } from "../../channels/registration.ts";
+import { registrationGate } from "../registration-gate.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -19,11 +21,23 @@ export interface DockerRunPlan {
   missingSecrets: string[];
   /** Neither an env-key credential nor a readable auth.json is available. */
   needsModelCredential: boolean;
+  /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar
+   *  answered. REQUIRED, not optional: an absent one would delete this whole step in silence, which
+   *  is the failure this driver's gate exists to end. A topology with no tunnel never calls it. */
+  announce: DockerAnnounce;
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
   requireTunnel: boolean;
 }
 
-export type DockerRunOutcome = { ok: true; url?: string; tunnelUrl?: string } | { ok: false; gate: string };
+export type DockerRunOutcome =
+  | { ok: true; url?: string; tunnelUrl?: string }
+  /** `url`/`tunnelUrl` travel with a gate too: Compose is up, so the operator still needs to know
+   *  where it is and what to re-run. */
+  | { ok: false; gate: string; url?: string; tunnelUrl?: string };
+
+/** Register the deployment's webhooks against its public URL, reporting what each registrar
+ *  answered. Injected so the driver stays free of channel specifics — and so a test can fail one. */
+type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
 
 export type DockerHealthProbe = (healthUrl: string) => Promise<boolean>;
 export type DockerTunnelUrlProbe = (
@@ -183,5 +197,12 @@ export async function deployDockerRun(
       `tunnel did not publish a Quick Tunnel URL — inspect \`docker compose -f ${plan.composeFile} logs tunnel\``,
     );
   }
+  // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer
+  // that owns the outcome, so it is the layer that can gate on one. While it sat above, docker was
+  // the one target whose `--run` could exit 0 with a webhook that never registered.
+  const reg = registrationGate(log, `re-run this deploy to retry registration (Compose is already up)`);
+  for (const { kind, outcome } of await plan.announce(tunnelUrl)) reg.track(kind, outcome);
+  const blocked = reg.gate();
+  if (blocked) return { ok: false, gate: blocked, url, tunnelUrl };
   return { ok: true, url, tunnelUrl };
 }
