@@ -3,8 +3,7 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
-import { loadChannels } from "../src/channels/discover.ts";
-import { discoverChannelFiles, inspectChannels } from "../src/channels/discover.ts";
+import { loadChannels, discoverChannelFiles, inspectChannels } from "../src/channels/discover.ts";
 
 // loadChannels only forwards the ctx to the factory; these factories ignore it.
 const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };

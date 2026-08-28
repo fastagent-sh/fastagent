@@ -18,6 +18,18 @@ import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
 import { SSE_HEARTBEAT_MS } from "./channels/http.ts";
 import { abortFirstIterator } from "./collect.ts";
 import type { WireEvent } from "./channels/control.ts";
+import {
+  isAddressableSession,
+  type AgentCommand,
+  type Session,
+  type SessionCapabilities,
+  type SessionEntries,
+  type SessionEvent,
+  type SessionControl,
+  type SessionResult,
+  type SessionState,
+  type SessionSummary,
+} from "./session.ts";
 
 /** Dead-connection watchdog for SSE reads: the server heartbeats every SSE_HEARTBEAT_MS, so a
  *  PENDING READ seeing no bytes (of ANY kind — comments included) for this many missed beats
@@ -59,18 +71,6 @@ function idleWatchdog(abort: AbortController): ReadWatch {
     stop: () => clearInterval(timer),
   };
 }
-import {
-  isAddressableSession,
-  type AgentCommand,
-  type Session,
-  type SessionCapabilities,
-  type SessionEntries,
-  type SessionEvent,
-  type SessionControl,
-  type SessionResult,
-  type SessionState,
-  type SessionSummary,
-} from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
  *  consumer distinguishing auth failure (401 — stale token, unrecoverable) from transient transport
