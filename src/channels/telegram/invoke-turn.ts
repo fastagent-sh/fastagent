@@ -7,7 +7,6 @@
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { AttachmentDirectoryError, attachmentDir } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -59,10 +58,6 @@ interface ResolvedAttachments {
 async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
   const { api, botToken, chatId, filesDir } = t;
   const { primary, buffered } = attachments;
-  // A turn-level invariant, so it is proved once here rather than per file: the route's directory
-  // breaks every attachment, and failing before the first byte costs nothing — including the vision
-  // images, which download in full before any file is reached.
-  attachmentDir(filesDir, chatId);
   const images = await resolveImages(api, botToken, primary.imageFileIds);
   const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
   const bufferedImages: ImageRef[] = [];
@@ -86,8 +81,6 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
     if (r.status === "fulfilled") {
       for (const file of r.value.files) bufferedFiles.push({ file, ref: r.value.ref });
     } else {
-      // Not one lost attachment — a broken route breaks every one of them, so it leaves the turn.
-      if (r.reason instanceof AttachmentDirectoryError) throw r.reason;
       lost++;
       log.warn(`[telegram] could not load an earlier (buffered) attachment: ${String(r.reason)}`);
     }
@@ -127,9 +120,7 @@ export async function* invokeTurn(
   try {
     resolved = await resolveTurnAttachments(transport, attachments);
   } catch (e) {
-    // A misconfigured route fails identically forever, so it must not be dressed as "try again".
-    const retryable = !(e instanceof AttachmentDirectoryError);
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable };
+    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };

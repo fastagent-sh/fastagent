@@ -121,9 +121,9 @@ src/
 │   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
 │   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
 │   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
-│   │   ├── attachment-path.ts # where an attachment lands: the route-supplied directory is PROVED
-│   │   │                     # inside filesDir (an author's `../..` throws), the platform's file
-│   │   │                     # name is reduced to a usable one (an odd name must not fail a turn)
+│   │   ├── attachment-path.ts # where an attachment lands: the conversation id is ENCODED into a
+│   │   │                     # directory (like piSessionId — an id belongs to the caller, so it is
+│   │   │                     # never rejected), the file name is only reduced, since the model reads it
 │   │   └── stop-command.ts  # the shared /stop parsing every chat channel accepts
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel: see docs/design/core.md §7

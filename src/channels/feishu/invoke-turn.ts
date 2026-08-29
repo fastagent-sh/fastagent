@@ -14,7 +14,6 @@
  */
 import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { AttachmentDirectoryError, attachmentDir } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -221,10 +220,6 @@ async function walkReplyChain(
  * degrade independently.
  */
 async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
-  // A turn-level invariant, so it is proved once here rather than per file: the route's directory
-  // breaks every attachment, and failing before the first byte costs nothing — including the vision
-  // images, which download in full when they come before a file.
-  attachmentDir(t.filesDir, t.chatId);
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";
@@ -320,10 +315,6 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   for (const result of fileResults) {
     if (result.status === "fulfilled") backgroundFiles.push(result.value);
     else {
-      // Not one lost attachment — a broken route breaks every one of them, so it leaves the turn.
-      // Untested here: reaching this needs a buffered file in a threaded room, which no feishu test
-      // sets up. The same line is covered in telegram.test.ts and slack-invoke-turn.test.ts.
-      if (result.reason instanceof AttachmentDirectoryError) throw result.reason;
       lost++;
       log.warn(`${t.label} could not load an earlier (buffered) attachment: ${String(result.reason)}`);
     }
@@ -368,9 +359,7 @@ export async function* invokeFeishuTurn(
   try {
     resolved = await resolveTurnInputs(transport, attachments);
   } catch (e) {
-    // A misconfigured route fails identically forever, so it must not be dressed as "try again".
-    const retryable = !(e instanceof AttachmentDirectoryError);
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable };
+    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };

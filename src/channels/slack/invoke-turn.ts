@@ -1,7 +1,6 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { AttachmentDirectoryError, attachmentDir } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -47,10 +46,6 @@ async function resolveInputs(
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
 ): Promise<ResolvedInputs> {
-  // A turn-level invariant, so it is proved once here rather than per file: the route's directory
-  // breaks every attachment, and failing before the first byte costs nothing — including the vision
-  // images, which download in full when they come before a file.
-  attachmentDir(transport.filesDir, transport.channelId);
   const images: ImageRef[] = [];
   const files: DownloadedSlackFile[] = [];
   for (const id of attachments.primaryFileIds) {
@@ -74,8 +69,6 @@ async function resolveInputs(
       if (resolved.image) backgroundImages.push({ image: resolved.image, ref });
       if (resolved.file) backgroundFiles.push({ file: resolved.file, ref });
     } else {
-      // Not one lost attachment — a broken route breaks every one of them, so it leaves the turn.
-      if (result.reason instanceof AttachmentDirectoryError) throw result.reason;
       lost++;
       log.warn(`${transport.label} could not load an earlier (buffered) Slack file: ${String(result.reason)}`);
     }
@@ -113,9 +106,7 @@ export async function* invokeSlackTurn(
   try {
     resolved = await resolveInputs(transport, attachments);
   } catch (error) {
-    // A misconfigured route fails identically forever, so it must not be dressed as "try again".
-    const retryable = !(error instanceof AttachmentDirectoryError);
-    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable };
+    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: true };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };

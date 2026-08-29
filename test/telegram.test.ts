@@ -535,29 +535,6 @@ describe("buffered attachments (files/photos from un-summoned discussion)", () =
     expect(text).toMatch(/valid\.pdf \(from @alice, msg 2, earlier discussion\)/); // …and it did NOT drag its sibling down
   });
 
-  it("a broken route leaves the turn instead of being counted as one lost background file", async () => {
-    const got = attachFetch();
-    const errors: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((m) => {
-      errors.push(String(m));
-    });
-    const { agent, calls } = replyingAgent("ok");
-    const ch = telegramChannel(agent, {
-      secretToken: SECRET,
-      botToken: "1:A",
-      route: (u) =>
-        (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? { chatId: "../.." } : null,
-    });
-    await ch(tgRequest(doc(1, "report"))); // un-summoned → buffered
-    await ch(tgRequest(summon(2, "@go summarize the file from earlier")));
-    await until(() => errors.length > 0);
-    // The degrade-per-file policy above is right for a stale file and wrong here: the route breaks
-    // every attachment, so the answer must not arrive with a "1 attachment not loaded" note.
-    expect(calls).toHaveLength(0);
-    expect(errors.some((e) => /AttachmentDirectoryError/.test(e))).toBe(true);
-    expect(got).toEqual([]); // rejected before the first byte, same as the primary path
-  });
-
   it("a failed buffered PHOTO also degrades — counted in the note, its sibling still lands as vision", async () => {
     vi.stubGlobal(
       "fetch",
@@ -1565,86 +1542,10 @@ describe("telegram channel", () => {
     expect((await ch(tgRequest(doc))).status).toBe(200);
     for (let i = 0; i < 100 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
     // files live UNDER the state dir — one home for all channel state, so `stateDir` moves everything
-    const dest = join(state, "files/77/report.pdf");
+    const dest = join(state, "files/c-77/report.pdf");
     expect(existsSync(dest)).toBe(true);
     expect(calls[0]?.text).toMatch(/attached files/);
     expect(calls[0]?.text).toContain(dest);
-  });
-
-  it("fails the turn when the route names an attachment directory outside files/ (an author bug is audible)", async () => {
-    const fetchMock = vi.fn(async (url: string) =>
-      String(url).endsWith("/getFile")
-        ? new Response(JSON.stringify({ ok: true, result: { file_path: "documents/report.pdf", file_size: 5 } }), {
-            status: 200,
-          })
-        : String(url).includes("/file/bot")
-          ? new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 })
-          : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const state = freshStateDir();
-    const { agent, calls } = replyingAgent("ok");
-    const ch = telegramChannel(agent, {
-      secretToken: SECRET,
-      botToken: "BOT",
-      route: () => ({ chatId: "../.." }),
-      apiBaseUrl: API,
-      stateDir: state,
-      onError: (f) => `ERR retryable=${f.retryable}: ${f.details}`,
-    });
-    const doc: TelegramUpdate = {
-      update_id: 12,
-      message: {
-        message_id: 5,
-        caption: "summarize",
-        document: { file_id: "d1", file_name: "report.pdf" },
-        chat: { id: 77, type: "private" },
-      },
-    };
-    expect((await ch(tgRequest(doc))).status).toBe(200);
-    const writes = (): string[] =>
-      [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
-        (c) => bodyOf(c).text as string,
-      );
-    const delivered = (): boolean => writes().some((t) => /ERR retryable=/.test(t));
-    for (let i = 0; i < 200 && !delivered(); i++) await new Promise((r) => setTimeout(r, 5));
-    expect(calls).toHaveLength(0);
-    // Permanent, so the user is not invited to retry something that will fail identically forever.
-    expect(writes().some((t) => /ERR retryable=false: could not load attachment/.test(t))).toBe(true);
-    // …and the route is rejected BEFORE the bytes: a permanent misconfiguration must not download
-    // (up to 20 MB) once per attachment, on every summon.
-    expect(callsTo(fetchMock, "getFile")).toHaveLength(0);
-    expect(existsSync(join(state, "files"))).toBe(false);
-  });
-
-  it("rejects a broken route before ANY attachment byte — including a turn that only carries images", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })));
-    vi.stubGlobal("fetch", fetchMock);
-    const { agent, calls } = replyingAgent("ok");
-    const ch = telegramChannel(agent, {
-      secretToken: SECRET,
-      botToken: "BOT",
-      route: () => ({ chatId: "" }),
-      apiBaseUrl: API,
-      onError: (f) => `ERR retryable=${f.retryable}: ${f.details}`,
-    });
-    const photo: TelegramUpdate = {
-      update_id: 13,
-      message: {
-        message_id: 6,
-        caption: "what is this",
-        photo: [{ file_id: "f1", file_unique_id: "u", width: 9, height: 9 }],
-        chat: { id: 42, type: "private" },
-      },
-    };
-    expect((await ch(tgRequest(photo))).status).toBe(200);
-    for (let i = 0; i < 200 && callsTo(fetchMock, "getFile").length + calls.length === 0; i++)
-      await new Promise((r) => setTimeout(r, 5));
-    await flush();
-    // Images never touch the attachment directory, so a per-file guard would let this turn run and
-    // then fail silently at delivery — the same empty chatId cannot receive the answer either.
-    expect(calls).toHaveLength(0);
-    expect(callsTo(fetchMock, "getFile")).toHaveLength(0);
   });
 
   it("surfaces an attachment fetch failure to the user (not a silent skip) and does not run the agent", async () => {

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt } from "../src/agent.ts";
-import { AttachmentDirectoryError } from "../src/channels/kit/attachment-path.ts";
 import { invokeSlackTurn } from "../src/channels/slack/invoke-turn.ts";
 import type { SlackApi } from "../src/channels/slack/slack-api.ts";
 
@@ -124,36 +123,5 @@ describe("Slack turn attachment resolution", () => {
 
     expect(prompt?.text).toContain("/state/OK.txt");
     expect(prompt?.text).toContain("2 attachment(s) from the earlier discussion are not loaded");
-  });
-
-  it("does NOT degrade a broken route the same way — it fails the turn, permanently", async () => {
-    let invoked = false;
-    const agent: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        invoked = true;
-        yield { type: "completed" };
-      },
-    };
-    const api = fakeApi({
-      fetchFile: async () => {
-        throw new AttachmentDirectoryError("route named an attachment directory that is not inside /state");
-      },
-    });
-
-    const events = await collect(
-      invokeSlackTurn(
-        agent,
-        "s1",
-        "answer",
-        { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
-        { primaryFileIds: [], buffered: { files: [{ id: "F1", from: "user U1", messageId: "1.0" }], skipped: 0 } },
-      ),
-    );
-
-    // The same route breaks every attachment, so it is not "1 missing" — and a retry cannot help.
-    expect(invoked).toBe(false);
-    expect(events).toEqual([
-      { type: "failed", details: expect.stringContaining("AttachmentDirectoryError"), retryable: false },
-    ]);
   });
 });
