@@ -27,13 +27,13 @@ export class AttachmentDirectoryError extends Error {
   name = "AttachmentDirectoryError";
 }
 
-/** Resolved attachment destination. Throws unless `conversationId` names a directory inside `filesDir`,
- *  which must not itself be the filesystem root (`dir` can then never be strictly inside it). */
-export function attachmentPath(
-  filesDir: string,
-  conversationId: string | number,
-  fileName: string,
-): { dir: string; name: string; path: string } {
+/**
+ * The conversation's directory, proved inside `filesDir` (which must not itself be the filesystem
+ * root — nothing can then be strictly inside it). Reachable without the file name because a channel
+ * can learn the conversation before the platform tells it what the file is called, and a route this
+ * rejects should not first cost a download per attachment.
+ */
+export function attachmentDir(filesDir: string, conversationId: string | number): string {
   const root = resolve(filesDir);
   const dir = resolve(root, String(conversationId));
   // `dir === root` when the id is empty or `.`, which is a route that forgot to name a conversation
@@ -42,7 +42,16 @@ export function attachmentPath(
     throw new AttachmentDirectoryError(
       `route named an attachment directory that is not inside ${filesDir}: ${JSON.stringify(String(conversationId))}`,
     );
+  return dir;
+}
 
+/** Resolved attachment destination: {@link attachmentDir} plus the reduced file name. */
+export function attachmentPath(
+  filesDir: string,
+  conversationId: string | number,
+  fileName: string,
+): { dir: string; name: string; path: string } {
+  const dir = attachmentDir(filesDir, conversationId);
   const cleaned = fileName.replace(/[/\\]/g, "_");
   const name = resolve(dir, cleaned).startsWith(dir + sep) ? cleaned : "file";
   return { dir, name, path: resolve(dir, name) };

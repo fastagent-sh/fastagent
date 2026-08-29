@@ -1601,15 +1601,18 @@ describe("telegram channel", () => {
       },
     };
     expect((await ch(tgRequest(doc))).status).toBe(200);
-    await flush();
-    await flush();
-    await flush();
+    const writes = (): string[] =>
+      [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
+        (c) => bodyOf(c).text as string,
+      );
+    const delivered = (): boolean => writes().some((t) => /ERR retryable=/.test(t));
+    for (let i = 0; i < 200 && !delivered(); i++) await new Promise((r) => setTimeout(r, 5));
     expect(calls).toHaveLength(0);
-    const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
-      (c) => bodyOf(c).text as string,
-    );
     // Permanent, so the user is not invited to retry something that will fail identically forever.
-    expect(writes.some((t) => /ERR retryable=false: could not load attachment/.test(t))).toBe(true);
+    expect(writes().some((t) => /ERR retryable=false: could not load attachment/.test(t))).toBe(true);
+    // …and the route is rejected BEFORE the bytes: a permanent misconfiguration must not download
+    // (up to 20 MB) once per attachment, on every summon.
+    expect(callsTo(fetchMock, "getFile")).toHaveLength(0);
     expect(existsSync(join(state, "files"))).toBe(false);
   });
 
