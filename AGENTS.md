@@ -120,6 +120,8 @@ src/
 │   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
 │   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
 │   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
+│   │   ├── fs-name.ts       # ONE reduction of external text to a path segment — the attachment file
+│   │   │                     # name AND the route-supplied conversation directory beside it
 │   │   └── stop-command.ts  # the shared /stop parsing every chat channel accepts
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel: see docs/design/core.md §7
