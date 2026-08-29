@@ -32,13 +32,6 @@ export interface InventoryEntry {
   file: string;
 }
 
-/** An entry whose NAME says module and whose kind says otherwise. */
-interface SkippedEntry {
-  label: string;
-  /** Why it is not loadable, in words an author can act on. */
-  why: string;
-}
-
 /**
  * WHAT A CODE-INPUT DIRECTORY DECLARES — the single answer to "which files here are modules",
  * without importing any of them.
@@ -62,12 +55,17 @@ interface SkippedEntry {
  * inside it, so following a link would import from anywhere on the box past the very check meant to
  * prevent it. Do not "fix" this by following them — report them, which this does.
  *
- * The skip is WARNED HERE, not handed back, because the fact is the same for all four consumers and
- * only one of them imports. It used to be warned by `loadModuleDir`, on the reasoning that the
- * loader is "the path where an author finds out their channel does not exist" — which had it exactly
- * backwards: `fastagent info` is where an author looks, it only lists names, and it therefore
- * reported a symlinked channel as simply ABSENT. What to do about a load FAILURE still differs per
- * caller and still travels as data; "this file is not loadable" does not.
+ * The skip is WARNED HERE, not handed back, because "this file is not loadable" holds for all four
+ * consumers and only one of them imports — a listing that reports the name it cannot load reads as
+ * "I never created it". What to do about a load FAILURE does differ per caller, so that travels as
+ * data. One warning per READ, so a command that both lists and loads the same directory (`deploy
+ * agentcore` does) says it twice — both readings are true, and remembering what was already said
+ * would mean a restart stops mentioning a skip that is still there.
+ *
+ * A skip is therefore a warning ONLY, unlike a {@link ModuleLoadFailure}: it is absent from `info
+ * --json` and `deploy` does not gate on it. That is the deliberate cost of one report for four
+ * consumers, three of which list names and have nowhere to put data. To give a machine consumer the
+ * skips, return them beside the entries — do not reconstruct them from stderr.
  */
 export async function moduleInventory(subDir: string): Promise<InventoryEntry[]> {
   let dirents: Dirent[];
@@ -80,7 +78,6 @@ export async function moduleInventory(subDir: string): Promise<InventoryEntry[]>
   }
   const sub = basename(subDir);
   const entries: InventoryEntry[] = [];
-  const skipped: SkippedEntry[] = [];
   // Sorted by the NAME a consumer sees, so none of them re-sorts and none can disagree about order.
   // Filename breaks a tie: `foo.js` and `foo.ts` both read as `foo`, and the domain loaders document
   // that the FIRST wins — deciding that here keeps it from depending on readdir's order.
@@ -92,12 +89,13 @@ export async function moduleInventory(subDir: string): Promise<InventoryEntry[]>
     if (dirent.isFile()) {
       entries.push({ name: moduleName(dirent.name), label, file: join(subDir, dirent.name) });
     } else if (dirent.isSymbolicLink()) {
-      skipped.push({ label, why: "a symlink — code inputs must be real files inside the agent dir" });
+      log.warn(`[fastagent] ${label} is a symlink — code inputs must be real files inside the agent dir — not loaded`);
+    } else if (dirent.isDirectory()) {
+      log.warn(`[fastagent] ${label} is a directory, not a file — not loaded`);
     } else {
-      skipped.push({ label, why: dirent.isDirectory() ? "a directory, not a file" : "not a regular file" });
+      log.warn(`[fastagent] ${label} is not a regular file — not loaded`);
     }
   }
-  for (const { label, why } of skipped) log.warn(`[fastagent] ${label} is ${why} — not loaded`);
   return entries;
 }
 
