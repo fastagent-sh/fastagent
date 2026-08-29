@@ -19,10 +19,16 @@
 import { resolve, sep } from "node:path";
 
 /** A `route` that does not name a directory inside `filesDir`. Permanent until the author edits their
- *  code, which is why a channel must not offer the user a retry. */
-export class AttachmentDirectoryError extends Error {}
+ *  code, which is why a channel must neither offer the user a retry nor count it as one attachment
+ *  lost — the same route breaks every attachment in the turn. */
+export class AttachmentDirectoryError extends Error {
+  // Channels put this into `failed.details` via `String(e)`, where a bare `Error:` would read as one
+  // more download that went wrong.
+  name = "AttachmentDirectoryError";
+}
 
-/** Resolved attachment destination. Throws unless `conversationId` names a directory inside `filesDir`. */
+/** Resolved attachment destination. Throws unless `conversationId` names a directory inside `filesDir`,
+ *  which must not itself be the filesystem root (`dir` can then never be strictly inside it). */
 export function attachmentPath(
   filesDir: string,
   conversationId: string | number,

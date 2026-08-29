@@ -82,6 +82,8 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
     if (r.status === "fulfilled") {
       for (const file of r.value.files) bufferedFiles.push({ file, ref: r.value.ref });
     } else {
+      // Not one lost attachment — a broken route breaks every one of them, so it leaves the turn.
+      if (r.reason instanceof AttachmentDirectoryError) throw r.reason;
       lost++;
       log.warn(`[telegram] could not load an earlier (buffered) attachment: ${String(r.reason)}`);
     }

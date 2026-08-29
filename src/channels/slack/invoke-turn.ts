@@ -70,6 +70,8 @@ async function resolveInputs(
       if (resolved.image) backgroundImages.push({ image: resolved.image, ref });
       if (resolved.file) backgroundFiles.push({ file: resolved.file, ref });
     } else {
+      // Not one lost attachment — a broken route breaks every one of them, so it leaves the turn.
+      if (result.reason instanceof AttachmentDirectoryError) throw result.reason;
       lost++;
       log.warn(`${transport.label} could not load an earlier (buffered) Slack file: ${String(result.reason)}`);
     }

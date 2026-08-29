@@ -535,6 +535,28 @@ describe("buffered attachments (files/photos from un-summoned discussion)", () =
     expect(text).toMatch(/valid\.pdf \(from @alice, msg 2, earlier discussion\)/); // …and it did NOT drag its sibling down
   });
 
+  it("a broken route leaves the turn instead of being counted as one lost background file", async () => {
+    attachFetch();
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "1:A",
+      route: (u) =>
+        (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? { chatId: "../.." } : null,
+    });
+    await ch(tgRequest(doc(1, "report"))); // un-summoned → buffered
+    await ch(tgRequest(summon(2, "@go summarize the file from earlier")));
+    await until(() => errors.length > 0);
+    // The degrade-per-file policy above is right for a stale file and wrong here: the route breaks
+    // every attachment, so the answer must not arrive with a "1 attachment not loaded" note.
+    expect(calls).toHaveLength(0);
+    expect(errors.some((e) => /AttachmentDirectoryError/.test(e))).toBe(true);
+  });
+
   it("a failed buffered PHOTO also degrades — counted in the note, its sibling still lands as vision", async () => {
     vi.stubGlobal(
       "fetch",

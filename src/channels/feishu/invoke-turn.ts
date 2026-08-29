@@ -316,6 +316,10 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   for (const result of fileResults) {
     if (result.status === "fulfilled") backgroundFiles.push(result.value);
     else {
+      // Not one lost attachment — a broken route breaks every one of them, so it leaves the turn.
+      // Untested here: reaching this needs a buffered file in a threaded room, which no feishu test
+      // sets up. The same line is covered in telegram.test.ts and slack-invoke-turn.test.ts.
+      if (result.reason instanceof AttachmentDirectoryError) throw result.reason;
       lost++;
       log.warn(`${t.label} could not load an earlier (buffered) attachment: ${String(result.reason)}`);
     }
