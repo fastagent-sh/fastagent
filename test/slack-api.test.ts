@@ -139,9 +139,9 @@ describe("Slack Web API transport", () => {
       "C1",
       root,
     );
-    // the id prefix and the name are sanitized as ONE segment: separators go, and the prefix already
-    // rules out a leading dot
-    expect(file.path).toBe(join(root, "C1", "F2-.._report.txt"));
+    // the channel is ENCODED (its own directory, whatever the id); the name is only reduced, since it
+    // is read by a human and by the model
+    expect(file.path).toBe(join(root, "c-C1", "F2-.._report.txt"));
     expect(readFileSync(file.path, "utf8")).toBe("report");
     expect(calls.every((call) => call.authorization === "Bearer xoxb-secret")).toBe(true);
   });

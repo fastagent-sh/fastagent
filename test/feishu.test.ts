@@ -1682,7 +1682,7 @@ describe("turn flow", () => {
     expect(prompt).toContain("attached files:");
     expect(prompt).toContain("spec.pdf");
     expect(fx.calls("/im/v1/messages/om_parent/resources/fk1").length).toBe(1);
-    expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
+    expect(readFileSync(join(home, "files", "c-oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
   });
 
   it("a thread opened on the agent's own card reads that card AND the chain up to the ask", async () => {

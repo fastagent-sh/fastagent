@@ -324,7 +324,7 @@ session control it answers with a visible "not enabled" notice).
 Message payloads are resolved by the channel before the agent turn runs — all as **primary** inputs (a load failure becomes a `failed` event, never a silent drop):
 
 - images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
-- files / audio / video are downloaded to `<state root>/channels/<kind>/files/<chat>/` and listed in the prompt so the agent reads them with its tools,
+- files / audio / video are downloaded to `<state root>/channels/<kind>/files/c-<chat>/` — `c-` plus the URL-encoded chat id, so a thread id keeps its `:` and `/` as one directory (`oc_x:thread/1` → `c-oc_x%3Athread%2F1`) — and listed in the prompt so the agent reads them with its tools,
 - a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works,
 - the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like buffered attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
 
@@ -337,7 +337,7 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 - `bot.json` — the bot's own `open_id` (bound to the `appId` that resolved it — kept state pointed at a different app must not let the new bot answer mentions of the old one), cached from `bot/v3/info` so a cold start can match group @mentions IMMEDIATELY: on AgentCore the channel is constructed inside the first request, and without the cache that request's own mention would race the identity fetch and lose (buffered instead of answered); a successful `bot/v3/info` that reports no identity clears the cache,
 - `thread-participants.json` — a bounded record of what the Agent HEARD in each thread, written for every group thread the channel can see, in every posture — including ones where the summon rule cannot read it, because the posture is configuration and a record outlives a change to it: the humans it saw speak (capped at two, since the rule only asks whether a second one exists) and whether it has answered there. Nothing is read back from the platform, so losing the file costs one mention per thread to re-enter it,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
-- `files/<chat>/` — downloaded inbound files.
+- `files/c-<chat>/` — downloaded inbound files, one directory per chat.
 
 An upgrade from the earlier session-mode model cleans itself up on the next start: the obsolete
 `owned-threads.json` is removed, and `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at

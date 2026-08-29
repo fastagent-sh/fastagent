@@ -199,7 +199,7 @@ OWN identity, which it otherwise only learns from `getMe`, and not at all if tha
 Telegram media are handled by the channel before the agent turn runs.
 
 - Photos are downloaded, converted to `prompt.images`, and resized by the engine before reaching the model. The selected model must support vision.
-- Documents, voice, video, and audio are downloaded to `<state root>/channels/telegram/files/<chat>/`. Their local paths are appended to the prompt so the agent can read them with tools.
+- Documents, voice, video, and audio are downloaded to `<state root>/channels/telegram/files/c-<chat>/` (`c-` plus the URL-encoded chat id). Their local paths are appended to the prompt so the agent can read them with tools.
 - Download failures become `failed` events, never silent drops.
 
 Downloaded files persist until the operator cleans them up. Treat `<state root>/channels/telegram/` like session state: git-ignored machine state that may need a volume or cleanup policy for long-running bots.
@@ -210,7 +210,7 @@ The channel persists its state under `<state root>/channels/telegram/` (the stat
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start.
-- `files/<chat>/` — downloaded inbound files.
+- `files/c-<chat>/` — downloaded inbound files, one directory per chat.
 
 The per-session turn queue is **in-memory** (one turn at a time per session; a second summon waits instead of colliding on the engine lease), with a durable **intent** layer on top (`turns.json`). Turn durability is layered:
 

@@ -20,10 +20,9 @@
  * here are shape-compatible with the SDK's `client.im.*` style, so the policy layer survives that swap.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
-import { safeSegment } from "../kit/fs-name.ts";
+import { attachmentPath } from "../kit/attachment-path.ts";
 import { utf8Prefix } from "../kit/text.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
@@ -450,14 +449,10 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     },
     async fetchFile(messageId, fileKey, name, chatId, filesDir) {
       const { bytes } = await api.downloadResource(messageId, fileKey, "file");
-      // Both halves are external input destined for a filesystem path: the name from the platform,
-      // `chatId` from the ROUTE (a custom route supplies it).
-      const safe = safeSegment(name);
-      const dir = join(filesDir, safeSegment(chatId, "chat"));
-      await mkdir(dir, { recursive: true });
-      const dest = join(dir, safe);
-      await writeFile(dest, bytes);
-      return { path: dest, name: safe, size: bytes.byteLength };
+      const dest = attachmentPath(filesDir, chatId, name);
+      await mkdir(dest.dir, { recursive: true });
+      await writeFile(dest.path, bytes);
+      return { path: dest.path, name: dest.name, size: bytes.byteLength };
     },
     async getAppConfig(appId) {
       // v6 app detail — the one read surface that returns the event-security material (under data.app).

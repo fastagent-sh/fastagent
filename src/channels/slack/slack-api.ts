@@ -1,8 +1,7 @@
 /** Slack Web API transport: one JSON pipeline plus authenticated, capped private-file downloads. */
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
-import { safeSegment } from "../kit/fs-name.ts";
+import { attachmentPath } from "../kit/attachment-path.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import type { SlackFile } from "./model.ts";
 
@@ -149,12 +148,6 @@ export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKD
     output.push(`${prefix}${raw}${suffix}`);
   }
   return output;
-}
-
-function safeFileName(file: SlackFile): string {
-  // `file.id` is as external as `file.name` (both come off the event), so the guard runs on the
-  // whole segment; the prefix keeps it from ever starting with a dot.
-  return safeSegment(`${file.id ?? "slack"}-${file.name ?? file.title ?? file.id ?? "file"}`);
 }
 
 function fileDownloadUrl(file: SlackFile): string {
@@ -431,11 +424,10 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     },
     async fetchFile(file, channelId, filesDir) {
       const { bytes } = await download(file);
-      // `channelId` is the ROUTE's, not necessarily the platform's — a custom route supplies it.
-      const dir = join(filesDir, safeSegment(channelId, "channel"));
+      // The id prefix keeps two same-named uploads in one channel apart.
+      const suggested = `${file.id ?? "slack"}-${file.name ?? file.title ?? file.id ?? "file"}`;
+      const { dir, name, path } = attachmentPath(filesDir, channelId, suggested);
       await mkdir(dir, { recursive: true });
-      const name = safeFileName(file);
-      const path = join(dir, name);
       await writeFile(path, bytes);
       return { path, name, size: bytes.byteLength };
     },

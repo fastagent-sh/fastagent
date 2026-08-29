@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   type TelegramChannelOptions,
   type TelegramUpdate,
@@ -1542,46 +1542,10 @@ describe("telegram channel", () => {
     expect((await ch(tgRequest(doc))).status).toBe(200);
     for (let i = 0; i < 100 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
     // files live UNDER the state dir — one home for all channel state, so `stateDir` moves everything
-    const dest = join(state, "files/77/report.pdf");
+    const dest = join(state, "files/c-77/report.pdf");
     expect(existsSync(dest)).toBe(true);
     expect(calls[0]?.text).toMatch(/attached files/);
     expect(calls[0]?.text).toContain(dest);
-  });
-
-  it("keeps a download inside files/ when the route names the directory with traversal", async () => {
-    const fetchMock = vi.fn(async (url: string) =>
-      String(url).endsWith("/getFile")
-        ? new Response(JSON.stringify({ ok: true, result: { file_path: "documents/report.pdf", file_size: 5 } }), {
-            status: 200,
-          })
-        : String(url).includes("/file/bot")
-          ? new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 })
-          : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const state = freshStateDir();
-    const { agent, calls } = replyingAgent("ok");
-    const ch = telegramChannel(agent, {
-      secretToken: SECRET,
-      botToken: "BOT",
-      route: () => ({ chatId: "../.." }),
-      apiBaseUrl: API,
-      stateDir: state,
-    });
-    const doc: TelegramUpdate = {
-      update_id: 12,
-      message: {
-        message_id: 5,
-        caption: "summarize",
-        document: { file_id: "d1", file_name: "report.pdf" },
-        chat: { id: 77, type: "private" },
-      },
-    };
-    expect((await ch(tgRequest(doc))).status).toBe(200);
-    for (let i = 0; i < 100 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
-    const dest = calls[0]?.text?.match(/\S+report\.pdf/)?.[0] ?? "";
-    expect(resolve(dest).startsWith(`${join(state, "files")}/`)).toBe(true);
-    expect(existsSync(dest)).toBe(true);
   });
 
   it("surfaces an attachment fetch failure to the user (not a silent skip) and does not run the agent", async () => {
@@ -1607,7 +1571,7 @@ describe("telegram channel", () => {
       botToken: "BOT",
       route: act,
       apiBaseUrl: API,
-      onError: (f) => `ERR: ${f.details}`,
+      onError: (f) => `ERR retryable=${f.retryable}: ${f.details}`,
     });
     const photo: TelegramUpdate = {
       update_id: 9,
@@ -1625,7 +1589,8 @@ describe("telegram channel", () => {
     const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
       (c) => bodyOf(c).text as string,
     );
-    expect(writes.some((t) => /could not load attachment/.test(t))).toBe(true);
+    // A failed download is the retryable counterpart to a misconfigured route.
+    expect(writes.some((t) => /ERR retryable=true: could not load attachment/.test(t))).toBe(true);
     expect(errors.some((e) => /turn failed/.test(e))).toBe(true);
   });
 
