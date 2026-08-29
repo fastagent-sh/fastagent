@@ -1567,7 +1567,7 @@ describe("telegram channel", () => {
       route: () => ({ chatId: "../.." }),
       apiBaseUrl: API,
       stateDir: state,
-      onError: (f) => `ERR: ${f.details}`,
+      onError: (f) => `ERR retryable=${f.retryable}: ${f.details}`,
     });
     const doc: TelegramUpdate = {
       update_id: 12,
@@ -1586,7 +1586,8 @@ describe("telegram channel", () => {
     const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
       (c) => bodyOf(c).text as string,
     );
-    expect(writes.some((t) => /could not load attachment/.test(t))).toBe(true);
+    // Permanent, so the user is not invited to retry something that will fail identically forever.
+    expect(writes.some((t) => /ERR retryable=false: could not load attachment/.test(t))).toBe(true);
     expect(existsSync(join(state, "files"))).toBe(false);
   });
 
@@ -1613,7 +1614,7 @@ describe("telegram channel", () => {
       botToken: "BOT",
       route: act,
       apiBaseUrl: API,
-      onError: (f) => `ERR: ${f.details}`,
+      onError: (f) => `ERR retryable=${f.retryable}: ${f.details}`,
     });
     const photo: TelegramUpdate = {
       update_id: 9,
@@ -1631,7 +1632,8 @@ describe("telegram channel", () => {
     const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
       (c) => bodyOf(c).text as string,
     );
-    expect(writes.some((t) => /could not load attachment/.test(t))).toBe(true);
+    // A failed download is the retryable counterpart to a misconfigured route.
+    expect(writes.some((t) => /ERR retryable=true: could not load attachment/.test(t))).toBe(true);
     expect(errors.some((e) => /turn failed/.test(e))).toBe(true);
   });
 

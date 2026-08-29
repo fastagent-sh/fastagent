@@ -7,7 +7,9 @@
  *   THEIR code, so it is audible — a silent fold into `__..` writes the file somewhere they did not
  *   ask for and tells no one.
  * - The file name comes off the platform, where an odd character is ordinary traffic. Failing a turn
- *   over one would be the channel's bug, so it is reduced to something usable instead.
+ *   over one would be the channel's bug, so it is reduced to something usable instead. A leading dot
+ *   survives that reduction: `.gitignore` is a name, not an escape, and nothing reads this directory
+ *   by listing it, so hiding is not a property anyone here depends on.
  *
  * Both are PROVED on the result rather than enumerated on the input: `resolve` settles every spelling
  * of escape (`..`, `a/../..`, an absolute path, a Windows drive-relative `D:foo`) in one check, so no
@@ -15,6 +17,10 @@
  * directory throws, the name falls back.
  */
 import { resolve, sep } from "node:path";
+
+/** A `route` that does not name a directory inside `filesDir`. Permanent until the author edits their
+ *  code, which is why a channel must not offer the user a retry. */
+export class AttachmentDirectoryError extends Error {}
 
 /** Resolved attachment destination. Throws unless `conversationId` names a directory inside `filesDir`. */
 export function attachmentPath(
@@ -27,7 +33,7 @@ export function attachmentPath(
   // `dir === root` when the id is empty or `.`, which is a route that forgot to name a conversation
   // rather than one escaping — same rejection, so the wording has to cover both.
   if (!dir.startsWith(root + sep))
-    throw new Error(
+    throw new AttachmentDirectoryError(
       `route named an attachment directory that is not inside ${filesDir}: ${JSON.stringify(String(conversationId))}`,
     );
 

@@ -7,6 +7,7 @@
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
+import { AttachmentDirectoryError } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -120,7 +121,9 @@ export async function* invokeTurn(
   try {
     resolved = await resolveTurnAttachments(transport, attachments);
   } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
+    // A misconfigured route fails identically forever, so it must not be dressed as "try again".
+    const retryable = !(e instanceof AttachmentDirectoryError);
+    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };

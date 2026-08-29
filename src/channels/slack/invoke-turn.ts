@@ -1,6 +1,7 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
+import { AttachmentDirectoryError } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -106,7 +107,9 @@ export async function* invokeSlackTurn(
   try {
     resolved = await resolveInputs(transport, attachments);
   } catch (error) {
-    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: true };
+    // A misconfigured route fails identically forever, so it must not be dressed as "try again".
+    const retryable = !(error instanceof AttachmentDirectoryError);
+    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
