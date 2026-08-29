@@ -1884,4 +1884,44 @@ describe("telegram /stop command", () => {
     expect(sent.some((b) => b.text === "Nothing is running.")).toBe(true);
     expect(sent.some((b) => String(b.text).includes("Stop isn't enabled"))).toBe(true);
   });
+
+  // The default route refuses slash commands in a group, so a route-gated stop was buffered as
+  // ordinary discussion while the run it meant to stop kept going.
+  const groupStop = (text: string): TelegramUpdate => ({
+    update_id: 78,
+    message: {
+      message_id: 4,
+      text,
+      chat: { id: -100123, type: "supergroup" },
+      from: { id: 7, username: "alice" },
+    },
+  });
+
+  it.each(["/stop", "/stop@mybot"])("%s in a group aborts instead of becoming buffered context", async (text) => {
+    invoked.length = 0;
+    vi.stubGlobal("fetch", okFetch());
+    const { control, aborted } = fakeControl({ ok: true });
+    const stateDir = freshStateDir();
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      botUsername: "mybot",
+      control,
+      stateDir,
+    });
+    expect((await ch(tgRequest(groupStop(text)))).status).toBe(200);
+    await flush();
+    expect(aborted).toEqual(["-100123"]);
+    expect(invoked).toEqual([]);
+    expect(existsSync(join(stateDir, "buffers.json"))).toBe(false);
+  });
+
+  it("/stop@otherbot in a group is still not ours", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { control, aborted } = fakeControl({ ok: true });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
+    await ch(tgRequest(groupStop("/stop@otherbot")));
+    await flush();
+    expect(aborted).toEqual([]);
+  });
 });
