@@ -39,7 +39,7 @@ export async function onboardSlackInternalApp(input: {
     );
   }
 
-  let state = await readSlackOnboardingState(input.stateRoot);
+  let state = readSlackOnboardingState(input.stateRoot);
   const resumed = state !== undefined;
   if (input.replaceConfig && !state) {
     throw new Error(
@@ -100,7 +100,7 @@ export async function onboardSlackInternalApp(input: {
       if (!configToken.startsWith("xoxe.") || !configRefreshToken.startsWith("xoxe-")) {
         throw new Error("invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh)");
       }
-      await writeSlackOnboardingState(input.stateRoot, {
+      writeSlackOnboardingState(input.stateRoot, {
         ...state,
         configToken,
         configRefreshToken,
@@ -133,10 +133,10 @@ export async function onboardSlackInternalApp(input: {
       configToken,
       configRefreshToken,
     });
-    await writeSlackOnboardingState(input.stateRoot, state);
+    writeSlackOnboardingState(input.stateRoot, state);
   } else if (input.groupBehavior.explicit && !state.appId) {
     state = { ...state, groupBehavior: input.groupBehavior.behavior };
-    await writeSlackOnboardingState(input.stateRoot, state);
+    writeSlackOnboardingState(input.stateRoot, state);
   }
   if (state.createAttemptedAt && !state.appId) {
     throw new Error(
@@ -172,7 +172,7 @@ export async function onboardSlackInternalApp(input: {
       if (!state.configToken.startsWith("xoxe.") || !state.configRefreshToken.startsWith("xoxe-")) {
         throw new Error("invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh)");
       }
-      await writeSlackOnboardingState(input.stateRoot, state);
+      writeSlackOnboardingState(input.stateRoot, state);
     }
   }
 

@@ -57,7 +57,7 @@ export async function onboardSlackApp(
     // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the app;
     // refusing a blind retry is safer than silently producing duplicates.
     state = { ...state, createAttemptedAt: new Date().toISOString() };
-    await writeSlackOnboardingState(input.stateRoot, state);
+    writeSlackOnboardingState(input.stateRoot, state);
     let created: Awaited<ReturnType<typeof createSlackApp>>;
     try {
       created = await (deps.createApp ?? createSlackApp)(current.token, manifest);
@@ -69,7 +69,7 @@ export async function onboardSlackApp(
         );
       if (!ambiguous) {
         state = { ...state, createAttemptedAt: undefined };
-        await writeSlackOnboardingState(input.stateRoot, state);
+        writeSlackOnboardingState(input.stateRoot, state);
       }
       throw error;
     }
@@ -82,7 +82,7 @@ export async function onboardSlackApp(
       signingSecret: created.signingSecret,
     };
     // Irreversible boundary first: a cancellation or .env write failure can resume without creating a duplicate.
-    await writeSlackOnboardingState(input.stateRoot, state);
+    writeSlackOnboardingState(input.stateRoot, state);
     io.note(`Created Slack app ${created.appId}; credentials captured locally.`);
   } else {
     if (!state.clientId || !state.clientSecret) {
@@ -98,7 +98,7 @@ export async function onboardSlackApp(
   if (state.signingSecret) {
     await io.writeRuntimeSecrets({ signingSecret: state.signingSecret });
     state = { ...state, signingSecret: undefined };
-    await writeSlackOnboardingState(input.stateRoot, state);
+    writeSlackOnboardingState(input.stateRoot, state);
   }
   if (!state.appId || !state.clientId || !state.clientSecret) {
     throw new Error("Slack onboarding state lost app OAuth credentials before installation");
@@ -142,7 +142,7 @@ export async function onboardSlackApp(
     teamName: oauth.teamName,
     installedAt: new Date().toISOString(),
   };
-  await writeSlackOnboardingState(input.stateRoot, state);
+  writeSlackOnboardingState(input.stateRoot, state);
   return state;
 }
 

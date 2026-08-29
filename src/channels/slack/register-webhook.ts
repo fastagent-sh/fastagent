@@ -19,9 +19,9 @@ export async function registerSlackWebhook(
 ): Promise<RegistrationOutcome> {
   const note = options.log ?? ((message: string) => console.error(message));
   const publicBaseUrl = baseUrl.replace(/\/$/, "");
-  let state: Awaited<ReturnType<typeof readSlackOnboardingState>>;
+  let state: ReturnType<typeof readSlackOnboardingState>;
   try {
-    state = await readSlackOnboardingState(options.stateRoot);
+    state = readSlackOnboardingState(options.stateRoot);
   } catch (error) {
     note(`[fastagent] slack: cannot read local onboarding state: ${String(error)}`);
     return "failed";
