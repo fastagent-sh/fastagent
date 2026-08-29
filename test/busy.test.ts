@@ -52,7 +52,7 @@ describe("channels/busy: the process-wide in-flight signal", () => {
 
   it("a tracked side task counts until it settles — rejection included", async () => {
     const base = activeWork();
-    const tracker = createTaskTracker();
+    const tracker = createTaskTracker("[test]");
     let reject: (e: Error) => void = () => {};
     const task = new Promise<void>((_r, rj) => {
       reject = rj;
