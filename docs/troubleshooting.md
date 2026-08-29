@@ -221,11 +221,13 @@ Telegram and Slack images become `prompt.images`. The selected model must suppor
 Telegram documents/audio/video and Slack files are downloaded under:
 
 ```txt
-<state root>/channels/telegram/files/<chat>/
-<state root>/channels/slack/files/<channel>/
+<state root>/channels/telegram/files/c-<chat>/
+<state root>/channels/slack/files/c-<channel>/
 ```
 
-The path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.
+The directory is `c-` followed by the URL-encoded conversation id, so an id carrying `/` or `:`
+(a Feishu thread, a custom route's own id) still names one directory: `oc_x:thread/1` is stored as
+`c-oc_x%3Athread%2F1`. The full path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.
 
 ## Feishu URL verification fails
 

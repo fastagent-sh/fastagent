@@ -207,7 +207,7 @@ Events persist stable Slack file IDs—never temporary private URLs. At dequeue,
 `files.info`, then:
 
 - downloads images as vision `prompt.images`;
-- writes ordinary files under `<state root>/channels/slack/files/<channel>/` and adds their absolute paths to the prompt;
+- writes ordinary files under `<state root>/channels/slack/files/c-<channel>/` (`c-` plus the URL-encoded channel id) and adds their absolute paths to the prompt;
 - sends the Bot token on private-file downloads;
 - accepts only HTTPS Slack-owned download/redirect hosts;
 - enforces a streaming 20 MB cap and a download timeout;
