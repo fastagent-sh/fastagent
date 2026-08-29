@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { rotateSlackConfigToken } from "./config-api.ts";
@@ -42,11 +42,11 @@ function validState(value: unknown): value is SlackOnboardingState {
   );
 }
 
-export async function readSlackOnboardingState(stateRoot: string): Promise<SlackOnboardingState | undefined> {
+export function readSlackOnboardingState(stateRoot: string): SlackOnboardingState | undefined {
   const file = slackOnboardingStatePath(stateRoot);
   let raw: string;
   try {
-    raw = await readFile(file, "utf8");
+    raw = readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new Error(`cannot read Slack onboarding state ${file}: ${(error as Error).message}`);
@@ -61,9 +61,10 @@ export async function readSlackOnboardingState(stateRoot: string): Promise<Slack
 }
 
 /** Atomic replacement with owner-only permissions: this file carries a workspace-wide config refresh
- *  token. Synchronous, through the shared writer, like every other piece of state this repo keeps: the
- *  file is ~1 KB and this runs on an interactive `fastagent add slack`, so the async spelling bought
- *  nothing and cost a fifth set of temp-name and permission rules to keep true. */
+ *  token. Synchronous, through the shared writer, like every other piece of state this repo keeps
+ *  (kit/state.ts): the file is ~1 KB and its writers are `fastagent add slack` and one config-token
+ *  rotation at tunnel startup, so the async spelling bought nothing and cost a fifth set of temp-name
+ *  and permission rules to keep true. */
 export function writeSlackOnboardingState(stateRoot: string, state: SlackOnboardingState): void {
   writeFileAtomic(slackOnboardingStatePath(stateRoot), `${JSON.stringify(state, null, 2)}\n`, 0o600);
 }

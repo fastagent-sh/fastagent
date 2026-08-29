@@ -201,7 +201,7 @@ describe("Slack internal-app onboarding", () => {
     ]);
     expect(result).toMatchObject({ appId: "A1", teamId: "T1", teamName: "Acme" });
     expect(result.clientSecret).toBeUndefined();
-    const persisted = await readSlackOnboardingState(stateRoot);
+    const persisted = readSlackOnboardingState(stateRoot);
     expect(persisted?.clientSecret).toBeUndefined();
     expect(persisted?.installedAt).toBeTruthy();
     expect((await stat(join(stateRoot, "channels", "slack", "onboarding.json"))).mode & 0o777).toBe(0o600);
@@ -222,8 +222,10 @@ describe("Slack internal-app onboarding", () => {
     });
     writeSlackOnboardingState(stateRoot, initial);
     await mkdir(join(stateRoot, "channels", "slack", "onboarding.json.tmp"));
-    expect(() => writeSlackOnboardingState(stateRoot, { ...initial, appName: "Renamed" })).toThrow();
-    expect((await readSlackOnboardingState(stateRoot))?.appName).toBe("Agent");
+    expect(() => writeSlackOnboardingState(stateRoot, { ...initial, appName: "Renamed" })).toThrow(
+      expect.objectContaining({ syscall: "open", code: "EISDIR" }),
+    );
+    expect(readSlackOnboardingState(stateRoot)?.appName).toBe("Agent");
   });
 
   it("blocks a blind duplicate create after an ambiguous create response", async () => {
@@ -251,7 +253,7 @@ describe("Slack internal-app onboarding", () => {
       redirectUrl: "https://setup.test/oauth",
     };
     await expect(onboardSlackApp(input, io, { createApp })).rejects.toThrow(/connection reset/);
-    const attempted = await readSlackOnboardingState(stateRoot);
+    const attempted = readSlackOnboardingState(stateRoot);
     expect(attempted?.createAttemptedAt).toBeTruthy();
     await expect(onboardSlackApp({ ...input, state: attempted! }, io, { createApp })).rejects.toThrow(
       /Inspect https:\/\/api.slack.com\/apps/,
@@ -284,7 +286,7 @@ describe("Slack internal-app onboarding", () => {
       token: "xoxe.new",
       state: { configRefreshToken: "xoxe-new-refresh", teamId: "T1" },
     });
-    expect((await readSlackOnboardingState(stateRoot))?.configRefreshToken).toBe("xoxe-new-refresh");
+    expect(readSlackOnboardingState(stateRoot)?.configRefreshToken).toBe("xoxe-new-refresh");
   });
 
   it("rejects a forged OAuth callback state before exchanging the code", async () => {

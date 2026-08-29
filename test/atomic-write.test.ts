@@ -1,6 +1,6 @@
 /**
- * `writeFileAtomic` — the one spelling of "a reader sees the whole file or none of it", after four
- * copies of it drifted apart across the codebase (two identical, two with different temp names and
+ * `writeFileAtomic` — the one spelling of "a reader sees the whole file or none of it", after five
+ * copies of it drifted apart across the codebase (two identical, three with different temp names and
  * different permission handling).
  */
 import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
