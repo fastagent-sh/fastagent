@@ -152,7 +152,9 @@ export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKD
 }
 
 function safeFileName(file: SlackFile): string {
-  return `${file.id ?? "slack"}-${safeSegment(file.name ?? file.title ?? file.id ?? "file")}`;
+  // `file.id` is as external as `file.name` (both come off the event), so the guard runs on the
+  // whole segment; the prefix keeps it from ever starting with a dot.
+  return safeSegment(`${file.id ?? "slack"}-${file.name ?? file.title ?? file.id ?? "file"}`);
 }
 
 function fileDownloadUrl(file: SlackFile): string {

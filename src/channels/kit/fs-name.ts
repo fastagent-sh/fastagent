@@ -8,6 +8,9 @@
  * `chatId: "../.."` wrote outside the state home, silently. The two halves are the same question, so
  * they get the same answer here rather than one guard per platform (which is how the directory came
  * to be missing three times).
+ *
+ * Containment beats uniqueness: `a/b` and `a_b` fold to one segment. Real platform ids carry no
+ * separator, so that collision needs a hostile custom route to reach.
  */
 
 /** A single path segment: no separators, no traversal, never empty. */
