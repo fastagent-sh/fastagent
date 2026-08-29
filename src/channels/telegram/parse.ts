@@ -168,21 +168,67 @@ function botName(botUsername: string | undefined): string | undefined {
 }
 
 /**
- * Whether the message @mentions the bot — read from the `mention` ENTITIES Telegram's server already
- * parsed, not a regex over the raw text. The entity type excludes by construction what a text scan
- * false-matches: `@bot` inside a code block or a URL is not a `mention` entity, a glued `/cmd@bot` is a
- * `bot_command` — and slicing the exact offset/length range makes `@fast` vs `@fastagent` confusion
- * impossible. (Offsets are UTF-16 code units = native JS string indexing.) No text fallback: mention
- * entities are produced server-side, so their absence means there is no mention.
+ * The `mention` ENTITIES naming THIS bot — read from what Telegram's server already parsed, not a
+ * regex over the raw text. The entity type excludes by construction what a text scan false-matches:
+ * `@bot` inside a code block or a URL is not a `mention` entity, a glued `/cmd@bot` is a `bot_command`
+ * — and slicing the exact offset/length range makes `@fast` vs `@fastagent` confusion impossible.
+ * (Offsets are UTF-16 code units = native JS string indexing.) No text fallback: mention entities are
+ * produced server-side, so their absence means there is no mention. Empty when the bot does not know
+ * its own username — "which of these names me?" has no answer then, and guessing would mis-summon.
  */
-function mentionsBot(m: TelegramMessage, botUsername: string | undefined): boolean {
+function botMentions(m: TelegramMessage, botUsername: string | undefined): { offset: number; length: number }[] {
   const name = botName(botUsername);
-  if (!name) return false;
+  if (!name) return [];
   const text = m.text ?? m.caption ?? "";
   const entities = (m.text !== undefined ? m.entities : m.caption_entities) ?? [];
-  return entities.some(
+  return entities.filter(
     (e) => e.type === "mention" && text.slice(e.offset, e.offset + e.length).toLowerCase() === `@${name}`,
   );
+}
+
+/** Whether the message @mentions the bot. */
+function mentionsBot(m: TelegramMessage, botUsername: string | undefined): boolean {
+  return botMentions(m, botUsername).length > 0;
+}
+
+/** The message text with THIS bot's mentions cut out, so a command addressed to it reads as the bare
+ *  command. Only its own: a message that names someone else (`@otherbot /stop`) must keep that name,
+ *  or cutting it would turn an ask aimed elsewhere into this bot's command. Cut from the end so the
+ *  earlier offsets stay valid (they are UTF-16 code units = native JS indexing). */
+function textWithoutBotMentions(m: TelegramMessage, botUsername: string | undefined): string {
+  const text = m.text ?? m.caption ?? "";
+  return botMentions(m, botUsername)
+    .sort((a, b) => b.offset - a.offset)
+    .reduce((out, e) => out.slice(0, e.offset) + out.slice(e.offset + e.length), text)
+    .trim();
+}
+
+/**
+ * Whether the update is a `/stop` ADDRESSED TO THIS BOT — the one question the channel asks about a
+ * stop, because an unaddressed one is not a command it may act on. Four ways to address it, all
+ * equivalent: a bare `/stop` in a private chat (no one else is there), `/stop@thisbot`, an `@thisbot`
+ * mention beside the command, and a bare `/stop` replying to one of this bot's messages.
+ *
+ * A BARE `/stop` in a group is deliberately NOT one of them. Telegram hands it to every bot in the
+ * chat — and only promises to deliver it at all when this bot spoke last — so it names no one: acting
+ * on it lets a bystander's ask for a different bot abort this bot's run, and answering it lets that
+ * bystander make this bot talk. It stays ordinary discussion, which is what the group sees anyway.
+ *
+ * Takes the UPDATE, like `route` itself, so a custom route can ask it directly — that route is the
+ * gate a stop must pass, and one that refuses this update silences the command.
+ */
+export function telegramStop(update: TelegramUpdate, options?: { botUsername?: string; botId?: number }): boolean {
+  const m = pickMessage(update);
+  if (!m) return false;
+  // This bot's own mentions are cut out before matching: `@thisbot /stop` is the same command as
+  // `/stop@thisbot`. Anyone else's stays in the text, so `@otherbot /stop` never reduces to a command
+  // here — not even when it also replies to this bot.
+  const match = /^\/stop(?:@([A-Za-z0-9_]+))?$/i.exec(textWithoutBotMentions(m, options?.botUsername));
+  if (!match) return false;
+  // `/stop@name` states its addressee: ours only when the name is ours, and never when this bot does
+  // not know its own username (fail closed — the same rule reply/mention summon follows).
+  if (match[1] !== undefined) return match[1].toLowerCase() === botName(options?.botUsername);
+  return m.chat.type === "private" || mentionsBot(m, options?.botUsername) || repliesToBot(m, options);
 }
 
 /** Whether the message replies to THIS bot — not just any bot: in a multi-bot group, replying to
@@ -204,7 +250,9 @@ function repliesToBot(m: TelegramMessage, options?: { botUsername?: string; botI
  * answer private chats always; a group only on a reply to THIS bot (by `botId`) or a `mention` entity
  * naming it (when `botUsername` is supplied — telegramChannel parses the id from the token and resolves
  * the username via getMe). A bare or directed slash command does NOT summon in a group (that was noisy;
- * a bot author who wants commands adds a custom route). Returns `{}` (act; the channel fills
+ * a bot author who wants commands adds a custom route) — except a `/stop` ADDRESSED to this bot, which
+ * must reach the run it stops rather than sit in the buffer behind it (see {@link telegramStop}; a
+ * bare group `/stop` addresses no one and stays ordinary discussion). Returns `{}` (act; the channel fills
  * session/target/prompt from the message) or `null` (ignore).
  */
 export function defaultTelegramRoute(
@@ -213,6 +261,13 @@ export function defaultTelegramRoute(
 ): TelegramRoute | null {
   const m = pickMessage(update);
   if (!m) return null;
-  const summoned = m.chat.type === "private" || repliesToBot(m, options) || mentionsBot(m, options?.botUsername);
+  const summoned =
+    m.chat.type === "private" ||
+    repliesToBot(m, options) ||
+    mentionsBot(m, options?.botUsername) ||
+    // Adds exactly ONE case to the three above: the `/stop@thisbot` suffix form. Every other way to
+    // address a stop (private, mention, reply) is already a summon on its own — telegramStop repeats
+    // those three by design, since it must answer "addressed to me?" without a route to lean on.
+    telegramStop(update, options);
   return summoned ? {} : null;
 }

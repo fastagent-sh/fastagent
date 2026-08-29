@@ -240,7 +240,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
-4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
+4. **Review policy.** Merging is a maintainer's decision, never an agent's. Green CI makes a PR eligible; report "ready to merge" and stop — merge only when told to. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
