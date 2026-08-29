@@ -44,6 +44,7 @@ import {
   ownImages,
   pickMessage,
   telegramEnvelope,
+  telegramStop,
 } from "./parse.ts";
 import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
 import { ensureStateHome } from "../kit/state.ts";
@@ -53,7 +54,7 @@ import { createTurnQueue } from "../kit/turn-queue.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
 // Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.
-export { defaultTelegramRoute, telegramEnvelope };
+export { defaultTelegramRoute, telegramEnvelope, telegramStop };
 export type { TelegramFailure, TelegramMessage, TelegramRoute, TelegramUpdate };
 
 /** Execution ceiling: a turn that has STARTED running this many times without finishing is dropped
@@ -136,9 +137,10 @@ export function telegramChannel({
       throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
     }
     const formatError = onError ?? defaultErrorMessage;
-    // One getMe at startup: the bot's @username (for the default route's group @mention summon, only when
-    // not supplied) and the group-privacy flag — privacy mode off is required to receive the un-summoned
-    // group messages that feed the context buffer, so warn if it is on.
+    // One getMe at startup: the bot's @username (for the default route's group @mention summon and for
+    // recognising an addressed `/stop`, only when not supplied) and the group-privacy flag — privacy
+    // mode off is required to receive the un-summoned group messages that feed the context buffer, so
+    // warn if it is on.
     let mentionName = botUsername;
     void callApi(apiBaseUrl, botToken, "getMe", {}).then(
       (me) => {
@@ -150,7 +152,13 @@ export function telegramChannel({
           );
         }
       },
-      (e) => log.warn(`[telegram] getMe failed; @mention summon + privacy check skipped: ${String(e)}`),
+      // Name every capability the missing username costs, so "the bot ignores /stop@name" is
+      // diagnosable from this ONE line — the alternative, a warn per undecidable message, repeats a
+      // single startup fact on every update.
+      (e) =>
+        log.warn(
+          `[telegram] getMe failed; @mention summon, addressed /stop, and the privacy check are skipped: ${String(e)}`,
+        ),
     );
     // A bot token is "<bot_id>:<secret>" — the bot's own id is knowable synchronously, so reply-to-bot
     // targeting is precise from the first update (no getMe race; getMe only resolves the @username).
@@ -398,52 +406,50 @@ export function telegramChannel({
         }
         return new Response(null, { status: 200 });
       }
-      {
-        const session = r.session ?? placeKey;
-        const chatId = r.chatId ?? m.chat.id;
-        // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no
-        // reply-quote. Only when the RESOLVED target is the message's own chat+thread: a route that
-        // redirects elsewhere must not carry a reply_parameters that resolves in the wrong place (fail, or
-        // quote a same-id message there). Compare VALUES, not whether the route touched the field — a route
-        // that explicitly returns the same chat/thread still quotes.
-        const threadId = r.threadId ?? m.message_thread_id;
-        const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
-        // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the
-        // run it stops. `/stop@otherbot` is not ours; a bare `/stop` always is. Awaited before the ACK:
-        // dispatch + one sendMessage is fast, and a delivery failure logs instead of failing the webhook.
-        const stopMatch = /^\/stop(?:@([A-Za-z0-9_]+))?$/i.exec(messageText(m).trim());
-        if (stopMatch && (!stopMatch[1] || stopMatch[1].toLowerCase() === mentionName?.toLowerCase())) {
-          const feedback = await dispatchStop(control, session, "[telegram]");
-          const target: Target = {
+      const session = r.session ?? placeKey;
+      const chatId = r.chatId ?? m.chat.id;
+      // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no
+      // reply-quote. Only when the RESOLVED target is the message's own chat+thread: a route that
+      // redirects elsewhere must not carry a reply_parameters that resolves in the wrong place (fail, or
+      // quote a same-id message there). Compare VALUES, not whether the route touched the field — a route
+      // that explicitly returns the same chat/thread still quotes.
+      const threadId = r.threadId ?? m.message_thread_id;
+      const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
+      const replyTo = m.chat.type !== "private" && sameTarget ? m.message_id : undefined;
+      // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the
+      // run it stops. Awaited before the ACK: dispatch + one sendMessage is fast, and a delivery failure
+      // logs instead of failing the webhook. Read AFTER the route, on the route's own session: the route
+      // is both the gate (a route that ignores this chat must not have the bot abort or answer in it) and
+      // the session authority (a route that remaps `session` would otherwise have its stop abort a
+      // session nobody runs). The default route summons an ADDRESSED `/stop` in a group for this reason:
+      // the general slash-command refusal would leave it buffered as discussion while the run kept going.
+      // An unaddressed one is not a command at all (see telegramStop) and never reaches here.
+      if (telegramStop(update, { botUsername: mentionName, botId })) {
+        const feedback = await dispatchStop(control, session, "[telegram]");
+        await sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }).catch((e) =>
+          log.warn(`[telegram] stop feedback failed: ${String(e)}`),
+        );
+        return new Response(null, { status: 200 });
+      }
+      const baseText = r.text ?? telegramEnvelope(m);
+      const imageFileIds = extractImages(m);
+      const fileIds = extractFiles(m);
+      if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
+        // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
+        submit(
+          {
+            id: `${update.update_id}`,
+            session,
+            placeKey,
+            baseText,
             chatId,
             threadId,
-            replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
-          };
-          await sendMessage(apiBaseUrl, botToken, target, feedback, { html: false }).catch((e) =>
-            log.warn(`[telegram] stop feedback failed: ${String(e)}`),
-          );
-          return new Response(null, { status: 200 });
-        }
-        const baseText = r.text ?? telegramEnvelope(m);
-        const imageFileIds = extractImages(m);
-        const fileIds = extractFiles(m);
-        if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-          // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
-          submit(
-            {
-              id: `${update.update_id}`,
-              session,
-              placeKey,
-              baseText,
-              chatId,
-              threadId,
-              replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
-              imageFileIds,
-              fileIds,
-            },
-            true,
-          );
-        }
+            replyTo,
+            imageFileIds,
+            fileIds,
+          },
+          true,
+        );
       }
       return new Response(null, { status: 200 });
     };
