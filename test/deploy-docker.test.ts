@@ -3,10 +3,10 @@ import {
   CLOUDFLARED_IMAGE,
   MIN_DOCKER_COMPOSE_VERSION,
   composeHasTunnelService,
-  dockerWebhookPaths,
   planDockerDeploy,
   toDockerProjectName,
 } from "../src/deploy/docker/plan.ts";
+import { webhookPaths } from "../src/deploy/channel-ingress.ts";
 
 const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
   plan.artifacts.find((artifact) => artifact.path.endsWith("fastagent.compose.yml"))!.content;
@@ -132,7 +132,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(composeHasTunnelService("services:\n    tunnel:\n        image: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n\ttunnel:\n\t\timage: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n  agent:\n")).toBe(false);
-    expect(dockerWebhookPaths(["telegram", "github", "slack", "feishu", "lark"])).toEqual([
+    expect(webhookPaths(["telegram", "github", "slack", "feishu", "lark"])).toEqual([
       "/telegram",
       "/webhook",
       "/slack",

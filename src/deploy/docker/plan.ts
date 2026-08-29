@@ -5,6 +5,7 @@
  * `--tunnel` can add an ephemeral Cloudflare Quick Tunnel service; durable ingress remains operator-owned.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -60,18 +61,6 @@ export function toDockerProjectName(directoryName: string): string {
     .slice(0, 54)
     .replace(/[-_]+$/g, "");
   return `fastagent-${slug || "agent"}`;
-}
-
-/** Default first-party webhook paths. Workspace glue may remap them, so guidance labels them defaults. */
-export function dockerWebhookPaths(channels: ChannelKind[]): string[] {
-  const path: Record<ChannelKind, string> = {
-    github: "/webhook",
-    telegram: "/telegram",
-    slack: "/slack",
-    feishu: "/feishu",
-    lark: "/lark",
-  };
-  return channels.map((kind) => path[kind]);
 }
 
 /** `${NAME:-}` without making JavaScript treat it as interpolation. */
@@ -145,8 +134,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
   const required = secrets.filter((secret) => secret.required);
   const optional = secrets.filter((secret) => !secret.required);
-  const routeChannels = input.channels.filter((kind) => !input.longConnectionChannels?.includes(kind));
-  const paths = dockerWebhookPaths(routeChannels);
+  const paths = webhookPaths(input.channels, input.longConnectionChannels);
 
   const runbook: string[] = [
     `# Run FastAgent in local Docker. ${composePath} / Dockerfile(.dockerignore) are generated above.`,

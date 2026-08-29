@@ -17,8 +17,7 @@
  * (one machine, the single-machine tier). Secrets go in via `secrets import` over stdin, so values
  * never land in argv/process listings.
  */
-import type { RegistrationOutcome } from "../../channels/registration.ts";
-import { registrationGate } from "../registration-gate.ts";
+import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -84,18 +83,16 @@ function listHasName(stdout: string, name: string): boolean {
 }
 
 /**
- * Run the deploy through `fly`. `log` reports progress; the injected Telegram/Feishu/Slack registrars
- * perform post-deploy webhook steps from the builder machine (Slack's control credential never travels
- * to the host). Absent, the manual console
- * instruction is printed. Every gate is fail-visible.
+ * Run the deploy through `fly`. `log` reports progress; the injected {@link Registrars} perform the
+ * post-deploy webhook steps from the builder machine (Slack's control credential never travels to the
+ * host). A registrar the caller did not wire becomes the printed manual step. Every gate is
+ * fail-visible.
  */
 export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
-  registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registrars: Registrars,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -174,41 +171,16 @@ export async function deployFlyRun(
     return gate("`fly deploy` failed — see the flyctl output above; fix and re-run");
   }
 
-  // 7. Post-deploy webhook — telegram end-to-end (fastagent has the token + the live URL); github is a
-  //    repo-settings step only a human can do. Gate policy is the shared registration-gate kernel
-  //    (registrars report facts, it owns the policy); all channels are attempted first.
-  const reg = registrationGate(log, "re-run to retry registration (steps already done are skipped)");
-  if (plan.channels.includes("telegram")) {
-    log("registering telegram webhook…");
-    reg.track("telegram", await registerTelegram(`https://${plan.appName}.fly.dev`));
-  }
-  if (plan.channels.includes("github")) {
-    log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
-    reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
-  }
-  if (plan.channels.includes("slack")) {
-    const baseUrl = `https://${plan.appName}.fly.dev`;
-    if (registerSlack) {
-      log("registering slack event URL…");
-      reg.track("slack", await registerSlack(baseUrl));
-    } else {
-      log(`slack: set Event Subscriptions → Request URL → ${baseUrl}/slack`);
-      reg.track("slack", "manual");
-    }
-  }
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!plan.channels.includes(kind) || plan.longConnectionChannels?.includes(kind)) continue;
-    if (registerFeishu) {
-      log(`registering ${kind} event URL…`);
-      reg.track(kind, await registerFeishu(`https://${plan.appName}.fly.dev`, kind));
-    } else {
-      log(
-        `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
-      );
-      reg.track(kind, "manual"); // no registrar wired — the console step above is the operator's
-    }
-  }
-  const registrationGateMsg = reg.gate();
+  // 7. Post-deploy webhook — which channels, in what words, and the gate policy are all the shared
+  //    kernel's; Fly contributes its deterministic URL and how to retry.
+  const registrationGateMsg = await registerWebhooks({
+    baseUrl: `https://${plan.appName}.fly.dev`,
+    channels: plan.channels,
+    longConnectionChannels: plan.longConnectionChannels,
+    registrars,
+    log,
+    retryHint: "re-run to retry registration (steps already done are skipped)",
+  });
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true };
 }

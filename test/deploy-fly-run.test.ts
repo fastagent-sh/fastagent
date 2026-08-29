@@ -28,7 +28,7 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
 });
 
 const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered")) =>
-  deployFlyRun(p, fly, () => {}, tg);
+  deployFlyRun(p, fly, () => {}, { telegram: tg });
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("happy path: auth → create app+volume → set secrets → deploy → telegram webhook", async () => {
@@ -60,13 +60,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
 
-    const out = await deployFlyRun(
-      plan({ channels: ["feishu", "lark"] }),
-      fly,
-      () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      registerFeishu,
-    );
+    const out = await deployFlyRun(plan({ channels: ["feishu", "lark"] }), fly, () => {}, {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      feishu: registerFeishu,
+    });
 
     expect(out).toEqual({ ok: true });
     expect(registerFeishu.mock.calls).toEqual([
@@ -80,13 +77,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const registerFeishu = vi.fn(
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
-    const out = await deployFlyRun(
-      plan({ channels: ["feishu"], longConnectionChannels: ["feishu"] }),
-      fly,
-      () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      registerFeishu,
-    );
+    const out = await deployFlyRun(plan({ channels: ["feishu"], longConnectionChannels: ["feishu"] }), fly, () => {}, {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      feishu: registerFeishu,
+    });
     expect(out).toEqual({ ok: true });
     expect(registerFeishu).not.toHaveBeenCalled();
   });
@@ -97,13 +91,11 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
 
-    const out = await deployFlyRun(
-      plan({ channels: ["telegram", "feishu"] }),
-      fly,
-      () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "failed"), // telegram registration ends with the webhook NOT set
-      registerFeishu,
-    );
+    const out = await deployFlyRun(plan({ channels: ["telegram", "feishu"] }), fly, () => {}, {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
+      feishu: // telegram registration ends with the webhook NOT set
+        registerFeishu,
+    });
 
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
     expect(out).toEqual({
@@ -118,13 +110,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(
-      plan({ channels: ["lark"] }),
-      fly,
-      (m) => logs.push(m),
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
-    );
+    const out = await deployFlyRun(plan({ channels: ["lark"] }), fly, (m) => logs.push(m), {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
+    });
 
     expect(out).toEqual({ ok: true });
     expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
@@ -134,14 +123,11 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
     const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
 
-    const out = await deployFlyRun(
-      plan({ channels: ["slack"] }),
-      fly,
-      () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      undefined,
-      registerSlack,
-    );
+    const out = await deployFlyRun(plan({ channels: ["slack"] }), fly, () => {}, {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      feishu: undefined,
+      slack: registerSlack,
+    });
 
     expect(out).toEqual({ ok: true });
     expect(registerSlack).toHaveBeenCalledWith("https://bot.fly.dev");
@@ -151,12 +137,9 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(
-      plan({ channels: ["slack"] }),
-      fly,
-      (message) => logs.push(message),
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-    );
+    const out = await deployFlyRun(plan({ channels: ["slack"] }), fly, (message) => logs.push(message), {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+    });
 
     expect(out).toEqual({ ok: true });
     expect(logs.join("\n")).toContain("https://bot.fly.dev/slack");
@@ -167,13 +150,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(
-      plan({ channels: ["telegram", "lark"] }),
-      fly,
-      (m) => logs.push(m),
-      vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
-      vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
-    );
+    const out = await deployFlyRun(plan({ channels: ["telegram", "lark"] }), fly, (m) => logs.push(m), {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
+      feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
+    });
 
     expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
     expect(out).toEqual({
@@ -186,12 +166,9 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(
-      plan({ channels: ["feishu", "lark"] }),
-      fly,
-      (message) => logs.push(message),
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-    );
+    const out = await deployFlyRun(plan({ channels: ["feishu", "lark"] }), fly, (message) => logs.push(message), {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+    });
 
     expect(out).toEqual({ ok: true });
     expect(logs.join("\n")).toContain("https://bot.fly.dev/feishu");

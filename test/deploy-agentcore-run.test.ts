@@ -67,7 +67,7 @@ const run = (
   aws: CliRunner,
   docker: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, tg);
+) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, { telegram: tg });
 
 describe("the deployment bucket (the agent's memory outlives the stack)", () => {
   const withForwarder = plan({ needsForwarder: true });
@@ -160,7 +160,7 @@ describe("the pre-stop checkpoint", () => {
       (m) => logs.push(m),
       writeParams,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     expect(logs.join("\n")).toContain("checkpointed the ingress session");
   });
@@ -175,7 +175,7 @@ describe("the pre-stop checkpoint", () => {
       (m) => logs.push(m),
       writeParams,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     const out = logs.join("\n");
     expect(out).not.toContain("checkpointed the ingress session");
@@ -193,7 +193,7 @@ describe("the pre-stop checkpoint", () => {
       (m) => logs.push(m),
       writeParams,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     expect(logs.join("\n")).toContain("it is lost");
   });
@@ -213,7 +213,7 @@ describe("the pre-stop checkpoint", () => {
       () => {},
       writeSecret,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     const invoke = calls.find((call) => call.args[1] === "invoke-agent-runtime")!.args;
     expect(invoke.join(" ")).not.toContain(ingressSecret);
@@ -231,7 +231,7 @@ describe("the pre-stop checkpoint", () => {
       (message) => logs.push(message),
       writeParams,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     expect(logs.join("\n")).toContain("invalid checkpoint response");
     expect(logs.join("\n")).not.toContain("checkpointed the ingress session");
@@ -434,7 +434,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       (m) => logs.push(m),
       writeParams,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     expect(out).toMatchObject({ ok: true });
     expect(logs.join("\n")).toContain("no ingress session to stop");
@@ -459,7 +459,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       () => {},
       writeParams,
       writeZip,
-      async () => "registered",
+      { telegram: async () => "registered" },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("stop-runtime-session") });
     expect((out as { gate: string }).gate).toContain("AccessDeniedException");
@@ -565,7 +565,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       (m) => logs.push(m),
       writeParams,
       writeZip,
-      tg,
+      { telegram: tg },
     );
     expect(out).toMatchObject({ ok: true });
     // The reserved path (works on EVERY forwarder topology — a schedule-only URL 404s /health), with
@@ -594,9 +594,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      async () => "registered",
-      undefined,
-      undefined,
+      { telegram: async () => "registered", feishu: undefined, slack: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 5_000, intervalMs: 1_000 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("FEISHU_APP_SECRET is not set") });
@@ -612,9 +610,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      async () => "registered",
-      undefined,
-      undefined,
+      { telegram: async () => "registered", feishu: undefined, slack: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("403 forbidden") });
@@ -632,9 +628,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      async () => "registered",
-      undefined,
-      undefined,
+      { telegram: async () => "registered", feishu: undefined, slack: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("never answered") });

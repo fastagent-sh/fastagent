@@ -22,6 +22,7 @@
  * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -203,49 +204,16 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).
-  const hasFeishuCloudChannel = (["feishu", "lark"] as const).some((kind) => channels.includes(kind));
-  if (
-    channels.includes("telegram") ||
-    channels.includes("github") ||
-    channels.includes("slack") ||
-    hasFeishuCloudChannel
-  ) {
+  // Mint only when something below needs it: with nothing to point at the domain (no channels, or only
+  // long-connection ones), "use it in the step(s) below" would refer to steps that do not follow.
+  const steps = webhookRunbook(`https://<your-domain>`, channels, input.longConnectionChannels);
+  if (steps.length > 0) {
     runbook.push(
       ``,
       `# Public URL — Railway mints a *.up.railway.app domain (NOT deterministic). Generate it, then read`,
       `# the printed https URL and use it as <your-domain> in the webhook step(s) below:`,
       `railway domain`,
-    );
-  }
-  if (channels.includes("telegram")) {
-    runbook.push(
-      `# Register the Telegram webhook (default route POST /telegram; if you remapped it in`,
-      `# channels/telegram.ts, use your path). secret_token MUST equal TELEGRAM_SECRET_TOKEN:`,
-      `curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \\`,
-      `  -d url=https://<your-domain>/telegram -d secret_token=<TELEGRAM_SECRET_TOKEN>`,
-    );
-  }
-  if (channels.includes("github")) {
-    runbook.push(
-      `# Set the GitHub webhook (repo Settings → Webhooks). Default route POST /webhook; if you remapped it`,
-      `# in channels/github.ts, use your path:`,
-      `#   Payload URL = https://<your-domain>/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
-    );
-  }
-  if (channels.includes("slack")) {
-    runbook.push(
-      `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
-      `# answers Slack's challenge), and match scopes/subscriptions to channels/slack.ts groupBehavior:`,
-      `#   Request URL = https://<your-domain>/slack`,
-    );
-  }
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!channels.includes(kind) || input.longConnectionChannels?.includes(kind)) continue;
-    const label = kind === "feishu" ? "Feishu" : "Lark";
-    runbook.push(
-      `# Set the ${label} event Request URL (developer console → Events & Callbacks). Default route`,
-      `# POST /${kind}; the service must be RUNNING when you save (the console verifies with a challenge):`,
-      `#   Request URL = https://<your-domain>/${kind}`,
+      ...steps,
     );
   }
 

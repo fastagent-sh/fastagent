@@ -31,6 +31,7 @@ import { createHash } from "node:crypto";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -1017,33 +1018,15 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     );
   }
 
-  // Post-deploy webhook registration — same per-channel steps as every host, pointed at the
-  // forwarder's Function URL (read from the stack outputs).
-  const post: string[] = [];
-  if (channels.includes("telegram")) {
-    post.push(
-      `# Register the Telegram webhook (default route POST /telegram; secret_token MUST equal TELEGRAM_SECRET_TOKEN):`,
-      `curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \\`,
-      `  -d url=<ForwarderUrl>/telegram -d secret_token=<TELEGRAM_SECRET_TOKEN>`,
-    );
-  }
+  // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's
+  // Function URL (read from the stack outputs). No long-connection channels exist here: the CLI gates
+  // them before an AgentCore deploy (nothing holds a connection through scale-to-zero).
+  const post = webhookRunbook(`<ForwarderUrl>`, channels);
   if (channels.includes("github")) {
+    // AgentCore-specific, so it is not in the shared step: nothing else has a compute ceiling.
     post.push(
-      `# Set the GitHub webhook (repo Settings → Webhooks): Payload URL = <ForwarderUrl>/webhook,`,
-      `#   content type application/json, secret = GITHUB_WEBHOOK_SECRET.`,
       `# NOTE: github turns are fire-and-forget with no replay — a compute reclaimed mid-review drops it`,
       `#   (the ping's HealthyBusy + time_of_last_update holds the session while turns run, but the 8 h compute ceiling is hard).`,
-    );
-  }
-  if (channels.includes("slack")) {
-    post.push(`# Set Slack Event Subscriptions → Request URL = <ForwarderUrl>/slack (scopes per channels/slack.ts).`);
-  }
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!channels.includes(kind)) continue;
-    post.push(
-      `# Set the ${kind === "feishu" ? "Feishu" : "Lark"} event Request URL (developer console → Events & Callbacks):`,
-      `#   Request URL = <ForwarderUrl>/${kind} (the stack must be deployed when you save — the console`,
-      `#   sends a challenge, which rides through the forwarder to the channel and back verbatim).`,
     );
   }
   if (post.length > 0) runbook.push(``, ...post);

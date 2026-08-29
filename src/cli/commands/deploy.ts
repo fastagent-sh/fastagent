@@ -23,10 +23,10 @@ import {
   planAgentcoreDeploy,
 } from "../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun } from "../../deploy/agentcore/run.ts";
+import { type Registrars, webhookChannels, webhookPaths } from "../../deploy/channel-ingress.ts";
 import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../deploy/container.ts";
 import {
   composeHasTunnelService,
-  dockerWebhookPaths,
   isGeneratedCompose,
   planDockerDeploy,
   toDockerProjectName,
@@ -74,6 +74,16 @@ export interface DeployOptions {
 }
 
 /** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
+/** The registrars every host driver gets. One wiring: a channel's credentials are the channel's, not
+ *  the host's, so which of them can run end-to-end never varies by deployment target. */
+function registrarsFor(agentDir: string): Registrars {
+  return {
+    telegram: (baseUrl) => registerTelegramWebhook(baseUrl),
+    slack: (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+    feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
+  };
+}
+
 function shellArg(value: string): string {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
@@ -596,7 +606,7 @@ async function runDeployDocker(
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, {
           openUrl: openExternalUrl,
-          routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
+          routeChannels: webhookChannels(channels, longConnectionChannels),
           stateRoot: resolveStateRoot(agentDir),
         }),
     },
@@ -624,7 +634,7 @@ async function runDeployDocker(
   }
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   if (outcome.tunnelUrl) return;
-  const paths = dockerWebhookPaths(channels.filter((kind) => !longConnectionChannels.includes(kind)));
+  const paths = webhookPaths(channels, longConnectionChannels);
   if (paths.length > 0) {
     console.error(
       `[fastagent] note: public ingress is operator-owned — configure your tunnel/proxy, then wire the ` +
@@ -706,9 +716,7 @@ async function runDeployFly(
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
-    (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+    registrarsFor(agentDir),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
@@ -802,9 +810,7 @@ async function runDeployAgentcore(
         await writeFile(path, bytes);
         return path;
       },
-      (baseUrl) => registerTelegramWebhook(baseUrl),
-      (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-      (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+      registrarsFor(agentDir),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);
@@ -886,9 +892,7 @@ async function runDeployRailway(
     { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked, dockerfilePath },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
-    (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+    registrarsFor(agentDir),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);
