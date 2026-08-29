@@ -82,7 +82,7 @@ By default, `telegramChannel` uses `defaultTelegramRoute`:
 - groups answer when the message replies to THIS bot — matched by the bot id parsed from the token, so a reply to another bot in a multi-bot group stays silent, precisely from the first update (no getMe race),
 - groups answer on an `@botname` mention when the bot username is known — detected from Telegram's own `mention` entities, not a text scan, so `@fast` never matches `@fastagent`, and an `@botname` inside a code block or a URL does not summon (it is not a mention entity).
 
-A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy. When reusing `defaultTelegramRoute`, pass your bot's identity (`botUsername` and/or `botId`) — group summon needs it, and a bare call answers only private chats (fail-closed: "is this a reply to me?" cannot be yes without knowing who "me" is).
+A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. The one exception is a `/stop` [addressed to this bot](#stopping-a-running-turn): refusing it would leave the stop buffered as ordinary discussion while the run it meant to stop kept going. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy — including `/stop`, which is gated by the route like any other message and aborts the session the route returns. Reuse `defaultTelegramRoute` (as below) or the exported `telegramStop(update, { botUsername, botId })` to keep the command working. When reusing `defaultTelegramRoute`, pass your bot's identity (`botUsername` and/or `botId`) — group summon needs it, and a bare call answers only private chats (fail-closed: "is this addressed to me?" cannot be yes without knowing who "me" is).
 
 ## Group chats
 
@@ -103,6 +103,7 @@ const botUsername = "my_bot";
 telegramChannel({
   secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
   botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+  botUsername,
   route(update) {
     const base = defaultTelegramRoute(update, { botUsername });
     if (!base) return null;
@@ -168,10 +169,30 @@ For development bots, surfacing `failed.details` is useful. For public bots, pre
 
 ## Stopping a running turn
 
-When the serve runs with `sessionControl: true` (fastagent.config), `/stop` aborts the chat's active
-turn (queued asks are independent and keep running — send `/stop` again when one starts). Without
-session control the command answers with a visible "not enabled" notice. `/stop@<bot>` addressed to
-another bot is ignored.
+When the serve runs with `sessionControl: true` (fastagent.config), a `/stop` **addressed to this bot**
+aborts the chat's active turn (queued asks are independent and keep running — send `/stop` again when
+one starts). Without session control the command answers with a visible "not enabled" notice.
+
+Four ways to address it, all equivalent: a bare `/stop` in a private chat, `/stop@<thisbot>`,
+`@<thisbot> /stop`, and a bare `/stop` replying to one of the bot's own messages.
+
+**In a group, a bare `/stop` is not the command** — it stays ordinary discussion and lands in the
+context buffer like any other message. Telegram hands a bare command to every bot in the group, and
+only promises to deliver it when this bot spoke last, so it addresses no one: acting on it would let a
+bystander's ask for a different bot abort this bot's run. Say `@<thisbot> /stop`, or reply to the bot
+with `/stop`, instead. `/stop@<otherbot>` is likewise not this bot's.
+
+"Stays discussion" is what `defaultTelegramRoute` does with it. A permissive custom `route` that
+answers every group message will instead run the bare `/stop` as an ordinary turn — queued behind the
+run it meant to stop. If your route is that permissive, decide what to do with an unaddressed stop
+yourself: `telegramStop(update, { botUsername, botId })` tells you whether a stop is addressed to this
+bot, and returning `null` for the rest keeps them out of the queue.
+
+`/stop` runs through `route` like any other message: it aborts the session the route resolves (so a
+route that remaps `session` stops the session it actually runs), and a route that returns `null` for
+the chat silences the command there too. Pass `botUsername` to `telegramChannel` whenever you also
+pass a custom `route` (as the example above does) — the channel matches an addressed stop against its
+OWN identity, which it otherwise only learns from `getMe`, and not at all if that call fails.
 
 ## Files and images
 

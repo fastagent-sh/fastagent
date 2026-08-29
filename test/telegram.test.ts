@@ -1885,21 +1885,32 @@ describe("telegram /stop command", () => {
     expect(sent.some((b) => String(b.text).includes("Stop isn't enabled"))).toBe(true);
   });
 
-  // The default route refuses slash commands in a group, so a route-gated stop was buffered as
-  // ordinary discussion while the run it meant to stop kept going.
-  const groupStop = (text: string): TelegramUpdate => ({
+  // A `/stop` ADDRESSED to this bot is the command; an unaddressed one in a group is not (see
+  // telegramStop). Everything below is that one rule, in a group — the ambiguous place.
+  const groupStop = (text: string, extra: Record<string, unknown> = {}): TelegramUpdate => ({
     update_id: 78,
     message: {
       message_id: 4,
       text,
       chat: { id: -100123, type: "supergroup" },
       from: { id: 7, username: "alice" },
+      ...extra,
     },
   });
 
-  it.each(["/stop", "/stop@mybot"])("%s in a group aborts instead of becoming buffered context", async (text) => {
+  const stopFeedback = (fetchMock: ReturnType<typeof okFetch>): (string | undefined)[] =>
+    callsTo(fetchMock, "sendMessage").map(([, init]) => (JSON.parse(String(init.body)) as { text?: string }).text);
+
+  // The four addressing forms are equivalent, and each must abort rather than become a turn — a turn
+  // would queue behind the very run it means to stop. (The private-chat form is the first test above.)
+  it.each([
+    ["/stop@mybot", {}],
+    ["@mybot /stop", { entities: [{ type: "mention", offset: 0, length: 6 }] }],
+    ["/stop", { reply_to_message: { message_id: 1, from: { id: 9, is_bot: true, username: "mybot" } } }],
+  ])("aborts on an addressed group stop: %s", async (text, extra) => {
     invoked.length = 0;
-    vi.stubGlobal("fetch", okFetch());
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
     const { control, aborted } = fakeControl({ ok: true });
     const stateDir = freshStateDir();
     const ch = telegramChannel(agent, {
@@ -1909,19 +1920,112 @@ describe("telegram /stop command", () => {
       control,
       stateDir,
     });
-    expect((await ch(tgRequest(groupStop(text)))).status).toBe(200);
+    expect((await ch(tgRequest(groupStop(text, extra)))).status).toBe(200);
     await flush();
     expect(aborted).toEqual(["-100123"]);
     expect(invoked).toEqual([]);
     expect(existsSync(join(stateDir, "buffers.json"))).toBe(false);
+    expect(stopFeedback(fetchMock)).toEqual(["\u23f9 Stopped."]);
   });
 
-  it("/stop@otherbot in a group is still not ours", async () => {
-    vi.stubGlobal("fetch", okFetch());
+  // An addressed stop reports whatever happened — the asker named this bot and must not be left
+  // guessing while the run continues.
+  it.each([
+    ["nothing is running", { code: NO_ACTIVE_RUN_CODE } as const, "Nothing is running."],
+    [
+      "the hub rejects the abort",
+      { code: "run_command_failed" } as const,
+      "\u26a0\ufe0f Could not stop (run_command_failed).",
+    ],
+  ])("answers an addressed group stop when %s", async (_case, result, expected) => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { control } = fakeControl(result);
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
+    await ch(tgRequest(groupStop("/stop@mybot")));
+    await flush();
+    expect(stopFeedback(fetchMock)).toEqual([expected]);
+  });
+
+  // Cutting mentions must not cut SOMEONE ELSE'S: `@otherbot /stop` names another addressee, and a
+  // reply to this bot alongside it does not transfer the command — the reply is context, the mention
+  // is the address.
+  it.each([
+    ["alone", {}, 0],
+    [
+      "while replying to this bot",
+      { reply_to_message: { message_id: 1, from: { id: 9, is_bot: true, username: "mybot" } } },
+      1,
+    ],
+  ] as const)("never acts on `@otherbot /stop` %s", async (_case, extra, turns) => {
+    invoked.length = 0;
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
     const { control, aborted } = fakeControl({ ok: true });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
-    await ch(tgRequest(groupStop("/stop@otherbot")));
+    const mention = { entities: [{ type: "mention", offset: 0, length: 9 }] };
+    await ch(tgRequest(groupStop("@otherbot /stop", { ...mention, ...extra })));
     await flush();
     expect(aborted).toEqual([]);
+    expect(stopFeedback(fetchMock)).not.toContain("⏹ Stopped.");
+    // The reply still SUMMONS this bot — it just answers as an ordinary turn instead of stopping.
+    expect(invoked).toHaveLength(turns);
+  });
+
+  // Unaddressed: Telegram hands a bare group command to EVERY bot in the chat, so acting on it would
+  // let a bystander's ask for another bot abort this one's run — and answering it would let them make
+  // this bot talk. It is not the command: it stays ordinary discussion, buffered like any message.
+  it.each(["/stop", "/stop@otherbot"])("leaves an unaddressed group stop as discussion: %s", async (text) => {
+    invoked.length = 0;
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { control, aborted } = fakeControl({ ok: true });
+    const stateDir = freshStateDir();
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      botUsername: "mybot",
+      control,
+      stateDir,
+    });
+    await ch(tgRequest(groupStop(text)));
+    await flush();
+    expect(aborted).toEqual([]);
+    expect(invoked).toEqual([]);
+    expect(stopFeedback(fetchMock)).toEqual([]);
+    expect(readFileSync(join(stateDir, "buffers.json"), "utf8")).toContain(text);
+  });
+
+  // The route is the session authority: a custom route that remaps `session` (the shape docs/telegram.md
+  // shows) must have its stop abort the session its turns actually run on, not the message's place key.
+  it("aborts the session a custom route remaps to", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { control, aborted } = fakeControl({ ok: true });
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      botUsername: "mybot",
+      control,
+      route: (update) => {
+        const base = defaultTelegramRoute(update, { botUsername: "mybot" });
+        return base && { ...base, session: `telegram:${update.message?.chat.id}` };
+      },
+    });
+    await ch(tgRequest(groupStop("/stop@mybot")));
+    await flush();
+    expect(aborted).toEqual(["telegram:-100123"]);
+  });
+
+  // The route is also the gate: a route that ignores a chat (a whitelist) must not have the bot abort
+  // there — nor post the feedback line into a conversation it was told to stay out of.
+  it("a route that ignores the chat silences /stop there", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { control, aborted } = fakeControl({ ok: true });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", control, route: ignore });
+    await ch(tgRequest(groupStop("/stop@mybot")));
+    await flush();
+    expect(aborted).toEqual([]);
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(0);
   });
 });

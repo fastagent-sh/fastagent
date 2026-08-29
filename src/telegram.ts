@@ -3,6 +3,7 @@ export {
   telegramChannel,
   defaultTelegramRoute,
   telegramEnvelope,
+  telegramStop,
   type TelegramChannelOptions,
   type TelegramUpdate,
   type TelegramMessage,
