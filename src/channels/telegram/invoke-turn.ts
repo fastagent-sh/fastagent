@@ -7,7 +7,7 @@
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { AttachmentDirectoryError } from "../kit/attachment-path.ts";
+import { AttachmentDirectoryError, attachmentDir } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -59,6 +59,10 @@ interface ResolvedAttachments {
 async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
   const { api, botToken, chatId, filesDir } = t;
   const { primary, buffered } = attachments;
+  // A turn-level invariant, so it is proved once here rather than per file: the route's directory
+  // breaks every attachment, and failing before the first byte costs nothing — including the vision
+  // images, which download in full before any file is reached.
+  attachmentDir(filesDir, chatId);
   const images = await resolveImages(api, botToken, primary.imageFileIds);
   const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
   const bufferedImages: ImageRef[] = [];

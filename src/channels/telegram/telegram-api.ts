@@ -18,7 +18,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { ImageRef } from "../../agent.ts";
-import { attachmentDir, attachmentPath } from "../kit/attachment-path.ts";
+import { attachmentPath } from "../kit/attachment-path.ts";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
@@ -386,11 +386,8 @@ async function downloadTelegramFile(
   chatId: number | string,
   filesDir: string,
 ): Promise<DownloadedFile> {
-  // Only the NAME waits for the Bot API's `remotePath`; the directory is known now, and a route this
-  // rejects would otherwise cost a full download per attachment, on every summon.
-  const dir = attachmentDir(filesDir, chatId);
   const { bytes, remotePath } = await getFileBytes(api, botToken, fileId);
-  const { name, path } = attachmentPath(filesDir, chatId, basename(remotePath));
+  const { dir, name, path } = attachmentPath(filesDir, chatId, basename(remotePath));
   await mkdir(dir, { recursive: true });
   await writeFile(path, bytes);
   return { path, name, size: bytes.byteLength };

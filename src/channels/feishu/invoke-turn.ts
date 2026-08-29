@@ -14,7 +14,7 @@
  */
 import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { AttachmentDirectoryError } from "../kit/attachment-path.ts";
+import { AttachmentDirectoryError, attachmentDir } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -221,6 +221,10 @@ async function walkReplyChain(
  * degrade independently.
  */
 async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
+  // A turn-level invariant, so it is proved once here rather than per file: the route's directory
+  // breaks every attachment, and failing before the first byte costs nothing — including the vision
+  // images, which download in full when they come before a file.
+  attachmentDir(t.filesDir, t.chatId);
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";

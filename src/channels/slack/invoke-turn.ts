@@ -1,7 +1,7 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { AttachmentDirectoryError } from "../kit/attachment-path.ts";
+import { AttachmentDirectoryError, attachmentDir } from "../kit/attachment-path.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
@@ -47,6 +47,10 @@ async function resolveInputs(
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
 ): Promise<ResolvedInputs> {
+  // A turn-level invariant, so it is proved once here rather than per file: the route's directory
+  // breaks every attachment, and failing before the first byte costs nothing — including the vision
+  // images, which download in full when they come before a file.
+  attachmentDir(transport.filesDir, transport.channelId);
   const images: ImageRef[] = [];
   const files: DownloadedSlackFile[] = [];
   for (const id of attachments.primaryFileIds) {

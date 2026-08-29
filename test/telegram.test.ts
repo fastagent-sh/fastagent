@@ -536,7 +536,7 @@ describe("buffered attachments (files/photos from un-summoned discussion)", () =
   });
 
   it("a broken route leaves the turn instead of being counted as one lost background file", async () => {
-    attachFetch();
+    const got = attachFetch();
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
       errors.push(String(m));
@@ -555,6 +555,7 @@ describe("buffered attachments (files/photos from un-summoned discussion)", () =
     // every attachment, so the answer must not arrive with a "1 attachment not loaded" note.
     expect(calls).toHaveLength(0);
     expect(errors.some((e) => /AttachmentDirectoryError/.test(e))).toBe(true);
+    expect(got).toEqual([]); // rejected before the first byte, same as the primary path
   });
 
   it("a failed buffered PHOTO also degrades — counted in the note, its sibling still lands as vision", async () => {
@@ -1614,6 +1615,36 @@ describe("telegram channel", () => {
     // (up to 20 MB) once per attachment, on every summon.
     expect(callsTo(fetchMock, "getFile")).toHaveLength(0);
     expect(existsSync(join(state, "files"))).toBe(false);
+  });
+
+  it("rejects a broken route before ANY attachment byte — including a turn that only carries images", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      route: () => ({ chatId: "" }),
+      apiBaseUrl: API,
+      onError: (f) => `ERR retryable=${f.retryable}: ${f.details}`,
+    });
+    const photo: TelegramUpdate = {
+      update_id: 13,
+      message: {
+        message_id: 6,
+        caption: "what is this",
+        photo: [{ file_id: "f1", file_unique_id: "u", width: 9, height: 9 }],
+        chat: { id: 42, type: "private" },
+      },
+    };
+    expect((await ch(tgRequest(photo))).status).toBe(200);
+    for (let i = 0; i < 200 && callsTo(fetchMock, "getFile").length + calls.length === 0; i++)
+      await new Promise((r) => setTimeout(r, 5));
+    await flush();
+    // Images never touch the attachment directory, so a per-file guard would let this turn run and
+    // then fail silently at delivery — the same empty chatId cannot receive the answer either.
+    expect(calls).toHaveLength(0);
+    expect(callsTo(fetchMock, "getFile")).toHaveLength(0);
   });
 
   it("surfaces an attachment fetch failure to the user (not a silent skip) and does not run the agent", async () => {
