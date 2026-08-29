@@ -272,7 +272,14 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     // A DIRECTORY passes the name test on its own. Every reader of channels/ has to answer this the
     // same way loadModuleDir does, or `info` lists a channel the serve never mounts.
     await mkdir(join(dir, "channels", "feishu.ts"));
-    expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
+    const said: string[] = [];
+    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
+    try {
+      expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(said.filter((m) => m.includes("feishu.ts") && m.includes("a directory"))).toHaveLength(1);
   });
 
   it("orders by the NAME a consumer sees, not by filename", async () => {
@@ -301,7 +308,14 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     try {
       const loaded = await loadChannels(dir, { agent: {} as never, stateRoot: dir });
       expect(loaded.routeChannels).toEqual([]);
-      expect(said.join("\n")).toContain("symlink");
+      // Once per read of the directory: the inventory is the only place that says it.
+      expect(said.filter((m) => m.includes("symlink"))).toHaveLength(1);
+
+      // The LISTING path says it too: `fastagent info` only lists names, so a silent skip there
+      // reads as "I never created it" rather than "this one cannot be loaded".
+      said.length = 0;
+      expect(await discoverChannelFiles(dir)).toEqual([]);
+      expect(said.filter((m) => m.includes("symlink"))).toHaveLength(1);
     } finally {
       warn.mockRestore();
     }

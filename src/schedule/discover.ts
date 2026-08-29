@@ -15,7 +15,7 @@ import type { LoadedSchedule, Schedule } from "./schedule.ts";
  *  since it also reports broken files and next instants). */
 export async function discoverScheduleFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "schedules");
-  const { entries } = await moduleInventory(join(dir, "schedules"));
+  const entries = await moduleInventory(join(dir, "schedules"));
   return entries.map((entry) => entry.name);
 }
 
