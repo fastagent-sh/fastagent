@@ -302,6 +302,14 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
       const loaded = await loadChannels(dir, { agent: {} as never, stateRoot: dir });
       expect(loaded.routeChannels).toEqual([]);
       expect(said.join("\n")).toContain("symlink");
+
+      // The LISTING path says it too. `fastagent info` is where an author looks for what their
+      // directory assembles into, and it only lists names — so while the skip was reported by the
+      // loader alone, info showed a symlinked channel as simply absent, which reads as "I never
+      // created it" rather than "this one cannot be loaded".
+      said.length = 0;
+      expect(await discoverChannelFiles(dir)).toEqual([]);
+      expect(said.join("\n")).toContain("symlink");
     } finally {
       warn.mockRestore();
     }

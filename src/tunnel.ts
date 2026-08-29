@@ -140,7 +140,7 @@ function lastErrorLine(tail: string): string {
 async function channelBasenames(dir: string): Promise<string[]> {
   const channels = join(dir, "channels");
   try {
-    const { entries } = await moduleInventory(channels);
+    const entries = await moduleInventory(channels);
     return entries.map((entry) => entry.name);
   } catch (error) {
     log.warn(`[fastagent] --tunnel: cannot read ${channels}: ${(error as Error).message} — no webhooks registered`);

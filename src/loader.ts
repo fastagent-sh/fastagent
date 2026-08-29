@@ -32,9 +32,8 @@ export interface InventoryEntry {
   file: string;
 }
 
-/** An entry whose NAME says module and whose kind says otherwise. Data, not a log line: the loader
- *  warns, `info` could show it, and a test can assert it. */
-export interface SkippedEntry {
+/** An entry whose NAME says module and whose kind says otherwise. */
+interface SkippedEntry {
   label: string;
   /** Why it is not loadable, in words an author can act on. */
   why: string;
@@ -61,18 +60,22 @@ export interface SkippedEntry {
  * SYMLINKS ARE SKIPPED, and that is a boundary rather than an oversight: `assertInsideAgentDir`
  * guards the code-input DIRECTORY against escaping the definition, and nothing guards the entries
  * inside it, so following a link would import from anywhere on the box past the very check meant to
- * prevent it. Do not "fix" this by following them — report them, which is what `skipped` is for.
+ * prevent it. Do not "fix" this by following them — report them, which this does.
+ *
+ * The skip is WARNED HERE, not handed back, because the fact is the same for all four consumers and
+ * only one of them imports. It used to be warned by `loadModuleDir`, on the reasoning that the
+ * loader is "the path where an author finds out their channel does not exist" — which had it exactly
+ * backwards: `fastagent info` is where an author looks, it only lists names, and it therefore
+ * reported a symlinked channel as simply ABSENT. What to do about a load FAILURE still differs per
+ * caller and still travels as data; "this file is not loadable" does not.
  */
-export async function moduleInventory(subDir: string): Promise<{
-  entries: InventoryEntry[];
-  skipped: SkippedEntry[];
-}> {
+export async function moduleInventory(subDir: string): Promise<InventoryEntry[]> {
   let dirents: Dirent[];
   try {
     dirents = await readdir(subDir, { withFileTypes: true });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "not_found") return { entries: [], skipped: [] };
+    if (code === "ENOENT" || code === "not_found") return [];
     throw new Error(`cannot read ${subDir}: ${(error as Error).message}`);
   }
   const sub = basename(subDir);
@@ -94,7 +97,8 @@ export async function moduleInventory(subDir: string): Promise<{
       skipped.push({ label, why: dirent.isDirectory() ? "a directory, not a file" : "not a regular file" });
     }
   }
-  return { entries, skipped };
+  for (const { label, why } of skipped) log.warn(`[fastagent] ${label} is ${why} — not loaded`);
+  return entries;
 }
 
 export interface DiscoveredModule {
@@ -121,16 +125,12 @@ export interface ModuleLoadFailure {
  * Import every module the directory declares ({@link moduleInventory}). A file that fails to IMPORT
  * is collected into `failures` (with {@link moduleLoadHint}) rather than thrown, so the caller can
  * report every bad file and apply domain policy; `loadTools`/`loadChannels` add validation failures
- * the same way.
- *
- * Skipped entries are warned HERE rather than returned: this is the path where an author finds out
- * their channel does not exist, and the inventory's other two consumers only list names.
+ * the same way. Entries the inventory SKIPPED are already reported by it, for every consumer.
  */
 export async function loadModuleDir(
   subDir: string,
 ): Promise<{ modules: DiscoveredModule[]; failures: ModuleLoadFailure[] }> {
-  const { entries, skipped } = await moduleInventory(subDir);
-  for (const { label, why } of skipped) log.warn(`[fastagent] ${label} is ${why} — not loaded`);
+  const entries = await moduleInventory(subDir);
   const modules: DiscoveredModule[] = [];
   const failures: ModuleLoadFailure[] = [];
   for (const { name, label, file } of entries) {

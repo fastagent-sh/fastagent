@@ -267,6 +267,20 @@ resolves from the real environment — a `FASTAGENT_SECRETS_DIR` set *inside* `.
 `auth.json` but cannot move the file it is read from. The committable `.env.example` template always
 stays at `<agent dir>/.secrets/.env.example`.
 
+## Code inputs must be real files
+
+`tools/`, `channels/`, and `schedules/` are code the agent imports. Each directory must stay inside
+the agent directory, and each entry in it must be a real file. A symlink is skipped with a warning
+(`fastagent info`, `dev`, and `start` all say so) — it is never followed.
+
+This is deliberate, not a gap. The containment check guards the *directory*; nothing guards the
+entries inside it, so following a link would import code from anywhere on the machine past the check
+that exists to prevent exactly that. It also would not survive deployment: `deploy` bakes the
+workspace into an image, and a link pointing outside it resolves to nothing there — an agent that
+works locally and is silently missing a tool in production.
+
+To share code between agents, publish it as a package and import it, or copy the file.
+
 ## Tools
 
 There are two ways to add tools:
@@ -386,6 +400,8 @@ fastagent init releaser     # releaser/fastagent/
 
 Each is fully independent: its own persona, skills, tools, config, model, channels, schedules,
 `.state/` and `.secrets/`. Run them separately (`fastagent dev reviewer`), deploy them separately.
+They do not share code by symlink (see [Code inputs must be real files](#code-inputs-must-be-real-files));
+publish a package, or copy the file.
 
 One consequence to know: an agent's workspace is always the directory holding its `fastagent/`, so
 `reviewer`'s cwd is `reviewer/`, not the repo above it. Its `AGENTS.md` context still walks up to the

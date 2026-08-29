@@ -76,7 +76,7 @@ export async function inspectChannels(dir: string): Promise<{
  */
 export async function discoverChannelFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "channels");
-  const { entries } = await moduleInventory(join(dir, "channels"));
+  const entries = await moduleInventory(join(dir, "channels"));
   return entries.map((entry) => entry.name);
 }
 
