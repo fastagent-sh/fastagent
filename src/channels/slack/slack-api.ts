@@ -423,10 +423,11 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       return { mimeType: mime, data: bytes.toString("base64") };
     },
     async fetchFile(file, channelId, filesDir) {
-      const { bytes } = await download(file);
-      // The id prefix keeps two same-named uploads in one channel apart.
+      // Before the download: a route naming an impossible directory is a permanent misconfiguration,
+      // so it should not cost the bytes first. The id prefix keeps two same-named uploads apart.
       const suggested = `${file.id ?? "slack"}-${file.name ?? file.title ?? file.id ?? "file"}`;
       const { dir, name, path } = attachmentPath(filesDir, channelId, suggested);
+      const { bytes } = await download(file);
       await mkdir(dir, { recursive: true });
       await writeFile(path, bytes);
       return { path, name, size: bytes.byteLength };

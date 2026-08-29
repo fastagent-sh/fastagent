@@ -9,13 +9,14 @@
  * - The file name comes off the platform, where an odd character is ordinary traffic. Failing a turn
  *   over one would be the channel's bug, so it is reduced to something usable instead.
  *
- * The directory's containment is PROVED on the result rather than enumerated on the input: `resolve`
- * settles every spelling of escape (`..`, `a/../..`, an absolute path, a Windows drive-relative one)
- * in a single check, so no list of dangerous characters has to be kept complete.
+ * Both are PROVED on the result rather than enumerated on the input: `resolve` settles every spelling
+ * of escape (`..`, `a/../..`, an absolute path, a Windows drive-relative `D:foo`) in one check, so no
+ * list of dangerous spellings has to be kept complete. They differ only in what a failure means — the
+ * directory throws, the name falls back.
  */
 import { resolve, sep } from "node:path";
 
-/** Resolved attachment destination. Throws if `conversationId` names anything outside `filesDir`. */
+/** Resolved attachment destination. Throws unless `conversationId` names a directory inside `filesDir`. */
 export function attachmentPath(
   filesDir: string,
   conversationId: string | number,
@@ -23,14 +24,14 @@ export function attachmentPath(
 ): { dir: string; name: string; path: string } {
   const root = resolve(filesDir);
   const dir = resolve(root, String(conversationId));
+  // `dir === root` when the id is empty or `.`, which is a route that forgot to name a conversation
+  // rather than one escaping — same rejection, so the wording has to cover both.
   if (!dir.startsWith(root + sep))
     throw new Error(
-      `route named an attachment directory outside ${filesDir}: ${JSON.stringify(String(conversationId))}`,
+      `route named an attachment directory that is not inside ${filesDir}: ${JSON.stringify(String(conversationId))}`,
     );
 
-  // A segment can only leave `dir` by holding a separator or by BEING a directory reference, and that
-  // is the whole list — which is why the name needs no containment check of its own.
   const cleaned = fileName.replace(/[/\\]/g, "_");
-  const name = cleaned === "" || cleaned === "." || cleaned === ".." ? "file" : cleaned;
+  const name = resolve(dir, cleaned).startsWith(dir + sep) ? cleaned : "file";
   return { dir, name, path: resolve(dir, name) };
 }

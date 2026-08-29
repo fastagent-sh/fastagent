@@ -448,8 +448,10 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       return { mimeType: mime?.startsWith("image/") ? mime : "image/jpeg", data: bytes.toString("base64") };
     },
     async fetchFile(messageId, fileKey, name, chatId, filesDir) {
-      const { bytes } = await api.downloadResource(messageId, fileKey, "file");
+      // Before the download: a route naming an impossible directory is a permanent misconfiguration,
+      // so it should not cost the bytes first.
       const dest = attachmentPath(filesDir, chatId, name);
+      const { bytes } = await api.downloadResource(messageId, fileKey, "file");
       await mkdir(dest.dir, { recursive: true });
       await writeFile(dest.path, bytes);
       return { path: dest.path, name: dest.name, size: bytes.byteLength };

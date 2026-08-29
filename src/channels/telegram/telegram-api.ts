@@ -387,7 +387,8 @@ async function downloadTelegramFile(
   filesDir: string,
 ): Promise<DownloadedFile> {
   const { bytes, remotePath } = await getFileBytes(api, botToken, fileId);
-  // `remotePath` is the Bot API's, and only its last segment is the file's name here.
+  // `remotePath` is the Bot API's, and only its last segment is the file's name here — which is why
+  // this cannot run before the download, the way slack's and feishu's can.
   const { dir, name, path } = attachmentPath(filesDir, chatId, basename(remotePath));
   await mkdir(dir, { recursive: true });
   await writeFile(path, bytes);
