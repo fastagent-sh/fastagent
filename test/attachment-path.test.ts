@@ -23,6 +23,8 @@ const IDS = [
   "..\\..\\x",
   "oc_x:thread/1",
   "中文",
+  "a\u{1F600}b", // a valid surrogate PAIR survives whole
+  "\ud800", // …a lone one does not reach `encodeURIComponent`, which would throw on it
   "\u0000",
 ];
 
@@ -32,6 +34,11 @@ describe("attachmentPath", () => {
     for (const dir of dirs) expect(dir.startsWith(FILES + sep)).toBe(true);
     // Lossless, so no two conversations share a directory — `a/b` and `a_b` are different places.
     expect(new Set(dirs).size).toBe(IDS.length);
+  });
+
+  it("never rejects an id, including malformed UTF-16 a route can slice out of a message", () => {
+    expect(() => attachmentPath(FILES, "\ud800abc", "a.pdf")).not.toThrow();
+    expect(attachmentPath(FILES, "a\u{1F600}b", "a.pdf").dir).toBe(`${FILES}/c-a%F0%9F%98%80b`);
   });
 
   it("keeps an ordinary id and file name readable", () => {
