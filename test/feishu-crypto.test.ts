@@ -1,6 +1,13 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decryptEvent, eventSignature, timingSafeEqualStr, verifySignature } from "../src/channels/feishu/crypto.ts";
+import {
+  MAX_SIGNATURE_AGE_S,
+  decryptEvent,
+  eventSignature,
+  signatureFresh,
+  timingSafeEqualStr,
+  verifySignature,
+} from "../src/channels/feishu/crypto.ts";
 
 /** The INVERSE of the channel's decryption, built independently here from the platform's documented
  *  construction (key = sha256(encryptKey), payload = base64(IV ‖ AES-256-CBC ciphertext)) — so the test
@@ -39,6 +46,28 @@ describe("eventSignature / verifySignature", () => {
     expect(verifySignature("K", headers, "body")).toBe(true);
     expect(verifySignature("K", headers, "tampered")).toBe(false);
     expect(verifySignature("K", { ...headers, nonce: "n2" }, "body")).toBe(false);
+  });
+});
+
+describe("signatureFresh", () => {
+  const now = 1_700_000_000_000; // ms
+  const at = (offsetSeconds: number): string => String(Math.floor(now / 1000) + offsetSeconds);
+
+  it("accepts a timestamp inside the window in BOTH directions (a skewed clock runs either way)", () => {
+    expect(signatureFresh(at(0), now)).toBe(true);
+    expect(signatureFresh(at(-MAX_SIGNATURE_AGE_S), now)).toBe(true);
+    expect(signatureFresh(at(MAX_SIGNATURE_AGE_S), now)).toBe(true);
+  });
+
+  it("refuses a timestamp outside the window — the replay bound a valid-forever signature lacks", () => {
+    expect(signatureFresh(at(-MAX_SIGNATURE_AGE_S - 1), now)).toBe(false);
+    expect(signatureFresh(at(MAX_SIGNATURE_AGE_S + 1), now)).toBe(false);
+  });
+
+  it("refuses anything that is not a plain integer second count", () => {
+    for (const bad of ["", " ", "abc", "-1", "1.5", "1e9", "99999999999999999999"]) {
+      expect(signatureFresh(bad, now)).toBe(false);
+    }
   });
 });
 

@@ -395,8 +395,10 @@ describe("ingress verification", () => {
     };
     const encryptedBody = (plain: Record<string, unknown>): string =>
       JSON.stringify({ encrypt: encrypt(JSON.stringify(plain)) });
-    const headers = (sig: string) => ({
-      "x-lark-request-timestamp": "170",
+    // A live timestamp: the ingress bounds the replay window, so a fixed one would age out.
+    const ts = String(Math.floor(Date.now() / 1000));
+    const headers = (sig: string, timestamp = ts) => ({
+      "x-lark-request-timestamp": timestamp,
       "x-lark-request-nonce": "n1",
       "x-lark-signature": sig,
     });
@@ -427,7 +429,7 @@ describe("ingress verification", () => {
       new Request("http://app/feishu", {
         method: "POST",
         body: eventBody,
-        headers: headers(eventSignature(KEY, "170", "n1", eventBody)),
+        headers: headers(eventSignature(KEY, ts, "n1", eventBody)),
       }),
     );
     expect(signedEvent.status).toBe(200);
@@ -436,6 +438,20 @@ describe("ingress verification", () => {
         .status,
     ).toBe(401);
     expect((await handler(new Request("http://app/feishu", { method: "POST", body: eventBody }))).status).toBe(401);
+    // A correctly signed but STALE request is refused: a signature stays valid forever, so this
+    // window is the only thing bounding a replay once the bounded `seen` ring rolls over.
+    const stale = String(Math.floor(Date.now() / 1000) - 6 * 60);
+    expect(
+      (
+        await handler(
+          new Request("http://app/feishu", {
+            method: "POST",
+            body: eventBody,
+            headers: headers(eventSignature(KEY, stale, "n1", eventBody), stale),
+          }),
+        )
+      ).status,
+    ).toBe(401);
     // Encrypt Key mode remains modal: plaintext events are never accepted.
     expect((await handler(feishuRequest(messageEvent({})))).status).toBe(401);
   });

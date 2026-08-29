@@ -189,7 +189,7 @@ and resolves `closed`. There is deliberately no second public `close()` path. Se
 WebSocket authentication happens once while establishing the official-SDK connection. Webhook has two
 security modes, decided by the console's Encrypt Key setting and mirrored by `encryptKey`:
 
-- **Encrypt Key set (recommended):** ordinary events arrive AES-256-CBC encrypted with `X-Lark-Signature` headers. The channel verifies the signature over the raw body, decrypts, and **refuses plaintext events entirely** — accepting both would let a forger skip the stronger check.
+- **Encrypt Key set (recommended):** ordinary events arrive AES-256-CBC encrypted with `X-Lark-Signature` headers. The channel verifies the signature over the raw body, decrypts, and **refuses plaintext events entirely** — accepting both would let a forger skip the stronger check. A signature stays valid forever, so `X-Lark-Request-Timestamp` must also be within ±5 minutes of the server's clock; outside it the request is refused as a replay. Keep the host's clock in NTP sync.
 - **No Encrypt Key:** events arrive in plaintext and are authenticated by the Verification Token (constant-time compare).
 
 Request URL verification is the platform-documented narrow exception to event signatures. With an

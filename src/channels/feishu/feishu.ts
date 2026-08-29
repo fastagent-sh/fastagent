@@ -26,7 +26,7 @@ import {
   feishuBufferPlaceKey,
   feishuBufferText,
 } from "./context-buffer.ts";
-import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
+import { MAX_SIGNATURE_AGE_S, decryptEvent, signatureFresh, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
@@ -803,6 +803,17 @@ function createFeishuWebhookRoutes(
       if (sig.signature && !verifySignature(encryptKey, sig, body.text)) {
         log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
         return text("invalid signature\n", 401);
+      }
+      // A signature covers the timestamp but not the moment: without a window a captured body plus
+      // its headers stays valid forever, and the `seen` ring — bounded, so it rolls over — is the only
+      // thing between that and a re-run turn. Its own branch, and its own message: a skewed clock and
+      // a wrong encrypt key are different things to go fix.
+      if (sig.signature && !signatureFresh(sig.timestamp)) {
+        log.warn(
+          `${label} rejected an event: X-Lark-Request-Timestamp ${sig.timestamp || "(missing)"} is outside the ` +
+            `±${MAX_SIGNATURE_AGE_S}s replay window — a replayed request, or this box's clock has drifted`,
+        );
+        return text("stale signature\n", 401);
       }
       try {
         envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
