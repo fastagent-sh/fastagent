@@ -16,9 +16,9 @@
  * parse fallback, and the getFile→download dance. (telegram.ts orchestrates; no agent, no rendering.)
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import type { ImageRef } from "../../agent.ts";
-import { safeSegment } from "../kit/fs-name.ts";
+import { attachmentPath } from "../kit/attachment-path.ts";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
@@ -387,14 +387,11 @@ async function downloadTelegramFile(
   filesDir: string,
 ): Promise<DownloadedFile> {
   const { bytes, remotePath } = await getFileBytes(api, botToken, fileId);
-  // `remotePath` is the Bot API's; `chatId` is the ROUTE's (a custom route supplies it). basename
-  // strips directories but keeps `..` whole, so the segment guard still has to run on it.
-  const name = safeSegment(basename(remotePath));
-  const dir = join(filesDir, safeSegment(chatId, "chat"));
+  // `remotePath` is the Bot API's, and only its last segment is the file's name here.
+  const { dir, name, path } = attachmentPath(filesDir, chatId, basename(remotePath));
   await mkdir(dir, { recursive: true });
-  const dest = join(dir, name);
-  await writeFile(dest, bytes);
-  return { path: dest, name, size: bytes.byteLength };
+  await writeFile(path, bytes);
+  return { path, name, size: bytes.byteLength };
 }
 
 /** Fetch the message's images. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */

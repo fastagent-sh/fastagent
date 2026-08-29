@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   type TelegramChannelOptions,
   type TelegramUpdate,
@@ -1548,7 +1548,7 @@ describe("telegram channel", () => {
     expect(calls[0]?.text).toContain(dest);
   });
 
-  it("keeps a download inside files/ when the route names the directory with traversal", async () => {
+  it("fails the turn when the route names an attachment directory outside files/ (an author bug is audible)", async () => {
     const fetchMock = vi.fn(async (url: string) =>
       String(url).endsWith("/getFile")
         ? new Response(JSON.stringify({ ok: true, result: { file_path: "documents/report.pdf", file_size: 5 } }), {
@@ -1567,6 +1567,7 @@ describe("telegram channel", () => {
       route: () => ({ chatId: "../.." }),
       apiBaseUrl: API,
       stateDir: state,
+      onError: (f) => `ERR: ${f.details}`,
     });
     const doc: TelegramUpdate = {
       update_id: 12,
@@ -1578,10 +1579,15 @@ describe("telegram channel", () => {
       },
     };
     expect((await ch(tgRequest(doc))).status).toBe(200);
-    for (let i = 0; i < 100 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
-    const dest = calls[0]?.text?.match(/\S+report\.pdf/)?.[0] ?? "";
-    expect(resolve(dest).startsWith(`${join(state, "files")}/`)).toBe(true);
-    expect(existsSync(dest)).toBe(true);
+    await flush();
+    await flush();
+    await flush();
+    expect(calls).toHaveLength(0);
+    const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
+      (c) => bodyOf(c).text as string,
+    );
+    expect(writes.some((t) => /could not load attachment/.test(t))).toBe(true);
+    expect(existsSync(join(state, "files"))).toBe(false);
   });
 
   it("surfaces an attachment fetch failure to the user (not a silent skip) and does not run the agent", async () => {
