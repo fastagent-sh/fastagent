@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
+import { safeSegment } from "../kit/fs-name.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import type { SlackFile } from "./model.ts";
 
@@ -151,9 +152,7 @@ export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKD
 }
 
 function safeFileName(file: SlackFile): string {
-  const raw = file.name ?? file.title ?? file.id ?? "file";
-  const safe = raw.replace(/[/\\]/g, "_").replace(/^\.+/, "_") || "file";
-  return `${file.id ?? "slack"}-${safe}`;
+  return `${file.id ?? "slack"}-${safeSegment(file.name ?? file.title ?? file.id ?? "file")}`;
 }
 
 function fileDownloadUrl(file: SlackFile): string {
@@ -430,7 +429,8 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     },
     async fetchFile(file, channelId, filesDir) {
       const { bytes } = await download(file);
-      const dir = join(filesDir, channelId);
+      // `channelId` is the ROUTE's, not necessarily the platform's — a custom route supplies it.
+      const dir = join(filesDir, safeSegment(channelId, "channel"));
       await mkdir(dir, { recursive: true });
       const name = safeFileName(file);
       const path = join(dir, name);

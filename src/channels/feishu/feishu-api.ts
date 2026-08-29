@@ -23,6 +23,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
+import { safeSegment } from "../kit/fs-name.ts";
 import { utf8Prefix } from "../kit/text.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
@@ -449,9 +450,10 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     },
     async fetchFile(messageId, fileKey, name, chatId, filesDir) {
       const { bytes } = await api.downloadResource(messageId, fileKey, "file");
-      // The name is external input destined for a filesystem path — keep only its basename-safe core.
-      const safe = name.replace(/[/\\]/g, "_").replace(/^\.+/, "_") || "file";
-      const dir = join(filesDir, chatId);
+      // Both halves are external input destined for a filesystem path: the name from the platform,
+      // `chatId` from the ROUTE (a custom route supplies it).
+      const safe = safeSegment(name);
+      const dir = join(filesDir, safeSegment(chatId, "chat"));
       await mkdir(dir, { recursive: true });
       const dest = join(dir, safe);
       await writeFile(dest, bytes);

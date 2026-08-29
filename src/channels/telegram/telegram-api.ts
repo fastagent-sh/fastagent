@@ -18,6 +18,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
+import { safeSegment } from "../kit/fs-name.ts";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
@@ -386,8 +387,10 @@ async function downloadTelegramFile(
   filesDir: string,
 ): Promise<DownloadedFile> {
   const { bytes, remotePath } = await getFileBytes(api, botToken, fileId);
-  const name = basename(remotePath);
-  const dir = join(filesDir, String(chatId));
+  // `remotePath` is the Bot API's; `chatId` is the ROUTE's (a custom route supplies it). basename
+  // strips directories but keeps `..` whole, so the segment guard still has to run on it.
+  const name = safeSegment(basename(remotePath));
+  const dir = join(filesDir, safeSegment(chatId, "chat"));
   await mkdir(dir, { recursive: true });
   const dest = join(dir, name);
   await writeFile(dest, bytes);
