@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -149,7 +149,7 @@ describe("Slack internal-app onboarding", () => {
       configToken: "xoxe.config",
       configRefreshToken: "xoxe-refresh",
     });
-    await writeSlackOnboardingState(stateRoot, initial);
+    writeSlackOnboardingState(stateRoot, initial);
     let oauthState = "";
     const secrets: { botToken?: string; signingSecret?: string }[] = [];
 
@@ -210,6 +210,22 @@ describe("Slack internal-app onboarding", () => {
     );
   });
 
+  it("a failed write leaves the previous state intact and surfaces, never a half-file", async () => {
+    // The shared writer's fixed `<path>.tmp` is the injection seam every other state test uses:
+    // occupying it with a directory makes the temp write fail with EISDIR, before the rename.
+    const stateRoot = await root();
+    const initial = newSlackOnboardingState({
+      appName: "Agent",
+      groupBehavior: "mentions",
+      configToken: "xoxe.config",
+      configRefreshToken: "xoxe-refresh",
+    });
+    writeSlackOnboardingState(stateRoot, initial);
+    await mkdir(join(stateRoot, "channels", "slack", "onboarding.json.tmp"));
+    expect(() => writeSlackOnboardingState(stateRoot, { ...initial, appName: "Renamed" })).toThrow();
+    expect((await readSlackOnboardingState(stateRoot))?.appName).toBe("Agent");
+  });
+
   it("blocks a blind duplicate create after an ambiguous create response", async () => {
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
@@ -218,7 +234,7 @@ describe("Slack internal-app onboarding", () => {
       configToken: "xoxe.config",
       configRefreshToken: "xoxe-refresh",
     });
-    await writeSlackOnboardingState(stateRoot, initial);
+    writeSlackOnboardingState(stateRoot, initial);
     const createApp = vi.fn(async () => {
       throw new Error("connection reset after request");
     });
@@ -254,7 +270,7 @@ describe("Slack internal-app onboarding", () => {
       }),
       configTokenExpiresAt: 0,
     };
-    await writeSlackOnboardingState(stateRoot, state);
+    writeSlackOnboardingState(stateRoot, state);
     const fetchMock = vi.fn<typeof fetch>(async () =>
       Response.json({
         ok: true,
@@ -284,7 +300,7 @@ describe("Slack internal-app onboarding", () => {
       clientId: "C1",
       clientSecret: "secret",
     };
-    await writeSlackOnboardingState(stateRoot, state);
+    writeSlackOnboardingState(stateRoot, state);
     const exchangeCode = vi.fn();
     await expect(
       onboardSlackApp(
@@ -331,7 +347,7 @@ describe("Slack Request URL registration", () => {
 
   it("updates an onboarded app from the local machine without deploying the config token", async () => {
     const stateRoot = await root();
-    await writeSlackOnboardingState(stateRoot, {
+    writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
         groupBehavior: "context",
