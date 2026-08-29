@@ -25,4 +25,18 @@ describe("createTaskTracker", () => {
     tracker.track(Promise.reject(new Error("boom")).catch(() => "handled"));
     await expect(tracker.drain()).resolves.toBeUndefined();
   });
+
+  it("drain SETTLES a task that rejects — a caller handling its error on a separate branch still", async () => {
+    // `p.catch(log); track(p)` handles the error but hands us a promise that still rejects. Draining
+    // must not turn that into a failed turnsIdle for the whole serve.
+    const tracker = createTaskTracker();
+    const task = Promise.reject(new Error("boom"));
+    let handled: string | undefined;
+    task.catch((error: Error) => {
+      handled = error.message;
+    });
+    tracker.track(task);
+    await expect(tracker.drain()).resolves.toBeUndefined();
+    expect(handled).toBe("boom");
+  });
 });

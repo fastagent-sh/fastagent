@@ -2,7 +2,10 @@
  * SHARED fire-and-forget side-task tracking. Channels launch work off the request path (stop
  * feedback, DM welcomes) that must not block the transport ACK but MUST be drained on shutdown
  * (`turnsIdle`) — otherwise a reply in flight when the process exits is silently dropped. Error
- * handling stays with the caller: track() only guarantees the drain sees the task settle.
+ * handling stays with the caller: track() only guarantees the drain sees the task SETTLE, and settle
+ * includes reject. A caller that handles its error on a separate branch (`p.catch(log); track(p)`)
+ * still hands us a promise that rejects, and a drain that propagated it would turn one channel's side
+ * task into a failed `turnsIdle` for the whole serve.
  */
 import { beginWork } from "../busy.ts";
 
@@ -28,6 +31,6 @@ export function createTaskTracker(): TaskTracker {
         })
         .catch(() => {}); // the caller's chain owns the error
     },
-    drain: () => Promise.all(tasks).then(() => undefined),
+    drain: () => Promise.allSettled(tasks).then(() => undefined),
   };
 }

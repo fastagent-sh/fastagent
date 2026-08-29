@@ -265,6 +265,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       });
     };
 
+    // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle. Declared
+    // before its consumers, not beside them: `acceptEvent` reaches for it on the stop path, and a
+    // caller that ever runs during construction rather than from the handler would hit the temporal
+    // dead zone and throw at ACK time — which Slack answers with endless redelivery.
+    const sideTasks = createTaskTracker();
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /** A thread's participation is keyed by the SESSION it describes — "the agent answered here" is a
@@ -577,9 +582,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         });
       }
     };
-
-    // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
-    const sideTasks = createTaskTracker();
 
     // First-run DM welcome: app_home_opened(tab="messages") signals a DM open. Post once per user.
     const welcomeInFlight = new Set<string>();
