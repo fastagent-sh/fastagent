@@ -369,7 +369,7 @@ function createFeishuRuntimeFactory(
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
-    const sideTasks = createTaskTracker();
+    const sideTasks = createTaskTracker(label);
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
       const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };

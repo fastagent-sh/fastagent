@@ -75,9 +75,10 @@ src/
 │                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
 ├── atomic-write.ts         # writeFileAtomic: the ONE synchronous "whole file or none of it" write
-│                           # (temp + rename + mode), after four copies drifted apart. The fixed
-│                           # `<path>.tmp` rests on a stated assumption — no two processes write one
-│                           # state root — and is the seam channel tests use to inject a write failure.
+│                           # (temp + rename + mode), after five copies drifted apart. The fixed
+│                           # `<path>.tmp` rests on one-writer-per-state-root, with slack onboarding
+│                           # state as the documented exception, and is the seam channel tests use to
+│                           # inject a write failure.
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/

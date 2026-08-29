@@ -1,10 +1,11 @@
 /**
- * One spelling of "a reader sees the whole file or none of it" for SYNCHRONOUS writes, after four
- * copies of it drifted apart: two identical, two with different temp names and different permission
- * handling.
+ * One spelling of "a reader sees the whole file or none of it", after five copies of it drifted
+ * apart: two identical, three with different temp names and different permission handling.
  *
- * Slack's onboarding state stays on its own async path — this is deliberately not an async API, and
- * converting that caller is a separate question from de-duplicating these four.
+ * Synchronous, and there is no async sibling: every caller either sits on a path where a KB-sized
+ * write must complete BEFORE a transport ACK (channel state — an ACKed delivery is not redelivered)
+ * or on a CLI/startup path where the cost is not observable. An async spelling would buy one of them
+ * nothing and cost this module a second set of rules to keep true.
  */
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -12,12 +13,16 @@ import { dirname } from "node:path";
 /**
  * Write a file so a reader sees the whole thing or nothing: same-directory temp, then rename.
  *
- * The temp name is fixed (`<path>.tmp`). That is safe here because no two processes write one state
- * root: a deployment runs one container, and `dev`'s supervisor respawns its worker only after the
- * old one has EXITED (dev-supervisor.ts) — and these writes are synchronous, so an exited process
- * has none in flight. The fixed name is also the seam several channel tests use to inject a write
- * failure, by occupying that path with a directory. A unique name would trade that seam for a race
- * this codebase does not have; revisit it if a second writer ever becomes real.
+ * The temp name is fixed (`<path>.tmp`). It holds wherever one process writes one state root: a
+ * deployment runs one container, `dev`'s supervisor respawns its worker only after the old one has
+ * EXITED (dev-supervisor.ts), and these writes are synchronous, so an exited process has none in
+ * flight. Slack's onboarding state is the one file with two writers — `add slack`, and the
+ * config-token rotation inside `--tunnel` webhook registration — so a second terminal running
+ * `add slack --replace-config` can overlap a live `dev --tunnel`. Kept fixed anyway: that window is
+ * a single write at tunnel startup, its repair is the `add slack --replace-config` the registration
+ * failure already prints, and the fixed name is the seam several channel tests use to inject a write
+ * failure by occupying that path with a directory. Revisit for a writer that is neither rare nor
+ * self-repairing.
  *
  * `mode` is applied to the temp first, so the content is never briefly world-readable.
  *

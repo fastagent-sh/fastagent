@@ -88,7 +88,7 @@ describe("add slack --replace-config", () => {
 
   it("installed app: skips the menu, replaces only the config token pair, leaves runtime credentials alone", async () => {
     await writeFile(join(target, ".secrets", ".env"), RUNTIME_ENV);
-    await writeSlackOnboardingState(stateRoot, {
+    writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
       groupBehavior: "context",
@@ -112,7 +112,7 @@ describe("add slack --replace-config", () => {
 
   it("installed app: rejects a token pair with the wrong prefixes", async () => {
     await writeFile(join(target, ".secrets", ".env"), RUNTIME_ENV);
-    await writeSlackOnboardingState(stateRoot, {
+    writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
       groupBehavior: "context",
@@ -128,7 +128,7 @@ describe("add slack --replace-config", () => {
   });
 
   it("created-but-not-installed app: replaces tokens without a menu, then resumes installation", async () => {
-    await writeSlackOnboardingState(stateRoot, {
+    writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
       groupBehavior: "context",

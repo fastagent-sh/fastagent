@@ -224,7 +224,7 @@ describe("tunnel: announceWebhooks", () => {
     const errs = captureErrors();
     const dir = await workspace(["slack"]);
     const stateRoot = join(dir, ".fastagent");
-    await writeSlackOnboardingState(stateRoot, {
+    writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
         groupBehavior: "mentions",

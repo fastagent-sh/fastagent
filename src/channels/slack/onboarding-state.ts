@@ -1,5 +1,6 @@
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "../../atomic-write.ts";
 import { rotateSlackConfigToken } from "./config-api.ts";
 import type { SlackGroupBehavior } from "./manifest.ts";
 
@@ -41,11 +42,11 @@ function validState(value: unknown): value is SlackOnboardingState {
   );
 }
 
-export async function readSlackOnboardingState(stateRoot: string): Promise<SlackOnboardingState | undefined> {
+export function readSlackOnboardingState(stateRoot: string): SlackOnboardingState | undefined {
   const file = slackOnboardingStatePath(stateRoot);
   let raw: string;
   try {
-    raw = await readFile(file, "utf8");
+    raw = readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new Error(`cannot read Slack onboarding state ${file}: ${(error as Error).message}`);
@@ -59,20 +60,13 @@ export async function readSlackOnboardingState(stateRoot: string): Promise<Slack
   }
 }
 
-/** Atomic replacement with owner-only permissions: this file carries a workspace-wide config refresh token. */
-export async function writeSlackOnboardingState(stateRoot: string, state: SlackOnboardingState): Promise<void> {
-  const file = slackOnboardingStatePath(stateRoot);
-  await mkdir(dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    await chmod(temp, 0o600);
-    await rename(temp, file);
-    await chmod(file, 0o600);
-  } catch (error) {
-    await rm(temp, { force: true }).catch(() => {});
-    throw error;
-  }
+/** Atomic replacement with owner-only permissions: this file carries a workspace-wide config refresh
+ *  token. Synchronous, through the shared writer, like every other piece of state this repo keeps
+ *  (kit/state.ts): the file is ~1 KB and its writers are `fastagent add slack` and one config-token
+ *  rotation at tunnel startup, so the async spelling bought nothing and cost a fifth set of temp-name
+ *  and permission rules to keep true. */
+export function writeSlackOnboardingState(stateRoot: string, state: SlackOnboardingState): void {
+  writeFileAtomic(slackOnboardingStatePath(stateRoot), `${JSON.stringify(state, null, 2)}\n`, 0o600);
 }
 
 export async function currentSlackConfigToken(
@@ -90,6 +84,6 @@ export async function currentSlackConfigToken(
     configTokenExpiresAt: rotated.expiresAt,
     teamId: state.teamId ?? rotated.teamId,
   };
-  await writeSlackOnboardingState(stateRoot, next);
+  writeSlackOnboardingState(stateRoot, next);
   return { token: next.configToken, state: next };
 }
