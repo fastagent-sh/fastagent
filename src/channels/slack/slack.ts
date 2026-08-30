@@ -6,6 +6,7 @@ import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../kit/seen.ts";
+import { signatureIsFresh } from "../kit/signature.ts";
 import { createThreadParticipants } from "../kit/thread-participants.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { ensureStateHome } from "../kit/state.ts";
@@ -53,6 +54,8 @@ export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, Sl
 
 const MAX_EVENT_BYTES = 1 << 20;
 const MAX_TURN_ATTEMPTS = 3;
+/** Slack's own documented window — it re-signs every redelivery with a current timestamp, so a tight
+ *  one costs nothing. The Feishu ingress reads hours off the same helper for the opposite reason. */
 const MAX_SIGNATURE_AGE_S = 5 * 60;
 const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
@@ -146,10 +149,8 @@ export function verifySlackSignature(
   rawBody: string,
   nowMs = Date.now(),
 ): boolean {
-  if (!/^\d+$/.test(timestamp) || !/^v0=[a-f0-9]{64}$/i.test(signature)) return false;
-  const seconds = Number(timestamp);
-  if (!Number.isSafeInteger(seconds) || Math.abs(Math.floor(nowMs / 1000) - seconds) > MAX_SIGNATURE_AGE_S)
-    return false;
+  if (!/^v0=[a-f0-9]{64}$/i.test(signature)) return false;
+  if (!signatureIsFresh(timestamp, MAX_SIGNATURE_AGE_S, nowMs)) return false;
   const expected = `v0=${createHmac("sha256", signingSecret).update(`v0:${timestamp}:${rawBody}`).digest("hex")}`;
   const actualBytes = Buffer.from(signature);
   const expectedBytes = Buffer.from(expected);
