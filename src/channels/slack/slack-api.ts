@@ -246,8 +246,8 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
   };
 
   // Slack owns both halves of this download: the URL comes from its own files.info response, and it
-  // documents url_private as taking our bearer token. Where that URL leads, and whether a redirect
-  // still carries the token (fetch drops it cross-origin), are Slack's calls to make, not ours.
+  // documents url_private as taking our bearer token. Where that URL leads is Slack's call; whether a
+  // redirect hop still carries the token is fetch's, which drops the header cross-origin.
   const download = async (file: SlackFile): Promise<{ bytes: Buffer; contentType?: string }> => {
     let response: Response;
     try {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt } from "../src/agent.ts";
 import { invokeSlackTurn } from "../src/channels/slack/invoke-turn.ts";
-import type { SlackApi } from "../src/channels/slack/slack-api.ts";
+import { type SlackApi, SlackApiError } from "../src/channels/slack/slack-api.ts";
 
 function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
   return {
@@ -86,6 +86,28 @@ describe("Slack turn attachment resolution", () => {
     // not retryable: the same attachment fails the same way next time, so "try again" is the wrong advice
     expect(events).toEqual([{ type: "failed", details: expect.stringContaining("access_denied"), retryable: false }]);
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a network error", 0],
+    ["exhausted rate-limit retries", 429],
+    ["a Slack outage", 503],
+  ])("reports %s as retryable, since the same send can succeed later", async (_label, status) => {
+    const api = fakeApi({
+      fileInfo: async () => Promise.reject(new SlackApiError("files.info", status, "boom")),
+    });
+
+    const events = await collect(
+      invokeSlackTurn(
+        { invoke: vi.fn() } as unknown as Agent,
+        "s1",
+        "read it",
+        { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
+        { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
+      ),
+    );
+
+    expect(events).toEqual([{ type: "failed", details: expect.stringContaining("boom"), retryable: true }]);
   });
 
   it("degrades failed background files individually and tells the model what is missing", async () => {
