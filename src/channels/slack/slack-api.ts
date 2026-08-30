@@ -261,7 +261,10 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     }
     if (!response.ok) {
       const detail = codePointPrefix(await response.text().catch(() => ""), 300) || "file bytes were rejected";
-      throw new SlackApiError("file download", response.status, detail);
+      // response.url is the LAST hop, so a download that redirected before failing names the host that
+      // actually rejected it — otherwise the operator sees a status with nothing to point it at
+      const from = response.url ? ` from ${new URL(response.url).host}` : "";
+      throw new SlackApiError(`file download${from}`, response.status, detail);
     }
     return { bytes: await readBytesCapped(response), contentType: response.headers.get("content-type") ?? undefined };
   };

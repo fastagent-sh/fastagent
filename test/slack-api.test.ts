@@ -146,6 +146,19 @@ describe("Slack Web API transport", () => {
     expect(calls.every((call) => call.authorization === "Bearer xoxb-secret")).toBe(true);
   });
 
+  it("names the host that rejected the bytes, which a redirect makes different from the one asked", async () => {
+    vi.stubGlobal("fetch", async () => {
+      const rejected = new Response("expired signature", { status: 401 });
+      // what fetch reports after following a redirect: the last hop, not the URL we asked for
+      Object.defineProperty(rejected, "url", { value: "https://cdn.example/signed/x" });
+      return rejected;
+    });
+    const api = createSlackApi({ botToken: "x" });
+    await expect(
+      api.fetchFile({ id: "F1", name: "x", url_private: "https://files.slack.com/x" }, "C1", "/tmp"),
+    ).rejects.toThrow(/file download from cdn\.example failed: 401 expired signature/);
+  });
+
   it("refuses metadata above the 20 MB cap before fetching", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
