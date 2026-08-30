@@ -16,6 +16,7 @@ import { text } from "../respond.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
+import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
 import { createTurnStore } from "../kit/turn-store.ts";
@@ -70,6 +71,16 @@ const MAX_TURN_ATTEMPTS = 3;
 
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
+
+/**
+ * Replay window for a SIGNED event, sized by the OPEN PLATFORM'S REDELIVERY SCHEDULE, not by Slack's
+ * 5 minutes: a failed push is retried at 15s / 5min / 1h / 6h. It is not established whether a retry
+ * is re-signed with a fresh timestamp or replays the original one, and only the second case is safe
+ * to guess wrong about in one direction — a window under 6h would 401 three of the four retries, i.e.
+ * turn one transient fault into a permanently lost user message (and a callback-health alarm). Wide
+ * enough to cover the chain, still bounded, and the `seen` ring dedups an event_id inside it.
+ */
+const MAX_SIGNATURE_AGE_S = 7 * 60 * 60;
 
 /** Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was
  *  accepted behind another turn. The same reply-quoted card becomes the preview/final answer, so there
@@ -775,6 +786,14 @@ function createFeishuWebhookRoutes(
   const { verificationToken, encryptKey } = opts;
   const { kind, envPrefix } = profile;
   const label = `[${kind}]`;
+  if (!encryptKey) {
+    // Said once at wiring, not per request: without an encrypt key events arrive in plaintext and
+    // carry no signature, so the freshness window below never runs and a captured body replays for
+    // as long as the verification token lives.
+    log.warn(
+      `${label} no ${envPrefix}_ENCRYPT_KEY: events are accepted unsigned, with no replay window — set one in the console to enable it`,
+    );
+  }
   const handler = async (req: Request): Promise<Response> => {
     if (req.method !== "POST") return text("POST only\n", 405);
     const body = await readBodyCapped(req, MAX_EVENT_BYTES);
@@ -800,9 +819,21 @@ function createFeishuWebhookRoutes(
         nonce: req.headers.get("x-lark-request-nonce") ?? "",
         signature: req.headers.get("x-lark-signature") ?? "",
       };
-      if (sig.signature && !verifySignature(encryptKey, sig, body.text)) {
-        log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
-        return text("invalid signature\n", 401);
+      if (sig.signature) {
+        // Freshness BEFORE the signature: the signature covers the timestamp but proves nothing about
+        // it, so without a window a captured body + its three x-lark-* headers replays forever. The
+        // `seen` ring is not that defence — it is bounded, and past its rollover a replay re-runs the
+        // turn (a re-sent message, a re-fired tool).
+        if (!signatureIsFresh(sig.timestamp, MAX_SIGNATURE_AGE_S)) {
+          log.warn(
+            `${label} rejected an event: X-Lark-Request-Timestamp outside the ±${MAX_SIGNATURE_AGE_S / 3600} h replay window`,
+          );
+          return text("stale signature\n", 401);
+        }
+        if (!verifySignature(encryptKey, sig, body.text)) {
+          log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
+          return text("invalid signature\n", 401);
+        }
       }
       try {
         envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;

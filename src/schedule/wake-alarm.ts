@@ -17,7 +17,8 @@
  * Function URL at cold start), and the adapter persists it here; every wake write happens inside a
  * turn, and every ingress turn arrived through an envelope, so the URL is always known by then.
  *
- * Reconciliation is DECLARATIVE (the full pending set travels each time) and deletion is lazy: a
+ * Reconciliation is DECLARATIVE (the sink is told only THAT the store changed and reads the full
+ * pending set back per attempt, so no retry ever carries a stale view) and deletion is lazy: a
  * cancelled wake-up's alarm still fires its poke, finds nothing due, and self-deletes — a harmless
  * wasted wake-up of the box, traded for never needing list/delete choreography.
  */
@@ -88,6 +89,17 @@ export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
  * when `FASTAGENT_AGENTCORE=1` + `FASTAGENT_WAKE_SECRET` are present). Fire-and-forget by contract:
  * failures are logged, never thrown — a broken alarm degrades to the pre-alarm behavior (the wake
  * still fires on the next time the box happens to be awake), it must never break the store write.
+ *
+ * A single-flight RECONCILER, not a per-mutation delivery: a notification only marks the desired
+ * state dirty, and the loop re-derives it from the store before every attempt. So a mutation during
+ * a retry needs no ordering rule — there is one desired state, never two snapshots to rank — and the
+ * {@link DUE_MARGIN_MS} filter is re-applied with a fresh clock, which a captured payload could not
+ * do: entries that became due mid-retry would keep being POSTed with a past `at()`, a rejection no
+ * number of retries could clear.
+ *
+ * Assumes ONE sink per process over ONE state root (what `start` builds): the loop keeps the root of
+ * the call that started it, and its dirty flag is shared, so a second root would fold into the first
+ * one's pass.
  */
 export function createWakeAlarmSink(options: {
   secret: string;
@@ -96,64 +108,92 @@ export function createWakeAlarmSink(options: {
   now?: () => Date;
   /** Injectable retry pause (tests); defaults to exponential-ish backoff off RETRY_BASE_MS. */
   delay?: (ms: number) => Promise<void>;
-}): (stateRoot: string, pending: Wakeup[]) => void {
+}): (stateRoot: string) => void {
   const { secret, fetchImpl = fetch, now = () => new Date() } = options;
   const delay = options.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  // Supersession token: a newer mutation's sync REPLACES an older one still retrying — without it,
-  // an old in-flight set could win the race and mirror stale state.
-  let latest: symbol | undefined;
+  let running = false;
+  let dirty = false;
 
-  async function sync(url: string, body: WakeAlarmRequest, token: symbol): Promise<void> {
+  /** One POST of the CURRENT desired set. Returns false to retry, true when there is nothing left
+   *  to do (converged, or nothing this loop can act on). */
+  async function attemptOnce(stateRoot: string, attempt: number): Promise<boolean> {
+    const alarms = toAlarms(listWakeups(stateRoot), now());
+    // Nothing future to mirror: converged. Deletion is lazy by design — alarms already mirrored for
+    // cancelled wake-ups fire, find nothing, self-delete — so an empty set is never POSTed.
+    if (alarms.length === 0) return true;
+    const url = readWakeAlarmUrl(stateRoot);
+    if (!url) {
+      // Before the first envelope, or an unreadable state mount (readWakeAlarmUrl folds both into
+      // undefined). The wake itself is stored; the next store mutation or boot re-mirrors it.
+      log.warn("[schedule] wake alarm skipped — forwarder URL unavailable (not seen yet, or unreadable)");
+      return true;
+    }
+    const body: WakeAlarmRequest = { secret, alarms };
+    try {
+      const res = await fetchImpl(`${url.replace(/\/$/, "")}${WAKE_ALARM_PATH}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+      });
+      if (res.ok) return true;
+      log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: HTTP ${res.status}`);
+    } catch (e) {
+      log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: ${String(e)}`);
+    }
+    return false;
+  }
+
+  async function reconcile(stateRoot: string): Promise<void> {
     // Counted as in-flight work: the retry loop is exactly the window where the box must not be
     // reclaimed — idle away mid-retry and a pending wake has no alarm until the next boot.
     const workDone = beginWork();
+    // Consecutive failures ACROSS passes, not within one. A mid-retry mutation restarts the attempt
+    // sequence (the backoff and the log's `n/N` are about the new desired set), but it must not renew
+    // the budget: a store mutating faster than the backoff would keep the loop alive forever, and the
+    // one loud line saying the forwarder is down — the per-attempt warns are filterable — would never
+    // be reached. This counter is the thing that survives to reach it.
+    let failures = 0;
     try {
-      for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
-        if (latest !== token) return; // superseded by a newer set — that sync owns correctness now
-        try {
-          const res = await fetchImpl(`${url.replace(/\/$/, "")}${WAKE_ALARM_PATH}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
-          });
-          if (res.ok) return;
-          log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: HTTP ${res.status}`);
-        } catch (e) {
-          log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: ${String(e)}`);
+      while (dirty && failures < MAX_SYNC_ATTEMPTS) {
+        dirty = false;
+        for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
+          if (await attemptOnce(stateRoot, attempt)) {
+            failures = 0;
+            break;
+          }
+          failures++;
+          if (attempt === MAX_SYNC_ATTEMPTS || failures >= MAX_SYNC_ATTEMPTS) break;
+          await delay(RETRY_BASE_MS * attempt);
+          // A mutation landed mid-retry: the desired state moved, so this budget is spent on a set
+          // that no longer exists. Restart the attempt count against the new one.
+          if (dirty) break;
         }
-        await delay(RETRY_BASE_MS * attempt);
       }
-      log.error(
-        `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
-          `external alarm until the next store change or boot re-mirrors them`,
-      );
+      if (failures >= MAX_SYNC_ATTEMPTS) {
+        log.error(
+          `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
+            `external alarm until the next store change or boot re-mirrors them`,
+        );
+      }
+    } catch (e) {
+      // The END of the error path: nothing awaits this loop, so an escape is an unhandled rejection
+      // that kills the container. `listWakeups` throws by design on an unreadable store (state.ts),
+      // exactly the fault a wake alarm cannot fix — report it and leave the store write untouched,
+      // which is this sink's whole contract. The next mutation or boot re-runs the mirror.
+      log.error(`[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(e)}`);
     } finally {
+      running = false;
       workDone();
     }
   }
 
-  return (stateRoot, pending) => {
-    const url = readWakeAlarmUrl(stateRoot);
-    if (!url) {
-      // First-ever boot before any envelope: nothing to call yet. The wake itself is stored; the
-      // alarm catches up on the next store mutation after an envelope has arrived.
-      log.warn("[schedule] wake alarm skipped — forwarder URL not seen yet (it arrives with the first envelope)");
-      return;
-    }
-    const alarms = toAlarms(pending, now());
-    if (alarms.length === 0) return; // nothing future to mirror (deletion is lazy by design)
-    const token = Symbol("wake-alarm-sync");
-    latest = token;
-    void sync(url, { secret, alarms }, token);
+  // Single-flight: a save arriving while the loop runs only marks it dirty, so a burst coalesces
+  // into one more pass instead of one concurrent loop each.
+  return (stateRoot) => {
+    dirty = true;
+    if (running) return;
+    running = true;
+    void reconcile(stateRoot);
   };
-}
-
-/**
- * One boot-time reconcile: pending wake-ups may exist while their alarms were lost (a deploy
- * replaced the forwarder, a sink call failed) — re-mirror the current set once at start.
- */
-export function reconcileWakeAlarms(stateRoot: string, sink: (stateRoot: string, pending: Wakeup[]) => void): void {
-  const pending = listWakeups(stateRoot);
-  if (pending.length > 0) sink(stateRoot, pending);
 }

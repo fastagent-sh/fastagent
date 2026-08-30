@@ -119,6 +119,7 @@ src/
 │   │   ├── context-buffer.ts# generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
+│   │   ├── signature.ts     # replay window for a signed webhook ingress (the LENGTH is the platform's)
 │   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
 │   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
 │   │   ├── attachment-path.ts # where an attachment lands: the conversation id is ENCODED into a
