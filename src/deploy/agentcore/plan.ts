@@ -30,7 +30,8 @@
 import { createHash } from "node:crypto";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
+import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -46,10 +47,9 @@ export interface AgentcorePlanInput extends ContainerInput {
   name: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Known first-party channels — each contributes its secret metadata + webhook step. */
-  channels: ChannelKind[];
-  /** ALL route-channel basenames (customs included) — any of them requires the forwarder. */
-  routeChannels: string[];
+  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
+   *  whether the forwarder is needed at all (ANY webhook channel requires it, customs included). */
+  channels: readonly DeclaredChannel[];
   /** Extra secret env-var names (fastagent.config deploy.secrets). */
   extraSecrets?: string[];
   /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
@@ -521,7 +521,8 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
   // a schedule turn can outlive both its original presigned URL and the Lambda credentials that signed
   // it. Schedule-only URLs reject every non-reserved HTTP path before invoking AgentCore, so they do
   // not expose a webhook/data plane (and start never mounts the builtin /invoke under AgentCore).
-  const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
+  const needsForwarder =
+    input.channels.some((channel) => channel.ingress === "webhook") || translated.length > 0 || input.selfSchedule;
   const needsFunctionUrl = needsForwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
@@ -740,7 +741,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
       `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
       ...(needsFunctionUrl ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
-      ...(input.routeChannels.length > 0 ? [`          WEBHOOKS_ENABLED: "1"`] : []),
+      ...(input.channels.some((channel) => channel.ingress === "webhook") ? [`          WEBHOOKS_ENABLED: "1"`] : []),
       ...(input.selfSchedule
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,
@@ -916,7 +917,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
 
   // Every forwarder needs its authenticated Function URL to refresh S3 snapshot capabilities during
   // a long turn. Without route channels, ordinary HTTP paths are rejected before AgentCore is invoked.
-  const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
+  const needsForwarder =
+    input.channels.some((channel) => channel.ingress === "webhook") || translated.length > 0 || input.selfSchedule;
   const needsFunctionUrl = needsForwarder;
   const artifacts: Artifact[] = [
     { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated) },
@@ -1017,33 +1019,26 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     );
   }
 
-  // Post-deploy webhook registration — same per-channel steps as every host, pointed at the
-  // forwarder's Function URL (read from the stack outputs).
-  const post: string[] = [];
-  if (channels.includes("telegram")) {
+  // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's
+  // Function URL (read from the stack outputs). `--run` REFUSES a long-connection channel here, but
+  // generate-only only warns and still prints this runbook, so the steps are filtered on ingress like
+  // every other host's rather than on the CLI having gated.
+  const post = webhookRunbook(`<ForwarderUrl>`, channels);
+  // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and
+  // nothing else has a compute ceiling.
+  // Named rather than positional: the asides land after ALL the steps, so "the console" has to say
+  // WHICH console. One line for both kinds — an agent that declares feishu AND lark reads the same
+  // fact twice otherwise and looks for a second step that does not exist.
+  if (webhookKinds(channels).some((kind) => kind === "feishu" || kind === "lark")) {
     post.push(
-      `# Register the Telegram webhook (default route POST /telegram; secret_token MUST equal TELEGRAM_SECRET_TOKEN):`,
-      `curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \\`,
-      `  -d url=<ForwarderUrl>/telegram -d secret_token=<TELEGRAM_SECRET_TOKEN>`,
+      `# NOTE: the Feishu/Lark console's challenge rides through the forwarder to the channel and back`,
+      `#   verbatim, so the stack must be deployed when you save the Request URL.`,
     );
   }
-  if (channels.includes("github")) {
+  if (channels.some((channel) => channel.name === "github")) {
     post.push(
-      `# Set the GitHub webhook (repo Settings → Webhooks): Payload URL = <ForwarderUrl>/webhook,`,
-      `#   content type application/json, secret = GITHUB_WEBHOOK_SECRET.`,
       `# NOTE: github turns are fire-and-forget with no replay — a compute reclaimed mid-review drops it`,
       `#   (the ping's HealthyBusy + time_of_last_update holds the session while turns run, but the 8 h compute ceiling is hard).`,
-    );
-  }
-  if (channels.includes("slack")) {
-    post.push(`# Set Slack Event Subscriptions → Request URL = <ForwarderUrl>/slack (scopes per channels/slack.ts).`);
-  }
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!channels.includes(kind)) continue;
-    post.push(
-      `# Set the ${kind === "feishu" ? "Feishu" : "Lark"} event Request URL (developer console → Events & Callbacks):`,
-      `#   Request URL = <ForwarderUrl>/${kind} (the stack must be deployed when you save — the console`,
-      `#   sends a challenge, which rides through the forwarder to the channel and back verbatim).`,
     );
   }
   if (post.length > 0) runbook.push(``, ...post);

@@ -9,6 +9,7 @@ import {
 } from "../src/deploy/railway/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
+import { declaredChannels } from "../src/channels/discover.ts";
 
 /** A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). */
 function fakeRailway(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
@@ -42,7 +43,7 @@ const run = (
   p: RailwayRunPlan,
   railway: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-) => deployRailwayRun(p, railway, () => {}, tg);
+) => deployRailwayRun(p, railway, () => {}, { telegram: tg });
 
 describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () => {
   it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
@@ -53,7 +54,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     });
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
-      plan({ channels: ["telegram"], secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" } }),
+      plan({
+        channels: declaredChannels(["telegram"]),
+        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
+      }),
       railway,
       tg,
     );
@@ -109,11 +113,14 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     );
 
     const out = await deployRailwayRun(
-      plan({ channels: ["telegram", "feishu"] }),
+      plan({ channels: declaredChannels(["telegram", "feishu"]) }),
       railway,
       () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "failed"), // telegram registration ends with the webhook NOT set
-      registerFeishu,
+      {
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
+        feishu: // telegram registration ends with the webhook NOT set
+          registerFeishu,
+      },
     );
 
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
@@ -134,13 +141,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
 
-    const out = await deployRailwayRun(
-      plan({ channels: ["feishu", "lark"] }),
-      railway,
-      () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      registerFeishu,
-    );
+    const out = await deployRailwayRun(plan({ channels: declaredChannels(["feishu", "lark"]) }), railway, () => {}, {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      feishu: registerFeishu,
+    });
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
     expect(registerFeishu.mock.calls).toEqual([
@@ -157,14 +161,11 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     });
     const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
 
-    const out = await deployRailwayRun(
-      plan({ channels: ["slack"] }),
-      railway,
-      () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      undefined,
-      registerSlack,
-    );
+    const out = await deployRailwayRun(plan({ channels: declaredChannels(["slack"]) }), railway, () => {}, {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      feishu: undefined,
+      slack: registerSlack,
+    });
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
     expect(registerSlack).toHaveBeenCalledWith("https://bot-production.up.railway.app");
@@ -179,10 +180,12 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const logs: string[] = [];
 
     const out = await deployRailwayRun(
-      plan({ channels: ["slack"] }),
+      plan({ channels: declaredChannels(["slack"]) }),
       railway,
       (message) => logs.push(message),
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      {
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      },
     );
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
@@ -200,11 +203,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
     const out = await deployRailwayRun(
-      plan({ channels: ["lark"], longConnectionChannels: ["lark"] }),
+      plan({ channels: declaredChannels(["lark"], "long-connection") }),
       railway,
       () => {},
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      registerFeishu,
+      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"), feishu: registerFeishu },
     );
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
     expect(registerFeishu).not.toHaveBeenCalled();
@@ -219,10 +221,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const logs: string[] = [];
 
     const out = await deployRailwayRun(
-      plan({ channels: ["feishu", "lark"] }),
+      plan({ channels: declaredChannels(["feishu", "lark"]) }),
       railway,
       (message) => logs.push(message),
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
     );
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
@@ -303,12 +305,9 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       return {};
     });
     const logs: string[] = [];
-    await deployRailwayRun(
-      plan({ intoLinked: true }),
-      railway,
-      (m) => logs.push(m),
-      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-    );
+    await deployRailwayRun(plan({ intoLinked: true }), railway, (m) => logs.push(m), {
+      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+    });
     expect(logs.join("\n")).toMatch(/--into-linked.*isn't linked|creating a fresh/i);
   });
 
@@ -359,7 +358,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       if (a[0] === "domain") return { stdout: "not-json" }; // `railway domain --json` returns unreadable output
       return {};
     });
-    const out = await run(plan({ channels: ["telegram"] }), railway);
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), railway);
     expect(out).toEqual({ ok: false, gate: expect.stringMatching(/railway domain/) });
   });
 });

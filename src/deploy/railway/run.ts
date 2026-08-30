@@ -23,9 +23,8 @@
  * no bulk stdin import like Fly's `secrets import`). Auth needs an ACCOUNT credential (login or
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
-import type { RegistrationOutcome } from "../../channels/registration.ts";
-import { registrationGate } from "../registration-gate.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 
 export interface RailwayRunPlan {
@@ -40,8 +39,8 @@ export interface RailwayRunPlan {
   secrets: Record<string, string>;
   /** Required secret names with NO local value — the run gates on these before any side effect. */
   missingSecrets: string[];
-  channels: ChannelKind[];
-  longConnectionChannels?: string[];
+  /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
+  channels: readonly DeclaredChannel[];
   /** Opt-in (CLI `--into-linked`) to provision INTO the project this directory is already linked to. Off
    *  by default so `--run` only creates on an unlinked dir and never deploys into a pre-existing (possibly
    *  unrelated/production) project; the flag is the operator's explicit "yes, this project". */
@@ -123,18 +122,16 @@ export function parseHasVolume(stdout: string, mountPath: string): boolean {
 }
 
 /**
- * Run the deploy through `railway`. `log` reports progress; the injected Telegram/Feishu/Slack
- * registrars perform post-deploy webhook steps from the builder machine (Slack's control credential
- * never travels to the host). Absent, the manual console
- * instruction is printed. Every gate is fail-visible.
+ * Run the deploy through `railway`. `log` reports progress; the injected {@link Registrars} perform
+ * the post-deploy webhook steps from the builder machine (Slack's control credential never travels to
+ * the host). A registrar the caller did not wire becomes the printed manual step. Every gate is
+ * fail-visible.
  */
 export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
-  registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registrars: Registrars,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -258,39 +255,15 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
-  // 7. Post-deploy webhook — gate policy is the shared registration-gate kernel (registrars report
-  //    facts, it owns the policy); all channels are attempted first.
-  const reg = registrationGate(log, "re-run with --into-linked to retry registration");
-  if (plan.channels.includes("telegram")) {
-    log("registering telegram webhook…");
-    reg.track("telegram", await registerTelegram(url));
-  }
-  if (plan.channels.includes("github")) {
-    log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
-    reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
-  }
-  if (plan.channels.includes("slack")) {
-    if (registerSlack) {
-      log("registering slack event URL…");
-      reg.track("slack", await registerSlack(url));
-    } else {
-      log(`slack: set Event Subscriptions → Request URL → ${url}/slack`);
-      reg.track("slack", "manual");
-    }
-  }
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!plan.channels.includes(kind) || plan.longConnectionChannels?.includes(kind)) continue;
-    if (registerFeishu) {
-      log(`registering ${kind} event URL…`);
-      reg.track(kind, await registerFeishu(url, kind));
-    } else {
-      log(
-        `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,
-      );
-      reg.track(kind, "manual"); // no registrar wired — the console step above is the operator's
-    }
-  }
-  const registrationGateMsg = reg.gate();
+  // 7. Post-deploy webhook — which channels, in what words, and the gate policy are all the shared
+  //    kernel's; Railway contributes the minted URL and how to retry.
+  const registrationGateMsg = await registerWebhooks({
+    baseUrl: url,
+    channels: plan.channels,
+    registrars,
+    log,
+    retryHint: "re-run with --into-linked to retry registration",
+  });
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, url };
 }

@@ -12,6 +12,7 @@ import type { AgentService } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { declaredChannels } from "../channels/discover.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
@@ -181,7 +182,10 @@ export function maybeTunnel(
   if (!tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((instance) => {
     if (!instance) return;
-    void announceWebhooks(agentDir, instance.url, { openUrl: openExternalUrl, routeChannels, stateRoot });
+    void announceWebhooks(agentDir, instance.url, declaredChannels(routeChannels), {
+      openUrl: openExternalUrl,
+      stateRoot,
+    });
     const cleanup = (): void => instance.close();
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);

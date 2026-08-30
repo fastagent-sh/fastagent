@@ -21,7 +21,8 @@
  * the required-secret list. `railway.json`'s `healthcheckPath=/health` also fixes the "routed before the
  * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
  */
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
+import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -33,10 +34,9 @@ export interface RailwayPlanInput extends ContainerInput {
   serviceName: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Known first-party channels — each contributes its secret metadata + webhook step. */
-  channels: ChannelKind[];
-  /** All long-connection channel basenames, including custom channels — no App Sleeping. */
-  longConnectionChannels?: string[];
+  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
+   *  whether App Sleeping must stay off for an outbound connection. */
+  channels: readonly DeclaredChannel[];
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
   // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
@@ -108,7 +108,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ...containerArtifacts(input),
   ];
 
-  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets, input.longConnectionChannels);
+  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
@@ -203,49 +203,16 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).
-  const hasFeishuCloudChannel = (["feishu", "lark"] as const).some((kind) => channels.includes(kind));
-  if (
-    channels.includes("telegram") ||
-    channels.includes("github") ||
-    channels.includes("slack") ||
-    hasFeishuCloudChannel
-  ) {
+  // Mint only when something below needs it: with nothing to point at the domain (no channels, or only
+  // long-connection ones), "use it in the step(s) below" would refer to steps that do not follow.
+  const steps = webhookRunbook(`https://<your-domain>`, channels);
+  if (steps.length > 0) {
     runbook.push(
       ``,
       `# Public URL — Railway mints a *.up.railway.app domain (NOT deterministic). Generate it, then read`,
       `# the printed https URL and use it as <your-domain> in the webhook step(s) below:`,
       `railway domain`,
-    );
-  }
-  if (channels.includes("telegram")) {
-    runbook.push(
-      `# Register the Telegram webhook (default route POST /telegram; if you remapped it in`,
-      `# channels/telegram.ts, use your path). secret_token MUST equal TELEGRAM_SECRET_TOKEN:`,
-      `curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \\`,
-      `  -d url=https://<your-domain>/telegram -d secret_token=<TELEGRAM_SECRET_TOKEN>`,
-    );
-  }
-  if (channels.includes("github")) {
-    runbook.push(
-      `# Set the GitHub webhook (repo Settings → Webhooks). Default route POST /webhook; if you remapped it`,
-      `# in channels/github.ts, use your path:`,
-      `#   Payload URL = https://<your-domain>/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
-    );
-  }
-  if (channels.includes("slack")) {
-    runbook.push(
-      `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
-      `# answers Slack's challenge), and match scopes/subscriptions to channels/slack.ts groupBehavior:`,
-      `#   Request URL = https://<your-domain>/slack`,
-    );
-  }
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!channels.includes(kind) || input.longConnectionChannels?.includes(kind)) continue;
-    const label = kind === "feishu" ? "Feishu" : "Lark";
-    runbook.push(
-      `# Set the ${label} event Request URL (developer console → Events & Callbacks). Default route`,
-      `# POST /${kind}; the service must be RUNNING when you save (the console verifies with a challenge):`,
-      `#   Request URL = https://<your-domain>/${kind}`,
+      ...steps,
     );
   }
 
@@ -254,11 +221,11 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   // turn store), so a sleep mid-review would drop it — the same floor the Fly plan enforces via config.
   runbook.push(
     ``,
-    channels.includes("github")
+    channels.some((channel) => channel.name === "github")
       ? `# Scale-to-zero: do NOT enable App Sleeping — github turns have no replay, a sleep mid-review is lost.`
       : input.hasTimeTriggers
         ? `# Scale-to-zero: do NOT enable App Sleeping — schedules/wake-ups have no external wake-up; a sleeping service sleeps through them.`
-        : (input.longConnectionChannels?.length ?? 0) > 0
+        : channels.some((channel) => channel.ingress === "long-connection")
           ? `# Scale-to-zero: do NOT enable App Sleeping — a long-connection channel must remain connected.`
           : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,

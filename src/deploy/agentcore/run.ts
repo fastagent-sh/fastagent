@@ -14,9 +14,8 @@
  * a caller-provided temp parameters file (`file://…`, mode 0600, deleted by the caller) — the write
  * is injected to keep this module pure and the security-sensitive wiring testable.
  */
-import type { RegistrationOutcome } from "../../channels/registration.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
-import { registrationGate } from "../registration-gate.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
+import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
@@ -48,7 +47,8 @@ export interface AgentcoreRunPlan {
   secrets: Record<string, string>;
   /** Required secret names with NO local value — gated before any side effect. */
   missingSecrets: string[];
-  channels: ChannelKind[];
+  /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
+  channels: readonly DeclaredChannel[];
   /** Whether the topology includes the forwarder Lambda (route channels / schedules / selfSchedule).
    *  It owns the state snapshot's presigned URLs, so its absence means an invoke-only deployment
    *  with no cross-deploy state to keep. */
@@ -197,9 +197,7 @@ export async function deployAgentcoreRun(
   log: (msg: string) => void,
   writeSecretFile: (content: string) => Promise<string>,
   writeForwarderZip: (bytes: Uint8Array) => Promise<string>,
-  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
-  registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registrars: Registrars,
   /** Injected in tests; the probe itself stays inside the run so no deploy can skip it. */
   probe: { fetchImpl?: typeof fetch; timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<AgentcoreRunOutcome> {
@@ -567,37 +565,17 @@ export async function deployAgentcoreRun(
 
   // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the
   //    forwarder's Function URL. Gate policy is the shared registration-gate kernel.
-  const reg = registrationGate(log, "re-run to retry registration (steps already done are skipped)");
-  if (url) {
-    if (plan.channels.includes("telegram")) {
-      log("registering telegram webhook…");
-      reg.track("telegram", await registerTelegram(url));
-    }
-    if (plan.channels.includes("github")) {
-      log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
-      reg.track("github", "manual"); // always a human step — re-surfaced after the registrar output
-    }
-    if (plan.channels.includes("slack")) {
-      if (registerSlack) {
-        log("registering slack event URL…");
-        reg.track("slack", await registerSlack(url));
-      } else {
-        log(`slack: set Event Subscriptions → Request URL → ${url}/slack`);
-        reg.track("slack", "manual");
-      }
-    }
-    for (const kind of ["feishu", "lark"] as const) {
-      if (!plan.channels.includes(kind)) continue;
-      if (registerFeishu) {
-        log(`registering ${kind} event URL…`);
-        reg.track(kind, await registerFeishu(url, kind));
-      } else {
-        log(`${kind}: set the event Request URL (developer console → Events & Callbacks) → ${url}/${kind}`);
-        reg.track(kind, "manual");
-      }
-    }
-  }
-  const registrationGateMsg = reg.gate();
+  // No long-connection channels reach here: `deploy.ts` gates them before the driver runs (AgentCore
+  // has no resident process to hold a connection), so the deploy's channels are all webhook ones.
+  const registrationGateMsg = url
+    ? await registerWebhooks({
+        baseUrl: url,
+        channels: plan.channels,
+        registrars,
+        log,
+        retryHint: "re-run to retry registration (steps already done are skipped)",
+      })
+    : undefined;
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, runtimeArn, url };
 }

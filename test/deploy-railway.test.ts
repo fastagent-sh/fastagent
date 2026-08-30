@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { planRailwayDeploy } from "../src/deploy/railway/plan.ts";
+import { declaredChannels } from "../src/channels/discover.ts";
 
 const json = (p: ReturnType<typeof planRailwayDeploy>) =>
   p.artifacts.find((a) => a.path === "fastagent/railway.json")!.content;
@@ -78,7 +79,9 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("sets the state root as a variable matched to the volume mount, + the secret list", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"] }));
+    const out = runbook(
+      planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram"]) }),
+    );
     expect(out).toContain("railway volume add --mount-path /data");
     // `set` subcommand, NOT the deprecated `--set` legacy flag; secrets space-separated in one command.
     expect(out).toContain(
@@ -91,7 +94,9 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["feishu", "lark"] }));
+    const out = runbook(
+      planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["feishu", "lark"]) }),
+    );
     const requiredCommand = out.split("\n").find((line) => line.startsWith("railway variables set OPENAI")) ?? "";
     expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
     expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
@@ -105,8 +110,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
       planRailwayDeploy({
         ...base,
         modelAuth: undefined,
-        channels: ["lark"],
-        longConnectionChannels: ["lark"],
+        channels: [...declaredChannels(["lark"], "long-connection")],
       }),
     );
     expect(out).toContain("LARK_APP_ID=<value>");
@@ -121,8 +125,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
       planRailwayDeploy({
         ...base,
         modelAuth: undefined,
-        channels: [],
-        longConnectionChannels: ["socket"],
+        channels: declaredChannels(["socket"], "long-connection"),
       }),
     );
     expect(out).toContain("do NOT enable App Sleeping — a long-connection channel");
@@ -142,21 +145,21 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("points the webhook at the MINTED domain (railway domain), not a precomputed URL", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram"] }));
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) }));
     expect(out).toContain("railway domain"); // must generate + read the domain first
     expect(out).toContain("https://<your-domain>/telegram"); // placeholder, not a deterministic guess
     expect(out).not.toContain(".fly.dev");
   });
 
   it("mints a domain and prints Slack's manual Events API Request URL", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["slack"] }));
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack"]) }));
     expect(out).toContain("railway domain");
     expect(out).toContain("SLACK_BOT_TOKEN=<value>");
     expect(out).toContain("https://<your-domain>/slack");
   });
 
   it("mints a domain and prints the Feishu Request URL for a feishu-only agent", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["feishu"]) }));
     expect(out).toContain("railway domain");
     expect(out).toContain("POST /feishu");
     expect(out).toContain("https://<your-domain>/feishu");
@@ -173,7 +176,11 @@ describe("deploy/railway: planRailwayDeploy", () => {
 
   it("mints the domain ONCE and prints every path when all webhook channels are present", () => {
     const out = runbook(
-      planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram", "github", "feishu", "lark"] }),
+      planRailwayDeploy({
+        ...base,
+        modelAuth: undefined,
+        channels: declaredChannels(["telegram", "github", "feishu", "lark"]),
+      }),
     );
     expect(out.match(/railway domain/g)).toHaveLength(1); // not once per channel
     expect(out).toContain("https://<your-domain>/feishu");
@@ -181,16 +188,23 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("states App Sleeping as a manual dashboard step; forbids it for github (no replay)", () => {
-    expect(runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram"] }))).toContain(
-      "App Sleeping",
-    );
+    expect(
+      runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) })),
+    ).toContain("App Sleeping");
     // github: fire-and-forget reviews have no replay → do NOT sleep (same floor Fly enforces via config).
-    expect(runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["github"] }))).toContain(
-      "do NOT enable App Sleeping",
-    );
+    expect(
+      runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["github"]) })),
+    ).toContain("do NOT enable App Sleeping");
     // time triggers: cron/wake has no external wake-up — a sleeping service sleeps through them.
     expect(
-      runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram"], hasTimeTriggers: true })),
+      runbook(
+        planRailwayDeploy({
+          ...base,
+          modelAuth: undefined,
+          channels: declaredChannels(["telegram"]),
+          hasTimeTriggers: true,
+        }),
+      ),
     ).toContain("do NOT enable App Sleeping");
   });
 

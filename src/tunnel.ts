@@ -7,12 +7,12 @@
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { join } from "node:path";
-import { moduleInventory } from "./loader.ts";
 import type { RegistrationOutcome } from "./channels/registration.ts";
+import type { DeclaredChannel } from "./channels/discover.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
+import { pointChannelsAt } from "./deploy/channel-ingress.ts";
 import { dotEnvPath, loadDotEnv } from "./env.ts";
 import { resolveStateRoot } from "./paths.ts";
 import { log } from "./log.ts";
@@ -130,24 +130,6 @@ function lastErrorLine(tail: string): string {
   return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
 }
 
-/** Channel basenames present in `<dir>/channels/` — {@link moduleInventory}, the same reading the
- *  serve loads from, so the tunnel cannot register a set the deployment does not have.
- *
- *  The one thing it does differently is the FAILURE: `announceWebhooks` is void-called with no
- *  unhandledRejection handler, so a throw here would take the serve down. It reports and continues
- *  — silence would hide exactly the fault this scan exists to feed (a `channels/` that cannot be
- *  read registers nothing while the tunnel announces its public URL). */
-async function channelBasenames(dir: string): Promise<string[]> {
-  const channels = join(dir, "channels");
-  try {
-    const entries = await moduleInventory(channels);
-    return entries.map((entry) => entry.name);
-  } catch (error) {
-    log.warn(`[fastagent] --tunnel: cannot read ${channels}: ${(error as Error).message} — no webhooks registered`);
-    return [];
-  }
-}
-
 /**
  * Print the public URL and wire up first-party webhook channels found under `dir` (the agent
  * ROOT): Telegram and Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config
@@ -163,9 +145,12 @@ async function channelBasenames(dir: string): Promise<string[]> {
 export async function announceWebhooks(
   dir: string,
   baseUrl: string,
-  opts: { openUrl?: (url: string) => void; routeChannels?: string[]; stateRoot?: string } = {},
+  /** Every declared channel with its ingress. Not a pre-filtered list: this used to accept "the route
+   *  channels" and default to every basename in `channels/`, which pointed a webhook at a
+   *  long-connection channel whenever a caller forgot to filter. {@link pointChannelsAt} filters. */
+  channels: readonly DeclaredChannel[],
+  opts: { openUrl?: (url: string) => void; stateRoot?: string } = {},
 ): Promise<{ kind: string; outcome: RegistrationOutcome }[]> {
-  const registrations: { kind: string; outcome: RegistrationOutcome }[] = [];
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
     loadDotEnv(dir); // webhook registrars read channel credentials from .env
@@ -177,39 +162,27 @@ export async function announceWebhooks(
     // missing-credential guidance. loadDotEnv keeps throwing for the synchronous command callers.
     log.warn(`[fastagent] could not read ${dotEnvPath(dir)}: ${(error as Error).message} — continuing without it`);
   }
-  // Serving passes the validated route-channel subset. The basename fallback preserves the public
-  // helper's behavior for callers that did not assemble channels first.
-  const routeChannels = opts.routeChannels ?? (await channelBasenames(dir));
-  if (routeChannels.length === 0) return registrations;
-  // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before
-  // its origin connects, and the automatic registrars poll /health before configuring the platform (the
-  // same wait the deploy runners rely on). GitHub needs no wait — the operator adds that webhook by hand.
-  const track = (kind: string, outcome: RegistrationOutcome): void => {
-    registrations.push({ kind, outcome });
-  };
-  if (routeChannels.includes("telegram")) track("telegram", await registerTelegramWebhook(baseUrl));
-  if (routeChannels.includes("github")) {
-    log.info(
-      `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
-    );
-    track("github", "manual"); // always a human step — the console line above IS the instruction
-  }
-  if (routeChannels.includes("slack")) {
-    track(
-      "slack",
-      await registerSlackWebhook(baseUrl, {
-        stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
-        log: (message) => log.info(message),
-      }),
-    );
-  }
-  // feishu/lark register programmatically too (application-v7 config PATCH — telegram-setWebhook
-  // parity), once per mounted kind (each kind is its own app with its own credentials); the registrar
-  // owns its own health wait and degrades to the manual console instruction.
+  // Readiness is the registrar's job: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before its
+  // origin connects, and the automatic registrars poll /health before configuring the platform (the same
+  // wait the deploy runners rely on). GitHub needs no wait — the operator adds that webhook by hand.
+  //
+  // The registrars differ from the deploy path's in what they carry, not in which channels they answer
+  // for: this one narrates to the log and opens the console for a manual Feishu step.
   const feishuOptions = {
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };
-  if (routeChannels.includes("feishu")) track("feishu", await registerFeishuWebhook(baseUrl, "feishu", feishuOptions));
-  if (routeChannels.includes("lark")) track("lark", await registerFeishuWebhook(baseUrl, "lark", feishuOptions));
-  return registrations;
+  return pointChannelsAt({
+    baseUrl,
+    channels,
+    log: (message) => log.info(`[fastagent] ${message}`),
+    registrars: {
+      telegram: (url) => registerTelegramWebhook(url),
+      slack: (url) =>
+        registerSlackWebhook(url, {
+          stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
+          log: (message) => log.info(message),
+        }),
+      feishu: (url, kind) => registerFeishuWebhook(url, kind, feishuOptions),
+    },
+  });
 }

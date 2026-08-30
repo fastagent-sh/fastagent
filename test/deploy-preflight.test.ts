@@ -316,8 +316,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.channels).toEqual(["slack"]);
-      expect(pre.routeChannels).toEqual(["slack"]);
+      expect(pre.channels).toEqual([{ name: "slack", ingress: "webhook" }]);
       expect(pre.messages.some((message) => message.text.includes('channel "slack" is custom'))).toBe(false);
     }
   });
@@ -330,8 +329,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.routeChannels).toEqual(["discord"]);
-      expect(pre.longConnectionChannels).toEqual([]);
+      expect(pre.channels).toEqual([{ name: "discord", ingress: "webhook" }]);
       expect(pre.messages).toContainEqual({
         level: "note",
         text: expect.stringContaining('route channel "discord" is custom'),
@@ -349,9 +347,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.channels).toEqual(["feishu"]);
-      expect(pre.routeChannels).toEqual([]);
-      expect(pre.longConnectionChannels).toEqual(["feishu"]);
+      expect(pre.channels).toEqual([{ name: "feishu", ingress: "long-connection" }]);
       expect(pre.messages).toContainEqual({
         level: "note",
         text: expect.stringMatching(/long-connection channel.*keeps one machine running/),
@@ -366,9 +362,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.channels).toEqual([]);
-      expect(pre.routeChannels).toEqual([]);
-      expect(pre.longConnectionChannels).toEqual(["socket"]);
+      expect(pre.channels).toEqual([{ name: "socket", ingress: "long-connection" }]);
       expect(pre.messages).toContainEqual({
         level: "note",
         text: expect.stringMatching(/long-connection channel "socket".*keep the process running.*skip webhook/),

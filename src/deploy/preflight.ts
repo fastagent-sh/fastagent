@@ -15,10 +15,10 @@ import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists } from "../paths.ts";
-import { inspectChannels } from "../channels/discover.ts";
+import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
-import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
+import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
@@ -34,11 +34,10 @@ interface DeployMessage {
 /** The resolved facts every host plan needs (the container shape, channels, model auth, ports/secrets). */
 interface DeployFacts {
   messages: DeployMessage[];
-  channels: ChannelKind[];
-  /** Every structurally detected HTTP-route channel basename, including custom channels. */
-  routeChannels: string[];
-  /** Every structurally detected long-connection channel basename, including custom channels. */
-  longConnectionChannels: string[];
+  /** Every declared channel with the ingress its module shape says it has, custom ones included. The
+   *  ONE channel fact the plans and drivers read: a consumer that needs a subset derives it (see
+   *  {@link webhookKinds}) rather than receiving a list someone else already filtered. */
+  channels: DeclaredChannel[];
   /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). Cron/wake
    *  has no external wake-up, so the deployment must keep one machine running: the fly plan forces
    *  `min_machines_running=1`, the railway runbook forbids App Sleeping. */
@@ -165,19 +164,18 @@ export async function preflightDeploy(input: {
       `cannot inspect channel modules: ${inspected.failures.map((failure) => `${failure.label}: ${failure.message}`).join("; ")}`,
     );
   }
-  const discovered = inspected.channels;
-  const channels = discovered.filter((c): c is ChannelKind => (CHANNEL_KINDS as string[]).includes(c));
-  const routeChannels = inspected.routeChannels;
-  const longConnectionChannels = inspected.longConnectionChannels;
-  for (const c of discovered) {
-    if (channels.includes(c as ChannelKind)) continue;
+  const channels = inspected.channels;
+  for (const { name, ingress } of channels) {
+    if ((CHANNEL_KINDS as string[]).includes(name)) continue;
     messages.push({
       level: "note",
-      text: longConnectionChannels.includes(c)
-        ? `long-connection channel "${c}" is custom — configure its secrets yourself; generated deploy plans keep the process running and skip webhook registration`
-        : `route channel "${c}" is custom — configure its secrets and webhook yourself`,
+      text:
+        ingress === "long-connection"
+          ? `long-connection channel "${name}" is custom — configure its secrets yourself; generated deploy plans keep the process running and skip webhook registration`
+          : `route channel "${name}" is custom — configure its secrets and webhook yourself`,
     });
   }
+  const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
   // Time triggers (static schedules or self-scheduling) need a machine kept running — unlike a webhook,
   // nothing external wakes a scale-to-zero box for a cron instant or a wake-up. The note is CONDITIONAL
@@ -507,8 +505,6 @@ export async function preflightDeploy(input: {
     ok: true,
     messages,
     channels,
-    routeChannels,
-    longConnectionChannels,
     hasTimeTriggers,
     modelAuth,
     modelKeyInDefinition,

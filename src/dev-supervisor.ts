@@ -24,6 +24,7 @@ import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
+import { declaredChannels } from "./channels/discover.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
@@ -113,9 +114,8 @@ export async function runDevSupervisor(
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(placement.agentDir, t.url, {
+            void announceWebhooks(placement.agentDir, t.url, declaredChannels(m.routeChannels ?? []), {
               openUrl: openExternalUrl,
-              routeChannels: m.routeChannels,
               stateRoot: resolveStateRoot(placement.agentDir),
             });
           }

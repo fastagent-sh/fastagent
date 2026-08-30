@@ -8,6 +8,7 @@
  * --force). `--run` drives the target CLI instead of printing.
  */
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -23,10 +24,10 @@ import {
   planAgentcoreDeploy,
 } from "../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun } from "../../deploy/agentcore/run.ts";
+import { type Registrars, webhookPaths } from "../../deploy/channel-ingress.ts";
 import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../deploy/container.ts";
 import {
   composeHasTunnelService,
-  dockerWebhookPaths,
   isGeneratedCompose,
   planDockerDeploy,
   toDockerProjectName,
@@ -52,7 +53,6 @@ import { type ResolvedPlacement, resolveStateRoot, exists } from "../../paths.ts
 import { loadSchedules } from "../../schedule/discover.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
@@ -74,6 +74,16 @@ export interface DeployOptions {
 }
 
 /** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
+/** The registrars every host driver gets. One wiring: a channel's credentials are the channel's, not
+ *  the host's, so which of them can run end-to-end never varies by deployment target. */
+function registrarsFor(agentDir: string): Registrars {
+  return {
+    telegram: (baseUrl) => registerTelegramWebhook(baseUrl),
+    slack: (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+    feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
+  };
+}
+
 function shellArg(value: string): string {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
@@ -111,19 +121,10 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
-  const {
-    channels,
-    routeChannels,
-    longConnectionChannels,
-    hasTimeTriggers,
-    modelAuth,
-    modelKeyInDefinition,
-    authPath,
-    container,
-    port,
-    extraSecrets,
-  } = pre;
-  const hasDeclaredChannels = routeChannels.length + longConnectionChannels.length > 0;
+  const { channels, hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets } = pre;
+  const webhookChannels = channels.filter((channel) => channel.ingress === "webhook");
+  const longConnectionChannels = channels.filter((channel) => channel.ingress === "long-connection");
+  const hasDeclaredChannels = channels.length > 0;
 
   // Docker: one app service + loopback port + state volume. `--tunnel` shapes the generated topology
   // with an optional Quick Tunnel service; `--run` alone decides whether Docker receives side effects.
@@ -141,13 +142,12 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         port,
         modelAuth,
         channels,
-        longConnectionChannels,
         tunnel,
         extraSecrets,
         ...container,
       });
-    const requestedTunnel = !!opts.tunnel && (!hasDeclaredChannels || routeChannels.length > 0);
-    if (opts.tunnel && hasDeclaredChannels && routeChannels.length === 0) {
+    const requestedTunnel = !!opts.tunnel && (!hasDeclaredChannels || webhookChannels.length > 0);
+    if (opts.tunnel && hasDeclaredChannels && webhookChannels.length === 0) {
       console.error(`[fastagent] note: --tunnel skipped — every channel uses a long connection`);
     }
     let plan = dockerPlan(requestedTunnel);
@@ -177,7 +177,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         modelKeyInDefinition,
         authPath,
         channels,
-        longConnectionChannels,
         extraSecrets,
       });
     }
@@ -210,7 +209,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       serviceName,
       modelAuth,
       channels,
-      longConnectionChannels,
       extraSecrets,
       hasTimeTriggers,
       ...container,
@@ -236,7 +234,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         modelKeyInDefinition,
         authPath,
         channels,
-        longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
         dockerfilePath: dockerfilePathVar(pre.container.agentPrefix),
@@ -263,7 +260,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // (deploying a channel that can't connect); generate-only warns and prints the runbook.
     if (longConnectionChannels.length > 0) {
       const msg =
-        `long-connection channel (${longConnectionChannels.join(", ")}) cannot run on AgentCore — there is no ` +
+        `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) cannot run on AgentCore — there is no ` +
         `resident process to hold the connection, and nothing wakes a reclaimed session. Switch the channel ` +
         `to webhook mode (its events then ride the forwarder like every other channel).`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
@@ -297,7 +294,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       name: acName,
       modelAuth,
       channels,
-      routeChannels,
       extraSecrets,
       schedules: loaded.schedules.map((s) => ({ name: s.name, cron: s.cron, tz: s.tz })),
       selfSchedule: !!config.selfSchedule,
@@ -313,7 +309,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // Host capability limit, stated at plan time. GitHub's own webhook contract is 25 MiB, but a
     // Lambda Function URL request caps at 6 MB — so on this host a large payload cannot arrive at
     // all. Better a sentence here than an opaque 502 the first time someone pushes a big diff.
-    if (channels.includes("github")) {
+    if (channels.some((channel) => channel.name === "github")) {
       console.error(
         `[fastagent] note: on AgentCore a webhook body is capped at ~${Math.round(MAX_WEBHOOK_BODY_BYTES / (1 << 20))} MiB ` +
           `(the forwarder's Function URL limit); the GitHub channel accepts 25 MiB on a resident host, so the largest ` +
@@ -355,7 +351,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         selfSchedule: !!config.selfSchedule,
         // Same predicate the template uses for the forwarder resource — kept in one expression so
         // the run path and the topology cannot disagree about whether a forwarder exists.
-        needsForwarder: routeChannels.length > 0 || loaded.schedules.length > 0 || !!config.selfSchedule,
+        needsForwarder: webhookChannels.length > 0 || loaded.schedules.length > 0 || !!config.selfSchedule,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -371,7 +367,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
   // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
   // a note, not a warn, since the plan already did the safe thing (definition-aware autostop).
-  if (channels.includes("github")) {
+  if (channels.some((channel) => channel.name === "github")) {
     console.error(
       `[fastagent] note: github turns have no replay — the generated fly.toml uses min_machines_running=1 ` +
         `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 to accept that trade.`,
@@ -418,7 +414,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       // hand-written fly.toml without the line scales to zero exactly like an explicit 0.
       const reason = hasTimeTriggers
         ? `schedules/self-scheduling need a running machine (no external wake-up)`
-        : `long-connection channel (${longConnectionChannels.join(", ")}) needs an always-on outbound connection`;
+        : `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) needs an always-on outbound connection`;
       const msg =
         `your kept fly.toml scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
         `${reason}. Set min_machines_running = 1, or pass --force to regenerate.`;
@@ -431,7 +427,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     port,
     modelAuth,
     channels,
-    longConnectionChannels,
     extraSecrets,
     hasTimeTriggers,
     ...container,
@@ -451,7 +446,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       modelKeyInDefinition,
       authPath,
       channels,
-      longConnectionChannels,
       flyTomlPath,
       extraSecrets,
     });
@@ -539,8 +533,8 @@ export async function writeArtifacts(
   }
 }
 
-function deployEnvironment(agentDir: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
-  if (!channels.includes("slack")) return process.env;
+function deployEnvironment(agentDir: string, channels: readonly DeclaredChannel[]): NodeJS.ProcessEnv {
+  if (!channels.some((channel) => channel.name === "slack")) return process.env;
   const latest = readSlackBotAuthEnv(join(resolveStateRoot(agentDir), "channels", "slack", "bot-auth.json"));
   return { ...process.env, ...latest };
 }
@@ -558,8 +552,7 @@ async function runDeployDocker(
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
     authPath: string;
-    channels: ChannelKind[];
-    longConnectionChannels: string[];
+    channels: readonly DeclaredChannel[];
     extraSecrets: string[];
   },
 ): Promise<void> {
@@ -573,7 +566,6 @@ async function runDeployDocker(
     modelKeyInDefinition,
     authPath,
     channels,
-    longConnectionChannels,
     extraSecrets,
   } = params;
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
@@ -581,7 +573,6 @@ async function runDeployDocker(
     modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
-    longConnectionChannels,
     extraSecrets,
     env: deployEnvironment(agentDir, channels),
   });
@@ -594,9 +585,8 @@ async function runDeployDocker(
       needsModelCredential,
       requireTunnel,
       announce: (tunnelUrl) =>
-        announceWebhooks(agentDir, tunnelUrl, {
+        announceWebhooks(agentDir, tunnelUrl, channels, {
           openUrl: openExternalUrl,
-          routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
           stateRoot: resolveStateRoot(agentDir),
         }),
     },
@@ -624,7 +614,7 @@ async function runDeployDocker(
   }
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   if (outcome.tunnelUrl) return;
-  const paths = dockerWebhookPaths(channels.filter((kind) => !longConnectionChannels.includes(kind)));
+  const paths = webhookPaths(channels);
   if (paths.length > 0) {
     console.error(
       `[fastagent] note: public ingress is operator-owned — configure your tunnel/proxy, then wire the ` +
@@ -648,8 +638,7 @@ async function runDeployFly(
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
     authPath: string;
-    channels: ChannelKind[];
-    longConnectionChannels: string[];
+    channels: readonly DeclaredChannel[];
     flyTomlPath: string;
     extraSecrets: string[];
   },
@@ -663,7 +652,6 @@ async function runDeployFly(
     modelKeyInDefinition,
     authPath,
     channels,
-    longConnectionChannels,
     flyTomlPath,
     extraSecrets,
   } = params;
@@ -679,7 +667,6 @@ async function runDeployFly(
     modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
-    longConnectionChannels,
     extraSecrets,
     env: deployEnvironment(agentDir, channels),
   });
@@ -700,15 +687,12 @@ async function runDeployFly(
       secrets,
       missingSecrets,
       channels,
-      longConnectionChannels,
       flyConfig: `${agentPrefix}fly.toml`,
       dockerfile: `${agentPrefix}Dockerfile`,
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
-    (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+    registrarsFor(agentDir),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
@@ -728,7 +712,7 @@ async function runDeployAgentcore(
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
     authPath: string;
-    channels: ChannelKind[];
+    channels: readonly DeclaredChannel[];
     extraSecrets: string[];
     selfSchedule: boolean;
     needsForwarder: boolean;
@@ -802,9 +786,7 @@ async function runDeployAgentcore(
         await writeFile(path, bytes);
         return path;
       },
-      (baseUrl) => registerTelegramWebhook(baseUrl),
-      (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-      (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+      registrarsFor(agentDir),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);
@@ -837,8 +819,7 @@ async function runDeployRailway(
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
     authPath: string;
-    channels: ChannelKind[];
-    longConnectionChannels: string[];
+    channels: readonly DeclaredChannel[];
     extraSecrets: string[];
     intoLinked: boolean;
     /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
@@ -853,7 +834,6 @@ async function runDeployRailway(
     modelKeyInDefinition,
     authPath,
     channels,
-    longConnectionChannels,
     extraSecrets,
     intoLinked,
     dockerfilePath,
@@ -869,7 +849,6 @@ async function runDeployRailway(
     modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
-    longConnectionChannels,
     extraSecrets,
     env: deployEnvironment(agentDir, channels),
   });
@@ -883,12 +862,10 @@ async function runDeployRailway(
   }
 
   const outcome = await deployRailwayRun(
-    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked, dockerfilePath },
+    { name, mountPath: "/data", secrets, missingSecrets, channels, intoLinked, dockerfilePath },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
-    (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
+    registrarsFor(agentDir),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

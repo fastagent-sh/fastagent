@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { crc32 } from "node:zlib";
 import { Cron } from "croner";
+import { declaredChannels } from "../src/channels/discover.ts";
 import { cronError } from "../src/schedule/cron.ts";
 import { describe, expect, it } from "vitest";
 import {
@@ -31,7 +32,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   name: "my-agent",
   modelAuth: "OPENAI_API_KEY",
   channels: [],
-  routeChannels: [],
   schedules: [],
   selfSchedule: false,
   hasPackageJson: false,
@@ -163,7 +163,7 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
-    const plan = planAgentcoreDeploy(baseInput({ channels: ["telegram"], routeChannels: ["telegram"] }));
+    const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     expect(plan.artifacts.map((a) => a.path)).toContain(FORWARDER_FILE);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::Lambda::Function");
@@ -236,15 +236,12 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {
-    const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
-      .artifacts[0]!.content;
+    const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
     expect(template).toContain("Timeout: 900");
   });
 
   it("kit layout namespaces the template + forwarder under the kit", () => {
-    const plan = planAgentcoreDeploy(
-      baseInput({ agentPrefix: "agent/", routeChannels: ["telegram"], channels: ["telegram"] }),
-    );
+    const plan = planAgentcoreDeploy(baseInput({ agentPrefix: "agent/", channels: declaredChannels(["telegram"]) }));
     const paths = plan.artifacts.map((a) => a.path);
     expect(paths).toContain(`agent/${TEMPLATE_FILE}`);
     expect(paths).toContain(`agent/${FORWARDER_FILE}`);
@@ -364,7 +361,7 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
-    const plan = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }));
+    const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
     expect(FORWARDER_FILE).toBe("lambda/index.js");
     expect(plan.artifacts.map((a) => a.path)).toContain("lambda/index.js");
@@ -377,8 +374,7 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("grants the forwarder ONLY the one snapshot object, and hands the container its bucket/key", () => {
-    const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
-      .artifacts[0]!.content;
+    const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
     expect(template).toContain("Action: [s3:GetObject, s3:PutObject]");
     expect(template).toContain(`Resource: !Sub arn:aws:s3:::\${StateBucket}/${STATE_KEY}`);
     expect(template).toContain("STATE_BUCKET: !Ref StateBucket");
@@ -388,8 +384,7 @@ describe("deploy agentcore: the plan", () => {
   it("grants s3:ListBucket on the snapshot prefix — without it a MISSING first-deploy snapshot reads 403, not 404", () => {
     // S3 folds "key absent" into 403 unless the caller may list (anti-enumeration), and the restore
     // contract accepts ONLY 404 as first deploy — dropping this statement deadlocks every first boot.
-    const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
-      .artifacts[0]!.content;
+    const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
     expect(template).toContain("Action: s3:ListBucket");
     expect(template).toContain(`Resource: !Sub arn:aws:s3:::\${StateBucket}\n`); // the BUCKET arn, not an object
     expect(template).toContain("StringLike: { s3:prefix: state/* }"); // scoped: existence of the snapshot, not a full listing
@@ -415,7 +410,7 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("tells the truth about state: the mount is wiped per deploy, the S3 snapshot is what survives", () => {
-    const plan = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }));
+    const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("wipes it on every VERSION UPDATE");
     expect(template).not.toMatch(/SessionStorage: platform-persistent/);
@@ -469,8 +464,8 @@ describe("deploy agentcore: the plan", () => {
     });
 
     it("a webhook channel mints one, and scopes the second permission to URL traffic", () => {
-      const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
-        .artifacts[0]!.content;
+      const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!
+        .content;
       expect(template).toContain("AWS::Lambda::Url");
       expect(template).toContain('WEBHOOKS_ENABLED: "1"');
       expect(template).toContain("Action: lambda:InvokeFunctionUrl");
@@ -480,8 +475,8 @@ describe("deploy agentcore: the plan", () => {
     });
 
     it("declares the ingress secret whenever a forwarder exists, and stamps it on both sides", () => {
-      const template = planAgentcoreDeploy(baseInput({ routeChannels: ["telegram"], channels: ["telegram"] }))
-        .artifacts[0]!.content;
+      const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!
+        .content;
       expect(template).toContain("  FastagentIngressSecret:");
       expect(template).toContain("FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret"); // runtime
       expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret"); // forwarder
