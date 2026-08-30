@@ -16,7 +16,7 @@
  * snapshot is discarded replays on the next start (the Telegram L1 turn store) — at-least-once, the
  * documented floor. State on the /data volume survives stop/suspend on the same machine.
  */
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
@@ -33,10 +33,9 @@ export interface FlyPlanInput extends ContainerInput {
    * `"OAuth"`/`"stored credential"` (a local login the server can't use), or undefined (unconfigured).
    */
   modelAuth: string | undefined;
-  /** Known first-party channels — each contributes its secret metadata + webhook step. */
-  channels: ChannelKind[];
-  /** All long-connection channel basenames, including custom channels — require one running machine. */
-  longConnectionChannels?: string[];
+  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
+   *  whether a machine must stay up for an outbound connection. */
+  channels: readonly DeclaredChannel[];
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
   /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). CLI `--stop`. */
@@ -133,11 +132,11 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       content: flyToml(
         appName,
         port,
-        channels.includes("github"),
+        channels.some((channel) => channel.name === "github"),
         input.autostop,
         input.scaleToZero,
         input.hasTimeTriggers,
-        (input.longConnectionChannels?.length ?? 0) > 0,
+        channels.some((channel) => channel.ingress === "long-connection"),
       ),
     },
     ...containerArtifacts(input),
@@ -147,7 +146,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   // model key (when local auth is an env key) + every discovered channel's secrets. Names + hints as
   // COMMENT lines (a `#` inside a `\`-continued command would break the shell), then one flat, executable
   // `fly secrets set` the coding agent fills — `<value>` placeholders, never inline comments.
-  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets, input.longConnectionChannels);
+  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
@@ -225,7 +224,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
 
   // The fastagent-only post-step: point each channel at the live URL. WHICH channels and in what words
   // is the shared channel-ingress kernel's answer; Fly's contribution is that its URL is deterministic.
-  const steps = webhookRunbook(`https://${appName}.fly.dev`, channels, input.longConnectionChannels);
+  const steps = webhookRunbook(`https://${appName}.fly.dev`, channels);
   const post = steps.length > 0 ? [`# After deploy:`, ...steps] : [];
   if (post.length > 0) runbook.push(``, ...post);
 

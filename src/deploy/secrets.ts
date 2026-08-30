@@ -4,7 +4,20 @@
  * (`fly secrets import` vs `railway variables set`). The runbooks list both classes; `--run` reads local values.
  */
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
-import { type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../channels/discover.ts";
+import { CHANNEL_KINDS, type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
+
+/** The declared channels this tool has setup metadata for. A custom channel carries its own secrets;
+ *  nothing here can name them, and guessing would print a runbook line no one can act on. */
+function firstPartyChannels(
+  channels: readonly DeclaredChannel[],
+): { kind: ChannelKind; ingress: DeclaredChannel["ingress"] }[] {
+  return channels.flatMap((channel) =>
+    (CHANNEL_KINDS as string[]).includes(channel.name)
+      ? [{ kind: channel.name as ChannelKind, ingress: channel.ingress }]
+      : [],
+  );
+}
 
 /**
  * Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none?
@@ -24,15 +37,13 @@ export function isEnvKey(source: string | undefined): source is string {
  */
 export function deploymentSecrets(
   modelAuth: string | undefined,
-  channels: ChannelKind[],
+  channels: readonly DeclaredChannel[],
   extraSecrets: string[] = [],
-  longConnectionChannels: string[] = [],
 ): { name: string; hint: string; required: boolean }[] {
   const secrets: { name: string; hint: string; required: boolean }[] = [];
   if (isEnvKey(modelAuth)) secrets.push({ name: modelAuth, hint: "your model provider key", required: true });
-  for (const kind of channels) {
-    const setupMode = longConnectionChannels.includes(kind) ? "websocket" : "webhook";
-    for (const e of channelSetup(kind, setupMode).env) {
+  for (const { kind, ingress } of firstPartyChannels(channels)) {
+    for (const e of channelSetup(kind, ingress === "long-connection" ? "websocket" : "webhook").env) {
       secrets.push({ name: e.name, hint: e.hint, required: e.required });
     }
   }
@@ -76,8 +87,7 @@ export function assembleSecrets(input: {
    *  no value to carry and no gate to raise — see {@link modelCredentialCarry}. */
   modelKeyInDefinition?: boolean;
   authFile: Buffer | undefined;
-  channels: ChannelKind[];
-  longConnectionChannels?: string[];
+  channels: readonly DeclaredChannel[];
   /** Extra secret env-var names from `fastagent.config` deploy.secrets — carried like channel secrets. */
   extraSecrets?: string[];
   env: NodeJS.ProcessEnv;
@@ -105,9 +115,8 @@ export function assembleSecrets(input: {
     needsModelCredential = true; // no env key, no auth.json — `fastagent login` remediation
   }
 
-  for (const kind of input.channels) {
-    const setupMode = input.longConnectionChannels?.includes(kind) ? "websocket" : "webhook";
-    for (const e of channelSetup(kind, setupMode).env) {
+  for (const { kind, ingress } of firstPartyChannels(input.channels)) {
+    for (const e of channelSetup(kind, ingress === "long-connection" ? "websocket" : "webhook").env) {
       const v = input.env[e.name];
       if (v)
         secrets[e.name] = v; // optional channel values travel when configured
@@ -119,7 +128,7 @@ export function assembleSecrets(input: {
   // Slack bot-token rotation is an all-or-nothing credential bundle. Its fields remain optional so a
   // manually configured long-lived token works, but a partial bundle must gate before the container
   // reaches slackChannel construction.
-  if (input.channels.includes("slack")) {
+  if (input.channels.some((channel) => channel.name === "slack")) {
     const rotation = [
       "SLACK_BOT_REFRESH_TOKEN",
       "SLACK_BOT_TOKEN_EXPIRES_AT",

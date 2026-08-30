@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
+import { declaredChannels } from "../src/channels/discover.ts";
 import { modelTravelIssue } from "../src/deploy/preflight.ts";
 
 const flyToml = (p: ReturnType<typeof planFlyDeploy>) =>
@@ -35,23 +36,22 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("keeps one machine running for github (no replay), scales to zero otherwise (definition-aware)", () => {
-    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["github"] }))).toContain(
+    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["github"]) }))).toContain(
       "min_machines_running = 1",
     );
     expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasTimeTriggers: true }))).toContain(
       "min_machines_running = 1", // schedules/wake need a running machine — no external wake-up for a cron instant
     );
-    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["telegram"] }))).toContain(
-      "min_machines_running = 0",
-    );
+    expect(
+      flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) })),
+    ).toContain("min_machines_running = 0");
   });
 
   it("keeps one machine running and drops webhook-only secrets/URLs for long-connection Feishu", () => {
     const plan = planFlyDeploy({
       ...base,
       modelAuth: undefined,
-      channels: ["feishu"],
-      longConnectionChannels: ["feishu"],
+      channels: [...declaredChannels(["feishu"], "long-connection")],
     });
     const toml = flyToml(plan);
     const out = runbook(plan);
@@ -67,8 +67,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     const plan = planFlyDeploy({
       ...base,
       modelAuth: undefined,
-      channels: [],
-      longConnectionChannels: ["socket"],
+      channels: declaredChannels(["socket"], "long-connection"),
     });
     expect(flyToml(plan)).toContain("min_machines_running = 1");
   });
@@ -87,7 +86,12 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("computes the secret list from the model key + discovered channels + config deploy.secrets", () => {
     const out = runbook(
-      planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"], extraSecrets: ["GH_TOKEN"] }),
+      planFlyDeploy({
+        ...base,
+        modelAuth: "OPENAI_API_KEY",
+        channels: declaredChannels(["telegram"]),
+        extraSecrets: ["GH_TOKEN"],
+      }),
     );
     expect(out).toContain("OPENAI_API_KEY=");
     expect(out).toContain("TELEGRAM_BOT_TOKEN=");
@@ -98,7 +102,9 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
-    const out = runbook(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["feishu", "lark"] }));
+    const out = runbook(
+      planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["feishu", "lark"]) }),
+    );
     const requiredCommand = out.split("\n").find((line) => line.startsWith("fly secrets set")) ?? "";
     expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
     expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
@@ -108,7 +114,7 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("includes Slack secrets and its manual Events API Request URL", () => {
-    const out = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["slack"] }));
+    const out = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack"]) }));
     expect(out).toContain("SLACK_BOT_TOKEN=<value>");
     expect(out).toContain("SLACK_SIGNING_SECRET=<value>");
     expect(out).toContain("POST /slack");
@@ -116,12 +122,14 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("prints one event Request URL for each mounted Feishu-cloud kind", () => {
-    const feishu = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
+    const feishu = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["feishu"]) }));
     expect(feishu).toContain("POST /feishu");
     expect(feishu).toContain("https://bot.fly.dev/feishu");
     expect(feishu).not.toContain("https://bot.fly.dev/lark");
 
-    const both = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["feishu", "lark"] }));
+    const both = runbook(
+      planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["feishu", "lark"]) }),
+    );
     expect(both).toContain("https://bot.fly.dev/feishu");
     expect(both).toContain("https://bot.fly.dev/lark");
   });

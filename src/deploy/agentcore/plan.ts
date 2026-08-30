@@ -30,8 +30,8 @@
 import { createHash } from "node:crypto";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
-import { webhookRunbook } from "../channel-ingress.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
+import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
@@ -47,10 +47,9 @@ export interface AgentcorePlanInput extends ContainerInput {
   name: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Known first-party channels — each contributes its secret metadata + webhook step. */
-  channels: ChannelKind[];
-  /** ALL route-channel basenames (customs included) — any of them requires the forwarder. */
-  routeChannels: string[];
+  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
+   *  whether the forwarder is needed at all (ANY webhook channel requires it, customs included). */
+  channels: readonly DeclaredChannel[];
   /** Extra secret env-var names (fastagent.config deploy.secrets). */
   extraSecrets?: string[];
   /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
@@ -522,7 +521,8 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
   // a schedule turn can outlive both its original presigned URL and the Lambda credentials that signed
   // it. Schedule-only URLs reject every non-reserved HTTP path before invoking AgentCore, so they do
   // not expose a webhook/data plane (and start never mounts the builtin /invoke under AgentCore).
-  const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
+  const needsForwarder =
+    input.channels.some((channel) => channel.ingress === "webhook") || translated.length > 0 || input.selfSchedule;
   const needsFunctionUrl = needsForwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
@@ -741,7 +741,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
       `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
       ...(needsFunctionUrl ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
-      ...(input.routeChannels.length > 0 ? [`          WEBHOOKS_ENABLED: "1"`] : []),
+      ...(input.channels.some((channel) => channel.ingress === "webhook") ? [`          WEBHOOKS_ENABLED: "1"`] : []),
       ...(input.selfSchedule
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,
@@ -917,7 +917,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
 
   // Every forwarder needs its authenticated Function URL to refresh S3 snapshot capabilities during
   // a long turn. Without route channels, ordinary HTTP paths are rejected before AgentCore is invoked.
-  const needsForwarder = input.routeChannels.length > 0 || translated.length > 0 || input.selfSchedule;
+  const needsForwarder =
+    input.channels.some((channel) => channel.ingress === "webhook") || translated.length > 0 || input.selfSchedule;
   const needsFunctionUrl = needsForwarder;
   const artifacts: Artifact[] = [
     { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated) },
@@ -1019,11 +1020,20 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   }
 
   // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's
-  // Function URL (read from the stack outputs). No long-connection channels exist here: the CLI gates
-  // them before an AgentCore deploy (nothing holds a connection through scale-to-zero).
+  // Function URL (read from the stack outputs). `--run` REFUSES a long-connection channel here, but
+  // generate-only only warns and still prints this runbook, so the steps are filtered on ingress like
+  // every other host's rather than on the CLI having gated.
   const post = webhookRunbook(`<ForwarderUrl>`, channels);
-  if (channels.includes("github")) {
-    // AgentCore-specific, so it is not in the shared step: nothing else has a compute ceiling.
+  // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and
+  // nothing else has a compute ceiling.
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!webhookKinds(channels).includes(kind)) continue;
+    post.push(
+      `#   The console's challenge rides through the forwarder to the channel and back verbatim, so the`,
+      `#   stack must be deployed when you save it.`,
+    );
+  }
+  if (channels.some((channel) => channel.name === "github")) {
     post.push(
       `# NOTE: github turns are fire-and-forget with no replay — a compute reclaimed mid-review drops it`,
       `#   (the ping's HealthyBusy + time_of_last_update holds the session while turns run, but the 8 h compute ceiling is hard).`,

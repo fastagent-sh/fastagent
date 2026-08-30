@@ -14,7 +14,7 @@
  * a caller-provided temp parameters file (`file://…`, mode 0600, deleted by the caller) — the write
  * is injected to keep this module pure and the security-sensitive wiring testable.
  */
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { createHash } from "node:crypto";
@@ -47,7 +47,8 @@ export interface AgentcoreRunPlan {
   secrets: Record<string, string>;
   /** Required secret names with NO local value — gated before any side effect. */
   missingSecrets: string[];
-  channels: ChannelKind[];
+  /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
+  channels: readonly DeclaredChannel[];
   /** Whether the topology includes the forwarder Lambda (route channels / schedules / selfSchedule).
    *  It owns the state snapshot's presigned URLs, so its absence means an invoke-only deployment
    *  with no cross-deploy state to keep. */

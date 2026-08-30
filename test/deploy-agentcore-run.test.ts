@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { AUTH_SEED_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
@@ -245,7 +246,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
-        channels: ["telegram"],
+        channels: declaredChannels(["telegram"]),
         needsForwarder: true,
         secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
       }),
@@ -416,7 +417,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
         : happyAws(a),
     );
-    const out = await run(plan({ channels: ["telegram"] }), aws, fakeCli().cli);
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
   });
 
@@ -480,7 +481,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
   it("a failed telegram registration gates AFTER the deploy (the app itself deployed)", async () => {
     const { cli: aws } = fakeCli(happyAws);
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "failed");
-    const out = await run(plan({ channels: ["telegram"] }), aws, fakeCli().cli, tg);
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli, tg);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("telegram") });
   });
 });
@@ -559,7 +560,11 @@ describe("the post-deploy probe (verify restore + construction before registrati
       return "registered";
     });
     const out = await deployAgentcoreRun(
-      plan({ channels: ["telegram"], needsForwarder: true, secrets: { FASTAGENT_INGRESS_SECRET: "s3cret" } }),
+      plan({
+        channels: declaredChannels(["telegram"]),
+        needsForwarder: true,
+        secrets: { FASTAGENT_INGRESS_SECRET: "s3cret" },
+      }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
       (m) => logs.push(m),

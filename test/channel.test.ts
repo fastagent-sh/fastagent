@@ -176,9 +176,7 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(loaded.failures).toEqual([]);
 
     const inspected = await inspectChannels(dir);
-    expect(inspected.channels).toEqual(["socket"]);
-    expect(inspected.routeChannels).toEqual([]);
-    expect(inspected.longConnectionChannels).toEqual(["socket"]);
+    expect(inspected.channels).toEqual([{ name: "socket", ingress: "long-connection" }]);
   });
 
   it("rejects an object export that is not an explicit long-connection module", async () => {

@@ -34,32 +34,55 @@ function validateLongConnectionModule(value: LongConnectionChannelModule, label:
 }
 
 /**
+ * HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in.
+ *
+ * A webhook channel is reached at a URL someone must set; a long-connection channel dials out, so
+ * there is no URL and setting one breaks it (Telegram answers `getUpdates` with 409 once a webhook
+ * exists). Everything downstream — which secrets to carry, what the runbook says, what `--run` and
+ * `--tunnel` register — is a question about THIS.
+ *
+ * It is one list because it used to be three (`channels` + `routeChannels` + `longConnectionChannels`,
+ * two of them including custom channels and one not), and every consumer re-derived the answer from
+ * whichever pair it happened to hold. Two deploys shipped a webhook for a long-connection channel
+ * that way. A list of pairs cannot be recombined wrongly, and a consumer that needs a subset asks for
+ * it here rather than trusting its caller to have filtered.
+ */
+export type ChannelIngress = "webhook" | "long-connection";
+
+/** One channel a directory declares, with the ingress its module shape says it has. `name` is the
+ *  basename, which is a {@link ChannelKind} for the first-party ones and anything for a custom one. */
+export interface DeclaredChannel {
+  name: string;
+  ingress: ChannelIngress;
+}
+
+/** Declared channels from basenames that share one ingress: the serving surface's mounted route list
+ *  (a long-connection channel mounts no HTTP route, so every route IS a webhook channel), and fixtures. */
+export function declaredChannels(names: readonly string[], ingress: ChannelIngress = "webhook"): DeclaredChannel[] {
+  return names.map((name) => ({ name, ingress }));
+}
+
+/**
  * Import channel files without mounting route factories or opening connections. Deployment needs only
- * the authored structural fact: function exports are route channels; `{ connect() }` exports are
+ * the authored structural fact: function exports are webhook channels; `{ connect() }` exports are
  * long-connection channels. There is no second ingress/lifecycle declaration to keep in sync.
  */
 export async function inspectChannels(dir: string): Promise<{
-  channels: string[];
-  routeChannels: string[];
-  longConnectionChannels: string[];
+  channels: DeclaredChannel[];
   failures: ModuleLoadFailure[];
 }> {
   await assertInsideAgentDir(dir, "channels");
   const { modules, failures } = await loadModuleDir(join(dir, "channels"));
-  const channels: string[] = [];
-  const routeChannels: string[] = [];
-  const longConnectionChannels: string[] = [];
+  const channels: DeclaredChannel[] = [];
   for (const { name, label, file, mod } of modules) {
     try {
       if (typeof mod.default === "function") {
-        channels.push(name);
-        routeChannels.push(name);
+        channels.push({ name, ingress: "webhook" });
         continue;
       }
       if (longConnectionModule(mod.default)) {
         validateLongConnectionModule(mod.default, label);
-        channels.push(name);
-        longConnectionChannels.push(name);
+        channels.push({ name, ingress: "long-connection" });
         continue;
       }
       throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
@@ -67,7 +90,7 @@ export async function inspectChannels(dir: string): Promise<{
       failures.push({ label, file, message: (error as Error).message });
     }
   }
-  return { channels, routeChannels, longConnectionChannels, failures };
+  return { channels, failures };
 }
 
 /**

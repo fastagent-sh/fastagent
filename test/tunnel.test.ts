@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { log } from "../src/log.ts";
 import { newSlackOnboardingState } from "../src/channels/slack/onboard.ts";
 import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
+import { declaredChannels } from "../src/channels/discover.ts";
 import { announceWebhooks, parseTunnelUrl, startCloudflareTunnel } from "../src/tunnel.ts";
 
 // Mirrors TUNNEL_RETRY_MS in tunnel.ts (the constant is not exported).
@@ -165,7 +164,7 @@ describe("tunnel: announceWebhooks", () => {
     process.env.TELEGRAM_SECRET_TOKEN = "sek";
     const dir = await workspace(["telegram"]);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com");
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["telegram"]));
 
     const call = setWebhookCall(fetchMock);
     expect(call).toBeDefined();
@@ -185,7 +184,7 @@ describe("tunnel: announceWebhooks", () => {
     });
     const dir = await workspace(["telegram"]);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com");
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["telegram"]));
 
     expect(setWebhookCall(fetchMock)).toBeUndefined();
     expect(errs.some((e) => /set TELEGRAM_BOT_TOKEN/.test(e) && /x\.trycloudflare\.com\/telegram/.test(e))).toBe(true);
@@ -200,7 +199,7 @@ describe("tunnel: announceWebhooks", () => {
     });
     const dir = await workspace(["github"]);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com");
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["github"]));
 
     expect(setWebhookCall(fetchMock)).toBeUndefined();
     expect(errs.some((e) => /github:/.test(e) && /x\.trycloudflare\.com\/webhook/.test(e))).toBe(true);
@@ -215,7 +214,7 @@ describe("tunnel: announceWebhooks", () => {
     );
     const dir = await workspace(["slack"]);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com");
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["slack"]));
 
     expect(errs.some((line) => /slack:/.test(line) && /x\.trycloudflare\.com\/slack/.test(line))).toBe(true);
   });
@@ -245,7 +244,7 @@ describe("tunnel: announceWebhooks", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com", { stateRoot });
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["slack"]), { stateRoot });
 
     expect(errs.some((line) => /slack: Event Subscriptions Request URL registered/.test(line))).toBe(true);
   });
@@ -257,7 +256,7 @@ describe("tunnel: announceWebhooks", () => {
     vi.stubGlobal("fetch", fetchMock);
     const dir = await workspace(["feishu"]);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com", { routeChannels: [] });
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["feishu"], "long-connection"));
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -280,7 +279,7 @@ describe("tunnel: announceWebhooks", () => {
     const openUrl = vi.fn();
     const dir = await workspace(["lark"]);
 
-    await announceWebhooks(dir, "https://x.trycloudflare.com", { openUrl });
+    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["lark"]), { openUrl });
 
     expect(openUrl).toHaveBeenCalledOnce();
     expect(openUrl).toHaveBeenCalledWith("https://open.larksuite.com/app/cli_app/event");
@@ -304,7 +303,7 @@ describe("tunnel: announceWebhooks", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
 
-    const p = announceWebhooks(dir, "https://x.trycloudflare.com");
+    const p = announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["telegram"]));
     await vi.advanceTimersByTimeAsync(6000); // past the 5s retry backoff
     await p;
 
@@ -324,7 +323,7 @@ describe("tunnel: announceWebhooks", () => {
     await mkdir(join(dir, ".secrets", ".env"), { recursive: true }); // a directory at the .env path → loadDotEnv throws EISDIR, not ENOENT
 
     // No channels, so nothing to register — the point is that it RESOLVES rather than throwing.
-    await expect(announceWebhooks(dir, "https://x.trycloudflare.com")).resolves.toEqual([]);
+    await expect(announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels([]))).resolves.toEqual([]);
     expect(errs.some((e) => /could not read/.test(e) && /\.env/.test(e))).toBe(true); // surfaced, not silent
   });
 
@@ -342,75 +341,11 @@ describe("tunnel: announceWebhooks", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
 
-    const p = announceWebhooks(dir, "https://x.trycloudflare.com");
+    const p = announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["telegram"]));
     await vi.advanceTimersByTimeAsync(20000); // well past any retry window
     await p;
 
     expect(setWebhookCount(fetchMock)).toBe(1); // permanent error → no retry
     expect(errs.some((e) => /Register manually/.test(e))).toBe(true);
-  });
-
-  it("a DIRECTORY named like a channel file is not a channel", async () => {
-    // The name test alone passes for `github.ts/` — and announcing a webhook for a channel the serve
-    // never mounted is the same wrong answer as missing one. `loadModuleDir` checks isFile(); so does
-    // this, or the two disagree about what the deployment serves.
-    const dir = await mkdtemp(join(tmpdir(), "fa-tunnel-dirch-"));
-    await mkdir(join(dir, "channels", "github.ts"), { recursive: true });
-    const said: string[] = [];
-    const info = vi.spyOn(log, "info").mockImplementation((message) => void said.push(message));
-    try {
-      await announceWebhooks(dir, "https://x.trycloudflare.com");
-      expect(said.join("\n")).not.toContain("github:");
-      // The positive half, in the same test: without it the assertion above passes for any reason
-      // the announcement never happens — including github's line moving off `log.info`, which would
-      // retire this guard silently.
-      said.length = 0;
-      await rm(join(dir, "channels", "github.ts"), { recursive: true });
-      await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
-      await announceWebhooks(dir, "https://x.trycloudflare.com");
-      expect(said.join("\n")).toContain("github:");
-    } finally {
-      info.mockRestore();
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("a channels/ that is a FILE is reported, not read as 'no channels'", async () => {
-    // ENOTDIR is the author putting a file where the directory goes. #381 folded it in with ENOENT
-    // and said nothing — the same silence this scan exists to break, for a case that IS a mistake.
-    const dir = await mkdtemp(join(tmpdir(), "fa-tunnel-notdir-"));
-    await writeFile(join(dir, "channels"), "not a directory\n");
-    const said: string[] = [];
-    const warn = vi.spyOn(log, "warn").mockImplementation((message) => void said.push(message));
-    try {
-      await announceWebhooks(dir, "https://x.trycloudflare.com");
-      expect(said.join("\n")).toContain("cannot read");
-    } finally {
-      warn.mockRestore();
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  // chmod is the only way to reach this branch, and it does not bite as root (root reads any
-  // directory) or on Windows. Skipped rather than faked there: a guard that cannot run its own case
-  // should say so instead of passing quietly.
-  const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
-  it.skipIf(!canDenyRead)("reports an unreadable channels/ instead of reading it as 'no channels'", async () => {
-    // Returning [] for a directory it could not read registers no webhooks while the tunnel reports
-    // itself up — the exact failure this scan exists to feed, made invisible.
-    const dir = await mkdtemp(join(tmpdir(), "fa-tunnel-eacces-"));
-    const channels = join(dir, "channels");
-    await mkdir(channels);
-    await writeFile(join(channels, "telegram.ts"), "export default () => ({});\n");
-    chmodSync(channels, 0o000);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      await announceWebhooks(dir, "https://x.trycloudflare.com");
-      expect(warn.mock.calls.flat().join("\n")).toContain(`cannot read ${channels}`);
-    } finally {
-      chmodSync(channels, 0o755);
-      warn.mockRestore();
-      await rm(dir, { recursive: true, force: true });
-    }
   });
 });

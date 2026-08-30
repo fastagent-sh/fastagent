@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "yaml";
+import { declaredChannels } from "../src/channels/discover.ts";
 import {
   type AgentcorePlanInput,
   type ScheduleFact,
@@ -44,7 +45,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   name: "my-agent",
   modelAuth: "OPENAI_API_KEY",
   channels: [],
-  routeChannels: [],
   schedules: [],
   selfSchedule: false,
   hasPackageJson: false,
@@ -83,7 +83,7 @@ function references(node: unknown, path = "$"): { path: string; target: string; 
   return found;
 }
 
-const WEBHOOK_CHANNELS = { channels: ["telegram" as const], routeChannels: ["telegram"] };
+const WEBHOOK_CHANNELS = { channels: declaredChannels(["telegram"]) };
 const SCHEDULES: ScheduleFact[] = [{ name: "digest", cron: "0 9 * * *", tz: "Asia/Shanghai" }];
 
 describe("the agentcore template (parsed)", () => {

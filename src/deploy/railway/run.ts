@@ -24,7 +24,7 @@
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 
 export interface RailwayRunPlan {
@@ -39,8 +39,8 @@ export interface RailwayRunPlan {
   secrets: Record<string, string>;
   /** Required secret names with NO local value — the run gates on these before any side effect. */
   missingSecrets: string[];
-  channels: ChannelKind[];
-  longConnectionChannels?: string[];
+  /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
+  channels: readonly DeclaredChannel[];
   /** Opt-in (CLI `--into-linked`) to provision INTO the project this directory is already linked to. Off
    *  by default so `--run` only creates on an unlinked dir and never deploys into a pre-existing (possibly
    *  unrelated/production) project; the flag is the operator's explicit "yes, this project". */
@@ -260,7 +260,6 @@ export async function deployRailwayRun(
   const registrationGateMsg = await registerWebhooks({
     baseUrl: url,
     channels: plan.channels,
-    longConnectionChannels: plan.longConnectionChannels,
     registrars,
     log,
     retryHint: "re-run with --into-linked to retry registration",

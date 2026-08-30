@@ -4,6 +4,7 @@ import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { CONTROL_TOKEN_ENV } from "../src/channels/control.ts";
 import { assembleSecrets, deploymentSecrets } from "../src/deploy/secrets.ts";
+import { declaredChannels } from "../src/channels/discover.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
 function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
@@ -36,7 +37,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
-      plan({ channels: ["telegram"], secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" } }),
+      plan({
+        channels: declaredChannels(["telegram"]),
+        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
+      }),
       fly,
       tg,
     );
@@ -60,7 +64,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
 
-    const out = await deployFlyRun(plan({ channels: ["feishu", "lark"] }), fly, () => {}, {
+    const out = await deployFlyRun(plan({ channels: declaredChannels(["feishu", "lark"]) }), fly, () => {}, {
       telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
       feishu: registerFeishu,
     });
@@ -77,7 +81,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const registerFeishu = vi.fn(
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
-    const out = await deployFlyRun(plan({ channels: ["feishu"], longConnectionChannels: ["feishu"] }), fly, () => {}, {
+    const out = await deployFlyRun(plan({ channels: declaredChannels(["feishu"], "long-connection") }), fly, () => {}, {
       telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
       feishu: registerFeishu,
     });
@@ -91,7 +95,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
 
-    const out = await deployFlyRun(plan({ channels: ["telegram", "feishu"] }), fly, () => {}, {
+    const out = await deployFlyRun(plan({ channels: declaredChannels(["telegram", "feishu"]) }), fly, () => {}, {
       telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
       feishu: // telegram registration ends with the webhook NOT set
         registerFeishu,
@@ -110,7 +114,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(plan({ channels: ["lark"] }), fly, (m) => logs.push(m), {
+    const out = await deployFlyRun(plan({ channels: declaredChannels(["lark"]) }), fly, (m) => logs.push(m), {
       telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
       feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
     });
@@ -123,7 +127,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
     const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
 
-    const out = await deployFlyRun(plan({ channels: ["slack"] }), fly, () => {}, {
+    const out = await deployFlyRun(plan({ channels: declaredChannels(["slack"]) }), fly, () => {}, {
       telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
       feishu: undefined,
       slack: registerSlack,
@@ -137,9 +141,14 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(plan({ channels: ["slack"] }), fly, (message) => logs.push(message), {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-    });
+    const out = await deployFlyRun(
+      plan({ channels: declaredChannels(["slack"]) }),
+      fly,
+      (message) => logs.push(message),
+      {
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      },
+    );
 
     expect(out).toEqual({ ok: true });
     expect(logs.join("\n")).toContain("https://bot.fly.dev/slack");
@@ -150,10 +159,15 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(plan({ channels: ["telegram", "lark"] }), fly, (m) => logs.push(m), {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
-      feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
-    });
+    const out = await deployFlyRun(
+      plan({ channels: declaredChannels(["telegram", "lark"]) }),
+      fly,
+      (m) => logs.push(m),
+      {
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
+        feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
+      },
+    );
 
     expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
     expect(out).toEqual({
@@ -166,9 +180,14 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
 
-    const out = await deployFlyRun(plan({ channels: ["feishu", "lark"] }), fly, (message) => logs.push(message), {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-    });
+    const out = await deployFlyRun(
+      plan({ channels: declaredChannels(["feishu", "lark"]) }),
+      fly,
+      (message) => logs.push(message),
+      {
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      },
+    );
 
     expect(out).toEqual({ ok: true });
     expect(logs.join("\n")).toContain("https://bot.fly.dev/feishu");
@@ -273,7 +292,12 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
 
   it("channel secrets come from env; never minted (a re-run is stable; a human-shared secret stays known)", () => {
     const env = { OPENAI_API_KEY: "k", TELEGRAM_BOT_TOKEN: "bot", TELEGRAM_SECRET_TOKEN: "sec" };
-    const r = assembleSecrets({ modelAuth: "OPENAI_API_KEY", authFile: undefined, channels: ["telegram"], env });
+    const r = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: declaredChannels(["telegram"]),
+      env,
+    });
     expect(r.secrets.TELEGRAM_SECRET_TOKEN).toBe("sec"); // from env, not a mint
     expect(r.missingSecrets).toEqual([]);
   });
@@ -283,7 +307,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
-      channels: ["github", "telegram"],
+      channels: declaredChannels(["github", "telegram"]),
       env: { OPENAI_API_KEY: "k" },
     });
     expect(r.missingSecrets).toEqual(["GITHUB_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
@@ -299,7 +323,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     const manual = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
-      channels: ["slack"],
+      channels: declaredChannels(["slack"]),
       env: base,
     });
     expect(manual.missingSecrets).toEqual([]);
@@ -308,7 +332,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     const rotating = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
-      channels: ["slack"],
+      channels: declaredChannels(["slack"]),
       env: {
         ...base,
         SLACK_BOT_REFRESH_TOKEN: "refresh",
@@ -328,7 +352,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     const partial = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
-      channels: ["slack"],
+      channels: declaredChannels(["slack"]),
       env: { ...base, SLACK_BOT_REFRESH_TOKEN: "refresh" },
     });
     expect(partial.missingSecrets).toEqual(["SLACK_BOT_TOKEN_EXPIRES_AT", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"]);
@@ -348,7 +372,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       const absent = assembleSecrets({
         modelAuth: "OPENAI_API_KEY",
         authFile: undefined,
-        channels: [kind],
+        channels: declaredChannels([kind]),
         env: baseEnv,
       });
       expect(absent.missingSecrets).toEqual([]);
@@ -357,7 +381,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       const present = assembleSecrets({
         modelAuth: "OPENAI_API_KEY",
         authFile: undefined,
-        channels: [kind],
+        channels: declaredChannels([kind]),
         env: { ...baseEnv, [`${prefix}_ENCRYPT_KEY`]: "encrypt" },
       });
       expect(present.missingSecrets).toEqual([]);
@@ -388,7 +412,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     const dup = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
-      channels: ["telegram"],
+      channels: declaredChannels(["telegram"]),
       extraSecrets: ["TELEGRAM_BOT_TOKEN"],
       env: { OPENAI_API_KEY: "k" },
     });

@@ -6,6 +6,7 @@ import {
   planDockerDeploy,
   toDockerProjectName,
 } from "../src/deploy/docker/plan.ts";
+import { declaredChannels } from "../src/channels/discover.ts";
 import { webhookPaths } from "../src/deploy/channel-ingress.ts";
 
 const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
@@ -25,7 +26,7 @@ const base = {
 
 describe("deploy/docker: planDockerDeploy", () => {
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
-    const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"] });
+    const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent/fastagent.compose.yml",
       "fastagent/Dockerfile",
@@ -48,7 +49,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: "OPENAI_API_KEY",
-      channels: ["telegram"],
+      channels: declaredChannels(["telegram"]),
       tunnel: true,
     });
     const yaml = compose(plan);
@@ -67,8 +68,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: undefined,
-      channels: ["feishu"],
-      longConnectionChannels: ["feishu"],
+      channels: [...declaredChannels(["feishu"], "long-connection")],
     });
     const yaml = compose(plan);
     expect(yaml).toContain("FEISHU_APP_ID");
@@ -82,7 +82,7 @@ describe("deploy/docker: planDockerDeploy", () => {
       planDockerDeploy({
         ...base,
         modelAuth: "OPENAI_API_KEY",
-        channels: ["telegram", "feishu"],
+        channels: declaredChannels(["telegram", "feishu"]),
         extraSecrets: ["GH_TOKEN"],
       }),
     );
@@ -115,7 +115,9 @@ describe("deploy/docker: planDockerDeploy", () => {
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
-    const out = runbook(planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram", "github"] }));
+    const out = runbook(
+      planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "github"]) }),
+    );
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
     expect(out).toContain("down        # stops containers; keeps the state volume");
@@ -132,7 +134,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(composeHasTunnelService("services:\n    tunnel:\n        image: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n\ttunnel:\n\t\timage: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n  agent:\n")).toBe(false);
-    expect(webhookPaths(["telegram", "github", "slack", "feishu", "lark"])).toEqual([
+    expect(webhookPaths(declaredChannels(["telegram", "github", "slack", "feishu", "lark"]))).toEqual([
       "/telegram",
       "/webhook",
       "/slack",

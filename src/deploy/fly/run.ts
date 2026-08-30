@@ -18,7 +18,7 @@
  * never land in argv/process listings.
  */
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
-import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 
 /**
@@ -57,8 +57,8 @@ export interface FlyRunPlan {
   secrets: Record<string, string>;
   /** Required secret names with NO local value — the run gates on these before any side effect. */
   missingSecrets: string[];
-  channels: ChannelKind[];
-  longConnectionChannels?: string[];
+  /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
+  channels: readonly DeclaredChannel[];
   /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace root). */
   flyConfig: string;
   /** Dockerfile path passed explicitly (`fastagent/Dockerfile`, with the workspace as context —
@@ -176,7 +176,6 @@ export async function deployFlyRun(
   const registrationGateMsg = await registerWebhooks({
     baseUrl: `https://${plan.appName}.fly.dev`,
     channels: plan.channels,
-    longConnectionChannels: plan.longConnectionChannels,
     registrars,
     log,
     retryHint: "re-run to retry registration (steps already done are skipped)",
