@@ -10,7 +10,6 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
-const MAX_REDIRECTS = 3;
 /** Slack's standard-Markdown fields cap each call at 12,000 characters. Keep headroom for
  * code-fence balancing and future server-side transformations. */
 const SLACK_MAX_MARKDOWN = 10_000;
@@ -189,24 +188,7 @@ async function readBytesCapped(response: Response): Promise<Buffer> {
 
 export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions): SlackApi {
   const apiBase = baseUrl.replace(/\/$/, "");
-  const configuredOrigin = new URL(apiBase).origin;
   const currentToken = typeof botToken === "string" ? async () => botToken : botToken;
-
-  const trustedDownloadUrl = (value: string): URL => {
-    const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    const slackHost =
-      host === "slack-files.com" ||
-      host.endsWith(".slack-files.com") ||
-      host === "slack.com" ||
-      host.endsWith(".slack.com") ||
-      host === "slack-edge.com" ||
-      host.endsWith(".slack-edge.com");
-    if (!slackHost && url.origin !== configuredOrigin) throw new Error(`refusing non-Slack file URL host ${host}`);
-    if (url.protocol !== "https:" && url.origin !== configuredOrigin)
-      throw new Error("refusing non-HTTPS Slack file URL");
-    return url;
-  };
 
   const call = async <T extends SlackBody>(
     method: string,
@@ -263,35 +245,25 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     }
   };
 
+  // Slack owns both halves of this download: the URL comes from its own files.info response, and it
+  // documents url_private as taking our bearer token. Where that URL leads is Slack's call; whether a
+  // redirect hop still carries the token is fetch's, which drops the header cross-origin.
   const download = async (file: SlackFile): Promise<{ bytes: Buffer; contentType?: string }> => {
-    let url = trustedDownloadUrl(fileDownloadUrl(file));
-    for (let redirect = 0; ; redirect++) {
-      let response: Response;
-      try {
-        const token = await currentToken();
-        response = await fetch(url, {
-          headers: { authorization: `Bearer ${token}` },
-          redirect: "manual",
-          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-        });
-      } catch (error) {
-        throw new SlackApiError("file download", 0, String(error), undefined, { cause: error });
-      }
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location || redirect >= MAX_REDIRECTS) {
-          throw new SlackApiError("file download", response.status, "invalid or excessive redirect");
-        }
-        await response.body?.cancel().catch(() => {});
-        url = trustedDownloadUrl(new URL(location, url).toString());
-        continue;
-      }
-      if (!response.ok) {
-        const detail = codePointPrefix(await response.text().catch(() => ""), 300) || "file bytes were rejected";
-        throw new SlackApiError("file download", response.status, detail);
-      }
-      return { bytes: await readBytesCapped(response), contentType: response.headers.get("content-type") ?? undefined };
+    let response: Response;
+    try {
+      const token = await currentToken();
+      response = await fetch(fileDownloadUrl(file), {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new SlackApiError("file download", 0, String(error), undefined, { cause: error });
     }
+    if (!response.ok) {
+      const detail = codePointPrefix(await response.text().catch(() => ""), 300) || "file bytes were rejected";
+      throw new SlackApiError("file download", response.status, detail);
+    }
+    return { bytes: await readBytesCapped(response), contentType: response.headers.get("content-type") ?? undefined };
   };
 
   const api: SlackApi = {

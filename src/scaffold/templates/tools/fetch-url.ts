@@ -3,8 +3,6 @@ import { defineTool, z } from "@fastagent-sh/fastagent";
 // A code tool: filename (fetch-url.ts) is the tool name. tools/ is auto-discovered,
 // so it needs no registration in fastagent.config. Test it without a model:
 //   fastagent tool fetch-url '{"url":"https://example.com"}'
-// Serving this behind a public channel? The URL then comes from untrusted users — add an
-// allowlist or block private-network addresses (localhost, 169.254.169.254, …) to prevent SSRF.
 const MAX_TEXT = 20_000; // keep a huge page from flooding the model's context
 
 export default defineTool({

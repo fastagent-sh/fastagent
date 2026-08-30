@@ -11,7 +11,7 @@ import {
   streamTurnWithBusyRetry,
 } from "../kit/invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
-import type { DownloadedSlackFile, SlackApi } from "./slack-api.ts";
+import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
 
 const MARKDOWN_INSTRUCTION =
   "\n\n(Format your reply as standard Markdown. Slack renders it natively. Do not use HTML or Slack control-mention syntax such as <!here>, <!channel>, or <!everyone>.)";
@@ -106,7 +106,11 @@ export async function* invokeSlackTurn(
   try {
     resolved = await resolveInputs(transport, attachments);
   } catch (error) {
-    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: true };
+    // transient (network, exhausted 429 retries, Slack 5xx) is worth re-sending; an access or shape
+    // error reads the same every time, and "try again in a moment" is the wrong thing to tell the user
+    const retryable =
+      error instanceof SlackApiError && (error.status === 0 || error.status === 429 || error.status >= 500);
+    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
