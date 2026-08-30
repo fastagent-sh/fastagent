@@ -151,7 +151,7 @@ describe("Slack Web API transport", () => {
     const redirectTo = (location: string) =>
       vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
         calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") ?? undefined });
-        return String(input).includes("files.slack.com")
+        return new URL(String(input)).hostname === "files.slack.com"
           ? new Response(null, { status: 302, headers: { location } })
           : new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
       });
