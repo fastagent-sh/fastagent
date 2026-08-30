@@ -330,10 +330,8 @@ describe("Slack signed ingress", () => {
   });
 
   it("refuses a VALID signature over a stale timestamp, in either direction", async () => {
-    // The signature commits to the timestamp; it does not make it recent. Without the window a captured
-    // body plus its two headers replays forever. Both directions: a clock ahead of ours is as suspect as
-    // one behind. Slack re-signs every redelivery, which is why 5 minutes is affordable here — the
-    // Feishu ingress reads hours off the same helper because its platform does not.
+    // End-to-end through the ingress: the unit test above proves the predicate, this proves the 401.
+    // A clock AHEAD of ours is the direction that test does not reach.
     vi.stubGlobal("fetch", okFetch());
     const { agent } = replyingAgent();
     const { handler } = mount(agent);
