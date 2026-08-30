@@ -106,7 +106,8 @@ export async function* invokeSlackTurn(
   try {
     resolved = await resolveInputs(transport, attachments);
   } catch (error) {
-    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: true };
+    // an unreadable attachment reads the same on every retry, so the user is told to change something
+    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: false };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };

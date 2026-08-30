@@ -83,7 +83,8 @@ describe("Slack turn attachment resolution", () => {
       ),
     );
 
-    expect(events).toEqual([{ type: "failed", details: expect.stringContaining("access_denied"), retryable: true }]);
+    // not retryable: the same attachment fails the same way next time, so "try again" is the wrong advice
+    expect(events).toEqual([{ type: "failed", details: expect.stringContaining("access_denied"), retryable: false }]);
     expect(invoke).not.toHaveBeenCalled();
   });
 

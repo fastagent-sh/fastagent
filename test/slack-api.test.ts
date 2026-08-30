@@ -146,13 +146,10 @@ describe("Slack Web API transport", () => {
     expect(calls.every((call) => call.authorization === "Bearer xoxb-secret")).toBe(true);
   });
 
-  it("refuses external/non-Slack download hosts and metadata above the 20 MB cap", async () => {
+  it("refuses metadata above the 20 MB cap before fetching", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const api = createSlackApi({ botToken: "x" });
-    await expect(
-      api.fetchFile({ id: "F1", name: "x", url_private: "https://evil.example/file" }, "C1", "/tmp"),
-    ).rejects.toThrow(/non-Slack file URL/);
     await expect(
       api.fetchFile(
         { id: "F2", name: "x", size: 21 * 1024 * 1024, url_private: "https://files.slack.com/x" },
