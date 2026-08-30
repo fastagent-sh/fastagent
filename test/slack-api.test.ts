@@ -146,6 +146,35 @@ describe("Slack Web API transport", () => {
     expect(calls.every((call) => call.authorization === "Bearer xoxb-secret")).toBe(true);
   });
 
+  it("re-sends the token across a Slack CDN redirect and refuses one that leaves Slack", async () => {
+    const calls: { url: string; authorization?: string }[] = [];
+    const redirectTo = (location: string) =>
+      vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") ?? undefined });
+        return String(input).includes("files.slack.com")
+          ? new Response(null, { status: 302, headers: { location } })
+          : new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
+      });
+
+    redirectTo("https://a.slack-edge.com/signed/image");
+    const api = createSlackApi({ botToken: "xoxb-secret" });
+    await expect(
+      api.fetchImage({ id: "F1", mimetype: "image/png", url_private: "https://files.slack.com/image" }),
+    ).resolves.toMatchObject({ mimeType: "image/png" });
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://files.slack.com/image",
+      "https://a.slack-edge.com/signed/image",
+    ]);
+    expect(calls.every((call) => call.authorization === "Bearer xoxb-secret")).toBe(true);
+
+    calls.length = 0;
+    redirectTo("https://cdn.example/signed/image");
+    await expect(
+      api.fetchImage({ id: "F1", mimetype: "image/png", url_private: "https://files.slack.com/image" }),
+    ).rejects.toThrow(/non-Slack file URL host cdn\.example/);
+    expect(calls).toHaveLength(1);
+  });
+
   it("refuses external/non-Slack download hosts and metadata above the 20 MB cap", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
