@@ -71,15 +71,18 @@ function isWakeup(e: unknown): e is Wakeup {
 }
 
 /**
- * The wake-ALARM sink: notified after EVERY wakeups-store mutation with the new pending set. The
- * AgentCore deployment registers one (schedule/wake-alarm.ts) that mirrors pending wake-ups into
- * one-shot EventBridge schedules — the external clock that makes `wake` reliable on a host with no
- * resident process. Neutral seam: this module knows only "someone wants to observe changes"; a
- * resident host registers nothing and behaves exactly as before. The sink is fire-and-forget and
- * must own its errors; a throw is caught here so a broken alarm never corrupts a store write.
+ * The wake-ALARM sink: notified after EVERY wakeups-store mutation. A notification, not a delivery
+ * — it carries no set, because the sink reconciles by re-reading the store, and handing it a set
+ * captured here would go stale in its retries. The AgentCore deployment registers one
+ * (schedule/wake-alarm.ts) that mirrors pending wake-ups into one-shot EventBridge schedules — the
+ * external clock that makes `wake` reliable on a host with no resident process. Neutral seam: this
+ * module knows only "someone wants to observe changes"; a resident host registers nothing and
+ * behaves exactly as before. The sink is fire-and-forget and must own its errors. The guard below
+ * catches a SYNCHRONOUS throw so a broken alarm never corrupts a store write; an async sink returns
+ * before it does any work, so its rejections are ITS to terminate — nothing here can see them.
  */
-let wakeupsSink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined;
-export function setWakeupsSink(sink: ((stateRoot: string, pending: Wakeup[]) => void) | undefined): void {
+let wakeupsSink: ((stateRoot: string) => void) | undefined;
+export function setWakeupsSink(sink: ((stateRoot: string) => void) | undefined): void {
   wakeupsSink = sink;
 }
 
@@ -102,7 +105,7 @@ function load(stateRoot: string): Wakeup[] {
 function save(stateRoot: string, wakeups: Wakeup[]): void {
   writeScheduleFile(scheduleFile(stateRoot, "wakeups"), wakeups);
   try {
-    wakeupsSink?.(stateRoot, wakeups);
+    wakeupsSink?.(stateRoot);
   } catch (e) {
     log.error(`[schedule] wake-alarm sink failed (store write is unaffected): ${String(e)}`);
   }

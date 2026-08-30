@@ -395,8 +395,11 @@ describe("ingress verification", () => {
     };
     const encryptedBody = (plain: Record<string, unknown>): string =>
       JSON.stringify({ encrypt: encrypt(JSON.stringify(plain)) });
-    const headers = (sig: string) => ({
-      "x-lark-request-timestamp": "170",
+    // A real (fresh) timestamp: the ingress refuses a signed event outside the replay window, so a
+    // fixed epoch constant here would only ever exercise that rejection.
+    const TS = String(Math.floor(Date.now() / 1000));
+    const headers = (sig: string, ts = TS) => ({
+      "x-lark-request-timestamp": ts,
       "x-lark-request-nonce": "n1",
       "x-lark-signature": sig,
     });
@@ -427,7 +430,7 @@ describe("ingress verification", () => {
       new Request("http://app/feishu", {
         method: "POST",
         body: eventBody,
-        headers: headers(eventSignature(KEY, "170", "n1", eventBody)),
+        headers: headers(eventSignature(KEY, TS, "n1", eventBody)),
       }),
     );
     expect(signedEvent.status).toBe(200);
@@ -435,6 +438,36 @@ describe("ingress verification", () => {
       (await handler(new Request("http://app/feishu", { method: "POST", body: eventBody, headers: headers("bad") })))
         .status,
     ).toBe(401);
+
+    // The platform retries a failed push at 15s / 5min / 1h / 6h, and it is not established whether a
+    // retry is re-signed. The last one in that chain MUST still be accepted — refusing it would turn a
+    // transient fault into a permanently lost user message.
+    const lastRetry = String(Math.floor(Date.now() / 1000) - 6 * 60 * 60);
+    expect(
+      (
+        await handler(
+          new Request("http://app/feishu", {
+            method: "POST",
+            body: eventBody,
+            headers: headers(eventSignature(KEY, lastRetry, "n1", eventBody), lastRetry),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    // Past the retry chain a VALID signature over a stale timestamp is refused: the signature commits
+    // to the timestamp, it does not make it recent, and the bounded `seen` ring is not a replay defence.
+    for (const skew of [-8 * 60 * 60, 8 * 60 * 60]) {
+      const stale = String(Math.floor(Date.now() / 1000) + skew);
+      const res = await handler(
+        new Request("http://app/feishu", {
+          method: "POST",
+          body: eventBody,
+          headers: headers(eventSignature(KEY, stale, "n1", eventBody), stale),
+        }),
+      );
+      expect(res.status).toBe(401);
+      expect(await res.text()).toContain("stale signature");
+    }
     expect((await handler(new Request("http://app/feishu", { method: "POST", body: eventBody }))).status).toBe(401);
     // Encrypt Key mode remains modal: plaintext events are never accepted.
     expect((await handler(feishuRequest(messageEvent({})))).status).toBe(401);

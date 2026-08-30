@@ -18,7 +18,7 @@ import { installProxyFetch } from "../../proxy.ts";
 import { bindAddress } from "../../bind.ts";
 
 import { isAgentcoreRuntime, mountAgentcoreService } from "../../channels/agentcore-service.ts";
-import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
+import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
@@ -200,5 +200,7 @@ function armWakeAlarms(stateRoot: string): (() => void) | undefined {
   const sink = createWakeAlarmSink({ secret });
   setWakeupsSink(sink);
   log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
-  return () => reconcileWakeAlarms(stateRoot, sink);
+  // Boot reconcile: pending wake-ups may exist while their alarms were lost (a deploy replaced the
+  // forwarder, a sink call failed). The sink re-reads the store, so a bare notification is enough.
+  return () => sink(stateRoot);
 }
