@@ -473,6 +473,58 @@ describe("fork: the copy is a copy", () => {
     }
   });
 
+  it("a compacted parent forks onto a transcript a provider accepts", async () => {
+    // The copied compaction's `firstKeptEntryId` used to be pinned to the child's leaf, keeping ONE
+    // entry of the retained tail. A compaction lands wherever the turn ended, so that entry is
+    // routinely a toolResult — and the child's first request then opened with a tool result whose
+    // tool_use had been summarized away, which every provider rejects. Same poison class as an
+    // interrupted tool call, reached by forking instead of by crashing.
+    for (const store of [
+      piInMemorySessionRecordStore(),
+      piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "fa-store-forkcmp-")), cwd: process.cwd() }),
+    ]) {
+      const parent = await store.openOrCreate("room");
+      parent.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
+      parent.appendMessage(fauxAssistantMessage("also summarized"));
+      const kept = parent.appendMessage({ role: "user", content: "kept question", timestamp: 3 });
+      parent.appendMessage({
+        ...fauxAssistantMessage(""),
+        content: [{ type: "toolCall", id: "call-1", name: "doer", arguments: {} }],
+        stopReason: "toolUse",
+      } as never);
+      parent.appendMessage({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "doer",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 5,
+      } as never);
+      parent.appendCompaction("the older part", kept, 1000);
+      const at = parent.appendMessage(fauxAssistantMessage("after the compaction"));
+
+      await store.fork("room", at, "copy", "test-provenance");
+      const child = await store.openIfExists("copy");
+      const roles = (child?.buildSessionContext().messages ?? []).map((m) => m.role);
+      // The tail travels whole, so the tool result still follows the call it belongs to.
+      expect(roles).toEqual(["compactionSummary", "user", "assistant", "toolResult", "assistant"]);
+      expect(JSON.stringify(child?.buildSessionContext().messages)).toContain("kept question");
+    }
+  });
+
+  it("carries an extension's injected context message", async () => {
+    // A `custom_message` IS the model's context (unlike a plain `custom` entry, which is not), so a
+    // fork that dropped it handed the child assistant messages answering something it cannot see.
+    const store = piInMemorySessionRecordStore();
+    const parent = await store.openOrCreate("room");
+    parent.appendCustomMessageEntry("ext.note", "the extension said this", true);
+    const at = parent.appendMessage(fauxAssistantMessage("answering the note"));
+
+    await store.fork("room", at, "copy", "test-provenance");
+    const child = await store.openIfExists("copy");
+    expect(JSON.stringify(child?.buildSessionContext().messages)).toContain("the extension said this");
+  });
+
   it("never writes to the record it copies FROM", async () => {
     // The reconcile this used to run appends at the parent's LEAF — unreachable from a copy that
     // stops at `at`, so it repaired nothing and durably mutated the source: a "copy" bumping the

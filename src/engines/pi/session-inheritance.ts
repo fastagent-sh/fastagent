@@ -193,22 +193,57 @@ export function inheritanceCut(parent: SessionManager, branchHints?: string[]): 
  * exact entries its user forked to keep.
  */
 export function copyBranchInto(parent: SessionManager, child: SessionManager, at: string): void {
+  /** Parent entry id → the child's id for the same entry: the copy mints its own, and a compaction
+   *  points BACK into the path it was appended to. */
+  const copied = new Map<string, string>();
   for (const raw of parent.getBranch(at)) {
     const entry = raw as Entry & {
       customType?: string;
+      content?: string | unknown[];
+      display?: boolean;
       data?: unknown;
       provider?: string;
       modelId?: string;
       thinkingLevel?: string;
+      firstKeptEntryId?: string;
       tokensBefore?: number;
       details?: unknown;
     };
     switch (entry.type) {
       case "message":
-        if (entry.message) child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
+        if (entry.message) {
+          copied.set(entry.id, child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]));
+        }
+        break;
+      case "custom_message":
+        // Model-visible history, unlike the `custom` entries below it: an extension injected it INTO
+        // the conversation, and the assistant messages answering it are being copied.
+        copied.set(
+          entry.id,
+          child.appendCustomMessageEntry(
+            entry.customType ?? "",
+            entry.content as Parameters<SessionManager["appendCustomMessageEntry"]>[1],
+            entry.display ?? false,
+            entry.details,
+          ),
+        );
         break;
       case "compaction":
-        child.appendCompaction(entry.summary ?? "", child.getLeafId() ?? "", entry.tokensBefore ?? 0, entry.details);
+        // `firstKeptEntryId` is where the RETAINED TAIL starts — the entries pi did not summarize,
+        // which still reach the model. Translated through the copy rather than pinned to the child's
+        // leaf: pinning kept exactly ONE entry, and when that entry was a toolResult (a compaction
+        // lands wherever the turn ended) the child's first request opened with a tool result whose
+        // call had been summarized away, which every provider rejects. An id the copy never saw
+        // keeps nothing, which is what pi itself does with a pointer it cannot resolve.
+        copied.set(
+          entry.id,
+          child.appendCompaction(
+            entry.summary ?? "",
+            copied.get(entry.firstKeptEntryId ?? "") ?? "",
+            entry.tokensBefore ?? 0,
+            entry.details,
+          ),
+        );
         break;
       case "model_change":
         if (entry.provider && entry.modelId) child.appendModelChange(entry.provider, entry.modelId);
