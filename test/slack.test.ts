@@ -328,6 +328,22 @@ describe("Slack signed ingress", () => {
     expect(await challenge.json()).toEqual({ challenge: "abc" });
     expect((await handler(signedRequest(message("1.0"), { signature: "v0=bad" }))).status).toBe(401);
   });
+
+  it("refuses a VALID signature over a stale timestamp, in either direction", async () => {
+    // The signature commits to the timestamp; it does not make it recent. Without the window a captured
+    // body plus its two headers replays forever. Both directions: a clock ahead of ours is as suspect as
+    // one behind. Slack re-signs every redelivery, which is why 5 minutes is affordable here — the
+    // Feishu ingress reads hours off the same helper because its platform does not.
+    vi.stubGlobal("fetch", okFetch());
+    const { agent } = replyingAgent();
+    const { handler } = mount(agent);
+    const now = Math.floor(Date.now() / 1000);
+    for (const skew of [-6 * 60, 6 * 60]) {
+      const stale = await handler(signedRequest(message("1.0"), { timestamp: now + skew }));
+      expect(stale.status).toBe(401);
+    }
+    expect((await handler(signedRequest(message("1.0"), { timestamp: now - 60 }))).status).toBe(200);
+  });
 });
 
 describe("Slack sessions, context, and thread participation", () => {
