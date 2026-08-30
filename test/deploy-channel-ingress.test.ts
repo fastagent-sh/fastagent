@@ -54,6 +54,9 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     expect(said.filter((m) => m.includes("https://x"))).toHaveLength(2);
     expect(said.join("\n")).toContain("Settings → Webhooks");
     expect(said.join("\n")).toContain("Event Subscriptions");
+    // The env-var name is the part nobody can guess, and `--tunnel` prints this line ALONE — there is
+    // no runbook next to it carrying the detail.
+    expect(said.join("\n")).toContain("GITHUB_WEBHOOK_SECRET");
     // manual never gates: a re-run cannot clear it, and an unclearable gate spins a coding agent.
     expect(gate).toBeUndefined();
   });
@@ -140,5 +143,9 @@ describe("every host's runbook reads the same answer", () => {
 
   it("agentcore: a feishu step carries the forwarder challenge note the shared wording cannot", () => {
     expect(agentcore(webhook("feishu"))).toContain("rides through the forwarder");
+    // ONE note for both kinds: the asides land after all the steps, so a second copy reads as a
+    // second step that does not exist.
+    const both = agentcore(webhook("feishu", "lark")).split("rides through the forwarder");
+    expect(both).toHaveLength(2);
   });
 });

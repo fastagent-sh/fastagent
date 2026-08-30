@@ -1026,11 +1026,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const post = webhookRunbook(`<ForwarderUrl>`, channels);
   // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and
   // nothing else has a compute ceiling.
-  for (const kind of ["feishu", "lark"] as const) {
-    if (!webhookKinds(channels).includes(kind)) continue;
+  // Named rather than positional: the asides land after ALL the steps, so "the console" has to say
+  // WHICH console. One line for both kinds — an agent that declares feishu AND lark reads the same
+  // fact twice otherwise and looks for a second step that does not exist.
+  if (webhookKinds(channels).some((kind) => kind === "feishu" || kind === "lark")) {
     post.push(
-      `#   The console's challenge rides through the forwarder to the channel and back verbatim, so the`,
-      `#   stack must be deployed when you save it.`,
+      `# NOTE: the Feishu/Lark console's challenge rides through the forwarder to the channel and back`,
+      `#   verbatim, so the stack must be deployed when you save the Request URL.`,
     );
   }
   if (channels.some((channel) => channel.name === "github")) {

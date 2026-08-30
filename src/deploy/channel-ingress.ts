@@ -1,8 +1,10 @@
 /**
- * HOW A DEPLOYED CHANNEL IS REACHED — the host-neutral half of "point this channel at the running
- * agent": its default route, whether anything can set that URL end-to-end, and the words an operator
- * needs when nothing can. Only the base URL is the host's to know (`<app>.fly.dev`, a minted Railway
- * domain, a Function URL), which is the argument every function here takes.
+ * HOW A RUNNING CHANNEL IS REACHED — the URL-neutral half of "point this channel at the agent": its
+ * default route, whether anything can set that URL end-to-end, and the words an operator needs when
+ * nothing can. Only the base URL varies, which is the argument every function here takes — a deploy
+ * host's (`<app>.fly.dev`, a minted Railway domain, a Function URL) or `dev --tunnel`'s Quick Tunnel.
+ * It lives under `deploy/` because that is where its answers are mostly consumed and where the gate
+ * policy it composes with lives; the serving path reads the same answers through `tunnel.ts`.
  *
  * It exists because that knowledge belongs to the CHANNEL and was written per HOST: three runbook
  * plans, three `--run` drivers, a path table in the docker plan and the `--tunnel` announcer each
@@ -71,7 +73,10 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
   },
   github: {
     path: "/webhook",
-    manual: (baseUrl) => `github: set the webhook in the repo (Settings → Webhooks) → ${baseUrl}/webhook`,
+    // The env-var name is the part a first-time operator cannot guess, and this line is all `--tunnel`
+    // prints — there is no runbook beside it to carry the detail.
+    manual: (baseUrl) =>
+      `github: set the webhook in the repo (Settings → Webhooks) → ${baseUrl}/webhook (content type application/json, secret = GITHUB_WEBHOOK_SECRET)`,
     runbook: (baseUrl) => [
       `# Set the GitHub webhook (repo Settings → Webhooks). Default route POST /webhook; if you remapped`,
       `# it in channels/github.ts, use your path:`,

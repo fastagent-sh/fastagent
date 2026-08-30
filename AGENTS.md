@@ -153,6 +153,14 @@ src/
 │       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy docker|fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
+│   ├── channel-ingress.ts   # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL
+│   │                     # end-to-end, the words when nobody can. The ONE answer to "which channels
+│   │                     # have a webhook" — it was written per host (3 runbooks, 3 --run drivers, a
+│   │                     # docker path table, the tunnel announcer) and the long-connection exception
+│   │                     # reached only the feishu/lark branches, so a long-connection Telegram deploy
+│   │                     # printed setWebhook and 409'd the channel it just deployed. Every function
+│   │                     # filters the DeclaredChannel list ITSELF — a pre-filtered argument is how it
+│   │                     # drifted. Consumed by every host AND by the serving path (src/tunnel.ts)
 │   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
 │   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
