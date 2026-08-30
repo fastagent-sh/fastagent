@@ -51,8 +51,9 @@ type Entry = {
   id: string;
   parentId: string | null;
   message?: AgentMessage;
+  content?: string | unknown[];
   summary?: string;
-  retainedTail?: AgentMessage[];
+  firstKeptEntryId?: string;
 };
 
 function isUserMessage(entry: Entry | undefined): boolean {
@@ -61,8 +62,7 @@ function isUserMessage(entry: Entry | undefined): boolean {
 
 /** Rough token estimate for windowing — text at chars/4, images flat. Precision is not the point:
  *  the window is a budget, and being 20% off moves a boundary by an exchange, not correctness. */
-function estimateMessageTokens(message: AgentMessage): number {
-  const content = (message as { content?: unknown }).content;
+function estimateContentTokens(content: unknown): number {
   if (typeof content === "string") return Math.ceil(content.length / 4);
   if (!Array.isArray(content)) return 0;
   let tokens = 0;
@@ -74,16 +74,28 @@ function estimateMessageTokens(message: AgentMessage): number {
   return tokens;
 }
 
+/** Both entry kinds pi projects into model context from a copied path: a `custom_message` is an
+ *  extension's injection INTO the conversation, so it charges the budget like any message. */
 function estimateEntryTokens(entry: Entry): number {
-  return entry.type === "message" && entry.message ? estimateMessageTokens(entry.message) : 0;
+  if (entry.type === "message") return estimateContentTokens((entry.message as { content?: unknown })?.content);
+  if (entry.type === "custom_message") return estimateContentTokens(entry.content);
+  return 0;
 }
 
-/** A compaction entry's summary and retained tail DO reach the model — they are the floor under
- *  every window that starts above the compaction, so the budget must count them. */
-function estimateCompactionTokens(entry: Entry | undefined): number {
-  if (entry?.type !== "compaction") return 0;
-  let tokens = Math.ceil((entry.summary ?? "").length / 4);
-  for (const message of entry.retainedTail ?? []) tokens += estimateMessageTokens(message);
+/** A compaction entry's summary AND its retained tail — the entries from `firstKeptEntryId` up to
+ *  the compaction — DO reach the model. They are the floor under every window that starts above the
+ *  compaction, so the budget must count them; the tail is read off the path, since pi stores it as a
+ *  pointer and not as messages on the entry. */
+function estimateCompactionTokens(path: Entry[], compactionIdx: number): number {
+  const compaction = path[compactionIdx];
+  if (compaction?.type !== "compaction") return 0;
+  let tokens = Math.ceil((compaction.summary ?? "").length / 4);
+  const firstKept = path.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
+  if (firstKept < 0) return tokens; // an unresolvable pointer keeps nothing — pi's own reading
+  for (let i = firstKept; i < compactionIdx; i++) {
+    const entry = path[i];
+    if (entry) tokens += estimateEntryTokens(entry);
+  }
   return tokens;
 }
 
@@ -136,7 +148,7 @@ function markInheritanceWindow(child: SessionManager): void {
   const scanned = path.slice(scanFrom);
   // The compaction's own summary + retained tail reach the model regardless of where the window
   // lands, so they charge the budget as a base cost — not estimating them would over-admit.
-  const baseTokens = estimateCompactionTokens(path[scanFrom - 1]);
+  const baseTokens = estimateCompactionTokens(path, scanFrom - 1);
   const starts: number[] = [];
   scanned.forEach((entry, i) => {
     if (isUserMessage(entry)) starts.push(i);
@@ -193,9 +205,19 @@ export function inheritanceCut(parent: SessionManager, branchHints?: string[]): 
  * exact entries its user forked to keep.
  */
 export function copyBranchInto(parent: SessionManager, child: SessionManager, at: string): void {
-  /** Parent entry id → the child's id for the same entry: the copy mints its own, and a compaction
+  /** Parent entry id → the child's id for that entry: the copy mints its own, and a compaction
    *  points BACK into the path it was appended to. */
   const copied = new Map<string, string>();
+  /** Ids of entries this copy did NOT append. A compaction's `firstKeptEntryId` routinely names one:
+   *  pi walks the cut point backwards onto the metadata entries adjacent to it, which carry no
+   *  context. They resolve to the next entry that survived — the retained tail starts there — so a
+   *  dropped anchor moves the boundary by an invisible entry instead of erasing the whole tail. */
+  let unanchored: string[] = [];
+  const record = (parentId: string, childId: string) => {
+    for (const id of unanchored) copied.set(id, childId);
+    unanchored = [];
+    copied.set(parentId, childId);
+  };
   for (const raw of parent.getBranch(at)) {
     const entry = raw as Entry & {
       customType?: string;
@@ -205,27 +227,24 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
       provider?: string;
       modelId?: string;
       thinkingLevel?: string;
-      firstKeptEntryId?: string;
       tokensBefore?: number;
       details?: unknown;
     };
+    let childId: string | undefined;
     switch (entry.type) {
       case "message":
         if (entry.message) {
-          copied.set(entry.id, child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]));
+          childId = child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
         }
         break;
       case "custom_message":
         // Model-visible history, unlike the `custom` entries below it: an extension injected it INTO
         // the conversation, and the assistant messages answering it are being copied.
-        copied.set(
-          entry.id,
-          child.appendCustomMessageEntry(
-            entry.customType ?? "",
-            entry.content as Parameters<SessionManager["appendCustomMessageEntry"]>[1],
-            entry.display ?? false,
-            entry.details,
-          ),
+        childId = child.appendCustomMessageEntry(
+          entry.customType ?? "",
+          entry.content as Parameters<SessionManager["appendCustomMessageEntry"]>[1],
+          entry.display ?? false,
+          entry.details,
         );
         break;
       case "compaction":
@@ -235,21 +254,18 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         // lands wherever the turn ended) the child's first request opened with a tool result whose
         // call had been summarized away, which every provider rejects. An id the copy never saw
         // keeps nothing, which is what pi itself does with a pointer it cannot resolve.
-        copied.set(
-          entry.id,
-          child.appendCompaction(
-            entry.summary ?? "",
-            copied.get(entry.firstKeptEntryId ?? "") ?? "",
-            entry.tokensBefore ?? 0,
-            entry.details,
-          ),
+        childId = child.appendCompaction(
+          entry.summary ?? "",
+          copied.get(entry.firstKeptEntryId ?? "") ?? "",
+          entry.tokensBefore ?? 0,
+          entry.details,
         );
         break;
       case "model_change":
-        if (entry.provider && entry.modelId) child.appendModelChange(entry.provider, entry.modelId);
+        if (entry.provider && entry.modelId) childId = child.appendModelChange(entry.provider, entry.modelId);
         break;
       case "thinking_level_change":
-        if (entry.thinkingLevel) child.appendThinkingLevelChange(entry.thinkingLevel);
+        if (entry.thinkingLevel) childId = child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
         // The plane's markers describe the parent's RECORD, not the thread's history: a copied
@@ -259,12 +275,14 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         // — the engine's tool-activation delta above all, since the copied assistant messages call
         // the tools it records.
         if (entry.customType && !isPlaneMarker(entry)) {
-          child.appendCustomEntry(entry.customType, entry.data);
+          childId = child.appendCustomEntry(entry.customType, entry.data);
         }
         break;
       default:
         break; // label / session_info / branch_summary: the parent's facts, not the thread's history
     }
+    if (childId === undefined) unanchored.push(entry.id);
+    else record(entry.id, childId);
   }
 }
 

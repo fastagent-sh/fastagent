@@ -515,14 +515,48 @@ describe("fork: the copy is a copy", () => {
   it("carries an extension's injected context message", async () => {
     // A `custom_message` IS the model's context (unlike a plain `custom` entry, which is not), so a
     // fork that dropped it handed the child assistant messages answering something it cannot see.
-    const store = piInMemorySessionRecordStore();
-    const parent = await store.openOrCreate("room");
-    parent.appendCustomMessageEntry("ext.note", "the extension said this", true);
-    const at = parent.appendMessage(fauxAssistantMessage("answering the note"));
+    // Both backends: its content/display/details cross a JSONL round-trip only on disk.
+    for (const store of [
+      piInMemorySessionRecordStore(),
+      piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "fa-store-forkcustom-")), cwd: process.cwd() }),
+    ]) {
+      const parent = await store.openOrCreate("room");
+      parent.appendCustomMessageEntry("ext.note", "the extension said this", true, { origin: "ext" });
+      const at = parent.appendMessage(fauxAssistantMessage("answering the note"));
 
-    await store.fork("room", at, "copy", "test-provenance");
-    const child = await store.openIfExists("copy");
-    expect(JSON.stringify(child?.buildSessionContext().messages)).toContain("the extension said this");
+      await store.fork("room", at, "copy", "test-provenance");
+      const child = await store.openIfExists("copy");
+      expect(JSON.stringify(child?.buildSessionContext().messages)).toContain("the extension said this");
+      const copied = child?.getBranch().find((e) => e.type === "custom_message");
+      expect(copied).toMatchObject({ customType: "ext.note", display: true, details: { origin: "ext" } });
+    }
+  });
+
+  it("a compaction anchored on a metadata entry still keeps its whole tail", async () => {
+    // pi walks a cut point BACKWARDS onto the adjacent entries that carry no context, so
+    // `firstKeptEntryId` naming a `model_change` (or a tool-activation `custom`) is pi's normal
+    // output, not malformed data. Those entries were copied but never registered, so the pointer
+    // resolved to "" and pi's reading of an unresolvable anchor — keep nothing — erased the whole
+    // retained tail: the child opened on the summary alone.
+    for (const store of [
+      piInMemorySessionRecordStore(),
+      piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "fa-store-forkmeta-")), cwd: process.cwd() }),
+    ]) {
+      const parent = await store.openOrCreate("room");
+      parent.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
+      parent.appendMessage(fauxAssistantMessage("also summarized"));
+      const anchor = parent.appendModelChange("anthropic", "claude-sonnet-4-5");
+      parent.appendMessage({ role: "user", content: "kept question", timestamp: 3 });
+      parent.appendMessage(fauxAssistantMessage("kept answer"));
+      parent.appendCompaction("the older part", anchor, 1000);
+      const at = parent.appendMessage(fauxAssistantMessage("after the compaction"));
+
+      await store.fork("room", at, "copy", "test-provenance");
+      const child = await store.openIfExists("copy");
+      const roles = (child?.buildSessionContext().messages ?? []).map((m) => m.role);
+      expect(roles).toEqual(["compactionSummary", "user", "assistant", "assistant"]);
+      expect(JSON.stringify(child?.buildSessionContext().messages)).toContain("kept question");
+    }
   });
 
   it("never writes to the record it copies FROM", async () => {
