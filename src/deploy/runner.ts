@@ -4,6 +4,7 @@
  * binary and the command sequence differ. Tests inject a fake recorder; production spawns the real CLI.
  */
 import { spawn } from "node:child_process";
+import { log } from "../log.ts";
 
 interface RunResult {
   code: number;
@@ -42,10 +43,30 @@ export function spawnRunner(bin: string, cwd: string): CliRunner {
       });
       let out = "";
       let err = "";
+      let stdinError: Error | undefined;
       child.stdout?.on("data", (d) => (out += String(d)));
       child.stderr?.on("data", (d) => (err += String(d)));
-      if (opts?.input) child.stdin?.end(opts.input);
-      child.on("close", (code) => res({ code: code ?? 1, stdout: out, stderr: opts?.captureStderr ? err : undefined }));
+      if (opts?.input) {
+        // A host CLI that rejects before reading (bad auth, a refused command) closes stdin under us:
+        // the write then emits `error` on a stream with no listener, which Node turns into an uncaught
+        // exception — crashing the deploy and losing the gate message the exit code was about to carry.
+        // HELD, not dropped: the exit code says it only when the CLI exits non-zero (see below).
+        child.stdin?.on("error", (error) => (stdinError ??= error));
+        child.stdin?.end(opts.input);
+      }
+      child.on("close", (code) => {
+        // A CLI that exits 0 having refused part of its stdin took TRUNCATED input — an auth seed runs
+        // well past the 64KB pipe buffer, so "success" here would deploy a half-written secret and say
+        // nothing. The exit code is what callers read, so the failure has to reach them as one.
+        const truncated = stdinError !== undefined && (code ?? 1) === 0;
+        if (truncated) {
+          // `error`, not `warn`: this line is the ONLY evidence of the failure — the caller's gate says
+          // "see the output above", and above it the host CLI printed success. A log level that mutes
+          // it (CI often sets `error`) leaves a stopped deploy with no diagnosable cause.
+          log.error(`[fastagent] ${bin} exited 0 without reading all of its input — ${stdinError?.message}`);
+        }
+        res({ code: truncated ? 1 : (code ?? 1), stdout: out, stderr: opts?.captureStderr ? err : undefined });
+      });
       child.on("error", () => res({ code: 127, stdout: "", stderr: opts?.captureStderr ? "" : undefined })); // ENOENT
     });
 }
