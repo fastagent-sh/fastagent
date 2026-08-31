@@ -7,18 +7,15 @@ import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
 
-import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
-import { reportModuleLoadFailures, setLogLevel } from "../../log.ts";
-import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
+import { setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { workspaceHint } from "../../paths.ts";
 import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
-import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
+import { parseBind, parsePort, reportAssembly, resolveFirstRunModel } from "../shared.ts";
 
 export interface DevOptions {
   port?: string;
@@ -69,15 +66,8 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
-  reportLine("agent", a.agentDir);
-  reportLine("workspace", a.workspace);
-  reportWorkspaceHint(workspaceHint(a));
-  reportLine("config", a.configPath ?? "(none)");
-  reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
-  await reportAuth(a.agentDir, a.modelSpec, a.authPath);
-  reportAgentsSkillsTools(a);
-  // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
-  // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
+  // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
+  await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = a.config.http?.host;
@@ -108,21 +98,4 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
       onShutdown: () => service.close(),
     },
   );
-}
-
-type Assembled = Awaited<ReturnType<typeof createPiAgentFromDir>>;
-
-/** The agents/skills/tools/collisions report lines. */
-function reportAgentsSkillsTools(a: Assembled): void {
-  reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
-  if (a.definition.persona) reportLine("persona", "persona.md");
-  reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
-  reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
-  if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
-  if (a.deferredToolNames.length > 0) {
-    reportLine("deferred", `${a.deferredToolNames.join(", ")} (activated via search_tools)`);
-  }
-  reportToolCollisions(a.toolCollisions);
-  reportModuleLoadFailures(a.toolFailures);
-  reportFindingsIfChanged(a.definition.dir, a.definition);
 }
