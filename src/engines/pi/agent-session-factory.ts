@@ -191,7 +191,7 @@ function toolDefinitions(tools: MountedTool[], env: ExecutionEnv, bound: { conte
     executionMode: tool.executionMode,
     execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
       const context = bound.context;
-      if (!context) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
+      if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
       return turnContext.run(
         context,
         // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are

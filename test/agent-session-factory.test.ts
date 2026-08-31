@@ -116,6 +116,8 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     await collect(agent.invoke({ session: "s" }, { text: "go" }));
 
     expect(seen).toHaveLength(2);
+    // Without this the assertion below passes on two undefineds — i.e. on the bridge being gone.
+    expect(seen[0]).toBeTypeOf("function");
     expect(seen[0]).toBe(seen[1]);
   });
 
