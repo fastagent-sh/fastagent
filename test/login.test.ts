@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuthInteraction, Credential, Provider } from "@earendil-works/pi-ai";
@@ -157,30 +157,30 @@ describe("loginFlow", () => {
   });
 
   // #58 invariant: the persist write AFTER a successful flow must fail visibly, never a false success.
-  // A read-only (0444) file lets the preflight pass (read + lock, no write) and the flow run, then the
-  // persist write hits EACCES. (Skipped under root, which bypasses the permission check.)
-  it.skipIf(process.getuid?.() === 0)(
-    "a persist write failure after a successful flow rejects, persisting nothing",
-    async () => {
-      const path = await tmpAuth(JSON.stringify({ existing: { type: "api_key", key: "x" } }));
-      await chmod(path, 0o444);
-      let ran = false;
-      const providers = [
-        fakeProvider("codex", {
-          oauth: true,
-          onOauthLogin: async () => {
-            ran = true;
-            return OAUTH_CRED;
-          },
-        }),
-      ];
-      await expect(
-        loginFlow(fakeIO().io, { provider: "codex", providers, store: fastagentCredentialStore(path) }),
-      ).rejects.toThrow(/EACCES|permission/i);
-      expect(ran).toBe(true); // got past preflight + flow; only the persist write failed
-      expect((await readAuth(path)).codex).toBeUndefined(); // no false success
-    },
-  );
+  // The failure is injected by occupying the atomic write's temp path with a DIRECTORY: the preflight
+  // passes (it reads and locks but writes nothing) and the flow runs, then the persist write cannot
+  // create its temp file. Not a read-only auth.json — the write publishes by rename, which needs the
+  // parent directory's write bit and not the target file's, so 0444 no longer stops one.
+  it("a persist write failure after a successful flow rejects, persisting nothing", async () => {
+    const path = await tmpAuth(JSON.stringify({ existing: { type: "api_key", key: "x" } }));
+    await mkdir(`${path}.tmp`);
+    let ran = false;
+    const providers = [
+      fakeProvider("codex", {
+        oauth: true,
+        onOauthLogin: async () => {
+          ran = true;
+          return OAUTH_CRED;
+        },
+      }),
+    ];
+    await expect(
+      loginFlow(fakeIO().io, { provider: "codex", providers, store: fastagentCredentialStore(path) }),
+    ).rejects.toThrow(/EISDIR|directory/i);
+    expect(ran).toBe(true); // got past preflight + flow; only the persist write failed
+    expect((await readAuth(path)).codex).toBeUndefined(); // no false success
+    expect((await readAuth(path)).existing).toBeDefined(); // and the file it could not replace is intact
+  });
 
   it("a prompt the provider leaves pending is aborted when the flow resolves, so the CLI does not hang", async () => {
     let aborted = false;
