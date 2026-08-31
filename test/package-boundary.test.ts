@@ -138,11 +138,24 @@ describe("knip's entry list mirrors the package's subpath exports", () => {
     const pkg = JSON.parse(readFileSync(resolve(srcDir, "../package.json"), "utf8")) as {
       exports: Record<string, unknown>;
     };
+    // Read the `entry` ARRAY, not the file: a substring match over the whole config is satisfied by a
+    // path sitting in `ignore` or `project`, or merely named in a comment — which is the misconfigured
+    // shape this test exists to catch, not a passing one.
+    //
+    // Every comment in knip.jsonc is a whole-line `//`, and stripping only those keeps the `$schema`
+    // URL's own `//` intact. A trailing or block comment makes JSON.parse throw, which is the right
+    // outcome: better a loud failure here than a silently mis-read config.
     const knip = readFileSync(resolve(srcDir, "../knip.jsonc"), "utf8");
+    const { entry } = JSON.parse(
+      knip
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .join("\n"),
+    ) as { entry: string[] };
     const missing = Object.keys(pkg.exports)
       .filter((key) => key !== "./package.json")
       .map((key) => (key === "." ? "src/index.ts" : `src/${key.slice(2)}.ts`))
-      .filter((entry) => !knip.includes(JSON.stringify(entry)));
+      .filter((subpath) => !entry.includes(subpath));
     expect(missing).toEqual([]);
   });
 });
