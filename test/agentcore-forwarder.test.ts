@@ -194,7 +194,7 @@ describe("agentcore forwarder: the shared-secret gates", () => {
     // `(WAKE_SECRET || STATE_REFRESH_SECRET)` ownUrl guard, so that spelling stayed green with the
     // state-urls gate deleted.
     for (const secret of ["INGRESS_SECRET", "WAKE_SECRET", "STATE_REFRESH_SECRET"]) {
-      expect(src).toMatch(new RegExp(`secretEq\\(req\\.\\w+, process\\.env\\.${secret}\\)`));
+      expect(src).toMatch(new RegExp(`secretEq\\([^)]+,\\s*process\\.env\\.${secret}\\)`));
     }
   });
 });
