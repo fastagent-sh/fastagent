@@ -7,7 +7,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { SECRETS_DIRNAME, assertInsideAgentDir, exists } from "../paths.ts";
+import { SECRETS_DIRNAME, assertInsideAgentDir, ensureSecretsDir, exists } from "../paths.ts";
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
@@ -291,7 +291,7 @@ export async function appendChannelDotEnv(
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
   const secretsDir = dirname(file);
-  await mkdir(secretsDir, { recursive: true });
+  await ensureSecretsDir(secretsDir);
   // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into
   // carries its own `.gitignore`. `init` writes it, and so does this — the reachable case where it is
   // missing (a hand-made agent) is exactly the one where the next line mints an unrecoverable app

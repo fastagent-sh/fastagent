@@ -16,7 +16,7 @@
  * modules depend on it for something the engine has no say in.
  */
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
-import { access, realpath } from "node:fs/promises";
+import { access, chmod, mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -345,6 +345,28 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
  */
 export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
   return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(resolve(dir), SECRETS_DIRNAME);
+}
+
+/** What a file under {@link resolveSecretsDir} is written with (auth.json, .env). */
+export const SECRET_FILE_MODE = 0o600;
+/** What the secrets directory itself is created with. */
+const SECRETS_DIR_MODE = 0o700;
+
+/**
+ * Create the secrets directory with the mode its contents require — and REPAIR it when it already
+ * exists, which is the case that matters.
+ *
+ * The DIRECTORY is the boundary that actually protects a credential: without its `x` bit nothing
+ * below it is reachable, whatever a file's own mode says. And it is decided ONCE, by whichever
+ * writer gets there first — `mkdir`'s `mode` is ignored for a directory that already exists, so a
+ * later, more careful caller silently inherits the first one's answer. Four callers create this
+ * directory (`init`, `add <channel>`, the credential store, the deploy seed) and the ordinary order
+ * is init → add → login, so the careful one is LAST: the rule has to live where all of them can
+ * reach it, and it has to chmod rather than trust the create.
+ */
+export async function ensureSecretsDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: SECRETS_DIR_MODE });
+  await chmod(dir, SECRETS_DIR_MODE);
 }
 
 /**
