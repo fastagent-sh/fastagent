@@ -30,7 +30,9 @@ function scriptedAgent(events: AgentEvent[] = [{ type: "text", delta: "hi" }, { 
 const SECRET = "ingress-s3cret";
 
 interface AdapterOverrides {
-  routes?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
+  /** A surface, or a factory for one. Production takes only the factory (construction must not run
+   *  until the state root is authoritative); the plain value is this fixture's shorthand. */
+  channels?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
   agent?: Agent;
   isBusy?: () => boolean;
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
@@ -58,9 +60,13 @@ function fakeStateSync(over: Partial<StateSync> = {}): StateSync & { seen: strin
 
 const stateRoot = await mkdtemp(join(tmpdir(), "fa-agentcore-adapter-"));
 
+/** A narrowing local: a property access is not narrowed inside the closure below. */
+const asFactory = (given: AdapterOverrides["channels"]): (() => Promise<RouteSurface> | RouteSurface) =>
+  typeof given === "function" ? given : () => given ?? { routes: {} };
+
 const adapter = (over: AdapterOverrides = {}): Routes =>
   agentcoreRoutes({
-    routes: over.routes ?? { routes: {} },
+    channels: asFactory(over.channels),
     agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
@@ -95,7 +101,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     let built = 0;
     const routes = adapter({
       stateSync: sync,
-      routes: () => {
+      channels: () => {
         order.push("construct");
         built += 1;
         return { routes: health };
@@ -119,7 +125,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     // (and 3s-apart deploy probes) follow; a fresh session is the retry boundary.
     let attempts = 0;
     const routes = adapter({
-      routes: () => {
+      channels: () => {
         attempts += 1;
         throw new Error("FEISHU_APP_SECRET is not set");
       },
@@ -135,7 +141,7 @@ describe("agentcore adapter: lazy channel construction", () => {
   });
 
   it("a probe reports construction structurally over transport-200 (diagnostics must survive the forwarder)", async () => {
-    const ok = adapter({ routes: () => ({ routes: health }) });
+    const ok = adapter({ channels: () => ({ routes: health }) });
     const okRes = await postEnvelope(ok, { kind: "probe" });
     expect(okRes.status).toBe(200);
     expect(await okRes.json()).toEqual({ ok: true });
@@ -143,7 +149,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     // The forwarder rewrites any non-200 transport into an opaque 502, so the failure verdict MUST
     // ride a transport-200 body — that is the whole reason the probe kind exists.
     const broken = adapter({
-      routes: () => {
+      channels: () => {
         throw new Error("FEISHU_APP_SECRET is not set");
       },
     });
@@ -160,7 +166,7 @@ describe("agentcore adapter: lazy channel construction", () => {
         throw new Error("snapshot GET failed: 403");
       },
     });
-    const routes = adapter({ stateSync: sync, routes: () => ({ routes: health }) });
+    const routes = adapter({ stateSync: sync, channels: () => ({ routes: health }) });
     const res = await postEnvelope(routes, {
       kind: "probe",
       state: { getUrl: "https://s3/g", putUrl: "https://s3/p" },
@@ -170,7 +176,9 @@ describe("agentcore adapter: lazy channel construction", () => {
     expect(verdict.ok).toBe(false);
     expect(verdict.error).toContain("state restore failed");
 
-    expect((await postUntrusted(adapter({ routes: () => ({ routes: health }) }), { kind: "probe" })).status).toBe(403);
+    expect((await postUntrusted(adapter({ channels: () => ({ routes: health }) }), { kind: "probe" })).status).toBe(
+      403,
+    );
   });
 
   it("a schedule fire initializes the channels first, and a broken channel does NOT silence the clock", async () => {
@@ -181,7 +189,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     });
     const routes = adapter({
       fire,
-      routes: () => {
+      channels: () => {
         order.push("construct");
         return { routes: health };
       },
@@ -195,7 +203,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     const fire2 = vi.fn(async (): Promise<ScheduleFireOutcome> => ({ fired: true, ms: 5 }));
     const broken = adapter({
       fire: fire2,
-      routes: () => {
+      channels: () => {
         throw new Error("channels/lark.ts is broken");
       },
     });
@@ -206,7 +214,7 @@ describe("agentcore adapter: lazy channel construction", () => {
   it("a wake-poke resolves construction too (the deploy probe; alarm wakes replay checkpointed turns)", async () => {
     let built = 0;
     const routes = adapter({
-      routes: () => {
+      channels: () => {
         built += 1;
         return { routes: {} };
       },
@@ -215,7 +223,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     expect(built).toBe(1);
 
     const broken = adapter({
-      routes: () => {
+      channels: () => {
         throw new Error("channels/lark.ts is broken");
       },
     });
@@ -284,7 +292,7 @@ describe("agentcore adapter: webhook envelope", () => {
   it("reconstructs the original request (method/path/headers/body) and rides the reply back byte-exact", async () => {
     const seen: { method: string; secret: string | null; body: string }[] = [];
     const routes = adapter({
-      routes: {
+      channels: {
         routes: {
           "POST /telegram": async (req) => {
             seen.push({
@@ -316,7 +324,7 @@ describe("agentcore adapter: webhook envelope", () => {
   });
 
   it("enforces the original webhook-body limit even if a caller bypasses the public forwarder", async () => {
-    const routes = adapter({ routes: { routes: { "POST /hook": () => new Response("must not run") } } });
+    const routes = adapter({ channels: { routes: { "POST /hook": () => new Response("must not run") } } });
     const res = await postEnvelope(routes, {
       kind: "webhook",
       method: "POST",
@@ -330,7 +338,7 @@ describe("agentcore adapter: webhook envelope", () => {
 
   it("carries a non-2xx channel response inside the envelope (transport stays 200)", async () => {
     const routes = adapter({
-      routes: { routes: { "POST /telegram": () => new Response("forbidden\n", { status: 403 }) } },
+      channels: { routes: { "POST /telegram": () => new Response("forbidden\n", { status: 403 }) } },
     });
     const res = await postEnvelope(routes, { kind: "webhook", method: "POST", path: "/telegram" });
     expect(res.status).toBe(200);
@@ -350,7 +358,7 @@ describe("agentcore adapter: webhook envelope", () => {
   it("the query string survives the round trip (a channel reading searchParams sees it)", async () => {
     const seen: string[] = [];
     const routes = adapter({
-      routes: {
+      channels: {
         routes: {
           "GET /hook": (req) => {
             seen.push(new URL(req.url).searchParams.get("code") ?? "(none)");
@@ -440,7 +448,7 @@ describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
   it("persists the forwarder URL ridden on an envelope for the wake-alarm sink", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-wake-url-"));
     const routes = agentcoreRoutes({
-      routes: { routes: {} },
+      channels: () => ({ routes: {} }),
       agent: scriptedAgent(),
       stateRoot: root,
       isBusy: () => false,
@@ -507,7 +515,7 @@ describe("agentcore adapter: cross-deploy state", () => {
     });
     const routes = adapter({
       stateSync: sync,
-      routes: {
+      channels: {
         routes: {
           "POST /hook": () => {
             order.push("dispatch");
@@ -530,7 +538,7 @@ describe("agentcore adapter: cross-deploy state", () => {
           throw new Error("snapshot GET failed: 500");
         },
       }),
-      routes: {
+      channels: {
         routes: {
           "POST /hook": () => new Response("must not run"),
         },
@@ -565,7 +573,7 @@ describe("agentcore adapter: cross-deploy state", () => {
 describe("agentcore adapter: the authentication boundary", () => {
   it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
     const fire = vi.fn(async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome);
-    const routes = adapter({ fire, routes: { routes: { "POST /hook": () => new Response("must not run") } } });
+    const routes = adapter({ fire, channels: { routes: { "POST /hook": () => new Response("must not run") } } });
 
     for (const envelope of [
       { kind: "schedule-fire", name: "digest", slot: "2026-07-28T09:00:00Z" },

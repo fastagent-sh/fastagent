@@ -61,7 +61,7 @@ describe("mountAgentcore", () => {
 
     const closed = new AbortController();
     agentcoreRoutes({
-      routes: { routes: {}, mounts: [] },
+      channels: () => ({ routes: {}, mounts: [] }),
       agent,
       stateRoot: "/tmp",
       isBusy: () => false,
@@ -85,26 +85,21 @@ describe("mountAgentcore", () => {
   };
   const schedule: LoadedSchedule = { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" };
 
-  it("mounts /invocations + /ping over the serving routes", async () => {
+  it("mounts the adapter's two paths, and ONLY those — the channels live behind the envelope", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-mount-"));
-    const routes = mountAgentcore(
-      { "POST /telegram": () => text("ok\n", 200) },
-      { agent, stateRoot: dir, schedules: [] },
-    );
-    expect(Object.keys(routes).sort()).toEqual(["GET /ping", "POST /invocations", "POST /telegram"]);
+    const routes = mountAgentcore({
+      agent,
+      stateRoot: dir,
+      schedules: [],
+      channels: () => ({ routes: { "POST /telegram": () => text("ok\n", 200) } }),
+    });
+    // The channel is NOT beside them: AgentCore routes only these two into the container, so a
+    // channel mounted alongside would be unreachable anyway — and a channel keyed `/invocations`
+    // cannot shadow the adapter, because it is dispatched in the envelope's own namespace.
+    expect(Object.keys(routes).sort()).toEqual(["GET /ping", "POST /invocations"]);
     expect(await (await routes["GET /ping"]!(new Request("http://x/ping"))).json()).toMatchObject({
       status: "Healthy",
     });
-  });
-
-  it("fails startup on a channel colliding with the adapter's paths", () => {
-    expect(() =>
-      mountAgentcore({ "POST /invocations": () => text("mine\n", 200) }, { agent, stateRoot: "/tmp", schedules: [] }),
-    ).toThrow(/collide with the AgentCore adapter/);
-    // An any-method key names the same route as the adapter's method-qualified one.
-    expect(() =>
-      mountAgentcore({ "/ping": () => text("mine\n", 200) }, { agent, stateRoot: "/tmp", schedules: [] }),
-    ).toThrow(/collide with the AgentCore adapter/);
   });
 
   it("binds schedule fires by name — an unknown name 404s through the adapter", async () => {
@@ -112,7 +107,7 @@ describe("mountAgentcore", () => {
     // schedule-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
     // routing (see the adapter's authentication boundary), so the mount must carry it.
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
-    const routes = mountAgentcore({}, { agent, stateRoot: dir, schedules: [schedule] });
+    const routes = mountAgentcore({ agent, stateRoot: dir, schedules: [schedule], channels: () => ({ routes: {} }) });
     const fire = (name: string): Promise<Response> | Response =>
       routes["POST /invocations"]!(
         new Request("http://x/invocations", {

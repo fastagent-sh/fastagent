@@ -40,15 +40,6 @@ import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
-/**
- * The HOST's webhook body limit, and the one place it is computed. Lambda Function URLs cap a request
- * at 6 MB, so the forwarder cannot deliver more than that no matter what the adapter accepts; the
- * body arrives base64-encoded (×4/3) inside a JSON envelope, so the ORIGINAL body ceiling is smaller
- * still. This is a real capability difference from a resident host — the GitHub channel's own
- * contract is 25 MiB — so `deploy agentcore` says so at plan time rather than letting an oversized
- * payload surface as an opaque 502.
- */
-
 /** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
  *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
  *  ALARM sink (schedule/wake-alarm.ts) can call back without the URL being baked anywhere. */
@@ -112,13 +103,14 @@ export interface RouteSurface {
 }
 
 export interface AgentcoreAdapterOptions {
-  /** The serving routes a direct deployment would mount (channels or the builtin invoke + health).
-   *  The serving path passes a LAZY factory: channel construction loads channel state and replays
-   *  durable turn intent, so on AgentCore it must not run until the state root is authoritative —
-   *  which happens at the first envelope's `stateSync.ready()` (the restore URLs only an envelope
-   *  carries), never at boot, where the mount is pre-restore (empty after every version update).
-   *  An eager `Routes` value remains supported for wirings whose state root is already durable. */
-  routes: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
+  /** The serving routes a direct deployment would mount (channels or the builtin invoke + health),
+   *  built LAZILY: channel construction loads channel state and replays durable turn intent, so on
+   *  AgentCore it must not run until the state root is authoritative — which happens at the first
+   *  envelope's `stateSync.ready()` (the restore URLs only an envelope carries), never at boot, where
+   *  the mount is pre-restore (empty after every version update). A factory, not a value: there is no
+   *  moment during construction at which the right answer is knowable. May answer synchronously — the
+   *  resolution chain normalizes it either way. */
+  channels: () => Promise<RouteSurface> | RouteSurface;
   agent: Agent;
   /** Where the forwarder URL from envelopes is persisted for the wake-alarm sink (the state root). */
   stateRoot: string;
@@ -159,14 +151,13 @@ function secretMatches(actual: unknown, expected: string | undefined): boolean {
 }
 
 /**
- * Build the AgentCore serving surface: `{ "POST /invocations", "GET /ping" }`. The caller merges it
- * over its routes (collision-checked at the mount site, serve.ts) — the inner routes stay mounted
- * too, which is harmless (AgentCore routes only /invocations and /ping into the container) and keeps
- * a local `curl` debug surface.
+ * Build the AgentCore serving surface: `{ "POST /invocations", "GET /ping" }` — the whole of what the
+ * platform routes into the container. The agent's own channels are not beside these: they are a table
+ * inside the envelope dispatch below, reached only by unwrapping a forwarder envelope.
  */
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { routes, agent, stateRoot, isBusy, fire, stateSync, ingressSecret, onStateReady } = options;
-  // Lazy channel construction (see AgentcoreAdapterOptions.routes) — resolved ONCE per process, on
+  const { channels, agent, stateRoot, isBusy, fire, stateSync, ingressSecret, onStateReady } = options;
+  // Lazy channel construction (see AgentcoreAdapterOptions.channels) — resolved ONCE per process, on
   // the first trusted envelope after the state root is authoritative, and the outcome is cached
   // EITHER WAY. Success: the same resident channels a direct host keeps. Failure too: construction
   // is an ACTIVATION with side effects — loadChannels builds every healthy channel (starting its
@@ -182,7 +173,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       // The factory runs INSIDE the chain: a synchronous throw must land in the cached rejection,
       // not escape before `dispatchP` is assigned (which would silently re-run the activation).
       dispatchP = Promise.resolve()
-        .then(() => (typeof routes === "function" ? routes() : routes))
+        .then(channels)
         .then((surface) => router(surface.routes, surface.mounts));
       dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
     }

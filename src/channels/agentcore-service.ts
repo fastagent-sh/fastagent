@@ -27,10 +27,10 @@ import {
   routesFor,
   startSchedules,
 } from "../service.ts";
-import { type RouteSurface, UnknownScheduleError, agentcoreRoutes } from "./agentcore.ts";
+import { type AgentcoreAdapterOptions, type RouteSurface, UnknownScheduleError, agentcoreRoutes } from "./agentcore.ts";
 import { createStateSync } from "./agentcore-state.ts";
 import { activeWork } from "./busy.ts";
-import { routeKeysConflict, router } from "./serve.ts";
+import { router } from "./serve.ts";
 
 export interface MountAgentcoreServiceOptions {
   /** Wrap the opened agent before anything binds to it (the CLI's turn trace). */
@@ -77,17 +77,14 @@ export async function mountAgentcoreService(
 
   // The adapter registers process-global listeners; this is what takes them down on close.
   const closed = new AbortController();
-  const adapterRoutes = mountAgentcore(
-    {},
-    {
-      signal: closed.signal,
-      agent,
-      stateRoot,
-      schedules: scheduled.schedules,
-      onStateReady: options.onStateReady,
-      lazyChannels,
-    },
-  );
+  const adapterRoutes = mountAgentcore({
+    signal: closed.signal,
+    agent,
+    stateRoot,
+    schedules: scheduled.schedules,
+    onStateReady: options.onStateReady,
+    channels: lazyChannels,
+  });
   const handler = router(adapterRoutes, withControl.mounts);
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
@@ -120,30 +117,28 @@ export async function mountAgentcoreService(
 }
 
 /**
- * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) over the serving routes —
- * the deployed container's ONLY reachable surface (channels/agentcore.ts). Wired by `start` when
- * `FASTAGENT_AGENTCORE=1` (set by the generated deploy artifacts, never by hand). A channel colliding
- * on either path fails startup, same disposition as the control-plane mount: the adapter's paths are
- * the platform's contract, so a channel shadowing them would silently unserve the whole deployment.
+ * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) — the deployed container's
+ * ONLY reachable surface (channels/agentcore.ts). Wired by `start` when `FASTAGENT_AGENTCORE=1` (set
+ * by the generated deploy artifacts, never by hand).
+ *
+ * The adapter IS the surface: the agent's channels live in a table INSIDE the envelope dispatch, a
+ * separate namespace from these two paths, so a channel route named `/invocations` is reached
+ * through the Function URL as itself and cannot shadow anything.
  */
-export function mountAgentcore(
-  routes: Routes,
-  options: {
-    agent: Agent;
-    stateRoot: string;
-    schedules: readonly LoadedSchedule[];
-    onStateReady?: () => void;
-    /** Cancels the adapter's process-global registrations on close. */
-    signal?: AbortSignal;
-    /** The serving path's LAZY channel surface: constructed by the adapter on the first envelope
-     *  AFTER the state-snapshot restore, never at boot (channels/agentcore.ts). When absent,
-     *  `routes` is the dispatch target — for wirings whose state root is already authoritative. */
-    lazyChannels?: () => Promise<RouteSurface>;
-  },
-): Routes {
-  const { agent, stateRoot, schedules, onStateReady, lazyChannels, signal } = options;
-  const mounted = agentcoreRoutes({
-    routes: lazyChannels ?? { routes },
+export function mountAgentcore(options: {
+  agent: Agent;
+  stateRoot: string;
+  schedules: readonly LoadedSchedule[];
+  onStateReady?: () => void;
+  /** Cancels the adapter's process-global registrations on close. */
+  signal?: AbortSignal;
+  /** The channel surface, constructed on the first envelope AFTER the state-snapshot restore — never
+   *  at boot, where the mount is pre-restore (channels/agentcore.ts). */
+  channels: AgentcoreAdapterOptions["channels"];
+}): Routes {
+  const { agent, stateRoot, schedules, onStateReady, channels, signal } = options;
+  return agentcoreRoutes({
+    channels,
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
@@ -166,18 +161,4 @@ export function mountAgentcore(
             return fireScheduleOnce({ agent, stateRoot, schedule, slot });
           },
   });
-  // EMPTY on the lazy path, and that is not a hole: there the channels are a table INSIDE the
-  // envelope dispatch, while these two are the outer router's — separate namespaces, so a channel
-  // route named `/invocations` is reachable through the Function URL and cannot shadow the adapter.
-  // The check is for the eager wiring, where `routes` and the adapter merge into one table.
-  const collisions = Object.keys(routes).filter((key) =>
-    Object.keys(mounted).some((adapterKey) => routeKeysConflict(key, adapterKey)),
-  );
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the AgentCore adapter ` +
-        `(/invocations, /ping) — rename the channel route`,
-    );
-  }
-  return { ...routes, ...mounted };
 }
