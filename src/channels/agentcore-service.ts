@@ -166,6 +166,10 @@ export function mountAgentcore(
             return fireScheduleOnce({ agent, stateRoot, schedule, slot });
           },
   });
+  // EMPTY on the lazy path, and that is not a hole: there the channels are a table INSIDE the
+  // envelope dispatch, while these two are the outer router's — separate namespaces, so a channel
+  // route named `/invocations` is reachable through the Function URL and cannot shadow the adapter.
+  // The check is for the eager wiring, where `routes` and the adapter merge into one table.
   const collisions = Object.keys(routes).filter((key) =>
     Object.keys(mounted).some((adapterKey) => routeKeysConflict(key, adapterKey)),
   );

@@ -181,6 +181,21 @@ const webhookEvent = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe("agentcore forwarder: the shared-secret gates", () => {
+  it("compares every one of them in constant time", () => {
+    // Three public endpoints on the Function URL gate on a shared secret, and this file had ONE of
+    // them comparing in constant time while the other two used `!==`. Asserted structurally because
+    // the property itself is not observable from a test: timing measurements against a Lambda are
+    // noise. What this catches is the next endpoint copying the wrong neighbour.
+    const src = forwarderSource();
+    expect(src).not.toMatch(/req\.\w+\s*!==\s*process\.env/);
+    // …and each secret is still actually checked (a gate deleted rather than converted).
+    for (const secret of ["INGRESS_SECRET", "WAKE_SECRET", "STATE_REFRESH_SECRET"]) {
+      expect(src).toContain(`process.env.${secret})`); // the secretEq argument position
+    }
+  });
+});
+
 describe("agentcore forwarder: the reserved probe path", () => {
   const probeEvent = (auth: string) => webhookEvent({ rawPath: "/__fastagent/probe", body: JSON.stringify({ auth }) });
 
