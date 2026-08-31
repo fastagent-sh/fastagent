@@ -57,7 +57,11 @@ import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
-export type DeployHost = "docker" | "fly" | "railway" | "agentcore";
+/** The deploy targets, as a value: {@link HOST_ONLY_FLAGS} is checked against this list by a test, and
+ *  a type alone cannot be enumerated at runtime. */
+export const DEPLOY_HOSTS = ["docker", "fly", "railway", "agentcore"] as const;
+
+export type DeployHost = (typeof DEPLOY_HOSTS)[number];
 
 export interface DeployOptions {
   run?: boolean;
@@ -89,40 +93,53 @@ function shellArg(value: string): string {
 }
 
 /** A flag exactly one host honours, and what the OTHERS do instead. `instead` is exhaustive over the
- *  non-owners, so a host added to {@link DeployHost} cannot silently lose its line. */
-interface HostOnlyFlag<Owner extends DeployHost> {
+ *  non-owners, so a host added to {@link DEPLOY_HOSTS} cannot silently lose its line. */
+export interface HostOnlyFlag<Owner extends DeployHost> {
   flag: string;
   owner: Owner;
   passed: (opts: DeployOptions) => boolean;
   instead: Record<Exclude<DeployHost, Owner>, string>;
 }
 
+/** Infers `Owner` from the literal's own `owner`, so each row carries its exhaustiveness itself. The
+ *  alternative — annotating the array as a tuple of `HostOnlyFlag<"fly"> | …` — put the whole guarantee
+ *  in one annotation that a third rule invites relaxing to `HostOnlyFlag<DeployHost>[]`, where
+ *  `Exclude<DeployHost, DeployHost>` collapses to `never` and every `instead` type-checks empty. */
+const hostOnlyFlag = <Owner extends DeployHost>(rule: HostOnlyFlag<Owner>): HostOnlyFlag<Owner> => rule;
+
 /**
  * ONE table for "this flag belongs to that host", because the fact is symmetric and was not stored
  * that way: each host branch stated the OTHER hosts' flags in its own words, so the same sentence
  * existed three times per flag and had already drifted (`Railway-only` twice, `railway-only` once).
+ *
+ * Every row is a flag that only WARNS elsewhere. `--tunnel` is host-only too and is deliberately not
+ * here: it is a usage GATE (`failUsage`, exit 2) raised in `runDeploy`, not a warning — moving it in
+ * would downgrade a refusal to a line of advice.
+ *
+ * Exported for the exhaustiveness test: the type stops a missing `instead` line, and the test stops it
+ * from being typed away.
  */
-const HOST_ONLY_FLAGS: [HostOnlyFlag<"fly">, HostOnlyFlag<"railway">] = [
-  {
+export const HOST_ONLY_FLAGS = [
+  hostOnlyFlag({
     flag: "--stop/--no-scale-to-zero",
     owner: "fly",
-    passed: (opts) => opts.stop === true || opts.scaleToZero === false,
+    passed: (opts: DeployOptions) => opts.stop === true || opts.scaleToZero === false,
     instead: {
       docker: "local Compose stays running",
       railway: "Railway's App Sleeping is a dashboard toggle (the runbook states the manual step)",
       agentcore: "AgentCore's idle/lifetime policy lives in the template's LifecycleConfiguration",
     },
-  },
-  {
+  }),
+  hostOnlyFlag({
     flag: "--into-linked",
     owner: "railway",
-    passed: (opts) => opts.intoLinked === true,
+    passed: (opts: DeployOptions) => opts.intoLinked === true,
     instead: {
       docker: "ignored for local Docker",
       agentcore: "ignored for AgentCore",
       fly: "fly --run is idempotent — it reuses an existing app/volume",
     },
-  },
+  }),
 ];
 
 /** Exported for its own test: nothing covered these six sentences, which is how three of them came to
@@ -131,8 +148,13 @@ export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
   for (const rule of HOST_ONLY_FLAGS) {
     if (host === rule.owner || !rule.passed(opts)) continue;
     // The `continue` above is exactly the key set `instead` is typed over, but TS cannot narrow a
-    // union member out through a comparison against a per-rule literal.
-    const instead = (rule.instead as Record<DeployHost, string>)[host];
+    // union member out through a comparison against a per-rule literal, so the read needs a cast —
+    // and a cast is how a hole would reach the operator as the word "undefined". Unreachable while
+    // the rows stay exhaustive, which is what the table's own test asserts.
+    const instead: string | undefined = (rule.instead as Record<string, string>)[host];
+    if (instead === undefined) {
+      throw new Error(`deploy: HOST_ONLY_FLAGS has no "instead" line for ${host} on ${rule.flag}`);
+    }
     console.error(`[fastagent] warn: ${rule.flag} is ${rule.owner}-only — ${instead}`);
   }
 }

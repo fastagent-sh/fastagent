@@ -12,7 +12,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import { warnHostOnlyFlags, writeArtifacts } from "../src/cli/commands/deploy.ts";
+import { DEPLOY_HOSTS, HOST_ONLY_FLAGS, warnHostOnlyFlags, writeArtifacts } from "../src/cli/commands/deploy.ts";
 
 /** The opening bytes that make each artifact kind OURS — one per kind the ownership table knows. */
 const MARKERS = {
@@ -154,5 +154,24 @@ describe("deploy: a flag only one host honours is reported the same way by every
     expect(said("fly", { stop: true, scaleToZero: false })).toBe("");
     expect(said("railway", { intoLinked: true })).toBe("");
     expect(said("docker", {})).toBe("");
+  });
+});
+
+describe("deploy: every host-only flag has a line for every other host", () => {
+  // The type says so — `instead: Record<Exclude<DeployHost, Owner>, string>` — but that guarantee is
+  // load-bearing on how the table is TYPED, and the natural move when adding a third rule is to relax
+  // it to `HostOnlyFlag<DeployHost>[]`, where `Exclude<DeployHost, DeployHost>` is `never` and an
+  // empty `instead` type-checks. Asserting the DATA holds whatever the annotation becomes.
+  it("covers every non-owner host, with a non-empty sentence", () => {
+    for (const rule of HOST_ONLY_FLAGS) {
+      const expected = DEPLOY_HOSTS.filter((host) => host !== rule.owner);
+      const instead = rule.instead as Record<string, string>;
+      expect(Object.keys(instead).sort()).toEqual([...expected].sort());
+      for (const host of expected) expect(instead[host]).toBeTruthy();
+    }
+  });
+
+  it("names an owner that is a real deploy host", () => {
+    for (const rule of HOST_ONLY_FLAGS) expect(DEPLOY_HOSTS).toContain(rule.owner);
   });
 });

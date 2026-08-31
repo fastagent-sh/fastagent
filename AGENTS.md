@@ -24,7 +24,8 @@ Code truth is `src/`.
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
 ├── service.ts               # THE PRODUCT AS ONE CALL: a directory becomes a live service
-│                           # (createAgentService). Before it, only the CLI could keep fastagent's
+│                           # (mountAgentService; engines/pi/service.ts adds the opener in front of it
+│                           # as createAgentService). Before it, only the CLI could keep fastagent's
 │                           # "into a live service inside an app" promise — everything else was
 │                           # parts an embedder had to assemble in the right order, and getting it
 │                           # wrong is silent (a plane that 404s while advertising itself). The
@@ -170,7 +171,9 @@ src/
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/.
 │   │                        # The CLI branch that picks between them is cli/commands/deploy.ts; what it may NOT
 │   │                        # hold is a fact about ANOTHER host ("--into-linked is railway's" lived in three
-│   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per flag.
+│   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per host-only flag
+│   │                        # that only WARNS elsewhere. `--tunnel` is host-only too and stays a usage GATE
+│   │                        # in runDeploy (exit 2): a refusal is not a row, and tabling it would make it advice.
 │   ├── channel-ingress.ts   # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL
 │   │                     # end-to-end, the words when nobody can. The ONE answer to "which channels
 │   │                     # have a webhook" — it was written per host (3 runbooks, 3 --run drivers, a
@@ -185,7 +188,7 @@ src/
 │   ├── secrets.ts           # BOTH directions of the credential carry: required-secret NAMES (runbook),
 │   │                     # assembleSecrets VALUES (--run), and the boot-side authSeedBytes/collectAuthSeed
 │   │                     # the container reads them back with. The read side lived in fly/run.ts, which
-│   │                     # `start` and two agentcore modules had to reach into to deploy nothing on Fly.
+│   │                     # `start` had to reach into to deploy nothing on Fly.
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
 │   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
