@@ -31,13 +31,7 @@ import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { DEFAULT_THINKING_LEVEL } from "./models.ts";
-import {
-  type ToolActivation,
-  type TurnContext,
-  additiveActivation,
-  agentSessionManager,
-  turnContext,
-} from "./tool-context.ts";
+import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
 /** pi's Model with the API-shape generic erased; fastagent only passes models through. */
 // biome-ignore lint/suspicious/noExplicitAny: variance-friendly model type, audited at this single point
@@ -128,45 +122,6 @@ function recordedActivations(session: AgentSession): string[] {
 /** Warned once per session+missing set: a fresh session is built per invoke and channel sessions run
  *  for weeks, so an un-deduped warn would repeat every turn and dilute its own signal. */
 const warnedDroppedActivations = new Set<string>();
-
-/**
- * The turn's {@link ToolActivation} over a live session — the same bridge chat uses, so one
- * built-in `search_tools` serves both.
- *
- * Activations are PERSISTED as deltas, so a tool discovered in one turn stays callable in the next.
- * pi's own chat session does not do this (it has no place to put the record); a served session does,
- * because the alternative is an agent that re-discovers the same capability every single turn.
- */
-function sessionToolActivation(session: AgentSession): ToolActivation {
-  // Serialize activations: the read-modify-write below is only race-free while nothing awaits
-  // between read and write, and pi's session setters happening to be synchronous today is not a
-  // contract worth betting parallel tool batches on. Built once per SESSION (the turn context
-  // below), because a chain rebuilt per tool call serializes nothing — it is a fresh chain each
-  // time, so the parallel calls it exists for never meet on it.
-  let chain: Promise<string[]> = Promise.resolve([]);
-  return {
-    active: () => session.getActiveToolNames(),
-    registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
-    activate(names) {
-      const run = async (): Promise<string[]> => {
-        const current = session.getActiveToolNames();
-        const added = additiveActivation(
-          session.getAllTools().map((t) => t.name),
-          current,
-          names,
-        );
-        if (added.length > 0) {
-          session.setActiveToolsByName([...current, ...added]);
-          session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added });
-        }
-        return added;
-      };
-      const result = chain.then(run, run);
-      chain = result.catch(() => []);
-      return result;
-    },
-  };
-}
 
 /**
  * fastagent's tools as pi tool definitions, bound to ONE session.
@@ -365,11 +320,16 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
       customTools: toolDefinitions(tools, env, bound),
     });
-    // One context for the whole session — the same lifetime chat binds its bridge to.
+    // One context for the whole session: it describes the SESSION, not the call. The activation
+    // bridge above all — a tool call has to see what the previous one activated.
     bound.context = {
       cwd,
       sessionManager: agentSessionManager(session, sessionId),
-      tools: sessionToolActivation(session),
+      // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
+      // the tool still callable next turn (see {@link TOOL_ACTIVATION_ENTRY}).
+      tools: sessionToolActivation(session, (added) =>
+        session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added }),
+      ),
     };
     // An extension handler that throws is otherwise dropped: pi fans errors out to registered
     // listeners and has none by default, which on a server means a broken extension looks like an

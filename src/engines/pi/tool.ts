@@ -116,9 +116,9 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
       const tools = store?.tools
         ? {
             ...store.tools,
-            activate: async (names: string[]) => {
+            activate: (names: string[]) => {
               // biome-ignore lint/style/noNonNullAssertion: guarded by the ternary above
-              const activated = await store.tools!.activate(names);
+              const activated = store.tools!.activate(names);
               added.push(...activated);
               return activated;
             },

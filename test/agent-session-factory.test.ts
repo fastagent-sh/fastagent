@@ -15,6 +15,7 @@ import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.t
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { type PropertyWrites, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
+import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { makeFaux } from "./faux.ts";
@@ -85,23 +86,22 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     expect(seenSessionId).toBe("-1001234567890");
   });
 
-  it("every tool call in a turn shares one activation bridge", async () => {
-    // The bridge carries the lock that orders concurrent activations, so it has to live as long as
-    // the session those activations mutate. Rebuilt per tool CALL it is a fresh chain every time,
-    // and the parallel batch it exists for never meets on it — the shape chat's builder already
-    // names ("a per-call chain serializes nothing").
+  it("every tool call in a turn runs in the same turn context", async () => {
+    // The context describes the SESSION, not the call — one cwd, one session manager, one activation
+    // bridge — and the bridge is why it matters: a tool call has to see what the previous one
+    // activated. Built inside `execute`, every call got its own set of objects.
     //
-    // The ordering ITSELF is not reachable from here: pi's session setters are synchronous today,
-    // so the read-modify-write cannot be interleaved no matter how many bridges exist. What is
-    // checkable is the thing the lock rests on — that both calls hold the same one.
-    const seen: unknown[] = [];
+    // Read through AsyncLocalStorage rather than off `ctx`: `defineTool` hands the tool a fresh
+    // wrapper object each call, so anything reachable from `ctx` can only stand IN for the context
+    // by way of a reference the wrapper happens to pass through.
+    const seen: (TurnContext | undefined)[] = [];
     const probe = (name: string) =>
       defineTool({
         name,
         description: `probe ${name}`,
         input: z.object({}),
-        execute: async (_input, ctx) => {
-          seen.push(ctx.tools?.active);
+        execute: async () => {
+          seen.push(turnContext.getStore());
           return "probed";
         },
       });
@@ -116,8 +116,8 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     await collect(agent.invoke({ session: "s" }, { text: "go" }));
 
     expect(seen).toHaveLength(2);
-    // Without this the assertion below passes on two undefineds — i.e. on the bridge being gone.
-    expect(seen[0]).toBeTypeOf("function");
+    // Without this the assertion below would pass on two undefineds — on there being no context.
+    expect(seen[0]).toBeDefined();
     expect(seen[0]).toBe(seen[1]);
   });
 

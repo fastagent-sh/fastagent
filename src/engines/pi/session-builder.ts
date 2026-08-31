@@ -50,8 +50,8 @@ import { log, reportModuleLoadFailures } from "../../log.ts";
 import {
   type ReadonlySessionManager,
   type ToolActivation,
-  additiveActivation,
   agentSessionManager,
+  sessionToolActivation,
   turnContext,
 } from "./tool-context.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
@@ -76,38 +76,6 @@ export async function buildAgentSessionRuntime(
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
-  /** The turn's {@link ToolActivation} over pi's AgentSession — the counterpart of invoke.ts's
-   *  serving bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
-   *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
-   *  static override keeps the prompt identical to serving). */
-  function sessionToolActivation(session: AgentSession): ToolActivation {
-    // Same serialization as invoke.ts's bridge (there per turn; here per session — interactive turns
-    // make per-session equivalent): the read-modify-write below is only race-free while nothing awaits
-    // between read and write, and pi's session setters happening to be synchronous today is not a
-    // contract worth betting parallel tool batches on. Built ONCE per session (createRuntime), so
-    // parallel calls actually share the chain.
-    let chain: Promise<string[]> = Promise.resolve([]);
-    return {
-      active: () => session.getActiveToolNames(),
-      registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
-      activate(names) {
-        const run = async (): Promise<string[]> => {
-          const current = session.getActiveToolNames();
-          const added = additiveActivation(
-            session.getAllTools().map((t) => t.name),
-            current,
-            names,
-          );
-          if (added.length > 0) session.setActiveToolsByName([...current, ...added]);
-          return added;
-        };
-        const result = chain.then(run, run); // run after the predecessor settles, success or failure
-        chain = result.catch(() => []); // the caller sees a rejection on `result`; the chain stays usable
-        return result;
-      },
-    };
-  }
-
   async function resolveAssembly(cwd: string) {
     // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving
     // opener uses (open.ts); those inputs cannot drift between the two consumption shapes.
@@ -190,11 +158,13 @@ export async function buildAgentSessionRuntime(
   // would leak env or require mutating global env at runtime.
   const rootCwd = canonicalPath(dir);
   // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
-  // while the memoized assembly (and its tool execute closures) stays. The bridge must share the
-  // session's lifetime, NOT be rebuilt per tool call (a per-call chain serializes nothing). Note on
+  // while the memoized assembly (and its tool execute closures) stays. The bridge shares the
+  // session's lifetime because a tool call has to see what the previous one activated. Note on
   // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
   // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
   // the whole batch serially and the outer diff sees correct snapshots.
+  // NO activation record here: pi's chat session has nowhere to put one (see sessionToolActivation's
+  // `onActivated`), which is the documented divergence from serving — a resumed chat re-discovers.
   const sessionRef: {
     current?: { session: AgentSession; sessionManager: ReadonlySessionManager; activation: ToolActivation };
   } = {};
