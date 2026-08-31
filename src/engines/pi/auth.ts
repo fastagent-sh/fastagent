@@ -20,16 +20,17 @@
  * Locking is vendored here on `proper-lockfile`, with the same parameters pi's file backend used
  * before pi 0.80.8 stopped exporting it (upstream's stated migration path for SDK consumers is a
  * custom pi-ai `CredentialStore`, which this file is). The lock guards the WRITE path only. `read`
- * is pi-ai's per-request hot path, so it stays UNLOCKED; the in-place locked write opens only a
- * sub-millisecond torn-read window, which `read` absorbs by re-reading. The write path refuses to
- * overwrite a corrupt file (never clobbering other providers' credentials).
+ * is pi-ai's per-request hot path, so it stays UNLOCKED — safe because the write publishes by
+ * rename ({@link writeFileAtomic}): a reader sees one whole version of the file or another, never a
+ * partial one, so there is no torn-read window for an unlocked read to absorb. The write path
+ * refuses to overwrite a corrupt file (never clobbering other providers' credentials).
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { GLOBAL_HOME_DIR, SECRETS_DIRNAME } from "../../paths.ts";
+import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import lockfile from "proper-lockfile";
 
@@ -108,10 +109,11 @@ async function withLockedAuthFile<T>(
     const current = existsSync(authPath) ? readFileSync(authPath, "utf8") : undefined;
     const out = await fn(current);
     throwIfCompromised();
-    if (out.next !== undefined) {
-      writeFileSync(authPath, out.next, AUTH_FILE_WRITE_OPTIONS);
-      chmodSync(authPath, 0o600);
-    }
+    // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only
+    // spelling that applies the mode before the content is reachable — `writeFileSync`'s `mode` is
+    // a no-op on an existing file, so a chmod after it leaves the new credential briefly readable
+    // at whatever mode the old file carried.
+    if (out.next !== undefined) writeFileAtomic(authPath, out.next, 0o600);
     throwIfCompromised();
     result = out.result;
   } catch (error) {
@@ -154,30 +156,23 @@ function decodeCreds(raw: string): Creds | undefined {
 }
 
 /**
- * Tolerant UNLOCKED read of the whole credentials file, shared by `read` and `list`. The only race
- * is a sub-millisecond in-place write during an OAuth rotation, which can yield an empty/partial
- * file; re-read a few times before concluding it is corrupt. A missing file reads as undefined
- * silently (normal not-configured); a valid file returns immediately, so the common case costs one
- * read.
+ * UNLOCKED read of the whole credentials file, shared by `read` and `list`. ONE read: the write
+ * publishes by rename, so this observes one whole version or another and has nothing to absorb by
+ * re-reading. A missing file reads as undefined silently (normal not-configured); anything that
+ * does not decode is a real corruption — a hand-edit — and says so immediately, rather than after
+ * retrying a race that cannot happen.
  */
-async function readCreds(authPath: string, warn: (message: string) => void): Promise<Creds | undefined> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let raw: string;
-    try {
-      raw = readFileSync(authPath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; // missing/deleted
-      warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
-      return undefined;
-    }
-    if (raw !== "") {
-      const creds = decodeCreds(raw);
-      if (creds !== undefined) return creds;
-      // A partial read mid-write parses as garbage; fall through and retry. A structurally invalid
-      // root lands here too and is reported as corrupt below.
-    }
-    if (attempt < 2) await sleep(2);
+function readCreds(authPath: string, warn: (message: string) => void): Creds | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(authPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; // missing/deleted
+    warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
+    return undefined;
   }
+  const creds = raw === "" ? undefined : decodeCreds(raw);
+  if (creds !== undefined) return creds;
   warn(`[fastagent] corrupt auth file ${authPath}: fix or remove it`);
   return undefined;
 }
@@ -206,13 +201,13 @@ export function fastagentCredentialStore(
 
   return {
     async read(providerId) {
-      const creds = await readCreds(authPath, warn);
+      const creds = readCreds(authPath, warn);
       return creds ? pick(creds, providerId) : undefined;
     },
     async list() {
       // Metadata only, never secrets (the pi-ai `list` contract). Foreign/old entries are filtered
       // with the same validation as `read`, so both surfaces agree on what "configured" means.
-      const creds = await readCreds(authPath, warn);
+      const creds = readCreds(authPath, warn);
       if (!creds) return [];
       const infos: CredentialInfo[] = [];
       for (const [providerId, cred] of Object.entries(creds)) {
