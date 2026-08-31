@@ -122,8 +122,8 @@ export async function mountAgentcoreService(
  * by the generated deploy artifacts, never by hand).
  *
  * The adapter IS the surface: the agent's channels live in a table INSIDE the envelope dispatch, a
- * separate namespace from these two paths, so a channel route named `/invocations` is unreachable
- * through the Function URL and cannot shadow anything.
+ * separate namespace from these two paths, so a channel route named `/invocations` is reached
+ * through the Function URL as itself and cannot shadow anything.
  */
 export function mountAgentcore(options: {
   agent: Agent;
