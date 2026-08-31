@@ -17,17 +17,6 @@ import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
- * Mount the session control plane (`/control/*`) when the agent enabled it
- * (`config.sessionControl`): merge the bearer-authenticated routes and return an announcer that
- * writes `<stateRoot>/control.json` — `{ url, token }`, 0600 — once the port is known. The file is
- * the LOCAL discovery channel (`fastagent attach`, a local desktop app); filesystem permissions are
- * its trust boundary, and each boot overwrites it with a fresh per-boot token. A user channel
- * colliding on `/control/*` fails startup — the same disposition as a channel-channel collision
- * (routesFor): `sessionControl` is an explicit opt-in, so declaring both is a configuration error,
- * and silently shadowing either side would serve a surface the author didn't write.
- */
-
-/**
  * Refuse `--tunnel` with a bind that cloudflared cannot reach: it dials the NAME `localhost:<port>`
  * (the dev supervisor's tunnel too), so anything outside `127.0.0.1`/`::1`/wildcard — including a
  * `127.0.0.2` bind, loopback though it is — would leave the tunnel up and 502ing every request.
@@ -50,15 +39,6 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
 }
 
 /**
- * The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies.
- * ONE function because they are one message — they were two, and `--bind` updated the first while the
- * second went on dialing `localhost`, which is precisely what a non-wildcard bind stops answering. Now
- * neither can be changed without the other in view, and the address has a single derivation.
- *
- * A wildcard bind is every interface, and naming one address there would understate it — but the curl
- * still needs one to dial, which is what `clientHost` gives (loopback for a wildcard, itself otherwise).
- */
-/**
  * The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and
  * what mounted. One function because both commands must say the same thing at the same moment —
  * after readiness, never at socket bind.
@@ -72,6 +52,15 @@ export function reportServing(service: AgentService, host: string | undefined, b
   }
 }
 
+/**
+ * The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies.
+ * ONE function because they are one message — they were two, and `--bind` updated the first while the
+ * second went on dialing `localhost`, which is precisely what a non-wildcard bind stops answering. Now
+ * neither can be changed without the other in view, and the address has a single derivation.
+ *
+ * A wildcard bind is every interface, and naming one address there would understate it — but the curl
+ * still needs one to dial, which is what `clientHost` gives (loopback for a wildcard, itself otherwise).
+ */
 export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   const lines = [
@@ -85,16 +74,17 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
   return lines;
 }
 
-/**
- * Bind HTTP, open long-connection channels, and report ready only when both forms are usable. Each
- * adapter owns reconnects; a terminal close rejects `closed` and fails the process visibly. Abort is
- * the sole clean-shutdown command. `host` unset binds all interfaces.
- */
 /** What the CLI gives a service to stop in, and the hard exit that follows it. The order matters:
  *  a forced exit before the service answers would report a clean shutdown over a stuck channel. */
 export const SHUTDOWN_GRACE_MS = 800;
 const FORCED_EXIT_MS = 1_500;
 
+/**
+ * Bind HTTP and report ready — but only once the SERVICE is, which is not the same moment: a bound
+ * socket is not a serving agent while a declared long-connection channel is still dialling, so this
+ * awaits `hooks.ready` (mountAgentService owns the connections themselves) before announcing
+ * anything. Signals are the sole clean-shutdown command; `host` unset binds all interfaces.
+ */
 export function serve(
   handler: ChannelHandler,
   bind: { port: number; host?: string },

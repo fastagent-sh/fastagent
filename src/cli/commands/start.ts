@@ -7,17 +7,8 @@ import { dirname, resolve } from "node:path";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import {
-  SECRET_FILE_MODE,
-  ensureSecretsDir,
-  resolveSecretsDir,
-  workspaceHint,
-  isUnderDir,
-  exists,
-} from "../../paths.ts";
-import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
-import { reportModuleLoadFailures, log, setLogLevel } from "../../log.ts";
-import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
+import { SECRET_FILE_MODE, ensureSecretsDir, resolveSecretsDir, isUnderDir, exists } from "../../paths.ts";
+import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
@@ -29,7 +20,7 @@ import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
-import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
+import { parseBind, parsePort, reportAssembly, resolveFirstRunModel } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -62,39 +53,16 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);
   const opened = await openStartDir(dir, opts, sessionsDirOverride);
-  const {
-    agent,
-    definition,
-    agentDir,
-    workspace,
-    config,
-    modelSpec,
-    stateRoot,
-    sessionsDir,
-    authPath,
-    toolNames,
-    deferredToolNames,
-    toolCollisions,
-    toolFailures,
-  } = opened;
+  const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
 
-  reportLine("agent", agentDir);
-  reportLine("workspace", workspace);
-  reportWorkspaceHint(workspaceHint({ agentDir, workspace }));
-  reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
-  await reportAuth(agentDir, modelSpec, authPath);
-  reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
-  if (definition.persona) reportLine("persona", "persona.md");
-  reportLine("skills", definition.skills.map((s) => s.name).join(", ") || "(none)");
-  reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
-  if (toolNames.length > 0) reportLine("tools", toolNames.join(", "));
-  if (deferredToolNames.length > 0) {
-    reportLine("deferred", `${deferredToolNames.join(", ")} (activated via search_tools)`);
-  }
-  reportToolCollisions(toolCollisions);
-  reportModuleLoadFailures(toolFailures);
-  reportLine("state", stateRoot);
-  reportLine("sessions", sessionsDir);
+  // The same report `dev` prints; `state:`/`sessions:` are start's own extras, and the persistence
+  // notes below are why (see reportAssembly on the asymmetry).
+  await reportAssembly(opened, {
+    afterTools: [
+      ["state", stateRoot],
+      ["sessions", sessionsDir],
+    ],
+  });
   // State defaults under the agent dir, which a redeploy may replace wholesale. Gate on where the
   // state root ACTUALLY resolved (inside the agent dir?), not on the raw env var: an empty
   // `FASTAGENT_STATE_DIR=""` reads as unset (resolveStateRoot) and still lands in-agent, so a raw
@@ -117,7 +85,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
     );
   }
-  reportFindingsIfChanged(definition.dir, definition);
 
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);

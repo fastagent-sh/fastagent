@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { loginWithKeyCheck } from "../src/cli/shared.ts";
+import { describe, expect, it, vi } from "vitest";
+import { loginWithKeyCheck, reportAssembly } from "../src/cli/shared.ts";
+import { setLogLevel } from "../src/log.ts";
 import { LoginCancelled, type LoginMethod } from "../src/engines/pi/login.ts";
 
 /** Record every flow call's (provider, method) and pop canned results/verdicts in order. */
@@ -61,5 +62,74 @@ describe("loginWithKeyCheck (the rejected-key retry loop)", () => {
     await expect(
       loginWithKeyCheck(undefined, "/tmp/auth.json", undefined, { flow, verify: f.verify }),
     ).rejects.toBeInstanceOf(LoginCancelled);
+  });
+});
+
+describe("reportAssembly (the startup report dev and start share)", () => {
+  const opened = {
+    agentDir: "/w/agent",
+    workspace: "/w",
+    modelSpec: "p/m",
+    authPath: "/w/agent/.secrets/auth.json",
+    config: {},
+    definition: {
+      dir: "/w/agent",
+      contextFiles: [{ path: "AGENTS.md" }],
+      skills: [{ name: "release" }],
+      collisions: [],
+      diagnostics: [],
+    },
+    toolNames: ["fetch-url"],
+    deferredToolNames: [],
+    toolCollisions: [],
+    toolFailures: [],
+  } as unknown as Parameters<typeof reportAssembly>[0];
+
+  /** The report writes through the leveled logger; `info` is the posture both commands report at. */
+  const lines = async (extras?: Parameters<typeof reportAssembly>[1]): Promise<string[]> => {
+    const out: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
+    setLogLevel("info");
+    try {
+      await reportAssembly(opened, extras);
+    } finally {
+      spy.mockRestore();
+      setLogLevel("info"); // restore the default the other suites rely on — the level is a module singleton
+    }
+    // Lines arrive as `INFO  [fastagent] <label>: <value>`; the label is what this pins.
+    return out.map(
+      (l) =>
+        l
+          .replace(/^\S+\s+\[fastagent\]\s+/, "")
+          .split(":")[0]
+          ?.trim() ?? "",
+    );
+  };
+
+  it("prints ONE spine, in order — the thing the two commands each used to write out by hand", async () => {
+    // `auth` is reportAuth's line; it reads real credentials, so only its position is pinned here.
+    const spine = await lines();
+    expect(spine.slice(0, 3)).toEqual(["agent", "workspace", "model"]);
+    expect(spine).toContain("context");
+    expect(spine).toContain("skills");
+    expect(spine).toContain("codingTools");
+    expect(spine).toContain("tools");
+    expect(spine).not.toContain("deferred"); // omitted when there are none
+  });
+
+  it("places each command's extras where that command puts them", async () => {
+    const dev = await lines({ beforeModel: [["config", "/w/agent/fastagent.config.mjs"]] });
+    expect(dev.indexOf("config")).toBe(2); // after agent/workspace, before model
+    expect(dev.indexOf("config")).toBeLessThan(dev.indexOf("model"));
+
+    const start = await lines({
+      afterTools: [
+        ["state", "/w/agent/.state"],
+        ["sessions", "/w/s"],
+      ],
+    });
+    expect(start.indexOf("state")).toBeGreaterThan(start.indexOf("codingTools"));
+    expect(start.slice(-2)).toEqual(["state", "sessions"]);
+    expect(start).not.toContain("config"); // start's report has never named it
   });
 });

@@ -28,7 +28,13 @@ import {
   providerAuthStatuses,
 } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
-import { log } from "../log.ts";
+import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
+import type { LoadedDefinition } from "../engines/pi/definition.ts";
+import type { ModuleLoadFailure } from "../loader.ts";
+import type { ToolCollision } from "../engines/pi/tool.ts";
+import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
+import { workspaceHint } from "../paths.ts";
+import { log, reportModuleLoadFailures } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { failStartup, failUsage } from "./fail.ts";
@@ -39,16 +45,80 @@ import { failStartup, failUsage } from "./fail.ts";
  * `codingTools:` joined `workspace:`/`config:`/`model:`/`state:`. `info` keeps its own writer on purpose: its report is
  * stdout DATA (pipeable, its own label set, its own width), not a log line — the shared thing is the
  * policy (pad, never hand-space), not a constant.
+ *
+ * Private to this module: {@link reportAssembly} is the report, and a command reaching past it for a
+ * line of its own is how the two copies of that report came to differ.
  */
-export function reportLine(label: string, value: string): void {
+function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(13)}${value}`);
 }
 
 /** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}):
  *  you pointed at the agent, and the project around it is probably what you meant. A hint, so it renders
- *  as one and is silent otherwise — `dev` and `start` both print the pair, so both ask for it. */
-export function reportWorkspaceHint(hint: string | undefined): void {
+ *  as one and is silent otherwise. */
+function reportWorkspaceHint(hint: string | undefined): void {
   if (hint) reportLine("hint", hint);
+}
+
+/** What the startup report reads off an opened directory — a structural subset of the opener's return,
+ *  spelled out so this module does not depend on that function's whole shape. */
+export interface ReportableAssembly {
+  agentDir: string;
+  workspace: string;
+  modelSpec: string;
+  authPath: string;
+  config: { thinkingLevel?: string };
+  definition: LoadedDefinition;
+  toolNames: string[];
+  deferredToolNames: string[];
+  toolCollisions: ToolCollision[];
+  toolFailures: ModuleLoadFailure[];
+}
+
+/**
+ * What `dev` and `start` say about the directory they just opened, in the order they say it.
+ *
+ * ONE function because it is one report: the two commands wrote it out line by line, and the copies
+ * had already diverged over which lines exist at all — `dev` naming the config file, `start` naming
+ * state and sessions. A line added to one of two hand-written copies is invisible in the other.
+ *
+ * The divergence itself is PRESERVED, not resolved: `start`'s `state:`/`sessions:` pair introduces the
+ * persistence warnings that follow it in production posture, and `dev`'s `config:` has no counterpart
+ * there. Both are passed as explicit extras by the caller, so the asymmetry is visible at the call
+ * site rather than buried in two copies of a list. Whether it is RIGHT is a separate question from
+ * whether it has one owner.
+ *
+ * Findings (skill collisions, definition diagnostics) CLOSE the report — they are about the assembly
+ * just printed. What a command says next is its own posture talk, not report: `start`'s persistence
+ * notes now follow them rather than precede them.
+ */
+export async function reportAssembly(
+  a: ReportableAssembly,
+  extras: {
+    /** Printed between `workspace:`/`hint:` and `model:` (`dev` names the config file here). */
+    beforeModel?: [label: string, value: string][];
+    /** Printed after the tool lines, before findings (`start` names state + sessions here). */
+    afterTools?: [label: string, value: string][];
+  } = {},
+): Promise<void> {
+  reportLine("agent", a.agentDir);
+  reportLine("workspace", a.workspace);
+  reportWorkspaceHint(workspaceHint(a));
+  for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
+  reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
+  await reportAuth(a.agentDir, a.modelSpec, a.authPath);
+  reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
+  if (a.definition.persona) reportLine("persona", "persona.md");
+  reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
+  reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
+  if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
+  if (a.deferredToolNames.length > 0) {
+    reportLine("deferred", `${a.deferredToolNames.join(", ")} (activated via search_tools)`);
+  }
+  reportToolCollisions(a.toolCollisions);
+  reportModuleLoadFailures(a.toolFailures);
+  for (const [label, value] of extras.afterTools ?? []) reportLine(label, value);
+  reportFindingsIfChanged(a.definition.dir, a.definition);
 }
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
