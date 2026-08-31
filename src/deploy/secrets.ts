@@ -2,6 +2,10 @@
  * The secret set a deployed agent needs, computed from the definition — host-neutral. Required values
  * gate every target; optional channel values travel only when configured. Only the SET command differs
  * (`fly secrets import` vs `railway variables set`). The runbooks list both classes; `--run` reads local values.
+ *
+ * Both DIRECTIONS of the credential carry live here: the deploy-time assembly below, and the boot-time
+ * seed read at the bottom. They were split across a host driver (`fly/run.ts`) that neither `start` nor
+ * AgentCore deploys through — a host's driver is not the place three non-Fly callers reach into.
  */
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
@@ -151,4 +155,33 @@ export function assembleSecrets(input: {
     else if (name !== CONTROL_TOKEN_ENV) missingSecrets.push(name);
   }
   return { secrets, missingSecrets, needsModelCredential };
+}
+
+/**
+ * The bytes to seed to the auth file, or undefined to leave it alone — the pure core of `start`'s
+ * FASTAGENT_AUTH_SEED materialization (the read side of {@link assembleSecrets}'s carry). ABSENT-ONLY
+ * by design: a present file (a refreshed volume copy) is never overwritten by the stale seed, so a box
+ * that ran its own OAuth refresh is not rolled back.
+ */
+export function authSeedBytes(seed: string | undefined, fileExists: boolean): Buffer | undefined {
+  return !seed || fileExists ? undefined : Buffer.from(seed, "base64");
+}
+
+/**
+ * Collect the (possibly CHUNKED) auth seed from the environment: `FASTAGENT_AUTH_SEED` plus numbered
+ * continuations (`_2`, `_3`, …) concatenated in order. Hosts whose env values carry a small max
+ * length (AgentCore: 2048 chars — a real OAuth auth.json's base64 exceeds it) split the seed across
+ * them at deploy time; single-var hosts (Fly/Railway) never set a continuation and are unchanged.
+ * Collection stops at the first absent/empty continuation — the writer fills them contiguously.
+ */
+export function collectAuthSeed(env: NodeJS.ProcessEnv): string | undefined {
+  const first = env.FASTAGENT_AUTH_SEED;
+  if (!first) return undefined;
+  let seed = first;
+  for (let i = 2; ; i++) {
+    const part = env[`FASTAGENT_AUTH_SEED_${i}`];
+    if (!part) break;
+    seed += part;
+  }
+  return seed;
 }

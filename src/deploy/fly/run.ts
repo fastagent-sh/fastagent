@@ -21,34 +21,6 @@ import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 
-/**
- * The bytes to seed to the auth file, or undefined to leave it alone — the pure core of `start`'s
- * FASTAGENT_AUTH_SEED materialization. ABSENT-ONLY by design: a present file (a refreshed volume copy)
- * is never overwritten by the stale seed, so a box that ran its own OAuth refresh is not rolled back.
- */
-export function authSeedBytes(seed: string | undefined, fileExists: boolean): Buffer | undefined {
-  return !seed || fileExists ? undefined : Buffer.from(seed, "base64");
-}
-
-/**
- * Collect the (possibly CHUNKED) auth seed from the environment: `FASTAGENT_AUTH_SEED` plus numbered
- * continuations (`_2`, `_3`, …) concatenated in order. Hosts whose env values carry a small max
- * length (AgentCore: 2048 chars — a real OAuth auth.json's base64 exceeds it) split the seed across
- * them at deploy time; single-var hosts (Fly/Railway) never set a continuation and are unchanged.
- * Collection stops at the first absent/empty continuation — the writer fills them contiguously.
- */
-export function collectAuthSeed(env: NodeJS.ProcessEnv): string | undefined {
-  const first = env.FASTAGENT_AUTH_SEED;
-  if (!first) return undefined;
-  let seed = first;
-  for (let i = 2; ; i++) {
-    const part = env[`FASTAGENT_AUTH_SEED_${i}`];
-    if (!part) break;
-    seed += part;
-  }
-  return seed;
-}
-
 export interface FlyRunPlan {
   appName: string;
   region: string;

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { type FlyRunPlan, authSeedBytes, collectAuthSeed, deployFlyRun } from "../src/deploy/fly/run.ts";
+import { type FlyRunPlan, deployFlyRun } from "../src/deploy/fly/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { CONTROL_TOKEN_ENV } from "../src/channels/control.ts";
-import { assembleSecrets, deploymentSecrets } from "../src/deploy/secrets.ts";
+import { assembleSecrets, authSeedBytes, collectAuthSeed, deploymentSecrets } from "../src/deploy/secrets.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
@@ -441,7 +441,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
   });
 });
 
-describe("deploy/fly/run: authSeedBytes (the start-side seed guard)", () => {
+describe("deploy/secrets: authSeedBytes (the start-side seed guard)", () => {
   it("seeds only when the seed is set AND the auth file is absent (absent-only — no rollback)", () => {
     expect(authSeedBytes(undefined, false)).toBeUndefined(); // no seed → no-op
     expect(authSeedBytes(Buffer.from("hi").toString("base64"), true)).toBeUndefined(); // file present → never clobber
