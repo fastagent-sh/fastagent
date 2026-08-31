@@ -2,12 +2,19 @@
  * `fastagent start [dir]`: run the agent in production posture — the SAME assembly as dev (your
  * directory is the agent), just no file-watching. No build step: start reads the definition directly.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import { resolveSecretsDir, workspaceHint, isUnderDir, exists } from "../../paths.ts";
+import {
+  SECRET_FILE_MODE,
+  ensureSecretsDir,
+  resolveSecretsDir,
+  workspaceHint,
+  isUnderDir,
+  exists,
+} from "../../paths.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
 import { reportModuleLoadFailures, log, setLogLevel } from "../../log.ts";
 import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
@@ -177,8 +184,10 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
   // env-value max length (AgentCore); single-var hosts are unchanged.
   const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
-  await mkdir(dirname(authPath), { recursive: true });
-  await writeFile(authPath, bytes);
+  await ensureSecretsDir(dirname(authPath));
+  await writeFile(authPath, bytes, { mode: SECRET_FILE_MODE });
+  await chmod(authPath, SECRET_FILE_MODE); // `mode` above is ignored if the file somehow exists
+
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 

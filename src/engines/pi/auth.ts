@@ -25,10 +25,10 @@
  * partial one, so there is no torn-read window for an unlocked read to absorb. The write path
  * refuses to overwrite a corrupt file (never clobbering other providers' credentials).
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { GLOBAL_HOME_DIR, SECRETS_DIRNAME } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE, ensureSecretsDir } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -58,7 +58,7 @@ function pick(creds: Creds, providerId: string): Credential | undefined {
   return cred && (cred.type === "oauth" || cred.type === "api_key") ? cred : undefined;
 }
 
-const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf8", mode: 0o600 } as const;
+const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf8", mode: SECRET_FILE_MODE } as const;
 
 interface LockResult<T> {
   result: T;
@@ -78,12 +78,11 @@ async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
-  const dir = dirname(authPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  await ensureSecretsDir(dirname(authPath));
   if (!existsSync(authPath)) {
     try {
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
-      chmodSync(authPath, 0o600);
+      chmodSync(authPath, SECRET_FILE_MODE);
     } catch (error) {
       // EEXIST: another process created the file between the existence check and this exclusive
       // create; its content (possibly already-written credentials) must not be clobbered.
@@ -113,7 +112,7 @@ async function withLockedAuthFile<T>(
     // spelling that applies the mode before the content is reachable — `writeFileSync`'s `mode` is
     // a no-op on an existing file, so a chmod after it leaves the new credential briefly readable
     // at whatever mode the old file carried.
-    if (out.next !== undefined) writeFileAtomic(authPath, out.next, 0o600);
+    if (out.next !== undefined) writeFileAtomic(authPath, out.next, SECRET_FILE_MODE);
     throwIfCompromised();
     result = out.result;
   } catch (error) {
