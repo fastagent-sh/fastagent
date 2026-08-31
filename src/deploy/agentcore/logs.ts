@@ -45,8 +45,8 @@ function parseLogGroupNames(stdout: string): string[] | undefined {
 
 /**
  * Find and tail one AgentCore log source. Discovery is dynamic rather than spelling `-DEFAULT`:
- * endpoint naming belongs to AWS, and an edited stack may use a different endpoint. Runtime tailing
- * filters the log STREAM prefix so OTEL/spans in the same group never pollute the application log.
+ * endpoint naming belongs to AWS, and an edited stack may use a different endpoint. The whole group
+ * is tailed — see the file header for why a stream filter cannot narrow it and must not be added.
  */
 export async function tailAgentcoreLogs(
   plan: AgentcoreLogsPlan,
