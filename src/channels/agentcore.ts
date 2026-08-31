@@ -412,6 +412,14 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
 
   // Settle-then-snapshot: when the envelope leaves nothing in flight, its writes are final now (a
   // background turn instead reports through the idle edge above).
+  //
+  // A public `invoke` is the one kind this MISSES, measurably: it answers with an unconsumed SSE
+  // stream, so the turn runs after this line and its records wait for the next envelope's snapshot.
+  // Counting it as in-flight work would close that and cost more than it buys — the stream drains at
+  // the CLIENT's pace, so one parked reader pins /ping at HealthyBusy and defeats the idle reclaim,
+  // which is the quota-exhaustion failure the ping contract below warns about. The kinds that carry
+  // conversations (webhook, schedule-fire, wake-poke) all run their turn inside the request or
+  // through `beginWork`, so they land on one of the two edges; `invoke` is the direct/debug door.
   const invocations = async (req: Request): Promise<Response> => {
     const response = await handleInvocation(req);
     if (stateSync && !isBusy()) stateSync.save();
