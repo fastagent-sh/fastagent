@@ -180,11 +180,10 @@ export async function loadExtensionPaths(
 }
 
 /**
- * The first candidate that is a REAL file. `exists` would follow a symlink, which is how a
- * subdirectory's `index.ts` could otherwise point outside the definition and slip past the rule the
- * top-level entries already follow.
+ * The first candidate that is a REAL file, and whether one was found but REFUSED as a symlink.
+ * `exists` would follow the link, which is how a subdirectory's `index.ts` could otherwise point
+ * outside the definition and slip past the rule the top-level entries already follow.
  */
-/** The first real file among the candidates, and whether one was found but REFUSED as a symlink. */
 async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ path?: string; refused: boolean }> {
   let refused = false;
   for (const candidate of candidates) {

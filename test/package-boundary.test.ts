@@ -130,6 +130,23 @@ describe("the public subpaths do not reach into the CLI", () => {
   }
 });
 
+describe("knip's entry list mirrors the package's subpath exports", () => {
+  // knip's own config says a forgotten entry "surfaces as its whole tree reported dead". That is only
+  // true for a subpath nothing else re-exports: `src/node.ts` was missing for as long as it has
+  // existed, and knip stayed silent because `index.ts` re-exports it. The claim needs its own check.
+  it("every exported subpath has a knip entry", () => {
+    const pkg = JSON.parse(readFileSync(resolve(srcDir, "../package.json"), "utf8")) as {
+      exports: Record<string, unknown>;
+    };
+    const knip = readFileSync(resolve(srcDir, "../knip.jsonc"), "utf8");
+    const missing = Object.keys(pkg.exports)
+      .filter((key) => key !== "./package.json")
+      .map((key) => (key === "." ? "src/index.ts" : `src/${key.slice(2)}.ts`))
+      .filter((entry) => !knip.includes(JSON.stringify(entry)));
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("the assembly's parts stay out of the public surface", () => {
   // Each of these was public once. They are how `createAgentService` builds a service, not something
   // a caller reproduces — and every one re-exported is a promise we then have to keep.

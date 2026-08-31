@@ -82,7 +82,6 @@ export interface ServingSurface {
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
   builtinInvoke: boolean;
-  /** Marks the built-in health route ready after every long-connection channel first connects. */
   /** Flip health between 200 and 503. Two-way on purpose: a long connection that dies after coming
    *  up leaves the surface serving something it no longer has, and a load balancer should hear it. */
   setReady(value: boolean): void;
