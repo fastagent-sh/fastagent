@@ -138,6 +138,31 @@ describe("inheritance edges", () => {
     expect(repaired).toHaveLength(1); // the thread starts on a transcript a provider will accept
   });
 
+  it("the window's budget counts the copied compaction's retained tail", async () => {
+    // The tail is a POINTER on pi's compaction entry, not messages on it, so a budget that reads the
+    // entry alone saw only the summary — and admitted a window on top of a tail that can be the
+    // engine's whole `keepRecentTokens` (20K by default), blowing past INHERIT_MAX_TOKENS. Here the
+    // tail is a `custom_message`, which reaches the model exactly like a message and was likewise
+    // uncounted.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
+    const anchor = room.appendCustomMessageEntry("ext.dump", "T".repeat(240_000), true); // ~60K tokens
+    room.appendCompaction("the older part", anchor, 1000);
+    for (let i = 0; i < 3; i++) {
+      room.appendMessage({ role: "user", content: `question ${i}`, timestamp: 10 + i });
+      room.appendMessage(fauxAssistantMessage(`answer ${i}`));
+    }
+
+    const thread = await store.openOrCreate("thread-budget", { parentSession: "room" });
+
+    // Two compactions: the copied one, plus the inheritance mark the budget now demands.
+    expect(thread.getBranch().filter((e) => e.type === "compaction")).toHaveLength(2);
+    const context = JSON.stringify(thread.buildSessionContext().messages);
+    expect(context).toContain("answer 2"); // the newest exchange is the window's floor
+    expect(context).not.toContain("question 0"); // …and the older ones are outside it
+  });
+
   it("a failure while preparing the fork leaves no record under the id", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-inherit-partial-"));
     const cwd = process.cwd();

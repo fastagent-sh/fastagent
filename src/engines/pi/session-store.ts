@@ -229,11 +229,11 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   };
   /** Fork the named parent into `id`, or answer undefined so the caller starts empty. Every failure
    *  is a warn: a thread must not lose its first turn to an inheritance edge. */
-  const inheritInto = async (id: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
+  const inheritInto = async (sessionId: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
     const found = locate(inherit.parentSession);
     if (!found) {
       log.warn(
-        `[fastagent] session "${id}" names parent "${inherit.parentSession}", which has no record — starting empty`,
+        `[fastagent] session "${sessionId}" names parent "${inherit.parentSession}", which has no record — starting empty`,
       );
       return undefined;
     }
@@ -243,11 +243,11 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const parent = reconcileInterruptedToolCalls(SessionManager.open(found.path, found.dir));
       const cut = inheritanceCut(parent, inherit.branchHints);
       if (!cut) return undefined;
-      return fillStaged(id, (staged) => copyBranchForInheritance(parent, staged, cut.at));
+      return fillStaged(piSessionId(sessionId), (staged) => copyBranchForInheritance(parent, staged, cut.at));
     } catch (error) {
       // Unattributed on purpose: this spans reading the parent AND writing the child.
       log.warn(
-        `[fastagent] could not inherit from "${inherit.parentSession}" into "${id}" (${String(error)}) — starting empty`,
+        `[fastagent] could not inherit from "${inherit.parentSession}" into "${sessionId}" (${String(error)}) — starting empty`,
       );
       return undefined;
     }
@@ -274,15 +274,15 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     async openOrCreate(sessionId, inherit) {
       const found = locate(sessionId);
       if (found) return reconcileInterruptedToolCalls(SessionManager.open(found.path, found.dir));
-      const id = piSessionId(sessionId);
       mkdirSync(own, { recursive: true });
       // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which
       // is what makes it one-time by construction.
       if (inherit) {
-        const inherited = await inheritInto(id, inherit);
+        const inherited = await inheritInto(sessionId, inherit);
         if (inherited) return inherited;
       }
-      return materialize(SessionManager.create(cwd, own, { id }), own);
+      // The CALLER's id in every message above; pi's spelling only where pi names the file.
+      return materialize(SessionManager.create(cwd, own, { id: piSessionId(sessionId) }), own);
     },
     openIfExists: openExisting,
     applyProperties: (sessionId, writes) => applyProperties(() => openExisting(sessionId), writes),
