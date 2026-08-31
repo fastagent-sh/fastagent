@@ -86,11 +86,18 @@ function authCallbacks(
     signal: userSignal ?? new AbortController().signal,
     prompt: async (p: AuthPrompt): Promise<string> => {
       if (p.type === "select") {
-        // No signal, unlike the text/secret branch below, and not an oversight: every builtin
-        // provider's `select` is the FIRST call of its `login()` — which login method to use — so
-        // nothing is racing it. `doneSignal` fires when `auth.login()` RETURNS, and it cannot
-        // return while this await is what it is blocked on. The pending-prompt backstop is for the
-        // later ones (a manual code paste losing to the callback server), which do take it.
+        // This branch is UNCANCELLABLE: `LoginIO.select` takes no signal, so all three the line
+        // below composes — the provider's own, the caller's `loginFlow({ signal })`, and the
+        // pending-prompt backstop — are dropped here.
+        //
+        // It costs nothing against pi 0.84's providers, where every `select` is the FIRST call of
+        // `login()` (bedrock, vertex, openai-codex, radius — all of them asking which login method
+        // to use). Nothing is racing it: no callback server is up yet, and `doneSignal` fires when
+        // `auth.login()` RETURNS, which it cannot do while blocked on this await.
+        //
+        // That is a property of the providers, not a guarantee, and nothing here holds it. A
+        // provider that ever issues a `select` after starting its callback server shows up as the
+        // CLI parked on stdin — widen `LoginIO.select` with a signal then.
         const v = await io.select(
           p.message,
           p.options.map((o) => ({ value: o.id, label: o.label, hint: o.description })),
@@ -151,7 +158,6 @@ async function selectProvider(
 ): Promise<Provider> {
   const candidates = candidatesFor(providers, method);
   if (candidates.length === 0) throw new Error(`no provider supports ${method} login`);
-  const byId = new Map(candidates.map((p) => [p.id, p]));
   const options = await Promise.all(
     candidates.map(async (p): Promise<IoOption> => {
       const cred = await store.read(p.id);
@@ -162,8 +168,9 @@ async function selectProvider(
   const id = await io.select("Select a provider", options);
   // Answers the PROVIDER, not its id: the caller needs the object, and resolving it here means the
   // one place that can fail to is the one that just offered the list. Cancel and an id that was
-  // never offered are the same answer — nothing was chosen.
-  const chosen = id === undefined ? undefined : byId.get(id);
+  // never offered are the same answer — nothing was chosen — and `find` gives both, since a
+  // provider id is always a string and `undefined` matches none of them.
+  const chosen = candidates.find((p) => p.id === id);
   if (!chosen) throw new LoginCancelled("no provider selected");
   return chosen;
 }
