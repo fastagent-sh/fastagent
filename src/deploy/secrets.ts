@@ -4,8 +4,8 @@
  * (`fly secrets import` vs `railway variables set`). The runbooks list both classes; `--run` reads local values.
  *
  * Both DIRECTIONS of the credential carry live here: the deploy-time assembly below, and the boot-time
- * seed read at the bottom. They were split across a host driver (`fly/run.ts`) that neither `start` nor
- * AgentCore deploys through — a host's driver is not the place three non-Fly callers reach into.
+ * seed read at the bottom. They were split across a host driver (`fly/run.ts`), which left `start`
+ * — a serving path that deploys nothing, on Fly or anywhere — importing from it to boot a container.
  */
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";

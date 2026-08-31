@@ -94,7 +94,7 @@ function shellArg(value: string): string {
 
 /** A flag exactly one host honours, and what the OTHERS do instead. `instead` is exhaustive over the
  *  non-owners, so a host added to {@link DEPLOY_HOSTS} cannot silently lose its line. */
-export interface HostOnlyFlag<Owner extends DeployHost> {
+interface HostOnlyFlag<Owner extends DeployHost> {
   flag: string;
   owner: Owner;
   passed: (opts: DeployOptions) => boolean;
@@ -152,6 +152,10 @@ export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
     // and a cast is how a hole would reach the operator as the word "undefined". Unreachable while
     // the rows stay exhaustive, which is what the table's own test asserts.
     const instead: string | undefined = (rule.instead as Record<string, string>)[host];
+    // THROWN, not `failStartup`ed, though every other failure in this file exits through that: an
+    // incomplete table is a bug, and fail.ts prints a plain Error's message WITHOUT its stack (it
+    // reserves that shape for user-fixable problems) while exiting the process — which in the test
+    // that covers this table would kill the worker instead of reporting which row is short.
     if (instead === undefined) {
       throw new Error(`deploy: HOST_ONLY_FLAGS has no "instead" line for ${host} on ${rule.flag}`);
     }
