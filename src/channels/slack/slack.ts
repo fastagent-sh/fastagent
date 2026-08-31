@@ -13,7 +13,7 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
-import { MAX_TURN_ATTEMPTS, commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
+import { commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { createSlackBotTokenProvider } from "./bot-auth.ts";
 import { collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
@@ -326,7 +326,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           log.error(`${label} deferring durable turn ${turn.id} because Slack authentication failed: ${String(error)}`);
           return;
         }
-        const attempt = store.startAttempt(turn.id, MAX_TURN_ATTEMPTS);
+        const attempt = store.startAttempt(turn.id);
         if (attempt === "exceeded") {
           notifyDropped(turn);
           return;

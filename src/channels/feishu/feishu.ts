@@ -19,7 +19,7 @@ import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
-import { MAX_TURN_ATTEMPTS, commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
+import { commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
@@ -444,7 +444,7 @@ function createFeishuRuntimeFactory(
         await notice?.done;
         notices.delete(rec.id);
         // Count this execution against the durable record (poison-turn ceiling) before running it again.
-        const decision = store.startAttempt(rec.id, MAX_TURN_ATTEMPTS);
+        const decision = store.startAttempt(rec.id);
         if (decision === "exceeded") {
           notifyDropped(rec);
           return;

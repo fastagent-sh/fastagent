@@ -59,12 +59,13 @@ import { loadStateFile, saveStateFile } from "./state.ts";
  * DEPLOY frequency, which is a property of how fastagent is operated, not of which chat platform is in
  * front of it.
  *
- * Known limitation, and the reason it is not higher: the count cannot tell a self-inflicted crash from
- * an external SIGTERM (there is no graceful drain), so a legitimately long turn interrupted by this
- * many successive deploys is dropped as if it were poison. Catching SIGTERM to spare it would
- * reintroduce the drain the design refuses.
+ * Known limitation: the count cannot tell a self-inflicted crash from an external SIGTERM (there is no
+ * graceful drain), so a legitimately long turn interrupted by this many successive deploys is dropped
+ * as if it were poison. Three is a bet that such a turn is an outlier, not a defence against one:
+ * catching SIGTERM to spare it would reintroduce the drain the design refuses — raise this constant
+ * instead if such turns are expected.
  */
-export const MAX_TURN_ATTEMPTS = 3;
+const MAX_TURN_ATTEMPTS = 3;
 
 /** What every persisted turn record carries regardless of channel: identity, the session whose FIFO
  *  chain it runs on, and how many times it has STARTED executing without finishing (0 until its first
@@ -89,14 +90,14 @@ export interface TurnStore<T extends TurnRecordBase> {
   recover(): T[];
   /** Called when a turn is about to RUN (dequeued). Returns:
    *   - "run": bumped its persisted execution count; go ahead.
-   *   - "exceeded": over `maxAttempts` starts without finishing (killed mid-run every time, whatever the
-   *     cause); the record is dropped and the runner notifies the asker.
+   *   - "exceeded": over {@link MAX_TURN_ATTEMPTS} starts without finishing (killed mid-run every time,
+   *     whatever the cause); the record is dropped and the runner notifies the asker.
    *   - "defer": the bump could not be persisted — skip this cycle (fail closed: an unpersisted count
    *     would let a poison turn re-run forever); the record stays on disk and replays on the next start
    *     (a restart is required — disk recovery alone does not re-run it). The runner does NOT notify.
    *  An id with no record returns "run" (untracked): a completed turn's `remove` cleared it, so the
    *  redelivery-double-run tail (see the header's pre-ACK window) lands here. */
-  startAttempt(id: string, maxAttempts: number): "run" | "exceeded" | "defer";
+  startAttempt(id: string): "run" | "exceeded" | "defer";
 }
 
 export interface TurnStoreOptions<T extends TurnRecordBase> {
@@ -176,11 +177,11 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
       // happening to survive the load's JSON round-trip.
       return [...turns.values()].sort(order);
     },
-    startAttempt(id, maxAttempts) {
+    startAttempt(id) {
       const rec = turns.get(id);
       if (!rec) return "run"; // no record — run untracked (a redelivery double-run whose first run removed it)
       const attempts = rec.attempts + 1;
-      if (attempts > maxAttempts) {
+      if (attempts > MAX_TURN_ATTEMPTS) {
         // State the fact, not a cause the counter can't prove: a turn killed mid-run every time bumps
         // this whether IT poisoned the process or a deploy/OOM took it down each time.
         log.error(

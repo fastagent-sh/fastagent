@@ -40,7 +40,7 @@ describe("turn-store", () => {
     const path = freshPath();
     const store = createTurnStore(path);
     store.add(turn("t1"));
-    store.startAttempt("t1", 3); // attempts -> 1
+    store.startAttempt("t1"); // attempts -> 1
     store.add(turn("t1")); // redelivery re-submits the same update_id (a fresh record with attempts:0)
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "t1", attempts: 1 }]); // preserved, not reset
   });
@@ -75,27 +75,27 @@ describe("turn-store", () => {
   it("startAttempt bumps the execution count and persists it", () => {
     const path = freshPath();
     createTurnStore(path).add(turn("t1"));
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run");
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run");
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "t1", attempts: 1 }]); // durable bump
   });
 
-  it("keeps a turn that lands exactly ON maxAttempts (the > vs >= boundary)", () => {
+  it("keeps a turn that lands exactly ON the ceiling (the > vs >= boundary)", () => {
     const path = freshPath();
     createTurnStore(path).add(turn("edge", { attempts: 2 }));
-    expect(createTurnStore(path).startAttempt("edge", 3)).toBe("run"); // 2 -> 3, still <= 3, not dropped
+    expect(createTurnStore(path).startAttempt("edge")).toBe("run"); // 2 -> 3, still <= 3, not dropped
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "edge", attempts: 3 }]);
   });
 
   it("an unknown id runs untracked (a redelivery double-run whose first run already removed the record)", () => {
-    expect(createTurnStore(freshPath()).startAttempt("gone", 3)).toBe("run");
+    expect(createTurnStore(freshPath()).startAttempt("gone")).toBe("run");
   });
 
-  it("drops a turn on its N+1th start (over maxAttempts) and persists the drop", () => {
+  it("drops a turn on its N+1th start (over the ceiling) and persists the drop", () => {
     const path = freshPath();
     const store = createTurnStore(path);
     store.add(turn("poison", { attempts: 3 }));
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(store.startAttempt("poison", 3)).toBe("exceeded"); // 3 -> 4 > 3, dropped
+    expect(store.startAttempt("poison")).toBe("exceeded"); // 3 -> 4 > 3, dropped
     expect(err).toHaveBeenCalledWith(expect.stringContaining("dropping turn poison"));
     expect(createTurnStore(path).recover()).toHaveLength(0); // the drop is persisted
   });
@@ -105,11 +105,11 @@ describe("turn-store", () => {
     // end to end (the seeded-count tests above each cover only one link).
     const path = freshPath();
     createTurnStore(path).add(turn("t1")); // accepted, attempts 0
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run"); // → 1
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run"); // → 2
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run"); // → 3
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run"); // → 1
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run"); // → 2
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run"); // → 3
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("exceeded"); // 4th start > 3 → dropped
+    expect(createTurnStore(path).startAttempt("t1")).toBe("exceeded"); // 4th start > 3 → dropped
     expect(createTurnStore(path).recover()).toHaveLength(0);
   });
 
@@ -127,8 +127,8 @@ describe("turn-store", () => {
         .recover()
         .map((t) => `${t.id}:${t.attempts}`),
     ).toEqual(["A:3", "B:0"]);
-    expect(store.startAttempt("A", 3)).toBe("exceeded");
-    expect(store.startAttempt("B", 3)).toBe("run"); // B was never charged for A's crashes
+    expect(store.startAttempt("A")).toBe("exceeded");
+    expect(store.startAttempt("B")).toBe("run"); // B was never charged for A's crashes
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "B", attempts: 1 }]); // only B survives, at 1
   });
 
@@ -172,7 +172,7 @@ describe("turn-store", () => {
     rmSync(sub, { recursive: true });
     writeFileSync(sub, "x"); // now the parent is a FILE — the bump write fails
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(store.startAttempt("t1", 3)).toBe("defer"); // an unpersistable bump must not run the turn
+    expect(store.startAttempt("t1")).toBe("defer"); // an unpersistable bump must not run the turn
     expect(err).toHaveBeenCalledWith(expect.stringContaining("deferring"));
   });
 
@@ -210,8 +210,10 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     expect(order).toEqual(["remove:t1", "commit:chat:1"]);
   });
 
-  it("commits the SNAPSHOT it was given, not the whole place", () => {
-    // The buffer removes by identity, so a message that arrived while the turn ran survives.
+  it("forwards the consumed entries by reference", () => {
+    // Not a copy: the buffer removes by object identity, so cloning the entries on the way through
+    // would commit a set that matches nothing and leave the answered discussion buffered forever.
+    // (That identity removal itself is context-buffer's own test; this only guards the hand-off.)
     const consumed = [{ body: "a" }];
     const seen: unknown[] = [];
     const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<

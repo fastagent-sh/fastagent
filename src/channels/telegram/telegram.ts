@@ -51,7 +51,7 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
-import { MAX_TURN_ATTEMPTS, commitAnsweredTurn } from "../kit/turn-store.ts";
+import { commitAnsweredTurn } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
@@ -223,10 +223,10 @@ export function telegramChannel({
         await notices.get(rec.id);
         notices.delete(rec.id);
         // Count this execution against the durable record (poison-turn ceiling) before running it again.
-        const decision = store.startAttempt(rec.id, MAX_TURN_ATTEMPTS);
+        const decision = store.startAttempt(rec.id);
         if (decision === "exceeded") {
-          // Started MAX_TURN_ATTEMPTS times without finishing — tell the asker (reusing its ⏳ notice if
-          // any), drop it.
+          // Started the ceiling's worth of times without finishing (turn-store.ts MAX_TURN_ATTEMPTS) —
+          // tell the asker (reusing its ⏳ notice if any), drop it.
           notifyDropped(rec);
           return;
         }
