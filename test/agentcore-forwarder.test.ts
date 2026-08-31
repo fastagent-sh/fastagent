@@ -189,9 +189,12 @@ describe("agentcore forwarder: the shared-secret gates", () => {
     // noise. What this catches is the next endpoint copying the wrong neighbour.
     const src = forwarderSource();
     expect(src).not.toMatch(/req\.\w+\s*!==\s*process\.env/);
-    // …and each secret is still actually checked (a gate deleted rather than converted).
+    // …and each secret is still actually checked (a gate deleted rather than converted). The WHOLE
+    // call, not the argument position: `process.env.STATE_REFRESH_SECRET)` also closes the unrelated
+    // `(WAKE_SECRET || STATE_REFRESH_SECRET)` ownUrl guard, so that spelling stayed green with the
+    // state-urls gate deleted.
     for (const secret of ["INGRESS_SECRET", "WAKE_SECRET", "STATE_REFRESH_SECRET"]) {
-      expect(src).toContain(`process.env.${secret})`); // the secretEq argument position
+      expect(src).toMatch(new RegExp(`secretEq\\(req\\.\\w+, process\\.env\\.${secret}\\)`));
     }
   });
 });
