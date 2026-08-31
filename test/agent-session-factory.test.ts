@@ -85,6 +85,40 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     expect(seenSessionId).toBe("-1001234567890");
   });
 
+  it("every tool call in a turn shares one activation bridge", async () => {
+    // The bridge carries the lock that orders concurrent activations, so it has to live as long as
+    // the session those activations mutate. Rebuilt per tool CALL it is a fresh chain every time,
+    // and the parallel batch it exists for never meets on it — the shape chat's builder already
+    // names ("a per-call chain serializes nothing").
+    //
+    // The ordering ITSELF is not reachable from here: pi's session setters are synchronous today,
+    // so the read-modify-write cannot be interleaved no matter how many bridges exist. What is
+    // checkable is the thing the lock rests on — that both calls hold the same one.
+    const seen: unknown[] = [];
+    const probe = (name: string) =>
+      defineTool({
+        name,
+        description: `probe ${name}`,
+        input: z.object({}),
+        execute: async (_input, ctx) => {
+          seen.push(ctx.tools?.active);
+          return "probed";
+        },
+      });
+    const agent = await agentWith(
+      [
+        fauxAssistantMessage([fauxToolCall("probe-a", {}, { id: "a" }), fauxToolCall("probe-b", {}, { id: "b" })]),
+        fauxAssistantMessage("done"),
+      ],
+      { tools: [probe("probe-a"), probe("probe-b")] as Parameters<typeof piAgentSessionFactory>[0]["tools"] },
+    );
+
+    await collect(agent.invoke({ session: "s" }, { text: "go" }));
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
+  });
+
   it("a deferred tool is not offered until something activates it", async () => {
     let offered: string[] = [];
     const agent = await agentWith(

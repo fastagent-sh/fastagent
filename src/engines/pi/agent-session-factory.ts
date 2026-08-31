@@ -31,7 +31,13 @@ import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { DEFAULT_THINKING_LEVEL } from "./models.ts";
-import { type ToolActivation, additiveActivation, agentSessionManager, turnContext } from "./tool-context.ts";
+import {
+  type ToolActivation,
+  type TurnContext,
+  additiveActivation,
+  agentSessionManager,
+  turnContext,
+} from "./tool-context.ts";
 
 /** pi's Model with the API-shape generic erased; fastagent only passes models through. */
 // biome-ignore lint/suspicious/noExplicitAny: variance-friendly model type, audited at this single point
@@ -133,7 +139,10 @@ const warnedDroppedActivations = new Set<string>();
  */
 function sessionToolActivation(session: AgentSession): ToolActivation {
   // Serialize activations: the read-modify-write below is only race-free while nothing awaits
-  // between read and write, and parallel tool calls in one batch would otherwise double-stamp.
+  // between read and write, and pi's session setters happening to be synchronous today is not a
+  // contract worth betting parallel tool batches on. Built once per SESSION (the turn context
+  // below), because a chain rebuilt per tool call serializes nothing — it is a fresh chain each
+  // time, so the parallel calls it exists for never meet on it.
   let chain: Promise<string[]> = Promise.resolve([]);
   return {
     active: () => session.getActiveToolNames(),
@@ -166,14 +175,12 @@ function sessionToolActivation(session: AgentSession): ToolActivation {
  * tool needs the session to reach the turn context. A tool that somehow runs before that binding
  * throws rather than executing outside the turn: a broken lifecycle must not look like a normal
  * out-of-turn call.
+ *
+ * It carries the whole turn CONTEXT, not just the session: the activation bridge holds the lock that
+ * orders concurrent activations, so it has to live as long as the session the activations mutate.
+ * Building it here, per call, would hand each parallel tool its own.
  */
-function toolDefinitions(
-  tools: MountedTool[],
-  cwd: string,
-  env: ExecutionEnv,
-  sessionId: string,
-  bound: { session?: AgentSession },
-): ToolDefinition[] {
+function toolDefinitions(tools: MountedTool[], env: ExecutionEnv, bound: { context?: TurnContext }): ToolDefinition[] {
   return tools.map((tool) => ({
     name: tool.name,
     label: tool.name,
@@ -183,10 +190,10 @@ function toolDefinitions(
     // without it pi's outer active-set diff double-stamps parallel calls.
     executionMode: tool.executionMode,
     execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
-      const session = bound.session;
-      if (!session) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
+      const context = bound.context;
+      if (!context) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
       return turnContext.run(
-        { cwd, sessionManager: agentSessionManager(session, sessionId), tools: sessionToolActivation(session) },
+        context,
         // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
         // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
         () => tool.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
@@ -346,7 +353,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       model,
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
-    const bound: { session?: AgentSession } = {};
+    const bound: { context?: TurnContext } = {};
     const { session } = await createAgentSessionFromServices({
       services: await services,
       sessionManager,
@@ -356,9 +363,14 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted.
       noTools: "builtin",
       ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
-      customTools: toolDefinitions(tools, cwd, env, sessionId, bound),
+      customTools: toolDefinitions(tools, env, bound),
     });
-    bound.session = session;
+    // One context for the whole session — the same lifetime chat binds its bridge to.
+    bound.context = {
+      cwd,
+      sessionManager: agentSessionManager(session, sessionId),
+      tools: sessionToolActivation(session),
+    };
     // An extension handler that throws is otherwise dropped: pi fans errors out to registered
     // listeners and has none by default, which on a server means a broken extension looks like an
     // extension that simply did nothing.
