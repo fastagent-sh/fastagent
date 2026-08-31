@@ -86,6 +86,11 @@ function authCallbacks(
     signal: userSignal ?? new AbortController().signal,
     prompt: async (p: AuthPrompt): Promise<string> => {
       if (p.type === "select") {
+        // No signal, unlike the text/secret branch below, and not an oversight: every builtin
+        // provider's `select` is the FIRST call of its `login()` — which login method to use — so
+        // nothing is racing it. `doneSignal` fires when `auth.login()` RETURNS, and it cannot
+        // return while this await is what it is blocked on. The pending-prompt backstop is for the
+        // later ones (a manual code paste losing to the callback server), which do take it.
         const v = await io.select(
           p.message,
           p.options.map((o) => ({ value: o.id, label: o.label, hint: o.description })),
@@ -143,9 +148,10 @@ async function selectProvider(
   providers: Provider[],
   method: LoginMethod,
   store: CredentialStore,
-): Promise<string> {
+): Promise<Provider> {
   const candidates = candidatesFor(providers, method);
   if (candidates.length === 0) throw new Error(`no provider supports ${method} login`);
+  const byId = new Map(candidates.map((p) => [p.id, p]));
   const options = await Promise.all(
     candidates.map(async (p): Promise<IoOption> => {
       const cred = await store.read(p.id);
@@ -154,8 +160,12 @@ async function selectProvider(
     }),
   );
   const id = await io.select("Select a provider", options);
-  if (!id) throw new LoginCancelled("no provider selected");
-  return id;
+  // Answers the PROVIDER, not its id: the caller needs the object, and resolving it here means the
+  // one place that can fail to is the one that just offered the list. Cancel and an id that was
+  // never offered are the same answer — nothing was chosen.
+  const chosen = id === undefined ? undefined : byId.get(id);
+  if (!chosen) throw new LoginCancelled("no provider selected");
+  return chosen;
 }
 
 /**
@@ -177,24 +187,24 @@ export async function loginFlow(
   const providers = options.providers ?? builtinProviders();
 
   let method: LoginMethod;
-  let providerId: string;
+  let provider: Provider;
   if (options.provider) {
-    providerId = options.provider;
-    const p = providers.find((x) => x.id === providerId);
-    if (!p) throw new Error(`unknown provider "${providerId}"`);
-    method = options.method ?? (await methodForProvider(io, p));
+    const named = providers.find((x) => x.id === options.provider);
+    if (!named) throw new Error(`unknown provider "${options.provider}"`);
+    provider = named;
+    method = options.method ?? (await methodForProvider(io, provider));
   } else {
     method = options.method ?? (await selectMethod(io));
-    providerId = await selectProvider(io, providers, method, store);
+    provider = await selectProvider(io, providers, method, store);
   }
 
   // Preflight: a no-op modify runs the refuse-corrupt / writability check BEFORE the flow.
-  await store.modify(providerId, async () => undefined);
+  await store.modify(provider.id, async () => undefined);
 
-  const provider = providers.find((p) => p.id === providerId);
-  if (!provider) throw new Error(`unknown provider "${providerId}"`);
+  // Reachable even though both branches above resolved a provider: an explicit `method` bypasses
+  // methodForProvider, so `{ provider: "openai-codex", method: "api_key" }` arrives here.
   const auth = method === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
-  if (!auth?.login) throw new Error(`provider "${providerId}" has no ${method} login`);
+  if (!auth?.login) throw new Error(`provider "${provider.id}" has no ${method} login`);
 
   // `done` cancels any prompt left pending when login resolves (manual-code race backstop).
   const done = new AbortController();
@@ -204,6 +214,6 @@ export async function loginFlow(
   } finally {
     done.abort();
   }
-  await store.modify(providerId, async () => credential);
-  return { provider: providerId, method };
+  await store.modify(provider.id, async () => credential);
+  return { provider: provider.id, method };
 }
