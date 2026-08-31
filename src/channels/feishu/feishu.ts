@@ -19,7 +19,8 @@ import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
-import { createTurnStore } from "../kit/turn-store.ts";
+import { MAX_TURN_ATTEMPTS, commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
+import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
   collectFeishuBufferedAttachments,
@@ -63,11 +64,6 @@ import { connectFeishuWs } from "./ws-ingress.ts";
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
 export type { FeishuFailure, FeishuMessage, FeishuMessageEvent, FeishuRoute };
-
-/** Execution ceiling: a turn that has STARTED running this many times without finishing is dropped
- *  rather than run again (a poison turn must not loop forever under a restart policy). Counted per turn
- *  at dequeue, so a never-run turn queued behind a poison one keeps its full budget. */
-const MAX_TURN_ATTEMPTS = 3;
 
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
@@ -477,8 +473,7 @@ function createFeishuRuntimeFactory(
         const roomBlock = room?.text
           ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
           : "";
-        const threadBlock = recent ? `[recent group discussion:\n${recent}\n]\n\n` : "";
-        const prompt = `${roomBlock}${threadBlock}${rec.baseText}`;
+        const prompt = `${roomBlock}${discussionBlock(recent)}${rec.baseText}`;
         // Room entries FIRST: the collector keeps the TAIL under its cap, so the thread's own
         // attachments win the slots.
         const buffered = collectFeishuBufferedAttachments([...(room?.consumed ?? []), ...consumed], {
@@ -503,12 +498,7 @@ function createFeishuRuntimeFactory(
                 ...(parentSession !== undefined ? { parentSession } : {}),
               },
               { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
-              () => {
-                // Drop intent first: a crash between these writes may re-fold answered context later,
-                // but can never replay this turn after its context was removed.
-                store.remove(rec.id);
-                buffer.commit(rec.bufferKey, consumed);
-              },
+              () => commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey: rec.bufferKey, consumed }),
             ),
             api,
             targetOf(rec),

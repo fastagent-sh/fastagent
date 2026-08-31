@@ -50,7 +50,21 @@
  * power-loss is best-effort — no fsync, consistent with the rest of the channel's state).
  */
 import { log } from "../../log.ts";
+import type { ContextBuffer } from "./context-buffer.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
+
+/**
+ * How many times a turn may START without finishing before it is dropped rather than run again — the
+ * poison-turn ceiling described at length above. One value for every channel: it prices replay against
+ * DEPLOY frequency, which is a property of how fastagent is operated, not of which chat platform is in
+ * front of it.
+ *
+ * Known limitation, and the reason it is not higher: the count cannot tell a self-inflicted crash from
+ * an external SIGTERM (there is no graceful drain), so a legitimately long turn interrupted by this
+ * many successive deploys is dropped as if it were poison. Catching SIGTERM to spare it would
+ * reintroduce the drain the design refuses.
+ */
+export const MAX_TURN_ATTEMPTS = 3;
 
 /** What every persisted turn record carries regardless of channel: identity, the session whose FIFO
  *  chain it runs on, and how many times it has STARTED executing without finishing (0 until its first
@@ -94,6 +108,25 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
   /** Arrival order for {@link TurnStore.recover} — the channel knows what its ids/fields encode
    *  (telegram: numeric update_id; lark: an explicit per-record seq). */
   order: (a: T, b: T) => number;
+}
+
+/**
+ * End an ANSWERED turn: drop its durable intent, then commit the discussion it folded in.
+ *
+ * The ORDER is the safety property, which is why this is a function and not two lines at each call
+ * site. A crash between the two writes may re-fold already-answered context into the next summon —
+ * additive and harmless. The reverse order leaves intent on disk with its context already consumed,
+ * so the replay runs the same turn with its context stripped.
+ *
+ * Called from the turn's `completed` event, when the fold provably lives in the durable session.
+ */
+export function commitAnsweredTurn<T extends TurnRecordBase, E>(
+  store: TurnStore<T>,
+  buffer: ContextBuffer<E>,
+  turn: { id: string; bufferKey: string; consumed: E[] },
+): void {
+  store.remove(turn.id);
+  buffer.commit(turn.bufferKey, turn.consumed);
 }
 
 export function createTurnStore<T extends TurnRecordBase>(path: string, opts: TurnStoreOptions<T>): TurnStore<T> {

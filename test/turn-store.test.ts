@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type StoredTurn, createTurnStore } from "../src/channels/telegram/turn-store.ts";
+import { commitAnsweredTurn } from "../src/channels/kit/turn-store.ts";
 
 const dirs: string[] = [];
 const freshPath = (): string => {
@@ -181,5 +182,42 @@ describe("turn-store", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {}); // log.warn/error both → console.error
     expect(createTurnStore(path).recover()).toHaveLength(0);
     expect(err).toHaveBeenCalledWith(expect.stringContaining("unexpected shape"));
+  });
+});
+
+describe("commitAnsweredTurn (the order a crash between the two writes depends on)", () => {
+  /** Records which durable write happened first. Both are real interfaces, faked to the two calls
+   *  this function makes — the assertion is ordering, not persistence (each side has its own tests). */
+  const recorder = () => {
+    const order: string[] = [];
+    return {
+      order,
+      store: { remove: (id: string) => void order.push(`remove:${id}`) } as unknown as Parameters<
+        typeof commitAnsweredTurn
+      >[0],
+      buffer: { commit: (key: string) => void order.push(`commit:${key}`) } as unknown as Parameters<
+        typeof commitAnsweredTurn
+      >[1],
+    };
+  };
+
+  it("drops the intent BEFORE committing the context", () => {
+    // Reversed, a crash between the writes leaves intent on disk with its context already consumed:
+    // the replay then runs the same turn with its folded discussion stripped. This order's failure is
+    // the harmless one — re-folding context that was already answered.
+    const { order, store, buffer } = recorder();
+    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [] });
+    expect(order).toEqual(["remove:t1", "commit:chat:1"]);
+  });
+
+  it("commits the SNAPSHOT it was given, not the whole place", () => {
+    // The buffer removes by identity, so a message that arrived while the turn ran survives.
+    const consumed = [{ body: "a" }];
+    const seen: unknown[] = [];
+    const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<
+      typeof commitAnsweredTurn
+    >[1];
+    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed });
+    expect(seen[0]).toBe(consumed);
   });
 });
