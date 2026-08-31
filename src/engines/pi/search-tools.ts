@@ -130,7 +130,7 @@ export function makeSearchToolsTool(): MountedTool {
           .map((t) => t.name)
           .join(", ")}${more > 0 ? ` … and ${more} more` : ""}.${activeNote ? ` ${activeNote}` : ""}`;
       }
-      const activated = await ctx.tools.activate(inactiveMatches.map((t) => t.name));
+      const activated = ctx.tools.activate(inactiveMatches.map((t) => t.name));
       // Report what actually happened, not what was attempted: a parallel sibling call may have
       // activated the same matches first, leaving nothing new here — an empty "Activated:" would lie.
       if (activated.length === 0) {

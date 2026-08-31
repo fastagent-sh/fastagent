@@ -31,7 +31,7 @@ import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { DEFAULT_THINKING_LEVEL } from "./models.ts";
-import { type ToolActivation, additiveActivation, agentSessionManager, turnContext } from "./tool-context.ts";
+import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
 /** pi's Model with the API-shape generic erased; fastagent only passes models through. */
 // biome-ignore lint/suspicious/noExplicitAny: variance-friendly model type, audited at this single point
@@ -124,56 +124,18 @@ function recordedActivations(session: AgentSession): string[] {
 const warnedDroppedActivations = new Set<string>();
 
 /**
- * The turn's {@link ToolActivation} over a live session — the same bridge chat uses, so one
- * built-in `search_tools` serves both.
- *
- * Activations are PERSISTED as deltas, so a tool discovered in one turn stays callable in the next.
- * pi's own chat session does not do this (it has no place to put the record); a served session does,
- * because the alternative is an agent that re-discovers the same capability every single turn.
- */
-function sessionToolActivation(session: AgentSession): ToolActivation {
-  // Serialize activations: the read-modify-write below is only race-free while nothing awaits
-  // between read and write, and parallel tool calls in one batch would otherwise double-stamp.
-  let chain: Promise<string[]> = Promise.resolve([]);
-  return {
-    active: () => session.getActiveToolNames(),
-    registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
-    activate(names) {
-      const run = async (): Promise<string[]> => {
-        const current = session.getActiveToolNames();
-        const added = additiveActivation(
-          session.getAllTools().map((t) => t.name),
-          current,
-          names,
-        );
-        if (added.length > 0) {
-          session.setActiveToolsByName([...current, ...added]);
-          session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added });
-        }
-        return added;
-      };
-      const result = chain.then(run, run);
-      chain = result.catch(() => []);
-      return result;
-    },
-  };
-}
-
-/**
  * fastagent's tools as pi tool definitions, bound to ONE session.
  *
  * `bound` is filled after the session exists — pi needs the definitions to build the session, and a
  * tool needs the session to reach the turn context. A tool that somehow runs before that binding
  * throws rather than executing outside the turn: a broken lifecycle must not look like a normal
  * out-of-turn call.
+ *
+ * It carries the whole turn CONTEXT, not just the session: the activation bridge holds the lock that
+ * orders concurrent activations, so it has to live as long as the session the activations mutate.
+ * Building it here, per call, would hand each parallel tool its own.
  */
-function toolDefinitions(
-  tools: MountedTool[],
-  cwd: string,
-  env: ExecutionEnv,
-  sessionId: string,
-  bound: { session?: AgentSession },
-): ToolDefinition[] {
+function toolDefinitions(tools: MountedTool[], env: ExecutionEnv, bound: { context?: TurnContext }): ToolDefinition[] {
   return tools.map((tool) => ({
     name: tool.name,
     label: tool.name,
@@ -183,10 +145,10 @@ function toolDefinitions(
     // without it pi's outer active-set diff double-stamps parallel calls.
     executionMode: tool.executionMode,
     execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
-      const session = bound.session;
-      if (!session) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
+      const context = bound.context;
+      if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
       return turnContext.run(
-        { cwd, sessionManager: agentSessionManager(session, sessionId), tools: sessionToolActivation(session) },
+        context,
         // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
         // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
         () => tool.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
@@ -346,7 +308,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       model,
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
-    const bound: { session?: AgentSession } = {};
+    const bound: { context?: TurnContext } = {};
     const { session } = await createAgentSessionFromServices({
       services: await services,
       sessionManager,
@@ -356,9 +318,19 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted.
       noTools: "builtin",
       ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
-      customTools: toolDefinitions(tools, cwd, env, sessionId, bound),
+      customTools: toolDefinitions(tools, env, bound),
     });
-    bound.session = session;
+    // One context for the whole session: it describes the SESSION, not the call. The activation
+    // bridge above all — a tool call has to see what the previous one activated.
+    bound.context = {
+      cwd,
+      sessionManager: agentSessionManager(session, sessionId),
+      // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
+      // the tool still callable next turn (see {@link TOOL_ACTIVATION_ENTRY}).
+      tools: sessionToolActivation(session, (added) =>
+        session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added }),
+      ),
+    };
     // An extension handler that throws is otherwise dropped: pi fans errors out to registered
     // listeners and has none by default, which on a server means a broken extension looks like an
     // extension that simply did nothing.

@@ -15,6 +15,7 @@ import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.t
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { type PropertyWrites, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
+import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { makeFaux } from "./faux.ts";
@@ -83,6 +84,41 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     // The CALLER's id, not pi's spelling of it: a tool correlates its own state by the id the
     // channel minted, and the record name is storage detail.
     expect(seenSessionId).toBe("-1001234567890");
+  });
+
+  it("every tool call in a turn runs in the same turn context", async () => {
+    // The context describes the SESSION, not the call — one cwd, one session manager, one activation
+    // bridge — and the bridge is why it matters: a tool call has to see what the previous one
+    // activated. Built inside `execute`, every call got its own set of objects.
+    //
+    // Read through AsyncLocalStorage rather than off `ctx`: `defineTool` hands the tool a fresh
+    // wrapper object each call, so anything reachable from `ctx` can only stand IN for the context
+    // by way of a reference the wrapper happens to pass through.
+    const seen: (TurnContext | undefined)[] = [];
+    const probe = (name: string) =>
+      defineTool({
+        name,
+        description: `probe ${name}`,
+        input: z.object({}),
+        execute: async () => {
+          seen.push(turnContext.getStore());
+          return "probed";
+        },
+      });
+    const agent = await agentWith(
+      [
+        fauxAssistantMessage([fauxToolCall("probe-a", {}, { id: "a" }), fauxToolCall("probe-b", {}, { id: "b" })]),
+        fauxAssistantMessage("done"),
+      ],
+      { tools: [probe("probe-a"), probe("probe-b")] as Parameters<typeof piAgentSessionFactory>[0]["tools"] },
+    );
+
+    await collect(agent.invoke({ session: "s" }, { text: "go" }));
+
+    expect(seen).toHaveLength(2);
+    // Without this the assertion below would pass on two undefineds — on there being no context.
+    expect(seen[0]).toBeDefined();
+    expect(seen[0]).toBe(seen[1]);
   });
 
   it("a deferred tool is not offered until something activates it", async () => {

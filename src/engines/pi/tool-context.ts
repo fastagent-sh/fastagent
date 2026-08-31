@@ -50,8 +50,44 @@ export interface ToolActivation {
   /** Every registered tool (active or not) — the discovery corpus for a loader like `search_tools`. */
   registered(): Array<{ name: string; description: string }>;
   /** ADDITIVE activation. Unknown names are filtered out before reaching pi (whose `setActiveTools`
-   *  THROWS on them); resolves the names actually newly activated (already-active names don't repeat). */
-  activate(names: string[]): Promise<string[]>;
+   *  THROWS on them); answers the names actually newly activated (already-active names don't repeat).
+   *
+   *  SYNCHRONOUS, and that is the contract, not an implementation detail: read-modify-write against
+   *  pi's active set cannot be interleaved as long as no caller can await inside it. An async
+   *  signature would need a lock to say the same thing, and the lock is what a previous version had
+   *  — one rebuilt per tool call, so the parallel batch it existed for never met on it. If pi's
+   *  setters ever become async, this signature is where that breaks, loudly. */
+  activate(names: string[]): string[];
+}
+
+/**
+ * The activation bridge over a live pi session — the ONE implementation, for both consumers.
+ *
+ * Serving (`agent-session-factory.ts`) and chat (`session-builder.ts`) had a copy each, identical
+ * but for the persistence line; the neighbouring `definitionResourceLoaderOptions` exists because
+ * that exact duplication drifted once before. The difference is a PARAMETER now: `onActivated` is
+ * what a served session uses to record the delta that carries the discovery into its next turn,
+ * and chat has nowhere to put one (pi's SessionContext has no active-tool set).
+ *
+ * Bind it to the SESSION, never to a tool call: the next call has to see what this one activated.
+ */
+export function sessionToolActivation(session: AgentSession, onActivated?: (added: string[]) => void): ToolActivation {
+  return {
+    active: () => session.getActiveToolNames(),
+    registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
+    activate(names) {
+      const current = session.getActiveToolNames();
+      const added = additiveActivation(
+        session.getAllTools().map((t) => t.name),
+        current,
+        names,
+      );
+      if (added.length === 0) return added;
+      session.setActiveToolsByName([...current, ...added]);
+      onActivated?.(added);
+      return added;
+    },
+  };
 }
 
 export interface TurnContext {
@@ -67,10 +103,9 @@ export interface TurnContext {
 
 export const turnContext = new AsyncLocalStorage<TurnContext>();
 
-/** The additive-activation contract, in ONE place for both bridges (the served session,
- *  chat.ts over pi's AgentSession): dedupe → keep registered names only (pi's setters THROW on
- *  unknown) → exclude already-active → the names to actually add (empty = nothing to set). */
-export function additiveActivation(registered: string[], current: string[], names: string[]): string[] {
+/** dedupe → keep registered names only (pi's setters THROW on unknown) → exclude already-active →
+ *  the names to actually add (empty = nothing to set). */
+function additiveActivation(registered: string[], current: string[], names: string[]): string[] {
   const known = new Set(registered);
   const active = new Set(current);
   return [...new Set(names)].filter((name) => known.has(name) && !active.has(name));
