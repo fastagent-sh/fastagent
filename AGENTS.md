@@ -24,7 +24,8 @@ Code truth is `src/`.
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
 ├── service.ts               # THE PRODUCT AS ONE CALL: a directory becomes a live service
-│                           # (createAgentService). Before it, only the CLI could keep fastagent's
+│                           # (mountAgentService; engines/pi/service.ts adds the opener in front of it
+│                           # as createAgentService). Before it, only the CLI could keep fastagent's
 │                           # "into a live service inside an app" promise — everything else was
 │                           # parts an embedder had to assemble in the right order, and getting it
 │                           # wrong is silent (a plane that 404s while advertising itself). The
@@ -99,6 +100,20 @@ src/
 │   │                     # is external, resident connections cannot survive scale-to-zero. Returns an
 │   │                     # AgentService, so `start` picks an assembly once and everything after is
 │   │                     # common. Owns nothing process-global: the wake sink stays with the entry.
+│   ├── agentcore.ts          # the RUNTIME adapter that assembly serves: AgentCore gives a container two
+│   │                     # paths (POST /invocations, GET /ping) and no public URL, so every trigger arrives
+│   │                     # as an ENVELOPE (webhook | schedule-fire | invoke | wake-poke | checkpoint | probe)
+│   │                     # and the channel's real HTTP status rides INSIDE a transport-200 reply. The
+│   │                     # authentication boundary is here: InvokeAgentRuntime is an ordinary IAM action, so
+│   │                     # only a shared-secret envelope is the forwarder's; a public one runs `invoke` alone.
+│   ├── agentcore-state.ts    # cross-deploy durability: the platform wipes the state mount on every version
+│   │                     # update, so the root is restored from / pushed to an S3 snapshot via presigned URLs
+│   │                     # the forwarder mints per envelope
+│   ├── agentcore-limits.ts   # the HOST's body ceilings, computed once (a Function URL caps at 6 MB, and the
+│   │                     # body rides base64 inside a JSON envelope) — deploy states it at plan time
+│   ├── busy.ts               # process-wide in-flight work counter + the 0-in-flight EDGE. Webhook channels ACK
+│   │                     # fast and finish the turn in the background, so "is this process busy?" is NOT
+│   │                     # derivable from open requests — /ping (HealthyBusy) and the state snapshot both read it
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
@@ -152,8 +167,13 @@ src/
 │       ├── lark.ts          # thin branded adapter bound to LARK_COMPAT_CLOUD
 │       ├── onboard.ts       # unbound launcher + credentials + manual config fallback
 │       └── scaffold/        # `add lark` bundle
-├── deploy/                  # `deploy docker|fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
-│   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
+├── deploy/                  # `deploy docker|fly|railway|agentcore`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
+│   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/.
+│   │                        # The CLI branch that picks between them is cli/commands/deploy.ts; what it may NOT
+│   │                        # hold is a fact about ANOTHER host ("--into-linked is railway's" lived in three
+│   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per host-only flag
+│   │                        # that only WARNS elsewhere. `--tunnel` is host-only too and stays a usage GATE
+│   │                        # in runDeploy (exit 2): a refusal is not a row, and tabling it would make it advice.
 │   ├── channel-ingress.ts   # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL
 │   │                     # end-to-end, the words when nobody can. The ONE answer to "which channels
 │   │                     # have a webhook" — it was written per host (3 runbooks, 3 --run drivers, a
@@ -165,11 +185,17 @@ src/
 │   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
 │   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
-│   ├── secrets.ts           # required-secret NAMES (runbook) + assembleSecrets VALUES (--run credential carry)
+│   ├── secrets.ts           # BOTH directions of the credential carry: required-secret NAMES (runbook),
+│   │                     # assembleSecrets VALUES (--run), and the boot-side authSeedBytes/collectAuthSeed
+│   │                     # the container reads them back with. The read side lived in fly/run.ts, which
+│   │                     # `start` had to reach into to deploy nothing on Fly.
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
-│   ├── docker/  { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
-│   ├── fly/     { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
-│   └── railway/ { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
+│   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
+│   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
+│   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
+│   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts }  # AWS Bedrock AgentCore: ONE CloudFormation stack (runtime +
+│                         # forwarder Lambda for webhooks + EventBridge rules for schedules). No public URL and no
+│                         # resident process — the two facts every difference in channels/agentcore*.ts follows from.
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
@@ -177,8 +203,14 @@ src/
 │   ├── scheduler.ts        # lifecycle + fire algorithm (overdue catch-up ONCE, claim-before-invoke) + stable per-schedule session + wake-up poll
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups, one-shot + recurring (2nd producer): engine-neutral store + guardrails (min delay/gap, cap, claim/defer)
 │   ├── audit.ts            # runs.jsonl append-only run audit (full reply) + `schedule history` reader — "did last night's run silently fail?"
+│   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: on a scale-to-zero host nothing is resident to
+│   │                     # poll, so each pending wake-up is mirrored into a one-shot EventBridge schedule
+│   │                     # through the forwarder, plus the boot reconcile that re-arms alarms a deploy lost
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
+    ├── service.ts           # createAgentService: the public one-call shortcut = this engine's opener +
+    │                         # the neutral mountAgentService. Here, not in src/service.ts, because
+    │                         # opening a DIRECTORY is the only pi-specific part of it
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
     ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half: lease (single-writer
     │                         # floor), terminals (settled message/thrown error → SPEC terminal +
@@ -198,6 +230,13 @@ src/
     │                         # (participant-model.md §5): fork the parent's active path to the branch
     │                         # point, then bound the model's view with one mechanical compaction mark
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
+    ├── session-markers.ts   # which journal entries are POSITIONS and which are the plane's own bookkeeping.
+    │                         # One module because the record store and the history copier must agree, and a
+    │                         # disagreement is invisible until a fork comes back missing something
+    ├── session-settings.ts  # what a session is SET TO, and what it may be set to. Model and thinking level
+    │                         # are ONE setting (which levels exist is a property of the model), so `state()`,
+    │                         # the update() gate and the per-invoke binding resolve them HERE rather than
+    │                         # each deriving its own — the run plane and the observation plane, one function
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent

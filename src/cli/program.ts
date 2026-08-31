@@ -6,6 +6,9 @@
  */
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
+// TYPE-only, so the lazy-import rule above still holds: `verbatimModuleSyntax` erases the whole
+// statement, and the built program.js carries no import of the command module.
+import type { DeployHost } from "./commands/deploy.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 
@@ -479,21 +482,17 @@ const deploy: CommandSpec = {
     "--force). A routine redeploy of an already-provisioned agent is just the host's own command " +
     "(e.g. `railway up`).",
   run: async (args, f) =>
-    (await import("./commands/deploy.ts")).runDeploy(
-      args[0] as "docker" | "fly" | "railway" | "agentcore",
-      args[1] as string,
-      {
-        run: f.run === true,
-        tunnel: f.tunnel === true,
-        force: f.force === true,
-        stop: f.stop === true,
-        scaleToZero: f.scaleToZero !== false,
-        intoLinked: f.intoLinked === true,
-        model: f.model as string | undefined,
-        authPath: f.authPath as string | undefined,
-        input: f.input !== false,
-      },
-    ),
+    (await import("./commands/deploy.ts")).runDeploy(args[0] as DeployHost, args[1] as string, {
+      run: f.run === true,
+      tunnel: f.tunnel === true,
+      force: f.force === true,
+      stop: f.stop === true,
+      scaleToZero: f.scaleToZero !== false,
+      intoLinked: f.intoLinked === true,
+      model: f.model as string | undefined,
+      authPath: f.authPath as string | undefined,
+      input: f.input !== false,
+    }),
 };
 
 const schedule: CommandSpec = {

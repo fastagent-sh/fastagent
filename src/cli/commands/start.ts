@@ -4,7 +4,7 @@
  */
 import { chmod, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { authSeedBytes, collectAuthSeed } from "../../deploy/fly/run.ts";
+import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { SECRET_FILE_MODE, ensureSecretsDir, resolveSecretsDir, isUnderDir, exists } from "../../paths.ts";
@@ -130,12 +130,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // channels have no such layer, so their in-flight turns are still lost (the asker re-invokes).
 }
 
-/**
- * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy --run`) into the
- * writable secrets dir ONCE — only when the seed is set AND the auth file is absent, so a refreshed
- * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
- * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
- */
 /** The opener, kept as its own call so `opened` can also feed the shared assembly below. */
 function openStartDir(dir: string, opts: StartOptions, sessionsDir: string | undefined) {
   return createPiAgentFromDir(dir, {
@@ -146,6 +140,12 @@ function openStartDir(dir: string, opts: StartOptions, sessionsDir: string | und
   }).catch(failStartup);
 }
 
+/**
+ * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy --run`) into the
+ * writable secrets dir ONCE — only when the seed is set AND the auth file is absent, so a refreshed
+ * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
+ * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
+ */
 async function maybeSeedAuth(authPath: string): Promise<void> {
   // collectAuthSeed: the seed may arrive CHUNKED (FASTAGENT_AUTH_SEED + _2…) on hosts with a small
   // env-value max length (AgentCore); single-var hosts are unchanged.

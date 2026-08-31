@@ -57,7 +57,14 @@ import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
-export type DeployHost = "docker" | "fly" | "railway" | "agentcore";
+/** The deploy targets, as a value: {@link HOST_ONLY_FLAGS} is checked against this list by a test, and
+ *  a type alone cannot be enumerated at runtime. NOT the only copy — `cli/program.ts` repeats it as the
+ *  `<host>` argument's `choices`, because that file may not import a command module at load time (its
+ *  per-command imports are lazy). Adding a host means editing both; the type there rides in on a
+ *  `import type`, which costs nothing at runtime. */
+export const DEPLOY_HOSTS = ["docker", "fly", "railway", "agentcore"] as const;
+
+export type DeployHost = (typeof DEPLOY_HOSTS)[number];
 
 export interface DeployOptions {
   run?: boolean;
@@ -73,7 +80,6 @@ export interface DeployOptions {
   input?: boolean;
 }
 
-/** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
 /** The registrars every host driver gets. One wiring: a channel's credentials are the channel's, not
  *  the host's, so which of them can run end-to-end never varies by deployment target. */
 function registrarsFor(agentDir: string): Registrars {
@@ -84,8 +90,120 @@ function registrarsFor(agentDir: string): Registrars {
   };
 }
 
+/** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
 function shellArg(value: string): string {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+/** A flag exactly one host honours, and what the OTHERS do instead. `instead` is exhaustive over the
+ *  non-owners, so a host added to {@link DEPLOY_HOSTS} cannot silently lose its line. */
+interface HostOnlyFlag<Owner extends DeployHost> {
+  flag: string;
+  owner: Owner;
+  passed: (opts: DeployOptions) => boolean;
+  instead: Record<Exclude<DeployHost, Owner>, string>;
+}
+
+/** Infers `Owner` from the literal's own `owner`, so each row carries its exhaustiveness itself. The
+ *  alternative — annotating the array as a tuple of `HostOnlyFlag<"fly"> | …` — put the whole guarantee
+ *  in one annotation that a third rule invites relaxing to `HostOnlyFlag<DeployHost>[]`, where
+ *  `Exclude<DeployHost, DeployHost>` collapses to `never` and every `instead` type-checks empty. */
+const hostOnlyFlag = <Owner extends DeployHost>(rule: HostOnlyFlag<Owner>): HostOnlyFlag<Owner> => rule;
+
+/**
+ * ONE table for "this flag belongs to that host", because the fact is symmetric and was not stored
+ * that way: each host branch stated the OTHER hosts' flags in its own words, so the same sentence
+ * existed three times per flag and had already drifted (`Railway-only` twice, `railway-only` once).
+ *
+ * Every row is a flag that only WARNS elsewhere. `--tunnel` is host-only too and is deliberately not
+ * here: it is a usage GATE (`failUsage`, exit 2) raised in `runDeploy`, not a warning — moving it in
+ * would downgrade a refusal to a line of advice.
+ *
+ * Exported for the exhaustiveness test: the type stops a missing `instead` line, and the test stops it
+ * from being typed away.
+ */
+export const HOST_ONLY_FLAGS = [
+  hostOnlyFlag({
+    flag: "--stop/--no-scale-to-zero",
+    owner: "fly",
+    passed: (opts: DeployOptions) => opts.stop === true || opts.scaleToZero === false,
+    instead: {
+      docker: "local Compose stays running",
+      railway: "Railway's App Sleeping is a dashboard toggle (the runbook states the manual step)",
+      agentcore: "AgentCore's idle/lifetime policy lives in the template's LifecycleConfiguration",
+    },
+  }),
+  hostOnlyFlag({
+    flag: "--into-linked",
+    owner: "railway",
+    passed: (opts: DeployOptions) => opts.intoLinked === true,
+    instead: {
+      docker: "ignored for local Docker",
+      agentcore: "ignored for AgentCore",
+      fly: "fly --run is idempotent — it reuses an existing app/volume",
+    },
+  }),
+];
+
+/** Exported for its own test: nothing covered these six sentences, which is how three of them came to
+ *  disagree about the spelling of a host name. */
+export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
+  for (const rule of HOST_ONLY_FLAGS) {
+    if (host === rule.owner || !rule.passed(opts)) continue;
+    // The `continue` above is exactly the key set `instead` is typed over, but TS cannot narrow a
+    // union member out through a comparison against a per-rule literal, so the read needs a cast —
+    // and a cast is how a hole would reach the operator as the word "undefined". Unreachable while
+    // the rows stay exhaustive, which is what the table's own test asserts.
+    const instead: string | undefined = (rule.instead as Record<string, string>)[host];
+    // THROWN, not `failStartup`ed, though every other failure in this file exits through that: an
+    // incomplete table is a bug, and fail.ts prints a plain Error's message WITHOUT its stack (it
+    // reserves that shape for user-fixable problems) while exiting the process — which in the test
+    // that covers this table would kill the worker instead of reporting which row is short.
+    if (instead === undefined) {
+      throw new Error(`deploy: HOST_ONLY_FLAGS has no "instead" line for ${host} on ${rule.flag}`);
+    }
+    // A colon, not "is": one row names a single flag and the other names a pair, and no verb agrees
+    // with both (the hand-written copies this replaced said "is" and "are" respectively).
+    console.error(`[fastagent] warn: ${rule.flag}: ${rule.owner}-only — ${instead}`);
+  }
+}
+
+/**
+ * The `--run` credential carry, for every host: the local model credential (an env key, or the whole
+ * auth.json as a `FASTAGENT_AUTH_SEED`) plus channel secrets, read through the one environment that
+ * accounts for Slack's rotated bot token. Four drivers assembled this identically; a fifth would have
+ * had to remember the `deployEnvironment` wrapper, which is invisible when forgotten (a rotated token
+ * silently deploys stale).
+ */
+async function carryCredentials(params: {
+  agentDir: string;
+  modelAuth: string | undefined;
+  modelKeyInDefinition: boolean;
+  authPath: string;
+  channels: readonly DeclaredChannel[];
+  extraSecrets: string[];
+}): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
+  const { agentDir, modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets } = params;
+  return assembleSecrets({
+    modelAuth,
+    modelKeyInDefinition,
+    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
+    channels,
+    extraSecrets,
+    env: deployEnvironment(agentDir, channels),
+  });
+}
+
+/** Gate a `--run` that has no model credential to carry. Its remediation is `fastagent login`, which
+ *  is why it is separate from `missingSecrets` (a `.env` fix) rather than folded into it. Docker states
+ *  the same gate inside its driver, where it belongs after the daemon check. */
+function gateOnModelCredential(needsModelCredential: boolean): void {
+  if (!needsModelCredential) return;
+  failStartup(
+    new Error(
+      `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+    ),
+  );
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
@@ -125,16 +243,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   const webhookChannels = channels.filter((channel) => channel.ingress === "webhook");
   const longConnectionChannels = channels.filter((channel) => channel.ingress === "long-connection");
   const hasDeclaredChannels = channels.length > 0;
+  warnHostOnlyFlags(host, opts);
 
   // Docker: one app service + loopback port + state volume. `--tunnel` shapes the generated topology
   // with an optional Quick Tunnel service; `--run` alone decides whether Docker receives side effects.
   if (host === "docker") {
-    if (opts.stop || opts.scaleToZero === false) {
-      console.error(`[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — local Compose stays running`);
-    }
-    if (opts.intoLinked) {
-      console.error(`[fastagent] warn: --into-linked is Railway-only — ignored for local Docker`);
-    }
     const projectName = toDockerProjectName(basename(workspace));
     const dockerPlan = (tunnel: boolean) =>
       planDockerDeploy({
@@ -193,12 +306,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
   // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
   if (host === "railway") {
-    if (opts.stop || opts.scaleToZero === false) {
-      console.error(
-        `[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — Railway's App Sleeping is a dashboard toggle ` +
-          `(the runbook states the manual step).`,
-      );
-    }
     // Railway service names are project-scoped (not globally unique like a Fly app); slug the dir
     // basename so a name with spaces/odd chars can't break the `railway add --service <name>` command.
     const serviceName =
@@ -246,15 +353,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // AgentCore: one CloudFormation stack (runtime + forwarder Lambda + EventBridge schedules); no
   // public URL and no resident process — see deploy/agentcore/plan.ts for the topology decisions.
   if (host === "agentcore") {
-    if (opts.stop || opts.scaleToZero === false) {
-      console.error(
-        `[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — AgentCore's idle/lifetime policy lives in ` +
-          `the template's LifecycleConfiguration.`,
-      );
-    }
-    if (opts.intoLinked) {
-      console.error(`[fastagent] warn: --into-linked is Railway-only — ignored for AgentCore`);
-    }
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a
     // reclaimed session has nothing to wake it — events in the gap are silently lost. `--run` gates
     // (deploying a channel that can't connect); generate-only warns and prints the runbook.
@@ -359,11 +457,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   }
 
   // host === "fly".
-  if (opts.intoLinked) {
-    console.error(
-      `[fastagent] warn: --into-linked is railway-only (fly --run is idempotent — it reuses an existing app/volume)`,
-    );
-  }
   // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
   // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
   // a note, not a warn, since the plan already did the safe thing (definition-aware autostop).
@@ -453,23 +546,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   console.log(plan.runbook.join("\n"));
 }
 
-/**
- * Write each generated artifact, under ONE ownership rule: **deploy only ever overwrites its own
- * output.** Each generated file opens with a marker, so a file on disk is either OURS (a previous
- * `deploy` wrote it) or the author's — and `--force` means "my generated artifact is authoritative",
- * which never licenses clobbering a file we did not write. To hand a path back to fastagent, delete it.
- *
- * That single rule replaced a second mechanism (a per-host list of paths exempt from `--force`), which
- * only described one shape: with the agent inside the workspace, the root `.dockerignore` is the
- * WORKSPACE's file and was listed; with the agent flat, the list was empty — so `--force` would have
- * overwritten a hand-written root `Dockerfile` in a repository `init --flat` had explicitly adopted.
- * Ownership is a property of the file, not of where the agent sits.
- *
- * A KEPT file of OURS that no longer matches what deploy would generate now (config/channel/lockfile/
- * version drift — or the author's edits, which we cannot tell apart) is flagged stale; `--force`
- * regenerates that one.
- */
-/** Did fastagent generate the file at `path`? ONE table for all five artifact kinds: a kind missing from
+/** Did fastagent generate the file at `path`? ONE table for every artifact kind: a kind missing from
  *  it is permanently classified as the author's, which silently turns `--force` into a no-op for that
  *  file (`fly.toml` and `railway.json` were, until the marker predicates below existed). */
 function isOurArtifact(path: string, content: string): boolean {
@@ -483,10 +560,24 @@ function isOurArtifact(path: string, content: string): boolean {
 }
 
 /**
- * Write the plan's artifacts under `target`, honouring the ownership rule: a file we did not generate is
- * never touched, ours is kept unless `--force`. Exported for its own test — this is a four-branch state
- * machine over (exists, ours, force) that used to be proven by spawning the CLI eight times, which is
- * command LOGIC re-run through a subprocess (see vitest.config.ts) and the suite's slowest test.
+ * Write each generated artifact under `target`, under ONE ownership rule: **deploy only ever overwrites
+ * its own output.** Each generated file opens with a marker, so a file on disk is either OURS (a previous
+ * `deploy` wrote it) or the author's — and `--force` means "my generated artifact is authoritative",
+ * which never licenses clobbering a file we did not write. To hand a path back to fastagent, delete it.
+ *
+ * That single rule replaced a second mechanism (a per-host list of paths exempt from `--force`), which
+ * only described one shape: with the agent inside the workspace, the root `.dockerignore` is the
+ * WORKSPACE's file and was listed; with the agent flat, the list was empty — so `--force` would have
+ * overwritten a hand-written root `Dockerfile` in a repository `init --flat` had explicitly adopted.
+ * Ownership is a property of the file, not of where the agent sits.
+ *
+ * A KEPT file of OURS that no longer matches what deploy would generate now (config/channel/lockfile/
+ * version drift — or the author's edits, which we cannot tell apart) is flagged stale; `--force`
+ * regenerates that one.
+ *
+ * Exported for its own test — this is a four-branch state machine over (exists, ours, force) that used
+ * to be proven by spawning the CLI eight times, which is command LOGIC re-run through a subprocess
+ * (see vitest.config.ts) and the suite's slowest test.
  */
 export async function writeArtifacts(
   target: string,
@@ -556,26 +647,8 @@ async function runDeployDocker(
     extraSecrets: string[];
   },
 ): Promise<void> {
-  const {
-    agentDir,
-    workspace,
-    composeFile,
-    port,
-    requireTunnel,
-    modelAuth,
-    modelKeyInDefinition,
-    authPath,
-    channels,
-    extraSecrets,
-  } = params;
-  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
-    modelAuth,
-    modelKeyInDefinition,
-    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
-    channels,
-    extraSecrets,
-    env: deployEnvironment(agentDir, channels),
-  });
+  const { agentDir, workspace, composeFile, port, requireTunnel, channels } = params;
+  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
   const outcome = await deployDockerRun(
     {
       composeFile,
@@ -643,18 +716,7 @@ async function runDeployFly(
     extraSecrets: string[];
   },
 ): Promise<void> {
-  const {
-    agentDir,
-    workspace,
-    agentPrefix,
-    appName,
-    modelAuth,
-    modelKeyInDefinition,
-    authPath,
-    channels,
-    flyTomlPath,
-    extraSecrets,
-  } = params;
+  const { agentDir, workspace, agentPrefix, appName, channels, flyTomlPath } = params;
   const fly = spawnRunner("fly", workspace);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
@@ -662,23 +724,8 @@ async function runDeployFly(
   }
 
   const region = parseFlyRegion(await readFile(flyTomlPath, "utf8")) ?? "iad";
-  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
-    modelAuth,
-    modelKeyInDefinition,
-    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
-    channels,
-    extraSecrets,
-    env: deployEnvironment(agentDir, channels),
-  });
-  // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
-  // here, not through missingSecrets, so the message isn't a contradictory mash of both.
-  if (needsModelCredential) {
-    failStartup(
-      new Error(
-        `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
-      ),
-    );
-  }
+  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
+  gateOnModelCredential(needsModelCredential);
 
   const outcome = await deployFlyRun(
     {
@@ -718,39 +765,15 @@ async function runDeployAgentcore(
     needsForwarder: boolean;
   },
 ): Promise<void> {
-  const {
-    agentDir,
-    workspace,
-    agentPrefix,
-    name,
-    modelAuth,
-    modelKeyInDefinition,
-    authPath,
-    channels,
-    extraSecrets,
-    selfSchedule,
-  } = params;
-  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
-    modelAuth,
-    modelKeyInDefinition,
-    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
-    channels,
-    extraSecrets,
-    env: deployEnvironment(agentDir, channels),
-  });
+  const { agentDir, workspace, agentPrefix, name, channels, selfSchedule } = params;
+  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
   // The wake-alarm shared secret (container ↔ forwarder). Minted fresh each run — both sides receive
   // the SAME parameter, so rotation is atomic; it never needs to be remembered locally.
   if (selfSchedule) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
   // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM
   // principal's. Minted fresh each run — both sides receive the SAME parameter, so rotation is atomic.
   if (params.needsForwarder) secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
-  if (needsModelCredential) {
-    failStartup(
-      new Error(
-        `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
-      ),
-    );
-  }
+  gateOnModelCredential(needsModelCredential);
   // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides —
   // never argv); 0700/0600 and removed after the run, success or gate.
   const paramsDir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-"));
@@ -826,40 +849,15 @@ async function runDeployRailway(
     dockerfilePath: string;
   },
 ): Promise<void> {
-  const {
-    agentDir,
-    workspace,
-    name,
-    modelAuth,
-    modelKeyInDefinition,
-    authPath,
-    channels,
-    extraSecrets,
-    intoLinked,
-    dockerfilePath,
-  } = params;
+  const { agentDir, workspace, name, channels, intoLinked, dockerfilePath } = params;
   const railway = spawnRunner("railway", workspace);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
     failStartup(new Error(`railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`));
   }
 
-  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
-    modelAuth,
-    modelKeyInDefinition,
-    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
-    channels,
-    extraSecrets,
-    env: deployEnvironment(agentDir, channels),
-  });
-  // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
-  if (needsModelCredential) {
-    failStartup(
-      new Error(
-        `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
-      ),
-    );
-  }
+  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
+  gateOnModelCredential(needsModelCredential);
 
   const outcome = await deployRailwayRun(
     { name, mountPath: "/data", secrets, missingSecrets, channels, intoLinked, dockerfilePath },
