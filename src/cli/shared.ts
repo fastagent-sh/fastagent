@@ -87,6 +87,10 @@ export interface ReportableAssembly {
  * there. Both are passed as explicit extras by the caller, so the asymmetry is visible at the call
  * site rather than buried in two copies of a list. Whether it is RIGHT is a separate question from
  * whether it has one owner.
+ *
+ * Findings (skill collisions, definition diagnostics) CLOSE the report — they are about the assembly
+ * just printed. What a command says next is its own posture talk, not report: `start`'s persistence
+ * notes now follow them rather than precede them.
  */
 export async function reportAssembly(
   a: ReportableAssembly,

@@ -94,6 +94,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
       await reportAssembly(opened, extras);
     } finally {
       spy.mockRestore();
+      setLogLevel("info"); // restore the default the other suites rely on — the level is a module singleton
     }
     // Lines arrive as `INFO  [fastagent] <label>: <value>`; the label is what this pins.
     return out.map(
