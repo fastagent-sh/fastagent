@@ -86,6 +86,18 @@ function authCallbacks(
     signal: userSignal ?? new AbortController().signal,
     prompt: async (p: AuthPrompt): Promise<string> => {
       if (p.type === "select") {
+        // This branch is UNCANCELLABLE: `LoginIO.select` takes no signal, so all three the line
+        // below composes — the provider's own, the caller's `loginFlow({ signal })`, and the
+        // pending-prompt backstop — are dropped here.
+        //
+        // It costs nothing against pi 0.84's providers, where every `select` is the FIRST call of
+        // `login()` (bedrock, vertex, openai-codex, radius — all of them asking which login method
+        // to use). Nothing is racing it: no callback server is up yet, and `doneSignal` fires when
+        // `auth.login()` RETURNS, which it cannot do while blocked on this await.
+        //
+        // That is a property of the providers, not a guarantee, and nothing here holds it. A
+        // provider that ever issues a `select` after starting its callback server shows up as the
+        // CLI parked on stdin — widen `LoginIO.select` with a signal then.
         const v = await io.select(
           p.message,
           p.options.map((o) => ({ value: o.id, label: o.label, hint: o.description })),
@@ -143,7 +155,7 @@ async function selectProvider(
   providers: Provider[],
   method: LoginMethod,
   store: CredentialStore,
-): Promise<string> {
+): Promise<Provider> {
   const candidates = candidatesFor(providers, method);
   if (candidates.length === 0) throw new Error(`no provider supports ${method} login`);
   const options = await Promise.all(
@@ -154,8 +166,13 @@ async function selectProvider(
     }),
   );
   const id = await io.select("Select a provider", options);
-  if (!id) throw new LoginCancelled("no provider selected");
-  return id;
+  // Answers the PROVIDER, not its id: the caller needs the object, and resolving it here means the
+  // one place that can fail to is the one that just offered the list. Cancel and an id that was
+  // never offered are the same answer — nothing was chosen — and `find` gives both, since a
+  // provider id is always a string and `undefined` matches none of them.
+  const chosen = candidates.find((p) => p.id === id);
+  if (!chosen) throw new LoginCancelled("no provider selected");
+  return chosen;
 }
 
 /**
@@ -177,24 +194,24 @@ export async function loginFlow(
   const providers = options.providers ?? builtinProviders();
 
   let method: LoginMethod;
-  let providerId: string;
+  let provider: Provider;
   if (options.provider) {
-    providerId = options.provider;
-    const p = providers.find((x) => x.id === providerId);
-    if (!p) throw new Error(`unknown provider "${providerId}"`);
-    method = options.method ?? (await methodForProvider(io, p));
+    const named = providers.find((x) => x.id === options.provider);
+    if (!named) throw new Error(`unknown provider "${options.provider}"`);
+    provider = named;
+    method = options.method ?? (await methodForProvider(io, provider));
   } else {
     method = options.method ?? (await selectMethod(io));
-    providerId = await selectProvider(io, providers, method, store);
+    provider = await selectProvider(io, providers, method, store);
   }
 
   // Preflight: a no-op modify runs the refuse-corrupt / writability check BEFORE the flow.
-  await store.modify(providerId, async () => undefined);
+  await store.modify(provider.id, async () => undefined);
 
-  const provider = providers.find((p) => p.id === providerId);
-  if (!provider) throw new Error(`unknown provider "${providerId}"`);
+  // Reachable even though both branches above resolved a provider: an explicit `method` bypasses
+  // methodForProvider, so `{ provider: "openai-codex", method: "api_key" }` arrives here.
   const auth = method === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
-  if (!auth?.login) throw new Error(`provider "${providerId}" has no ${method} login`);
+  if (!auth?.login) throw new Error(`provider "${provider.id}" has no ${method} login`);
 
   // `done` cancels any prompt left pending when login resolves (manual-code race backstop).
   const done = new AbortController();
@@ -204,6 +221,6 @@ export async function loginFlow(
   } finally {
     done.abort();
   }
-  await store.modify(providerId, async () => credential);
-  return { provider: providerId, method };
+  await store.modify(provider.id, async () => credential);
+  return { provider: provider.id, method };
 }
