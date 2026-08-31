@@ -43,6 +43,18 @@ export const BUFFER_LINE_MAX_CHARS = 280;
  *  each channel's attachment collector caps against this. */
 export const BUFFER_ATTACH_MAX = 3;
 
+/**
+ * The folded discussion as it reaches the model — the prompt block, or nothing when the buffer is
+ * empty. One renderer for every channel: what the agent is told about un-summoned discussion should
+ * not depend on which chat platform delivered it, and three copies of the literal is how that drifts.
+ *
+ * A channel that folds a SECOND source (feishu's originating room) labels that one itself — it is a
+ * different claim about a different place, not this block with another name.
+ */
+export function discussionBlock(text: string): string {
+  return text ? `[recent group discussion:\n${text}\n]\n\n` : "";
+}
+
 export interface ContextBuffer<E> {
   /** Record an un-summoned message. Persists BEFORE returning (pre-ACK; see the module header). */
   push(placeKey: string, entry: E): void;

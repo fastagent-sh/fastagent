@@ -51,22 +51,13 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
+import { commitAnsweredTurn } from "../kit/turn-store.ts";
+import { discussionBlock } from "../kit/context-buffer.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
 // Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.
 export { defaultTelegramRoute, telegramEnvelope, telegramStop };
 export type { TelegramFailure, TelegramMessage, TelegramRoute, TelegramUpdate };
-
-/** Execution ceiling: a turn that has STARTED running this many times without finishing is dropped
- *  rather than run again (a poison turn must not loop forever under a restart policy). Counted per turn
- *  at dequeue, so a never-run turn queued behind a poison one keeps its full budget.
- *
- *  Known limitation: `startAttempt` cannot tell a self-inflicted process crash from an external SIGTERM
- *  (no graceful drain), so a legitimately LONG turn interrupted by this many successive deploys is
- *  dropped ("please ask again") as if it were poison. Accepted: catching SIGTERM to spare it would
- *  reintroduce the drain the design refuses, and a turn outliving this many deploy cycles is an outlier
- *  — raise this constant if such turns are expected. */
-const MAX_TURN_ATTEMPTS = 3;
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
@@ -232,10 +223,10 @@ export function telegramChannel({
         await notices.get(rec.id);
         notices.delete(rec.id);
         // Count this execution against the durable record (poison-turn ceiling) before running it again.
-        const decision = store.startAttempt(rec.id, MAX_TURN_ATTEMPTS);
+        const decision = store.startAttempt(rec.id);
         if (decision === "exceeded") {
-          // Started MAX_TURN_ATTEMPTS times without finishing — tell the asker (reusing its ⏳ notice if
-          // any), drop it.
+          // Started the ceiling's worth of times without finishing (turn-store.ts MAX_TURN_ATTEMPTS) —
+          // tell the asker (reusing its ⏳ notice if any), drop it.
           notifyDropped(rec);
           return;
         }
@@ -260,7 +251,7 @@ export function telegramChannel({
         // Fold the un-summoned discussion since the last answered turn into the prompt; it is cleared
         // only when the turn COMPLETES (then it lives in the session).
         const { text: recent, consumed } = buffer.peek(rec.placeKey);
-        const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${rec.baseText}` : rec.baseText;
+        const prompt = `${discussionBlock(recent)}${rec.baseText}`;
         const buffered = collectAttachments(consumed, {
           files: new Set(rec.fileIds),
           images: new Set(rec.imageFileIds),
@@ -289,14 +280,7 @@ export function telegramChannel({
                 },
                 buffered,
               },
-              () => {
-                // On completed, ORDER the two durable clears so a crash between them can't replay a
-                // context-stripped turn: drop the intent FIRST (a crash after this won't replay it), THEN
-                // commit the context buffer (a crash before this just re-folds the same context into the
-                // next summon — harmless and additive). The reverse order would leave intent+no-context.
-                store.remove(rec.id);
-                buffer.commit(rec.placeKey, consumed);
-              },
+              () => commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey: rec.placeKey, consumed }),
             ),
             apiBaseUrl,
             botToken,

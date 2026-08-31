@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type StoredTurn, createTurnStore } from "../src/channels/telegram/turn-store.ts";
+import { commitAnsweredTurn } from "../src/channels/kit/turn-store.ts";
 
 const dirs: string[] = [];
 const freshPath = (): string => {
@@ -39,7 +40,7 @@ describe("turn-store", () => {
     const path = freshPath();
     const store = createTurnStore(path);
     store.add(turn("t1"));
-    store.startAttempt("t1", 3); // attempts -> 1
+    store.startAttempt("t1"); // attempts -> 1
     store.add(turn("t1")); // redelivery re-submits the same update_id (a fresh record with attempts:0)
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "t1", attempts: 1 }]); // preserved, not reset
   });
@@ -74,27 +75,27 @@ describe("turn-store", () => {
   it("startAttempt bumps the execution count and persists it", () => {
     const path = freshPath();
     createTurnStore(path).add(turn("t1"));
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run");
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run");
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "t1", attempts: 1 }]); // durable bump
   });
 
-  it("keeps a turn that lands exactly ON maxAttempts (the > vs >= boundary)", () => {
+  it("keeps a turn that lands exactly ON the ceiling (the > vs >= boundary)", () => {
     const path = freshPath();
     createTurnStore(path).add(turn("edge", { attempts: 2 }));
-    expect(createTurnStore(path).startAttempt("edge", 3)).toBe("run"); // 2 -> 3, still <= 3, not dropped
+    expect(createTurnStore(path).startAttempt("edge")).toBe("run"); // 2 -> 3, still <= 3, not dropped
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "edge", attempts: 3 }]);
   });
 
   it("an unknown id runs untracked (a redelivery double-run whose first run already removed the record)", () => {
-    expect(createTurnStore(freshPath()).startAttempt("gone", 3)).toBe("run");
+    expect(createTurnStore(freshPath()).startAttempt("gone")).toBe("run");
   });
 
-  it("drops a turn on its N+1th start (over maxAttempts) and persists the drop", () => {
+  it("drops a turn on its N+1th start (over the ceiling) and persists the drop", () => {
     const path = freshPath();
     const store = createTurnStore(path);
     store.add(turn("poison", { attempts: 3 }));
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(store.startAttempt("poison", 3)).toBe("exceeded"); // 3 -> 4 > 3, dropped
+    expect(store.startAttempt("poison")).toBe("exceeded"); // 3 -> 4 > 3, dropped
     expect(err).toHaveBeenCalledWith(expect.stringContaining("dropping turn poison"));
     expect(createTurnStore(path).recover()).toHaveLength(0); // the drop is persisted
   });
@@ -104,11 +105,11 @@ describe("turn-store", () => {
     // end to end (the seeded-count tests above each cover only one link).
     const path = freshPath();
     createTurnStore(path).add(turn("t1")); // accepted, attempts 0
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run"); // → 1
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run"); // → 2
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("run"); // → 3
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run"); // → 1
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run"); // → 2
+    expect(createTurnStore(path).startAttempt("t1")).toBe("run"); // → 3
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(createTurnStore(path).startAttempt("t1", 3)).toBe("exceeded"); // 4th start > 3 → dropped
+    expect(createTurnStore(path).startAttempt("t1")).toBe("exceeded"); // 4th start > 3 → dropped
     expect(createTurnStore(path).recover()).toHaveLength(0);
   });
 
@@ -126,8 +127,8 @@ describe("turn-store", () => {
         .recover()
         .map((t) => `${t.id}:${t.attempts}`),
     ).toEqual(["A:3", "B:0"]);
-    expect(store.startAttempt("A", 3)).toBe("exceeded");
-    expect(store.startAttempt("B", 3)).toBe("run"); // B was never charged for A's crashes
+    expect(store.startAttempt("A")).toBe("exceeded");
+    expect(store.startAttempt("B")).toBe("run"); // B was never charged for A's crashes
     expect(createTurnStore(path).recover()).toMatchObject([{ id: "B", attempts: 1 }]); // only B survives, at 1
   });
 
@@ -171,7 +172,7 @@ describe("turn-store", () => {
     rmSync(sub, { recursive: true });
     writeFileSync(sub, "x"); // now the parent is a FILE — the bump write fails
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(store.startAttempt("t1", 3)).toBe("defer"); // an unpersistable bump must not run the turn
+    expect(store.startAttempt("t1")).toBe("defer"); // an unpersistable bump must not run the turn
     expect(err).toHaveBeenCalledWith(expect.stringContaining("deferring"));
   });
 
@@ -181,5 +182,44 @@ describe("turn-store", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {}); // log.warn/error both → console.error
     expect(createTurnStore(path).recover()).toHaveLength(0);
     expect(err).toHaveBeenCalledWith(expect.stringContaining("unexpected shape"));
+  });
+});
+
+describe("commitAnsweredTurn (the order a crash between the two writes depends on)", () => {
+  /** Records which durable write happened first. Both are real interfaces, faked to the two calls
+   *  this function makes — the assertion is ordering, not persistence (each side has its own tests). */
+  const recorder = () => {
+    const order: string[] = [];
+    return {
+      order,
+      store: { remove: (id: string) => void order.push(`remove:${id}`) } as unknown as Parameters<
+        typeof commitAnsweredTurn
+      >[0],
+      buffer: { commit: (key: string) => void order.push(`commit:${key}`) } as unknown as Parameters<
+        typeof commitAnsweredTurn
+      >[1],
+    };
+  };
+
+  it("drops the intent BEFORE committing the context", () => {
+    // Reversed, a crash between the writes leaves intent on disk with its context already consumed:
+    // the replay then runs the same turn with its folded discussion stripped. This order's failure is
+    // the harmless one — re-folding context that was already answered.
+    const { order, store, buffer } = recorder();
+    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [] });
+    expect(order).toEqual(["remove:t1", "commit:chat:1"]);
+  });
+
+  it("forwards the consumed entries by reference", () => {
+    // Not a copy: the buffer removes by object identity, so cloning the entries on the way through
+    // would commit a set that matches nothing and leave the answered discussion buffered forever.
+    // (That identity removal itself is context-buffer's own test; this only guards the hand-off.)
+    const consumed = [{ body: "a" }];
+    const seen: unknown[] = [];
+    const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<
+      typeof commitAnsweredTurn
+    >[1];
+    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed });
+    expect(seen[0]).toBe(consumed);
   });
 });

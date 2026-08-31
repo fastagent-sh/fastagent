@@ -13,7 +13,8 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createTurnQueue } from "../kit/turn-queue.ts";
-import { createTurnStore } from "../kit/turn-store.ts";
+import { commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
+import { discussionBlock } from "../kit/context-buffer.ts";
 import { createSlackBotTokenProvider } from "./bot-auth.ts";
 import { collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { invokeSlackTurn } from "./invoke-turn.ts";
@@ -53,7 +54,6 @@ export { defaultSlackRoute, slackEnvelope };
 export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
 
 const MAX_EVENT_BYTES = 1 << 20;
-const MAX_TURN_ATTEMPTS = 3;
 /** Slack's own documented window — it re-signs every redelivery with a current timestamp, so a tight
  *  one costs nothing. The Feishu ingress reads hours off the same helper for the opposite reason. */
 const MAX_SIGNATURE_AGE_S = 5 * 60;
@@ -326,7 +326,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           log.error(`${label} deferring durable turn ${turn.id} because Slack authentication failed: ${String(error)}`);
           return;
         }
-        const attempt = store.startAttempt(turn.id, MAX_TURN_ATTEMPTS);
+        const attempt = store.startAttempt(turn.id);
         if (attempt === "exceeded") {
           notifyDropped(turn);
           return;
@@ -347,7 +347,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         const startedAt = Date.now();
         log.info(`${label} turn start: turn=${turn.id} session=${turn.session} channel=${turn.channelId}`);
         const { text: recent, consumed } = buffer.peek(turn.bufferKey);
-        const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${turn.baseText}` : turn.baseText;
+        const prompt = `${discussionBlock(recent)}${turn.baseText}`;
         const buffered = collectSlackBufferedFiles(consumed, new Set(turn.fileIds));
         const messageRef = messageRefOf(turn.id);
         const reaction =
@@ -368,10 +368,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               prompt,
               { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label },
               { primaryFileIds: turn.fileIds, buffered },
-              () => {
-                store.remove(turn.id);
-                buffer.commit(turn.bufferKey, consumed);
-              },
+              () => commitAnsweredTurn(store, buffer, { id: turn.id, bufferKey: turn.bufferKey, consumed }),
             ),
             api,
             targetOf(turn),
