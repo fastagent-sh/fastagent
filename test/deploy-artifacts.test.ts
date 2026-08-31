@@ -137,10 +137,10 @@ describe("deploy: a flag only one host honours is reported the same way by every
   it("names the owning host in ONE spelling, whichever host is refusing the flag", () => {
     // The drift this replaces: `Railway-only` from docker/agentcore, `railway-only` from fly.
     for (const host of ["docker", "agentcore", "fly"] as const) {
-      expect(said(host, { intoLinked: true })).toContain("--into-linked is railway-only");
+      expect(said(host, { intoLinked: true })).toContain("--into-linked: railway-only");
     }
     for (const host of ["docker", "railway", "agentcore"] as const) {
-      expect(said(host, { stop: true })).toContain("--stop/--no-scale-to-zero is fly-only");
+      expect(said(host, { stop: true })).toContain("--stop/--no-scale-to-zero: fly-only");
     }
   });
 

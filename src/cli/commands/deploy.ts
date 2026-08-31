@@ -58,7 +58,10 @@ import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 /** The deploy targets, as a value: {@link HOST_ONLY_FLAGS} is checked against this list by a test, and
- *  a type alone cannot be enumerated at runtime. */
+ *  a type alone cannot be enumerated at runtime. NOT the only copy — `cli/program.ts` repeats it as the
+ *  `<host>` argument's `choices`, because that file may not import a command module at load time (its
+ *  per-command imports are lazy). Adding a host means editing both; the type there rides in on a
+ *  `import type`, which costs nothing at runtime. */
 export const DEPLOY_HOSTS = ["docker", "fly", "railway", "agentcore"] as const;
 
 export type DeployHost = (typeof DEPLOY_HOSTS)[number];
@@ -159,7 +162,9 @@ export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
     if (instead === undefined) {
       throw new Error(`deploy: HOST_ONLY_FLAGS has no "instead" line for ${host} on ${rule.flag}`);
     }
-    console.error(`[fastagent] warn: ${rule.flag} is ${rule.owner}-only — ${instead}`);
+    // A colon, not "is": one row names a single flag and the other names a pair, and no verb agrees
+    // with both (the hand-written copies this replaced said "is" and "are" respectively).
+    console.error(`[fastagent] warn: ${rule.flag}: ${rule.owner}-only — ${instead}`);
   }
 }
 
