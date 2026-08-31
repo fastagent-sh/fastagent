@@ -63,8 +63,6 @@ const MOUNT = "/data";
  *  convention); two mechanisms, two documented spellings, one fact each. */
 export const dockerfilePathVar = (prefix: string): string => `/${prefix}Dockerfile`;
 
-/** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
- *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
 /** railway.json is JSON, so its ownership marker is a KEY rather than a comment line. Railway ignores
  *  unknown keys; the predicate below is what lets `--force` reset OUR file and keep a hand-written one. */
 const GENERATED_RAILWAY_KEY = "x-generated-by";
@@ -79,6 +77,8 @@ export function isGeneratedRailwayJson(content: string): boolean {
   }
 }
 
+/** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
+ *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
 function railwayJson(prefix: string): string {
   return `${JSON.stringify(
     {

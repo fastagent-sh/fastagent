@@ -130,6 +130,36 @@ describe("the public subpaths do not reach into the CLI", () => {
   }
 });
 
+describe("knip's entry list mirrors the package's subpath exports", () => {
+  // knip's own config says a forgotten entry "surfaces as its whole tree reported dead". That is only
+  // true for a subpath nothing else re-exports: `src/node.ts` was missing for as long as it has
+  // existed, and knip stayed silent because `index.ts` re-exports it. The claim needs its own check.
+  it("every exported subpath has a knip entry", () => {
+    const pkg = JSON.parse(readFileSync(resolve(srcDir, "../package.json"), "utf8")) as {
+      exports: Record<string, unknown>;
+    };
+    // Read the `entry` ARRAY, not the file: a substring match over the whole config is satisfied by a
+    // path sitting in `ignore` or `project`, or merely named in a comment — which is the misconfigured
+    // shape this test exists to catch, not a passing one.
+    //
+    // Every comment in knip.jsonc is a whole-line `//`, and stripping only those keeps the `$schema`
+    // URL's own `//` intact. A trailing or block comment makes JSON.parse throw, which is the right
+    // outcome: better a loud failure here than a silently mis-read config.
+    const knip = readFileSync(resolve(srcDir, "../knip.jsonc"), "utf8");
+    const { entry } = JSON.parse(
+      knip
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .join("\n"),
+    ) as { entry: string[] };
+    const missing = Object.keys(pkg.exports)
+      .filter((key) => key !== "./package.json")
+      .map((key) => (key === "." ? "src/index.ts" : `src/${key.slice(2)}.ts`))
+      .filter((subpath) => !entry.includes(subpath));
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("the assembly's parts stay out of the public surface", () => {
   // Each of these was public once. They are how `createAgentService` builds a service, not something
   // a caller reproduces — and every one re-exported is a promise we then have to keep.

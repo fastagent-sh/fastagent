@@ -262,10 +262,9 @@ function buildPiAgent(opts: {
   thinkingLevel?: ThinkingLevel;
   providers?: Provider[];
   authPath?: string;
-  /** A pre-built collection, used verbatim. The DIRECTORY rungs pass one so the agent's own
+  /** The model registry to run on, used verbatim. The DIRECTORY rung passes one so the agent's own
    *  models.json is in scope (see createPiModelRuntime); building it is async, which is why it
    *  happens in the caller — L1 has no directory, so it keeps the synchronous built-ins path. */
-  /** The model registry to run on. The directory rung passes one built from the agent's models.json. */
   models?: ModelRuntime;
   systemPrompt?: string | (() => string);
   tools?: MountedTool[];
