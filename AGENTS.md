@@ -251,10 +251,25 @@ src/
     │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
     └── report.ts            # startup report (auth/model/skills/tools surface)
 test/                        # vitest; faux models by default + reusable SPEC conformance.
-└── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
-                             # only reason they are devDeps): that path crosses the Node/Fetch seam
-                             # through code we do not own, so a swap underneath can keep every unit
-                             # test green while breaking the paste-this-in promise
+├── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
+│                            # only reason they are devDeps): that path crosses the Node/Fetch seam
+│                            # through code we do not own, so a swap underneath can keep every unit
+│                            # test green while breaking the paste-this-in promise
+└── live/                   # the probes for what the offline suite FAKES — every file here exists to
+                             # check an assumption about a system we do not own, never to re-run logic:
+                             # the published tarball (registry), a real provider's stream and errors
+                             # (model), a real container build + boot + state volume (docker). Each one
+                             # drives a PRODUCT ENTRY (`createPiAgentFromDir`, `deploy docker --run`,
+                             # `npm install`) and observes from OUTSIDE it — a probe that rebuilds the
+                             # assembly to get a better observation point measures the rebuild, and the
+                             # entry's own steps (installProxyFetch, credential resolution, pinning pi's
+                             # agent dir) go missing one at a time. Unit tests below DO reach into that
+                             # layer, correctly — the rule is this directory's, because only these files
+                             # claim to report on the real thing.
+                             # Excluded from `npm test`; `npm run test:live` (vitest.live.config.ts)
+                             # opts in, and a missing credential FAILS rather than skips — you asked
+                             # for them. Credentials arrive the PRODUCT's way (FASTAGENT_AUTH_PATH → an
+                             # auth.json), which is what lets an OAuth-only provider be the model.
 docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 
