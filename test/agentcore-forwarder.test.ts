@@ -188,7 +188,9 @@ describe("agentcore forwarder: the shared-secret gates", () => {
     // the property itself is not observable from a test: timing measurements against a Lambda are
     // noise. What this catches is the next endpoint copying the wrong neighbour.
     const src = forwarderSource();
-    expect(src).not.toMatch(/req\.\w+\s*!==\s*process\.env/);
+    // Either operand order, and `!=`/`!==`/`==`/`===` alike: `process.env.X !== req.auth` is the same
+    // bug written backwards, and a one-sided pattern reads as covering it while passing.
+    expect(src).not.toMatch(/req\.\w+\s*[!=]=+\s*process\.env|process\.env\.\w+\s*[!=]=+\s*req\.\w+/);
     // …and each secret is still actually checked (a gate deleted rather than converted). The WHOLE
     // call, not the argument position: `process.env.STATE_REFRESH_SECRET)` also closes the unrelated
     // `(WAKE_SECRET || STATE_REFRESH_SECRET)` ownUrl guard, so that spelling stayed green with the
