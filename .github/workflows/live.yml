@@ -110,4 +110,8 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
+          # A LONG-LIVED xoxb- (token rotation off): a runner has no durable volume to catch a
+          # refreshed pair, so a rotating credential would be revoked by its own first refresh.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_TEST_CHANNEL: ${{ secrets.SLACK_TEST_CHANNEL }}
         run: npm run test:live
