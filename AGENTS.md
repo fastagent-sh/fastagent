@@ -251,10 +251,18 @@ src/
     │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
     └── report.ts            # startup report (auth/model/skills/tools surface)
 test/                        # vitest; faux models by default + reusable SPEC conformance.
-└── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
-                             # only reason they are devDeps): that path crosses the Node/Fetch seam
-                             # through code we do not own, so a swap underneath can keep every unit
-                             # test green while breaking the paste-this-in promise
+├── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
+│                            # only reason they are devDeps): that path crosses the Node/Fetch seam
+│                            # through code we do not own, so a swap underneath can keep every unit
+│                            # test green while breaking the paste-this-in promise
+└── live/                   # the probes for what the offline suite FAKES — every file here exists to
+                             # check an assumption about a system we do not own, never to re-run logic:
+                             # the published tarball (registry), a real provider's stream/errors/cancel
+                             # (model), a real container build + boot + state volume (docker). Excluded
+                             # from `npm test`; `npm run test:live` (vitest.live.config.ts) opts in, and
+                             # a missing credential FAILS rather than skips — you asked for them.
+                             # Credentials arrive the PRODUCT's way (FASTAGENT_AUTH_PATH → an auth.json),
+                             # which is what lets an OAuth-only provider be the model under test.
 docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 

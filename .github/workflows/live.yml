@@ -1,0 +1,66 @@
+name: Live
+
+# The probes that need the real world: a published tarball, a real model provider, a real container.
+# Never a PR check — an external contributor has no credentials, and a platform's bad night must not
+# read as a broken pull request. Nightly, plus on demand.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version to probe (default: this checkout's)"
+        required: false
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live probes
+    runs-on: ubuntu-latest
+    environment: live # holds FASTAGENT_LIVE_MODEL and the provider key
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ONE credential mechanism for both probes: an auth.json, named by the product's own
+      # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
+      # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
+      #
+      # The secret holds a grant minted FOR CI and used nowhere else (`fastagent login openai-codex
+      # --auth-path <ci file>`, device-code flow). That isolation is the point: pi persists a NEW
+      # refresh token on every refresh, so any file sharing this grant goes stale the moment another
+      # one refreshes it — a maintainer's laptop and this workflow must not be the same grant.
+      #
+      # The secret is still a SNAPSHOT: CI's own refreshes live and die with the runner, so the stored
+      # token ages. Whether it eventually stops being accepted is the provider's call, not something
+      # this file should claim. When a run fails to authenticate, re-run the login above and re-set the
+      # secret; an API-key credential in the same variable avoids the question entirely.
+      - name: Stage the model credential
+        env:
+          FASTAGENT_AUTH_JSON: ${{ secrets.FASTAGENT_AUTH_JSON }}
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/secrets"
+          umask 077 && printf '%s' "$FASTAGENT_AUTH_JSON" > "$RUNNER_TEMP/secrets/auth.json"
+
+      - name: Run live probes
+        env:
+          FASTAGENT_LIVE_MODEL: ${{ vars.FASTAGENT_LIVE_MODEL }}
+          FASTAGENT_LIVE_VERSION: ${{ inputs.version }}
+          FASTAGENT_AUTH_PATH: ${{ runner.temp }}/secrets/auth.json
+        run: npm run test:live

@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defaultExclude, defineConfig } from "vitest/config";
 
 // A handful of CLI e2e tests spawn `node src/cli.ts <cmd>` subprocesses that each cold-start the full
 // engine import graph (~0.7s+, measured; the pi packages, not TS stripping). They are deliberately few
@@ -23,5 +23,8 @@ export default defineConfig({
     pool: "forks",
     testTimeout: 30000,
     hookTimeout: 30000,
+    // test/live/ talks to real providers, the registry and Docker; it runs only under
+    // `npm run test:live` (vitest.live.config.ts), never as part of `npm test`.
+    exclude: [...defaultExclude, "test/live/**"],
   },
 });
