@@ -103,4 +103,7 @@ jobs:
         env:
           FASTAGENT_LIVE_MODEL: ${{ vars.FASTAGENT_LIVE_MODEL }}
           FASTAGENT_AUTH_PATH: ${{ runner.temp }}/secrets/auth.json
+          # A bot of the probe's OWN: it sets and then deletes that bot's webhook, which would take
+          # down whatever traffic a shared bot was serving.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: npm run test:live
