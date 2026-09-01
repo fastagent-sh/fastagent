@@ -18,9 +18,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { readRuns } from "../../src/schedule/audit.ts";
-import { loadSchedules } from "../../src/schedule/discover.ts";
-import { createScheduler } from "../../src/schedule/scheduler.ts";
 import { saveFires } from "../../src/schedule/state.ts";
+import { startSchedules } from "../../src/service.ts";
 import { requireEnv } from "./env.ts";
 
 // Node's fetch ignores HTTPS_PROXY; the library opener deliberately leaves this to its caller.
@@ -53,17 +52,19 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
     );
 
     const { agent, stateRoot } = await createPiAgentFromDir(dir, { serving: true });
-    const { schedules, failures } = await loadSchedules(dir);
-    expect(failures, "a schedules/ file failed to load").toEqual([]);
-    expect(schedules.map((s) => s.name)).toEqual([SCHEDULE]);
 
-    // Two minutes back: the next 1-minute slot after it is already in the past, so start() catches up
-    // instead of arming a timer.
+    // Two minutes back, seeded before the scheduler starts: the next 1-minute slot after it is already
+    // in the past, so start() catches up instead of arming a timer.
     saveFires(stateRoot, { [SCHEDULE]: new Date(Date.now() - 120_000).toISOString() });
 
-    const scheduler = createScheduler({ agent, stateRoot, schedules });
-    cleanups.push(() => scheduler.stop());
-    scheduler.start();
+    // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
+    // than those four steps rebuilt here, which would measure the rebuild.
+    const { schedules, stop } = await startSchedules(dir, agent, stateRoot, false);
+    cleanups.push(stop);
+    expect(
+      schedules.map((s) => s.name),
+      "the schedules/ file did not load",
+    ).toEqual([SCHEDULE]);
 
     // The fire is a real model turn; poll the audit log rather than guessing a duration.
     let runs = readRuns(stateRoot, SCHEDULE);
@@ -76,7 +77,9 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
     // toMatchObject: a `failed` record carries `error`, and printing it is the difference between
     // knowing why an unattended nightly went red and having to re-run it.
     expect(runs[0]).toMatchObject({ name: SCHEDULE, outcome: "completed" });
-    expect(runs[0]?.reply?.trim(), "a completed run must carry the turn's reply").not.toBe("");
+    // toBeTruthy, not `.not.toBe("")`: a MISSING reply is exactly the regression this guards, and
+    // `undefined?.trim()` is undefined, which is not "".
+    expect(runs[0]?.reply?.trim(), "a completed run must carry the turn's reply").toBeTruthy();
     // The session is derived from the schedule's name, not minted per fire — that is what makes a
     // schedule's turns one continuing conversation.
     expect(runs[0]?.session).toContain(SCHEDULE);

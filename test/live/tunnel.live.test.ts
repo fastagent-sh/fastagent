@@ -9,6 +9,7 @@
  * Drives `startCloudflareTunnel`, the same function `dev --tunnel` and `deploy docker --tunnel` use.
  * Needs the `cloudflared` binary on PATH and no credentials: a Quick Tunnel is anonymous.
  */
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
@@ -27,6 +28,14 @@ afterAll(() => {
 
 describe("cloudflare quick tunnel", () => {
   it("assigns a public URL that carries a request back to this process", async () => {
+    // Checked first, and separately: startCloudflareTunnel reports a missing binary and a tunnel that
+    // failed to establish as the same `undefined`, and the two need opposite actions from whoever ran
+    // this. Same rule as env.ts — a missing precondition is named, not diagnosed from a symptom.
+    expect(
+      spawnSync("cloudflared", ["--version"]).error,
+      "live probes need cloudflared on PATH (e.g. `brew install cloudflared`)",
+    ).toBeUndefined();
+
     // A body only this run knows: proof the response came from OUR origin and not from a cached page,
     // a captive portal, or another tunnel.
     const token = randomUUID();
