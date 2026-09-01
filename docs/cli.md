@@ -108,6 +108,12 @@ for it again on the spot (cancel to stop), so a mistyped key is corrected at log
 failing at the first invoke; an inconclusive failure (network, quota, permissions) keeps the key and
 prints the provider's message.
 
+**The directory holding `auth.json` is managed as a secrets directory**, whichever knob named it:
+every credential write (including an OAuth refresh mid-run) re-applies `0700` to it, and where the
+process cannot chmod it the write fails instead of leaving the credential readable. Point
+`--auth-path` / `FASTAGENT_AUTH_PATH` inside a directory this process owns, not a shared one others
+need to read.
+
 **Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry, a shell env var, or `--auth-path`), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `--auth-path` and `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
 
 ## `fastagent dev`

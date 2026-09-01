@@ -363,10 +363,19 @@ const SECRETS_DIR_MODE = 0o700;
  * directory (`init`, `add <channel>`, the credential store, the deploy seed) and the ordinary order
  * is init → add → login, so the careful one is LAST: the rule has to live where all of them can
  * reach it, and it has to chmod rather than trust the create.
+ *
+ * A chmod the caller never asked for owes them its reason: the raw `EPERM ... chmod '/shared/creds'`
+ * reads as a bug in whatever they WERE doing (storing a credential), not as fastagent tightening a
+ * directory they pointed it at, and says nothing about the way out.
  */
 export async function ensureSecretsDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true, mode: SECRETS_DIR_MODE });
-  await chmod(dir, SECRETS_DIR_MODE);
+  await chmod(dir, SECRETS_DIR_MODE).catch((e: Error) => {
+    throw new Error(
+      `cannot secure secrets dir ${dir} (fastagent keeps it 0700): ${e.message} — point --auth-path/FASTAGENT_SECRETS_DIR at a directory this process owns`,
+      { cause: e },
+    );
+  });
 }
 
 /**

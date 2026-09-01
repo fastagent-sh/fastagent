@@ -436,8 +436,9 @@ is `createPiModels`'s default when no `authPath` is passed, and the explicit one
 `createPiModels()` bare reads the global file, not a project-level `login` — pass `authPath` explicitly
 to read the project's credential (the `createPiAgentFrom*` openers already do).
 
-**The directory you name is managed as a secrets directory.** On its first write the store creates it
-if needed and sets it to `0700`, repairing an existing one — `auth.json` itself is `0600`, but the
+**The directory you name is managed as a secrets directory.** Every credential write — including an
+OAuth refresh mid-run — creates it if needed and re-applies `0700`, so a directory you widen by hand
+is silently tightened again on the next token rotation. `auth.json` itself is `0600`, but the
 directory's `x` bit is what actually keeps another account out, and `mkdir`'s mode is a no-op on a
 directory that already exists. Point `authPath` at a file inside a directory fastagent may own, not
 into a shared one you need others to read. Where the process cannot chmod that directory, the
