@@ -9,7 +9,7 @@
  * builds and this test fails with that gate's own message.
  */
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +32,10 @@ const COMPOSE = "fastagent/fastagent.compose.yml";
 let workspace = "";
 let port = 0;
 
-/** A port the container will publish on 127.0.0.1 — taken and released, so parallel runs do not collide. */
+/** An ephemeral port for the container to publish on 127.0.0.1: taken to learn a free number, then
+ *  released — nothing holds it until the container binds it. What keeps concurrent runs apart is
+ *  `fileParallelism: false` plus the per-run Compose project name; losing the race in between surfaces
+ *  as `docker compose up` failing to bind, never as two probes on one port. */
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -74,7 +77,11 @@ afterAll(async () => {
   // Compose file — is ruled out by asking whether that file exists, so nothing here needs absorbing:
   // a `down` that fails now is a daemon refusing to remove a container that holds CI's credential,
   // and a run that ends green while that container keeps running is the outcome worth failing over.
-  if (workspace && (await exists(join(workspace, COMPOSE)))) await compose(["down", "-v"]);
+  // `--rmi local`: the Compose project name carries this run's mkdtemp suffix, so the built image is
+  // unique per run and nothing else can reuse it. Without this every local `npm run test:live` leaves
+  // another node:22-slim + full pi dependency tree behind.
+  if (workspace && (await exists(join(workspace, COMPOSE)))) await compose(["down", "-v", "--rmi", "local"]);
+  if (workspace) await rm(workspace, { recursive: true });
 });
 
 /** POST one turn and return its SSE events (the built-in `/invoke`, mounted because no channel is
@@ -110,7 +117,12 @@ describe("deploy docker --run: a definition serving real turns in a container", 
     expect(await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.text())).toBe("ok\n");
 
     const session = "live-docker";
-    expect((await invoke(session, "Remember this number: 47. Reply with just: ok")).at(-1)?.type).toBe("completed");
+    // toMatchObject, not `.at(-1)?.type`: a `failed` terminal carries `details`/`retryable` (SPEC
+    // MUST 2), and a mismatch prints the whole event. Nobody is watching a nightly run, so a bare
+    // `expected 'failed' to be 'completed'` costs a full re-run to learn why.
+    expect((await invoke(session, "Remember this number: 47. Reply with just: ok")).at(-1)).toMatchObject({
+      type: "completed",
+    });
 
     // The state volume is the deployment's continuity. Restarting the container drops every bit of
     // in-process state, so what answers afterwards can only have come off the volume.
@@ -120,7 +132,7 @@ describe("deploy docker --run: a definition serving real turns in a container", 
     expect(listed.stdout.trim()).not.toBe("");
 
     const second = await invoke(session, "What number did I ask you to remember? Reply with digits only.");
-    expect(second.at(-1)?.type).toBe("completed");
+    expect(second.at(-1)).toMatchObject({ type: "completed" });
     expect(answerOf(second)).toContain("47");
   });
 });

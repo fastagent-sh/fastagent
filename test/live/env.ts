@@ -11,15 +11,14 @@ export function requireEnv(name: string, hint: string): string {
 }
 
 /**
- * The published version under probe: the workflow's input when it carries one, else this checkout's
- * (after a release, the version just published). Read HERE rather than per probe, because the
- * registry install and the container image must resolve the same one — a dispatch that pins a version
- * for one of them and not the other would report on two different artifacts.
+ * The published version under probe, read the same way by every probe: `FASTAGENT_LIVE_VERSION` when
+ * it carries one — CI resolves the registry's current `latest` to an exact version ONCE and exports it
+ * (.github/workflows/live.yml), so the registry install and the container image cannot report on two
+ * artifacts — else this checkout's version, which is what a local run means.
  *
- * `||`, never `??`: an optional `workflow_dispatch` input left blank — and EVERY `schedule` run —
- * arrives as an empty string, which `??` would keep. That installs `@fastagent-sh/fastagent@` (npm
- * resolves the empty range to `latest`) and then asserts the CLI reports `""`, so the nightly path
- * would fail every night while never once probing this checkout.
+ * `||`, never `??`: an exported-but-empty variable is not a pin, and `??` would keep it. That installs
+ * `@fastagent-sh/fastagent@` (npm resolves the empty range to `latest`) and then asserts the CLI
+ * reports `""` — a probe that fails without ever naming the version it meant to check.
  */
 export async function liveVersion(): Promise<string> {
   return process.env.FASTAGENT_LIVE_VERSION || (await fastagentVersion());

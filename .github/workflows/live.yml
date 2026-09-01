@@ -4,15 +4,11 @@ name: Live
 # Never a PR check — an external contributor has no credentials, and a platform's bad night must not
 # read as a broken pull request. Nightly, plus on demand.
 #
-# One nightly failure is EXPECTED and not a defect: between a `chore(release)` merge and the Release
-# that triggers publish.yml, this checkout names a version npm does not serve yet, so the registry
-# install and the container build both fail on it. Dispatch with `version` set to the last published
-# one to get a clean read during that window — it moves both probes together.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published version to probe (default: this checkout's). Applies to BOTH the registry install and the container image."
+        description: "Exact published version to probe (default: the registry's current latest). Applies to BOTH the registry install and the container image."
         required: false
   schedule:
     - cron: "17 3 * * *"
@@ -71,9 +67,22 @@ jobs:
           install -d -m 700 "$RUNNER_TEMP/secrets"
           umask 077 && printf '%s' "$FASTAGENT_AUTH_JSON" > "$RUNNER_TEMP/secrets/auth.json"
 
+      # The ONE version both probes land on, resolved here so they cannot land on two. `latest`
+      # rather than this checkout's version: between a `chore(release)` merge and the Release that
+      # triggers publish.yml, this checkout names a version npm does not serve, and a nightly that is
+      # red every release cycle for a non-defect trains people to ignore it. Resolved to an EXACT
+      # version, never handed down as the tag: the registry probe asserts what `--version` reports,
+      # and the container image would resolve the tag a second time.
+      - name: Resolve the version under probe
+        env:
+          PINNED: ${{ inputs.version }}
+        run: |
+          VERSION="${PINNED:-$(npm view @fastagent-sh/fastagent version)}"
+          test -n "$VERSION" || { echo "could not resolve a published version to probe"; exit 1; }
+          echo "FASTAGENT_LIVE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Run live probes
         env:
           FASTAGENT_LIVE_MODEL: ${{ vars.FASTAGENT_LIVE_MODEL }}
-          FASTAGENT_LIVE_VERSION: ${{ inputs.version }}
           FASTAGENT_AUTH_PATH: ${{ runner.temp }}/secrets/auth.json
         run: npm run test:live

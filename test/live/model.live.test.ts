@@ -1,42 +1,40 @@
 /**
- * The SPEC conformance suite (spec-conformance.ts) against a REAL provider, over the same per-invoke
- * `AgentSession` L0 the serving path binds. The offline twin (test/conformance-session.test.ts) proves
- * the contract holds over a faux model; this one proves it still holds when the stream, the errors and
- * the cancellation are a real provider's.
+ * A definition directory served by a REAL provider, opened the way the product opens one.
  *
- * `FASTAGENT_LIVE_MODEL` selects the model ("provider/modelId"); credentials resolve exactly as the
- * product resolves them — `FASTAGENT_AUTH_PATH` or the agent's own auth.json, then the provider's env
- * key. An OAuth provider (openai-codex) has only the first, so point the variable at a logged-in file.
+ * The probe drives `createPiAgentFromDir` — the same opener `dev`, `start` and `invoke` drive — and
+ * observes only from outside: what the turn answers, and what a failing one reports. It deliberately
+ * does NOT reach for the `AgentSession` L0 underneath, even though that layer offers observation
+ * points this file cannot have (intercepting `session.abort`, for one). Rebuilding the opener to get
+ * at them means re-doing everything it does — proxy install, credential resolution, pinning pi's own
+ * agent dir away from `~/.pi/agent` — and every one of those was missed at least once here. A probe
+ * that rebuilds the assembly measures the rebuild's fidelity, not the product.
  *
- * The `failing` subject is the one deliberate stand-in: it points a definition-local models.json at a
- * local endpoint that answers 400, because the assertion is how a real HTTP error travels through pi's
- * provider stack into our terminal mapping — not which prose the vendor puts in it. MUST 6 has no
- * subject here either: the suite's `pair` probe needs to read the second instance's ANSWER, which is
- * the continuity test below, written once.
+ * SPEC conformance therefore stays where it can be asserted honestly: test/conformance-session.test.ts
+ * runs the full suite (MUST 1/2/3/6) against the L0 on a faux model. Cancellation in particular gains
+ * nothing from a live provider — the assertion is that the engine's abort ran, which is identical in
+ * both worlds. What only a real provider can settle is here: a real stream completes, a real HTTP
+ * error becomes a `failed` terminal with the right `retryable`, and a real record carries a
+ * conversation across two independent instances.
+ *
+ * `FASTAGENT_LIVE_MODEL` selects the model ("provider/modelId"); credentials resolve as the product
+ * resolves them — `FASTAGENT_AUTH_PATH`, else the agent's own `.secrets/auth.json`, else the
+ * provider's env key. An OAuth provider (openai-codex) has only the first, so point the variable at a
+ * logged-in file.
  */
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  type AgentSession,
-  createAgentSessionFromServices,
-  createAgentSessionServices,
-} from "@earendil-works/pi-coding-agent";
 import { afterAll, describe, expect, it } from "vitest";
-import type { Agent } from "../../src/agent.ts";
+import type { AgentEvent } from "../../src/agent.ts";
 import { collect } from "../../src/collect.ts";
-import { resolveAuthPath, resolveModel } from "../../src/engines/pi/config.ts";
-import { type PiAgentSessionFactory, createPiAgentFromSession } from "../../src/engines/pi/invoke-session.ts";
-import { createPiModelRuntime } from "../../src/engines/pi/models.ts";
-import { piInMemorySessionRecordStore, piSessionRecordStore } from "../../src/engines/pi/session-store.ts";
+import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
-import { describeSpecConformance } from "../spec-conformance.ts";
 import { requireEnv } from "./env.ts";
 
-// The `failing` subject's endpoint is on loopback, and undici's EnvHttpProxyAgent exempts nothing by
+// The refusing endpoint below is on loopback, and undici's EnvHttpProxyAgent exempts nothing by
 // itself ("Always proxy if NO_PROXY is not set or empty") — on a machine with a proxy set, that
-// request would be dialed through it and the subject would fail for a reason unrelated to what it
+// request would be dialed through it and the test would fail for a reason unrelated to what it
 // probes. The agent reads `no_proxy` BEFORE `NO_PROXY`, so the merged value goes into both spellings:
 // writing only the upper-case one is a no-op wherever the lower-case one is set.
 const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY ?? "", "127.0.0.1", "localhost"]
@@ -45,8 +43,9 @@ const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY ?? "", "127.0.0.1"
 process.env.no_proxy = noProxy;
 process.env.NO_PROXY = noProxy;
 
-// What every CLI entry does before it reaches a provider. This probe assembles the engine directly,
-// so it owes the same call: without it, a machine behind a proxy sees each turn time out.
+// Every CLI entry calls this before it reaches a provider, and the LIBRARY opener does not — proxy
+// wiring belongs to the process, not to the assembly. An embedder owes the same call, and so does
+// this probe: without it, a machine behind a proxy sees each turn time out.
 installProxyFetch();
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -56,62 +55,31 @@ afterAll(async () => {
   for (const cleanup of cleanups) await cleanup();
 });
 
-/** An empty agent dir: no models.json, so the real provider registry and real credentials are in play. */
-const agentDir = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-live-model-"));
-
 /**
- * A per-invoke `AgentSession` factory on the REAL model runtime — the same shape the offline
- * conformance subject builds, with pi's own resource loading turned off so the probe measures the
- * engine and the provider, not this machine's pi setup. `dir` makes the record durable; without it
- * each turn gets a fresh in-memory session.
+ * An agent directory as an author would write one: a persona and a config naming the model. The
+ * directory IS the agent (no nesting), so the opener resolves it as both agent dir and workspace.
  */
-async function sessionFactory(options: {
-  agentDir: string;
-  model: string;
-  dir?: string;
-}): Promise<PiAgentSessionFactory> {
-  const cwd = options.agentDir;
-  // Credentials resolve the way the opener resolves them (FASTAGENT_AUTH_PATH > the agent's own
-  // .secrets/auth.json), NOT the credential store's bare default: an OAuth provider has no env key to
-  // fall back to, so a probe that skipped this knob could only ever be run against an API-key provider.
-  const modelRuntime = await createPiModelRuntime({
-    agentDir: options.agentDir,
-    authPath: resolveAuthPath(options.agentDir, undefined),
-  });
-  const model = resolveModel(modelRuntime, options.model);
-  const services = await createAgentSessionServices({
-    cwd,
-    modelRuntime,
-    resourceLoaderOptions: {
-      noExtensions: true,
-      noPromptTemplates: true,
-      noContextFiles: true,
-      systemPromptOverride: () => "Answer in as few words as possible.",
-      appendSystemPromptOverride: () => [],
-      skillsOverride: (base) => ({ skills: [], diagnostics: base.diagnostics }),
-    },
-  });
-  const store =
-    options.dir === undefined ? piInMemorySessionRecordStore({ cwd }) : piSessionRecordStore({ dir: options.dir, cwd });
-  return async (sessionId) => {
-    const sessionManager = await store.openOrCreate(sessionId);
-    const { session } = await createAgentSessionFromServices({
-      services,
-      sessionManager,
-      model,
-      noTools: "builtin", // a protocol subject, not an agent: the coding tools stay off
-    });
-    return session;
-  };
+async function agentDirectory(model: string, files: Record<string, string> = {}): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "fa-live-model-"));
+  await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(model)} };\n`);
+  for (const [name, content] of Object.entries(files)) {
+    await mkdir(join(dir, name, ".."), { recursive: true });
+    await writeFile(join(dir, name), content);
+  }
+  return dir;
 }
 
-async function liveAgent(dir?: string): Promise<Agent> {
-  const factory = await sessionFactory({ agentDir: await agentDir(), model: MODEL, ...(dir ? { dir } : {}) });
-  return createPiAgentFromSession({ sessionFactory: factory });
+/** Drain a turn without letting a `failed` terminal throw — the SPEC's own discipline (MUST 2). */
+async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
+  const out: AgentEvent[] = [];
+  for await (const event of events) out.push(event);
+  return out;
 }
 
-/** An agent dir whose models.json points at a local endpoint that answers 400 to every request. */
-async function refusingEndpointAgent(): Promise<Agent> {
+/** A definition whose models.json points at a local endpoint that answers 400 to every request.
+ *  models.json is definition data, so this failure arrives through the product's own path. */
+async function refusingDefinition(): Promise<string> {
   const server = createServer((_req, res) => {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: "live probe: endpoint refuses this request", type: "bad_request" } }));
@@ -119,10 +87,8 @@ async function refusingEndpointAgent(): Promise<Agent> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const { port } = server.address() as { port: number };
-  const dir = await agentDir();
-  await writeFile(
-    join(dir, "models.json"),
-    JSON.stringify({
+  return agentDirectory("refusing/refuses", {
+    "models.json": JSON.stringify({
       providers: {
         refusing: {
           baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -132,49 +98,39 @@ async function refusingEndpointAgent(): Promise<Agent> {
         },
       },
     }),
-  );
-  return createPiAgentFromSession({
-    sessionFactory: await sessionFactory({ agentDir: dir, model: "refusing/refuses" }),
   });
 }
 
-describeSpecConformance(`pi AgentSession over ${MODEL} (live)`, {
-  completing: () => liveAgent(),
-
-  failing: () => refusingEndpointAgent(),
-
-  hanging: async (onCleanup) => {
-    const factory = await sessionFactory({ agentDir: await agentDir(), model: MODEL });
-    // The engine's cancel cleanup is session.abort() — intercepted as the probe, exactly as the
-    // offline subject does it. What is live here is that a real streaming HTTP response is what gets
-    // torn down, which is the half a faux provider cannot exercise.
-    return createPiAgentFromSession({
-      sessionFactory: async (sessionId) => {
-        const session = await factory(sessionId);
-        const abort = session.abort.bind(session);
-        (session as { abort: AgentSession["abort"] }).abort = async () => {
-          onCleanup();
-          return abort();
-        };
-        return session;
-      },
-    });
-  },
-});
-
 describe(`live model: ${MODEL}`, () => {
+  it("a real stream reaches a completed terminal with an answer", async () => {
+    const { agent } = await createPiAgentFromDir(await agentDirectory(MODEL));
+    const { text } = await collect(agent.invoke({ session: "live-answer" }, { text: "Reply with just: ok" }));
+    expect(text.trim()).not.toBe("");
+  });
+
   it("MUST 6 portable — a second instance over the same record continues the conversation", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-live-pair-"));
+    // One directory, opened twice: two agent instances sharing nothing in process but the disk, which
+    // is what a horizontally-scaled deployment is.
+    const dir = await agentDirectory(MODEL);
     const session = "-1001234567890"; // a telegram group id: pi refuses it verbatim
-    const first = await liveAgent(dir);
+    const { agent: first } = await createPiAgentFromDir(dir);
     await collect(first.invoke({ session }, { text: "Remember this number: 47. Reply with just: ok" }));
 
-    // A second agent instance over the same directory — nothing shared in process but the disk. The
-    // witness is a literal crossing the instance boundary, never the model's phrasing.
-    const second = await liveAgent(dir);
+    const { agent: second } = await createPiAgentFromDir(dir);
     const { text } = await collect(
       second.invoke({ session }, { text: "What number did I ask you to remember? Reply with digits only." }),
     );
+    // The witness is a literal crossing the instance boundary, never the model's phrasing.
     expect(text).toContain("47");
+  });
+
+  it("a real HTTP error becomes a failed terminal, classified non-retryable", async () => {
+    const { agent } = await createPiAgentFromDir(await refusingDefinition());
+    // MUST 2: iteration must not throw — a rejection here is the violation, not a failed event.
+    const events = await drain(agent.invoke({ session: "live-refused" }, { text: "go" }));
+    // 400 is decisive: re-sending it would fail identically, and `retryable` is what a caller branches
+    // on. This is the half a faux provider cannot settle — the shape of a real provider error as it
+    // travels through pi's stack into our classifier.
+    expect(events.at(-1)).toMatchObject({ type: "failed", retryable: false });
   });
 });
