@@ -31,6 +31,7 @@ installProxyFetch();
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("FEISHU_APP_ID", "an app of this probe's OWN, from `fastagent add feishu`");
 requireEnv("FEISHU_APP_SECRET", "the app secret that came with FEISHU_APP_ID");
+requireEnv("FEISHU_VERIFICATION_TOKEN", "console → Events & Callbacks; `add feishu --ingress webhook` captures it");
 
 // Every cleanup runs, in reverse, and failures surface together — a loop that stops at the first
 // failure would leave a public *.trycloudflare.com URL pointed at this service.
@@ -64,11 +65,14 @@ describe("feishu: registering an event URL the platform verifies by calling it",
         `export default feishuChannel({\n` +
         `  appId: process.env.FEISHU_APP_ID ?? "",\n` +
         `  appSecret: process.env.FEISHU_APP_SECRET ?? "",\n` +
+        `  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",\n` +
         `});\n`,
     );
 
     const service = await createAgentService(dir);
-    expect(service.channels.routes, "channels/feishu.ts did not mount a route").toContain("POST /feishu");
+    // `service.routes` is the literal route table; `channels.routes` next to it is the channel FILE
+    // names. The platform is about to call this path, so assert the path.
+    expect(Object.keys(service.routes), "channels/feishu.ts did not mount POST /feishu").toContain("POST /feishu");
 
     const server = serveNode(service.handler, { port: 0, host: "127.0.0.1" });
     cleanups.push(() => server.close());

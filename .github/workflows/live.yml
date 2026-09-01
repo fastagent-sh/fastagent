@@ -106,4 +106,8 @@ jobs:
           # A bot of the probe's OWN: it sets and then deletes that bot's webhook, which would take
           # down whatever traffic a shared bot was serving.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # Likewise an app of the probe's own: registering rewrites its event Request URL.
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
         run: npm run test:live
