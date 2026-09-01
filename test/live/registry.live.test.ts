@@ -8,22 +8,17 @@
  * `FASTAGENT_LIVE_VERSION` points it at any other (a dist-tag works too).
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { fastagentVersion } from "../../src/version.ts";
+import { exists } from "../../src/paths.ts";
+import { liveVersion } from "./env.ts";
 
 const run = promisify(execFile);
-const VERSION = process.env.FASTAGENT_LIVE_VERSION ?? (await fastagentVersion());
+const VERSION = await liveVersion();
 const PACKAGE = "@fastagent-sh/fastagent";
-
-const exists = (path: string): Promise<boolean> =>
-  stat(path).then(
-    () => true,
-    () => false,
-  );
 
 describe(`published ${PACKAGE}@${VERSION}`, () => {
   it("installs from the registry and scaffolds a complete agent", async () => {

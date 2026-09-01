@@ -3,11 +3,16 @@ name: Live
 # The probes that need the real world: a published tarball, a real model provider, a real container.
 # Never a PR check — an external contributor has no credentials, and a platform's bad night must not
 # read as a broken pull request. Nightly, plus on demand.
+#
+# One nightly failure is EXPECTED and not a defect: between a `chore(release)` merge and the Release
+# that triggers publish.yml, this checkout names a version npm does not serve yet, so the registry
+# install and the container build both fail on it. Dispatch with `version` set to the last published
+# one to get a clean read during that window — it moves both probes together.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published version to probe (default: this checkout's)"
+        description: "Published version to probe (default: this checkout's). Applies to BOTH the registry install and the container image."
         required: false
   schedule:
     - cron: "17 3 * * *"
@@ -23,6 +28,10 @@ jobs:
   live:
     name: Live probes
     runs-on: ubuntu-latest
+    # vitest's own ceiling covers the tests; `npm ci` and a container build sit outside it. Nobody is
+    # watching a nightly run, and the 6h default would hold the next one behind it (the group does not
+    # cancel in progress).
+    timeout-minutes: 60
     environment: live # holds FASTAGENT_LIVE_MODEL and the provider key
     steps:
       - name: Check out repository
@@ -55,6 +64,10 @@ jobs:
         env:
           FASTAGENT_AUTH_JSON: ${{ secrets.FASTAGENT_AUTH_JSON }}
         run: |
+          # An unset secret would write an EMPTY auth.json, and the probes would then report the
+          # product's own "no model credential" gate — a CI misconfiguration wearing a product bug's
+          # face. Same rule as test/live/env.ts: missing configuration fails here, loudly.
+          test -n "$FASTAGENT_AUTH_JSON" || { echo "secrets.FASTAGENT_AUTH_JSON is not set for this environment"; exit 1; }
           install -d -m 700 "$RUNNER_TEMP/secrets"
           umask 077 && printf '%s' "$FASTAGENT_AUTH_JSON" > "$RUNNER_TEMP/secrets/auth.json"
 
