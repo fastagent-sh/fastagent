@@ -16,6 +16,7 @@ import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   FEISHU_CONTEXT_ONBOARDING_SCOPES,
   FEISHU_MESSAGE_READ_SCOPE,
+  feishuAppAddons,
   scopeSatisfied,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
@@ -316,16 +317,9 @@ async function createFeishuAppFlow(
     const app = await registerFeishuApp({
       name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
       desc: "Served by fastagent",
-      // The agent template alone is not enough to SERVE: v7 config PATCHes (webhook registration and
-      // context-aware group scope setup) demand application:application:patch, and the app must subscribe
-      // the receive event. Addons merge those BASE capabilities onto the confirm page; sensitive group
+      // The agent template alone is not enough to SERVE (see feishuAppAddons). Sensitive group
       // permission approval and version publishing remain explicit console work.
-      addons: {
-        ...(ingress === "webhook" || (groupBehavior.behavior === "context" && groupBehavior.explicit)
-          ? { scopes: { tenant: ["application:application:patch"] } }
-          : {}),
-        events: { items: { tenant: ["im.message.receive_v1"] } },
-      },
+      addons: feishuAppAddons(),
       onVerificationUrl: ({ url, expiresInS }) => {
         console.error(
           `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
