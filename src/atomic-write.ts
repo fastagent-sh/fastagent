@@ -32,7 +32,7 @@ import { dirname } from "node:path";
  * It runs on the temp, before the rename — the final path is then never observable with the wrong
  * permissions, which a chmod after the rename cannot promise.
  */
-export function writeFileAtomic(path: string, data: string, mode?: number): void {
+export function writeFileAtomic(path: string, data: string | Buffer, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   try {

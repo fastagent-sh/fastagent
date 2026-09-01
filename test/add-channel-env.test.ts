@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -75,6 +75,7 @@ describe("appendChannelDotEnv", () => {
   it("writes to the RESOLVED secrets dir — FASTAGENT_SECRETS_DIR moves the .env target with the protection", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-move-"));
     const secrets = await mkdtemp(join(tmpdir(), "fa-env-external-"));
+    await chmod(secrets, 0o755); // an existing dir the operator (or a volume mount) left wide open
     process.env.FASTAGENT_SECRETS_DIR = secrets;
     try {
       const r = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "s" });
@@ -82,6 +83,10 @@ describe("appendChannelDotEnv", () => {
       expect(await readFile(join(secrets, ".env"), "utf8")).toContain("GITHUB_WEBHOOK_SECRET=s");
       // Nothing lands at the workspace default — the write and the leak protection target ONE dir.
       expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+      // …and the protection this test's name promises: `.env` is written with no mode of its own, so
+      // the DIRECTORY is the only thing keeping `GITHUB_WEBHOOK_SECRET` off other accounts. The
+      // override moves the target; it does not move it out of protection.
+      expect(((await stat(secrets)).mode & 0o777).toString(8)).toBe("700");
     } finally {
       delete process.env.FASTAGENT_SECRETS_DIR;
     }

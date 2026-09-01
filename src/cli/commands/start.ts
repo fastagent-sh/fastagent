@@ -2,8 +2,8 @@
  * `fastagent start [dir]`: run the agent in production posture — the SAME assembly as dev (your
  * directory is the agent), just no file-watching. No build step: start reads the definition directly.
  */
-import { chmod, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
@@ -152,9 +152,12 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
   const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
   await ensureSecretsDir(dirname(authPath));
-  await writeFile(authPath, bytes, { mode: SECRET_FILE_MODE });
-  await chmod(authPath, SECRET_FILE_MODE); // `mode` above is ignored if the file somehow exists
-
+  // Same spelling as the credential store: the mode is applied before the content is reachable, so
+  // the seed can never be published at some other file's looser permissions. It does NOT close the
+  // gap between the `exists` check and the write — the rename would overwrite a file created in
+  // between, against this function's absent-only promise. That window needs two `start` processes on
+  // one secrets dir, which no supported deployment runs (one container, one volume).
+  writeFileAtomic(authPath, bytes, SECRET_FILE_MODE);
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 

@@ -20,10 +20,13 @@
  * Locking is vendored here on `proper-lockfile`, with the same parameters pi's file backend used
  * before pi 0.80.8 stopped exporting it (upstream's stated migration path for SDK consumers is a
  * custom pi-ai `CredentialStore`, which this file is). The lock guards the WRITE path only. `read`
- * is pi-ai's per-request hot path, so it stays UNLOCKED — safe because the write publishes by
- * rename ({@link writeFileAtomic}): a reader sees one whole version of the file or another, never a
- * partial one, so there is no torn-read window for an unlocked read to absorb. The write path
- * refuses to overwrite a corrupt file (never clobbering other providers' credentials).
+ * is pi-ai's per-request hot path, so it stays UNLOCKED — safe because every write that carries a
+ * CREDENTIAL publishes by rename ({@link writeFileAtomic}): a reader sees one whole version of the
+ * file or another, never a partial one, so a rotation has no torn-read window for an unlocked read
+ * to absorb. The one in-place write left is the `{}` bootstrap below, whose window an unlocked read
+ * observes as an empty file — reported as corrupt, which for a zero-byte auth.json is the right
+ * answer either way. The write path refuses to overwrite a corrupt file (never clobbering other
+ * providers' credentials).
  */
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -78,6 +81,10 @@ async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
+  // 0700 unconditionally, including on a directory an operator named with `--auth-path`: pointing a
+  // credential file somewhere is asking for that somewhere to hold a credential. Where the process
+  // cannot chmod (a mount it does not own), this raises — the write fails visibly instead of
+  // quietly leaving the directory readable, which is the trade this repo takes everywhere else.
   await ensureSecretsDir(dirname(authPath));
   if (!existsSync(authPath)) {
     try {
