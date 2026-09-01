@@ -259,7 +259,13 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # check an assumption about a system we do not own, never to re-run logic:
                              # the published tarball (registry), a real provider's stream and errors
                              # (model), a real container build + boot + state volume (docker). Each one
-                             # drives a PRODUCT ENTRY and observes from outside (see the rule below).
+                             # drives a PRODUCT ENTRY (`createPiAgentFromDir`, `deploy docker --run`,
+                             # `npm install`) and observes from OUTSIDE it — a probe that rebuilds the
+                             # assembly to get a better observation point measures the rebuild, and the
+                             # entry's own steps (installProxyFetch, credential resolution, pinning pi's
+                             # agent dir) go missing one at a time. Unit tests below DO reach into that
+                             # layer, correctly — the rule is this directory's, because only these files
+                             # claim to report on the real thing.
                              # Excluded from `npm test`; `npm run test:live` (vitest.live.config.ts)
                              # opts in, and a missing credential FAILS rather than skips — you asked
                              # for them. Credentials arrive the PRODUCT's way (FASTAGENT_AUTH_PATH → an
@@ -287,7 +293,6 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **A session id belongs to the Caller.** `scope.session` is opaque and arbitrary — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`. What an engine needs to store it (pi rejects all of those as record names, so they are encoded) is storage detail and must not leak back out: a tool asking which conversation it is in gets the id the channel minted, not the record's name.
 - **The run plane and the observation plane read the same state, through the same function.** They answer different questions about one session — what will execute, and what to report — so deriving them separately is how they come to disagree. The concrete failures this rule is made of: a turn running on assembly defaults while `state()` reported the recorded override, and one plane refusing a record with a cut parent chain while the other silently ran on the truncated path.
 - **A convention with four enforcers has none.** When several call sites must each remember to do a thing, the thing belongs in a function they all call, and that function must REPAIR rather than trust the first writer. `.secrets/` was created by four paths and only one passed `0700` — and `mkdir`'s mode is a no-op on an existing directory, so the careful one (login, which runs last) never applied it: every scaffolded agent held its credentials in a 0755 directory. `ensureSecretsDir` (paths.ts) is that function; `writeFileAtomic` and `sessionToolActivation` are the same lesson from the same review.
-- **A test that rebuilds the assembly measures the rebuild.** Drive the entry a user drives (`createPiAgentFromDir`, `deploy docker --run`, `npm install`) and observe from OUTSIDE it. Reaching one layer down to get an observation point means re-doing everything the entry does — `installProxyFetch` (which the CLI calls and the library deliberately does not), credential resolution, pinning pi's agent dir away from `~/.pi/agent` — and each omission surfaces one at a time, as a defect in the test. The live model probe was built on the `AgentSession` L0 to satisfy one conformance subject (`hanging`, which intercepts `session.abort`); across three review rounds every defect it produced was in that rebuilt assembly and none was in the product, while the two probes that drove real entries were right the first time. That subject asserted the same thing its faux twin does — the engine's abort ran — so the layer it forced bought nothing. When the observation point is out of reach from the entry, change what you assert, not which layer you call.
 
 ### Reviewing this repo
 
