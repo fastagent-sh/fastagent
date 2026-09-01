@@ -15,7 +15,7 @@
  * inheritance edge.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { CompactionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { isPlaneMarker } from "./session-markers.ts";
 
@@ -53,7 +53,10 @@ type Entry = {
   message?: AgentMessage;
   content?: string | unknown[];
   summary?: string;
-  firstKeptEntryId?: string;
+  // Bound to pi's own field so the shape change the compaction reader documents cannot land quietly:
+  // dropping `firstKeptEntryId` for a self-contained `retainedTail` (pi-agent-core's form) makes this
+  // index fail to typecheck. Adding `retainedTail` BESIDE the pointer would still compile.
+  firstKeptEntryId?: CompactionEntry["firstKeptEntryId"];
 };
 
 function isUserMessage(entry: Entry | undefined): boolean {
@@ -84,8 +87,16 @@ function estimateEntryTokens(entry: Entry): number {
 
 /** A compaction entry's summary AND its retained tail — the entries from `firstKeptEntryId` up to
  *  the compaction — DO reach the model. They are the floor under every window that starts above the
- *  compaction, so the budget must count them; the tail is read off the path, since pi stores it as a
- *  pointer and not as messages on the entry. */
+ *  compaction, so the budget must count them; the tail is read off the path, since pi-coding-agent's
+ *  SessionManager stores it as a POINTER and not as messages on the entry (0.84: `appendCompaction`
+ *  writes `firstKeptEntryId`, and both of AgentSession's compaction paths go through it).
+ *
+ *  pi-agent-core's harness writes the newer self-contained form instead — `retainedTail` on the entry,
+ *  no pointer. If pi-coding-agent adopts it the pointer stops resolving, and this function prices the
+ *  tail at zero while {@link copyBranchInto} drops it. Adopting it the way pi-agent-core did, by
+ *  REPLACING the pointer, fails to typecheck at `Entry.firstKeptEntryId` rather than running quietly;
+ *  a `retainedTail` added BESIDE the pointer would not, and is the case to watch on the next bump.
+ *  Either way this is the place to change — not a reason to read both shapes today. */
 function estimateCompactionTokens(path: Entry[], compactionIdx: number): number {
   const compaction = path[compactionIdx];
   if (compaction?.type !== "compaction") return 0;
