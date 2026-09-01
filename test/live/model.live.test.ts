@@ -32,20 +32,11 @@ import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { requireEnv } from "./env.ts";
 
-// The refusing endpoint below is on loopback, and undici's EnvHttpProxyAgent exempts nothing by
-// itself ("Always proxy if NO_PROXY is not set or empty") — on a machine with a proxy set, that
-// request would be dialed through it and the test would fail for a reason unrelated to what it
-// probes. The agent reads `no_proxy` BEFORE `NO_PROXY`, so the merged value goes into both spellings:
-// writing only the upper-case one is a no-op wherever the lower-case one is set.
-const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY ?? "", "127.0.0.1", "localhost"]
-  .filter(Boolean)
-  .join(",");
-process.env.no_proxy = noProxy;
-process.env.NO_PROXY = noProxy;
-
-// Every CLI entry calls this before it reaches a provider, and the LIBRARY opener does not — proxy
-// wiring belongs to the process, not to the assembly. An embedder owes the same call, and so does
-// this probe: without it, a machine behind a proxy sees each turn time out.
+// Node's own fetch ignores HTTPS_PROXY, so a correctly configured machine still needs this call to
+// honour it. Every CLI entry makes it and the LIBRARY opener deliberately does not — proxy wiring
+// belongs to the process, not to the assembly — so an embedder owes it, and this probe is one.
+// Nothing beyond this line is the probe's business: whether a given host bypasses the proxy is the
+// runner's environment to get right, and a probe that edited NO_PROXY would be hiding that.
 installProxyFetch();
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
