@@ -84,8 +84,14 @@ function estimateEntryTokens(entry: Entry): number {
 
 /** A compaction entry's summary AND its retained tail — the entries from `firstKeptEntryId` up to
  *  the compaction — DO reach the model. They are the floor under every window that starts above the
- *  compaction, so the budget must count them; the tail is read off the path, since pi stores it as a
- *  pointer and not as messages on the entry. */
+ *  compaction, so the budget must count them; the tail is read off the path, since pi-coding-agent's
+ *  SessionManager stores it as a POINTER and not as messages on the entry (0.84: `appendCompaction`
+ *  writes `firstKeptEntryId`, and both of AgentSession's compaction paths go through it).
+ *
+ *  pi-agent-core's harness writes the newer self-contained form instead — `retainedTail` on the entry,
+ *  no pointer. If pi-coding-agent adopts it, the pointer here stops resolving: this function prices
+ *  the tail at zero and {@link copyBranchInto} drops it, both silently. That is the change to make
+ *  here, not a reason to read both shapes today. */
 function estimateCompactionTokens(path: Entry[], compactionIdx: number): number {
   const compaction = path[compactionIdx];
   if (compaction?.type !== "compaction") return 0;
