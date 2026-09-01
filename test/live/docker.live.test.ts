@@ -16,7 +16,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { AgentEvent } from "../../src/agent.ts";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
+import { exists } from "../../src/paths.ts";
 import { liveVersion, requireEnv } from "./env.ts";
 
 // A container build's log is megabytes; execFile's 1 MB default would abort the deploy mid-build.
@@ -67,24 +69,37 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Always tear down, including the volume: a leaked probe deployment is a leaked model credential.
-  // Swallowed on purpose — `down` also runs when the deploy never got as far as writing a Compose
-  // file, and rethrowing from a hook would replace the real test failure with this one. REPORTED on
-  // purpose too: the case this catch exists to absorb looks identical to a daemon that refused to
-  // remove a running container, and that one leaves CI's credential live in it.
-  if (workspace) await compose(["down", "-v"]).catch((error) => console.error(`[live] teardown failed: ${error}`));
+  // Tear down whatever the deploy created, volume included: a leaked probe deployment is a leaked
+  // model credential. The one expected failure — `down` when the deploy never got as far as writing a
+  // Compose file — is ruled out by asking whether that file exists, so nothing here needs absorbing:
+  // a `down` that fails now is a daemon refusing to remove a container that holds CI's credential,
+  // and a run that ends green while that container keeps running is the outcome worth failing over.
+  if (workspace && (await exists(join(workspace, COMPOSE)))) await compose(["down", "-v"]);
 });
 
-/** POST one turn and return the SSE body (the built-in `/invoke`, mounted because no channel is declared). */
-async function invoke(session: string, text: string): Promise<string> {
+/** POST one turn and return its SSE events (the built-in `/invoke`, mounted because no channel is
+ *  declared). Same reduction test/http.test.ts uses; `JSON.parse` is deliberately unguarded, since a
+ *  payload that is not an event is a broken wire format, not a case to absorb. */
+async function invoke(session: string, text: string): Promise<AgentEvent[]> {
   const response = await fetch(`http://127.0.0.1:${port}/invoke`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ session, text }),
   });
   expect(response.status).toBe(200);
-  return await response.text();
+  return (await response.text())
+    .split("\n\n")
+    .filter((block) => block.startsWith("data: "))
+    .map((block) => JSON.parse(block.slice("data: ".length)) as AgentEvent);
 }
+
+/**
+ * The ANSWER, and only it. Asserting on the raw SSE text would be wrong in both directions: a
+ * provider that splits `47` into two tokens never spells it literally, and a `thinking` delta that
+ * reasoned about the number would satisfy the assertion even when the answer got it wrong.
+ */
+const answerOf = (events: AgentEvent[]): string =>
+  events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
 
 describe("deploy docker --run: a definition serving real turns in a container", () => {
   it("builds, boots, answers, and keeps its sessions across a restart", async () => {
@@ -95,7 +110,7 @@ describe("deploy docker --run: a definition serving real turns in a container", 
     expect(await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.text())).toBe("ok\n");
 
     const session = "live-docker";
-    expect(await invoke(session, "Remember this number: 47. Reply with just: ok")).toContain('"type":"completed"');
+    expect((await invoke(session, "Remember this number: 47. Reply with just: ok")).at(-1)?.type).toBe("completed");
 
     // The state volume is the deployment's continuity. Restarting the container drops every bit of
     // in-process state, so what answers afterwards can only have come off the volume.
@@ -105,7 +120,7 @@ describe("deploy docker --run: a definition serving real turns in a container", 
     expect(listed.stdout.trim()).not.toBe("");
 
     const second = await invoke(session, "What number did I ask you to remember? Reply with digits only.");
-    expect(second).toContain('"type":"completed"');
-    expect(second).toContain("47");
+    expect(second.at(-1)?.type).toBe("completed");
+    expect(answerOf(second)).toContain("47");
   });
 });

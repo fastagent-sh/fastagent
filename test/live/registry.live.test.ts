@@ -5,7 +5,9 @@
  * the tarball makes `init` produce a half-empty agent, and every offline test stays green.
  *
  * Defaults to this checkout's version — after a release, that is the version just published.
- * `FASTAGENT_LIVE_VERSION` points it at any other (a dist-tag works too).
+ * `FASTAGENT_LIVE_VERSION` points it at any other EXACT version. Not a dist-tag: `--version` reports
+ * what a tag resolved to, never the tag, and the container image resolves the same tag a second time
+ * — the two probes would stop being about one artifact.
  */
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile } from "node:fs/promises";

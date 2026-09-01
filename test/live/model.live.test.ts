@@ -34,6 +34,17 @@ import { installProxyFetch } from "../../src/proxy.ts";
 import { describeSpecConformance } from "../spec-conformance.ts";
 import { requireEnv } from "./env.ts";
 
+// The `failing` subject's endpoint is on loopback, and undici's EnvHttpProxyAgent exempts nothing by
+// itself ("Always proxy if NO_PROXY is not set or empty") — on a machine with a proxy set, that
+// request would be dialed through it and the subject would fail for a reason unrelated to what it
+// probes. The agent reads `no_proxy` BEFORE `NO_PROXY`, so the merged value goes into both spellings:
+// writing only the upper-case one is a no-op wherever the lower-case one is set.
+const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY ?? "", "127.0.0.1", "localhost"]
+  .filter(Boolean)
+  .join(",");
+process.env.no_proxy = noProxy;
+process.env.NO_PROXY = noProxy;
+
 // What every CLI entry does before it reaches a provider. This probe assembles the engine directly,
 // so it owes the same call: without it, a machine behind a proxy sees each turn time out.
 installProxyFetch();
