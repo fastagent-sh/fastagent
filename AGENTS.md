@@ -258,14 +258,18 @@ test/                        # vitest; faux models by default + reusable SPEC co
 └── live/                   # the probes for what the offline suite FAKES — every file here exists to
                              # check an assumption about a system we do not own, never to re-run logic:
                              # the published tarball (registry), a real provider's stream and errors
-                             # (model), a real container build + boot + state volume (docker). Each one
-                             # drives a PRODUCT ENTRY (`createPiAgentFromDir`, `deploy docker --run`,
-                             # `npm install`) and observes from OUTSIDE it — a probe that rebuilds the
-                             # assembly to get a better observation point measures the rebuild, and the
-                             # entry's own steps (installProxyFetch, credential resolution, pinning pi's
-                             # agent dir) go missing one at a time. Unit tests below DO reach into that
-                             # layer, correctly — the rule is this directory's, because only these files
-                             # claim to report on the real thing.
+                             # (model), a real container build + boot + state volume (docker), a real
+                             # Quick Tunnel carrying a request home (tunnel), a cron on disk firing a
+                             # real turn into the audit log (schedule), and Telegram VERIFYING a webhook
+                             # URL it was handed (telegram — registration only; delivery needs a human
+                             # to type). Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
+                             # `deploy docker --run`, `npm install`, `startCloudflareTunnel`,
+                             # `startSchedules`, `registerTelegramWebhook`) and observes from OUTSIDE it
+                             # — a probe that rebuilds the assembly to get a better observation point
+                             # measures the rebuild, and the entry's own steps (installProxyFetch,
+                             # credential resolution, pinning pi's agent dir) go missing one at a time.
+                             # Unit tests below DO reach into that layer, correctly — the rule is this
+                             # directory's, because only these files claim to report on the real thing.
                              # Excluded from `npm test`; `npm run test:live` (vitest.live.config.ts)
                              # opts in, and a missing credential FAILS rather than skips — you asked
                              # for them. Credentials arrive the PRODUCT's way (FASTAGENT_AUTH_PATH → an

@@ -43,6 +43,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The tunnel probe needs the binary `dev --tunnel` shells out to. Deliberately the LATEST
+      # release, not the version deploy/docker/plan.ts pins for generated Compose: that pin exists so a
+      # deployment does not move under its operator, while this probe exists to find out when the tool
+      # we shell out to changes. Pinning it here would retire the only check that would notice.
+      #
+      # Through Cloudflare's apt repo rather than a raw .deb from releases/latest: still that latest
+      # build, but signed and verified by apt — this job stages an OAuth grant on the same runner.
+      - name: Install cloudflared
+        run: |
+          sudo mkdir -p --mode=0755 /usr/share/keyrings
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+            | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+            | sudo tee /etc/apt/sources.list.d/cloudflared.list
+          sudo apt-get update
+          sudo apt-get install -y cloudflared
+          cloudflared --version
+
       # ONE credential mechanism for both probes: an auth.json, named by the product's own
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
       # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
@@ -85,4 +103,7 @@ jobs:
         env:
           FASTAGENT_LIVE_MODEL: ${{ vars.FASTAGENT_LIVE_MODEL }}
           FASTAGENT_AUTH_PATH: ${{ runner.temp }}/secrets/auth.json
+          # A bot of the probe's OWN: it sets and then deletes that bot's webhook, which would take
+          # down whatever traffic a shared bot was serving.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: npm run test:live
