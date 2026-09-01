@@ -43,9 +43,10 @@ describe("cloudflare quick tunnel", () => {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end(token);
     });
-    // No host: cloudflared is pointed at `http://localhost:<port>` (src/tunnel.ts), and `localhost`
-    // resolves to ::1 before 127.0.0.1 on a dual-stack machine — an origin bound to 127.0.0.1 alone
-    // gets a tunnel that establishes and then cannot reach it.
+    // No host, so Node binds every interface: cloudflared is pointed at `http://localhost:<port>`
+    // (src/tunnel.ts) and this probe is about the tunnel, not about which address that name resolves
+    // to inside it. Whether a 127.0.0.1-only origin answers is the product's own question, settled by
+    // `answersLocalhost` (src/bind.ts) and exercised by telegram.live.test.ts, which binds one.
     await new Promise<void>((resolve) => origin.listen(0, resolve));
     cleanups.push(() => origin.close());
     const { port } = origin.address() as { port: number };

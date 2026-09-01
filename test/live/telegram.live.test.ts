@@ -34,9 +34,22 @@ installProxyFetch();
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 const BOT_TOKEN = requireEnv("TELEGRAM_BOT_TOKEN", "a bot token of this probe's OWN bot, from @BotFather");
 
+// Every cleanup runs, in reverse, and failures surface together: the first one registered is a
+// network call to Telegram, and a plain loop would let its failure skip the two below it — leaving a
+// public *.trycloudflare.com URL pointed at this service's unauthenticated `POST /invoke`.
 const cleanups: (() => Promise<void> | void)[] = [];
 afterAll(async () => {
-  for (const cleanup of cleanups) await cleanup();
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups.reverse()) {
+    // The only catch here, and it hides nothing: it holds one failure so the cleanups after it still
+    // run, then every one of them is rethrown together below.
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, "cleanup failed");
 });
 
 /** One Bot API call, failing loudly: a non-ok body is a protocol answer, never something to absorb. */
@@ -54,9 +67,13 @@ async function botApi(method: string, body?: Record<string, unknown>): Promise<R
 describe("telegram: registering a webhook against a live tunnel", () => {
   it("Telegram verifies the tunnel URL and keeps the webhook we registered", async () => {
     // The bot's webhook is global state on Telegram's side — clear it however this test ends.
+    // `drop_pending_updates`, both here and before registering: Telegram queues updates for 24h while
+    // no webhook is set and delivers them the instant `setWebhook` succeeds. No `/telegram` route is
+    // mounted here, so a queued update would 404 and land in the `last_error_message` asserted below.
     cleanups.push(async () => {
-      await botApi("deleteWebhook");
+      await botApi("deleteWebhook", { drop_pending_updates: true });
     });
+    await botApi("deleteWebhook", { drop_pending_updates: true });
 
     const dir = await mkdtemp(join(tmpdir(), "fa-live-telegram-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");

@@ -27,6 +27,7 @@ installProxyFetch();
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 const SCHEDULE = "heartbeat";
+const BUDGET_MS = 480_000;
 
 const cleanups: (() => void)[] = [];
 afterAll(() => {
@@ -41,11 +42,10 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
     await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
     await mkdir(join(dir, "schedules"), { recursive: true });
-    // A plain default export, not `defineSchedule(...)`: that import resolves through the agent dir's
-    // own node_modules, which a throwaway directory has none of (and vitest's alias does not reach a
-    // dynamic import). `defineSchedule` is an identity function, so the loaded shape is the same one
-    // either spelling produces. What that costs this probe is the module-resolution step, which is
-    // covered where it belongs — registry.live.test.ts asserts the scaffold that carries the dependency.
+    // A plain default export: `defineSchedule` is an identity function, so this is the shape the
+    // loader gets either way, and the file stays what an author's `schedules/*.ts` looks like rather
+    // than carrying an import path back into this checkout (the spelling schedule-discover.test.ts
+    // needs, since that one is testing the loader itself).
     await writeFile(
       join(dir, "schedules", `${SCHEDULE}.ts`),
       `export default { cron: "* * * * *", prompt: "Reply with just: tick" };\n`,
@@ -66,14 +66,19 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
       "the schedules/ file did not load",
     ).toEqual([SCHEDULE]);
 
-    // The fire is a real model turn; poll the audit log rather than guessing a duration.
+    // The fire is a real model turn; poll the audit log rather than guessing a duration. The budget is
+    // the file timeout minus room for teardown, not an estimate of a turn: a queued or thinking model
+    // running long is the one thing this must not report as a schedule that never fired.
     let runs = readRuns(stateRoot, SCHEDULE);
-    for (let waited = 0; runs.length === 0 && waited < 120_000; waited += 500) {
+    for (let waited = 0; runs.length === 0 && waited < BUDGET_MS; waited += 500) {
       await sleep(500);
       runs = readRuns(stateRoot, SCHEDULE);
     }
 
-    expect(runs, "the overdue schedule never fired").toHaveLength(1);
+    expect(
+      runs,
+      `no run recorded in ${BUDGET_MS / 1000}s: the schedule never fired, or its turn is still running`,
+    ).toHaveLength(1);
     // toMatchObject: a `failed` record carries `error`, and printing it is the difference between
     // knowing why an unattended nightly went red and having to re-run it.
     expect(runs[0]).toMatchObject({ name: SCHEDULE, outcome: "completed" });
