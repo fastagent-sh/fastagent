@@ -9,7 +9,7 @@
  */
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts";
@@ -801,7 +801,6 @@ async function runDeployAgentcore(
       async (content) => {
         const path = join(paramsDir, "params.json");
         await writeFile(path, content, { mode: 0o600 });
-        await chmod(path, 0o600);
         return path;
       },
       async (bytes) => {
