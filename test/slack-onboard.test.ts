@@ -270,10 +270,10 @@ describe("Slack internal-app onboarding", () => {
   });
 
   it("--manual builds an app that needs no callback: no rotation, no request_url, events intact", async () => {
-    // The three things the manual mode must get right, and the reason it is the SAME flow rather than
-    // a second one: rotation is off because rotating tokens are issued through an OAuth redirect it
-    // does not have, request_url is absent because no public URL exists yet, and the bot events are
-    // still subscribed — an app that installs cleanly and then receives nothing is the silent failure.
+    // What the manual mode must get right, and the reason it is the SAME flow rather than a second
+    // one: rotation is off (a rotating token is issued THROUGH an OAuth redirect it does not have) and
+    // the whole event subscription is absent, because Slack rejects one without a request_url —
+    // `dev --tunnel`/`deploy` then sets the URL and the bot events in a single later manifest.
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
       appName: "Agent",
@@ -306,9 +306,11 @@ describe("Slack internal-app onboarding", () => {
 
     expect(sent?.settings.token_rotation_enabled).toBe(false);
     expect(sent?.oauth_config.redirect_urls).toBeUndefined();
-    expect(sent?.settings.event_subscriptions.request_url).toBeUndefined();
-    expect(sent?.settings.event_subscriptions.bot_events).toEqual(slackBotEvents("mentions"));
+    expect(sent?.settings.event_subscriptions).toBeUndefined();
     expect(result.installedAt).toBeTruthy();
+    // Recorded so the first Request-URL update cannot flip it: Slack refuses to disable rotation once
+    // enabled, making that flip permanent.
+    expect(result.tokenRotation).toBe(false);
     // A static token travels alone: bot-auth.ts serves it when the rotation fields are absent.
     expect(secrets.at(-1)).toEqual({ botToken: "xoxb-static", clientId: "C1", clientSecret: "client-secret" });
   });
@@ -442,6 +444,41 @@ describe("Slack Request URL registration", () => {
     await expect(registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock })).resolves.toBe(
       "registered",
     );
+  });
+
+  it("never flips a --manual app's token rotation on — Slack cannot undo that", async () => {
+    // Verified against the real API: apps.manifest.update answers `cannot_disable_once_enabled`. Since
+    // setting a Request URL sends the WHOLE manifest, a registrar defaulting rotation to true would
+    // permanently convert an app installed with a static token, on its first `dev --tunnel`.
+    const stateRoot = await root();
+    writeSlackOnboardingState(stateRoot, {
+      ...newSlackOnboardingState({
+        appName: "Agent",
+        groupBehavior: "context",
+        configToken: "xoxe.config",
+        configRefreshToken: "xoxe-refresh",
+      }),
+      appId: "A1",
+      installedAt: new Date().toISOString(),
+      tokenRotation: false,
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { manifest: string };
+      const manifest = JSON.parse(body.manifest) as ReturnType<typeof buildSlackManifest>;
+      expect(manifest.settings.token_rotation_enabled).toBe(false);
+      // The same update carries the events, which is what closes the gap left by an app created
+      // before any public URL existed.
+      expect(manifest.settings.event_subscriptions).toMatchObject({
+        request_url: "https://agent.test/slack",
+        bot_events: slackBotEvents("context"),
+      });
+      return Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock })).resolves.toBe(
+      "registered",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("retries while Slack cannot verify the Request URL yet, then registers", async () => {

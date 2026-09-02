@@ -65,20 +65,26 @@ reach the machine — strict egress, no `cloudflared`, a resolver that will not 
 fastagent add slack --manual
 ```
 
-App creation is still the same Manifest API call, so the app, its scopes, and its event subscriptions are
-identical. Instead of redirecting, the command opens the app's console install page and asks for the **Bot
-User OAuth Token** it displays; `auth.test` then verifies the pasted token and names the workspace.
+App creation is still the same Manifest API call, so the app and its scopes are identical. Instead of
+redirecting, the command opens the app's console install page and asks for the **Bot User OAuth Token**
+it displays; `auth.test` then verifies the pasted token and names the workspace.
 
 Two differences follow from having no redirect:
 
 | | Automatic | `--manual` |
 |---|---|---|
 | Bot token | Rotating (`SLACK_BOT_REFRESH_TOKEN` + expiry) | Static `SLACK_BOT_TOKEN` |
-| Events Request URL | Set to the temporary tunnel, replaced on the next `dev --tunnel`/`deploy` | Unset until the first `dev --tunnel`/`deploy`, or set by hand |
+| Events Request URL + subscriptions | Set to the temporary tunnel, replaced on the next `dev --tunnel`/`deploy` | Both arrive with the first `dev --tunnel`/`deploy` |
 
 Rotating tokens are issued *through* an OAuth redirect, so a console install cannot produce one; the
-channel reads a static token when the rotation variables are absent. Setting the Request URL later still
-works automatically — that runs from this machine against Slack's API and needs no inbound callback.
+channel reads a static token when the rotation variables are absent. Because Slack refuses to disable
+token rotation once enabled, later Request-URL updates carry the app's recorded setting rather than
+defaulting it on.
+
+The app starts with **no event subscription at all**: Slack rejects a manifest that subscribes to events
+without a Request URL. The update that later sets the URL carries the bot events in the same manifest, so
+nothing has to be ticked by hand — and that update runs from this machine against Slack's API, needing no
+inbound callback. Until it runs, the app is installed but idle.
 
 App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
 re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:

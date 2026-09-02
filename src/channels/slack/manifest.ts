@@ -36,8 +36,8 @@ export interface SlackAppManifest {
     redirect_urls?: string[];
   };
   settings: {
-    /** `request_url` is absent until a public URL exists; `bot_events` never is — see buildSlackManifest. */
-    event_subscriptions: { request_url?: string; bot_events: string[] };
+    /** All-or-nothing: Slack rejects a subscription with no `request_url` unless Socket Mode is on. */
+    event_subscriptions?: { request_url: string; bot_events: string[] };
     org_deploy_enabled: boolean;
     socket_mode_enabled: boolean;
     token_rotation_enabled: boolean;
@@ -99,13 +99,19 @@ export function buildSlackManifest(input: {
       ...(input.redirectUrl ? { redirect_urls: [input.redirectUrl] } : {}),
     },
     settings: {
-      // The events are a property of the AGENT, not of where it is reachable: an app created before a
-      // public URL exists must still subscribe to them, or it installs cleanly and then receives
-      // nothing. Only `request_url` waits for the URL.
-      event_subscriptions: {
-        ...(input.requestUrl ? { request_url: input.requestUrl } : {}),
-        bot_events: slackBotEvents(input.groupBehavior),
-      },
+      // Subscription and URL travel TOGETHER because Slack requires it: `apps.manifest.create` rejects
+      // `event_subscriptions` without a `request_url` ("requires Socket Mode if no Request URL is
+      // provided"), verified against the real API. So an app created before a public URL exists
+      // subscribes to nothing yet — and the update that later sets `request_url` carries `bot_events`
+      // in the same manifest, which is what keeps that temporary gap from becoming a silent one.
+      ...(input.requestUrl
+        ? {
+            event_subscriptions: {
+              request_url: input.requestUrl,
+              bot_events: slackBotEvents(input.groupBehavior),
+            },
+          }
+        : {}),
       org_deploy_enabled: false,
       socket_mode_enabled: false,
       token_rotation_enabled: input.tokenRotation ?? true,

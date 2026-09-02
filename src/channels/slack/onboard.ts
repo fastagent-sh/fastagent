@@ -93,6 +93,8 @@ export async function onboardSlackApp(
       clientId: created.clientId,
       clientSecret: created.clientSecret,
       signingSecret: created.signingSecret,
+      // Read off the manifest actually sent, so the record cannot disagree with the app.
+      tokenRotation: manifest.settings.token_rotation_enabled,
     };
     // Irreversible boundary first: a cancellation or .env write failure can resume without creating a duplicate.
     writeSlackOnboardingState(input.stateRoot, state);

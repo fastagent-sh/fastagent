@@ -69,6 +69,10 @@ export async function registerSlackWebhook(
           // Token-rotation manifests require at least one OAuth redirect URL even after installation.
           // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
           redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
+          // Setting a Request URL sends the WHOLE manifest, so this call decides rotation too. Carry
+          // the app's own setting: Slack refuses to disable rotation once enabled, so defaulting to
+          // true here would permanently convert a `--manual` app on its first `dev --tunnel`.
+          tokenRotation: current.state.tokenRotation ?? true,
         }),
         { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
       );

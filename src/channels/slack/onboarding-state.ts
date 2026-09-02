@@ -22,6 +22,14 @@ export interface SlackOnboardingState {
   teamId?: string;
   teamName?: string;
   installedAt?: string;
+  /**
+   * Whether THIS app has Slack token rotation on. Recorded because every later Request-URL update
+   * sends a FULL manifest and must not change it: Slack answers `cannot_disable_once_enabled` (verified
+   * against the real API), so a registrar defaulting to `true` would permanently flip a `--manual`
+   * app — which has no redirect URL to issue a rotating token through — on its first `dev --tunnel`.
+   * Absent means the app predates the record and came from the OAuth path, which is always rotating.
+   */
+  tokenRotation?: boolean;
 }
 
 function slackOnboardingStatePath(stateRoot: string): string {
