@@ -2,10 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSlackBotTokenProvider } from "../src/channels/slack/bot-auth.ts";
 import { createSlackApp, exchangeSlackOAuthCode } from "../src/channels/slack/config-api.ts";
 import { installFromConsole, installViaOAuth } from "../src/cli/add-slack.ts";
 import { buildSlackManifest, slackBotEvents, slackBotScopes } from "../src/channels/slack/manifest.ts";
-import { newSlackOnboardingState, onboardSlackApp } from "../src/channels/slack/onboard.ts";
+import { newSlackOnboardingState, onboardSlackApp, type SlackOnboardIO } from "../src/channels/slack/onboard.ts";
 import {
   currentSlackConfigToken,
   readSlackOnboardingState,
@@ -269,7 +270,7 @@ describe("Slack internal-app onboarding", () => {
     expect(createApp).toHaveBeenCalledOnce();
   });
 
-  it("--manual builds an app that needs no callback: no rotation, no request_url, events intact", async () => {
+  it("--manual builds an app that needs no callback: no rotation, no subscription, a token that travels alone", async () => {
     // What the manual mode must get right, and the reason it is the SAME flow rather than a second
     // one: rotation is off (a rotating token is issued THROUGH an OAuth redirect it does not have) and
     // the whole event subscription is absent, because Slack rejects one without a request_url —
@@ -283,7 +284,7 @@ describe("Slack internal-app onboarding", () => {
     });
     writeSlackOnboardingState(stateRoot, initial);
     let sent: ReturnType<typeof buildSlackManifest> | undefined;
-    const secrets: Record<string, unknown>[] = [];
+    const secrets: Parameters<SlackOnboardIO["writeRuntimeSecrets"]>[0][] = [];
 
     const result = await onboardSlackApp(
       { stateRoot, state: initial },
@@ -311,8 +312,15 @@ describe("Slack internal-app onboarding", () => {
     // Recorded so the first Request-URL update cannot flip it: Slack refuses to disable rotation once
     // enabled, making that flip permanent.
     expect(result.tokenRotation).toBe(false);
-    // A static token travels alone: bot-auth.ts serves it when the rotation fields are absent.
-    expect(secrets.at(-1)).toEqual({ botToken: "xoxb-static", clientId: "C1", clientSecret: "client-secret" });
+    // A static token travels ALONE. bot-auth.ts reads the four rotation fields as all-or-nothing, so a
+    // client id/secret written beside a static token does not make it rotate — it makes the channel
+    // refuse to start. The first real `--manual` run hit exactly that; assert the consequence, not
+    // just the shape.
+    const written = secrets.at(-1) as Parameters<typeof createSlackBotTokenProvider>[0];
+    expect(written).toEqual({ botToken: "xoxb-static" });
+    expect(() =>
+      createSlackBotTokenProvider({ ...written, statePath: join(stateRoot, "bot-auth.json") }),
+    ).not.toThrow();
   });
 
   it("rotates expiring config credentials atomically and persists the replacement refresh token", async () => {

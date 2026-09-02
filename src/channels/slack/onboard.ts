@@ -132,12 +132,20 @@ export async function onboardSlackApp(
   if (oauth.scopes.length > 0 && scopes.some((scope) => !oauth.scopes.includes(scope))) {
     throw new Error("Slack install completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
+  // The client credentials have ONE runtime use: rotating the bot token. bot-auth.ts reads the four
+  // rotation fields as all-or-nothing, so writing them next to a static token (the --manual install)
+  // does not make it rotate — it makes the channel refuse to start. Found by the first real `--manual`
+  // run; the e2e script's no-op secret writer could not see it.
   await io.writeRuntimeSecrets({
     botToken: oauth.botToken,
-    botRefreshToken: oauth.botRefreshToken,
-    botTokenExpiresAt: oauth.botTokenExpiresAt,
-    clientId: state.clientId,
-    clientSecret: state.clientSecret,
+    ...(manifest.settings.token_rotation_enabled
+      ? {
+          botRefreshToken: oauth.botRefreshToken,
+          botTokenExpiresAt: oauth.botTokenExpiresAt,
+          clientId: state.clientId,
+          clientSecret: state.clientSecret,
+        }
+      : {}),
   });
   state = {
     ...state,

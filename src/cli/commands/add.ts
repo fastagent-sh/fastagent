@@ -117,7 +117,10 @@ export async function runAddChannel(
     created = await onboardFeishuCloudApp(target, channelKind, ingress, groupBehavior).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
-  const env = setup.env;
+  // Slack's optional env IS its rotation set (refresh token, expiry, client id/secret). A `--manual`
+  // app has rotation off and Slack will not let it be turned on later, so "optionally set" would be
+  // an invitation to break the channel: bot-auth.ts reads those four as all-or-nothing.
+  const env = opts.manual ? setup.env.filter((e) => e.required) : setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
