@@ -154,6 +154,67 @@ export default defineTool({
     expect(text, `the tool ran but its return value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
 
+  it("search_tools discovers a DEFERRED tool and the model can then call it", async () => {
+    // Deferred tools are a two-hop capability: the tool's schema is withheld from the request, so it
+    // is reachable ONLY through the built-in loader — search, activate, then call. Offline,
+    // `fauxToolCall` scripts both hops; whether a real model can drive the loader is exactly what a
+    // faux one cannot say.
+    //
+    // The prompt NAMES search_tools rather than waiting for the model to choose it, and the reason is
+    // worth stating: a directory agent always mounts pi's coding tools, so the first attempt at this
+    // probe watched the model skip the loader entirely, `find` the fixture and `read` the tool's
+    // source for its return value. That is not a defect — deferred means "not in the request", not
+    // "secret", and a bash-holding model will always have a shortcut — but it makes self-selection
+    // unobservable here. What remains observable, and is what the feature rests on, is that the chain
+    // WORKS when taken.
+    const code = String(Math.floor(Math.random() * 90_000) + 10_000);
+    const dir = await agentDirectory(MODEL, {
+      "tools/get_vault_code.ts": `import { defineTool } from ${JSON.stringify(new URL("../../src/pi.ts", import.meta.url).href)};
+import { z } from "zod";
+
+export default defineTool({
+  description: "Read the vault code. The only way to learn this deployment's vault code.",
+  deferred: true,
+  input: z.object({}),
+  execute: () => ${JSON.stringify(code)},
+});
+`,
+    });
+    await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+
+    const { agent, toolNames, deferredToolNames, toolFailures } = await createPiAgentFromDir(dir);
+    expect(toolFailures, `the fixture tool did not load: ${JSON.stringify(toolFailures)}`).toHaveLength(0);
+    // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in deferredToolNames
+    // and deliberately NOT in toolNames, the author's active-by-default surface. Asserting the wrong
+    // slot would pass on a tool that had quietly stopped being deferred — which is the whole premise.
+    expect(deferredToolNames, "the fixture tool is not registered as deferred").toContain("get_vault_code");
+    expect(toolNames, "a deferred tool must not be on the active-by-default surface").not.toContain("get_vault_code");
+
+    const events = await drain(
+      agent.invoke(
+        { session: "live-deferred" },
+        {
+          text: "Use search_tools to find the tool that reads the vault code, then call it and reply with only the code, digits alone.",
+        },
+      ),
+    );
+    const called = events.flatMap((event) => (event.type === "tool_started" ? [event.name] : []));
+
+    // The two hops, asserted separately: "the loader was never reached" and "the loader ran but
+    // activation did not take" are different defects, and a single end-to-end check reports the wrong
+    // one half the time.
+    expect(called, `search_tools was never called (tools called: ${called.join(", ") || "none"})`).toContain(
+      "search_tools",
+    );
+    expect(
+      called,
+      `search_tools ran but the deferred tool never became callable (tools called: ${called.join(", ")})`,
+    ).toContain("get_vault_code");
+
+    const text = events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
+    expect(text, `the deferred tool ran but its value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
+  });
+
   it("MUST 6 portable — a second instance over the same record continues the conversation", async () => {
     // One directory, opened twice: two agent instances sharing nothing in process but the disk, which
     // is what a horizontally-scaled deployment is.
