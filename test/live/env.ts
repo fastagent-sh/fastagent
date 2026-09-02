@@ -77,3 +77,18 @@ export async function invoke(baseUrl: string, session: string, text: string): Pr
  */
 export const answerOf = (events: AgentEvent[]): string =>
   events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
+
+/**
+ * The long-lived Railway project both railway probes work inside, instead of each minting one.
+ *
+ * Two reasons beyond speed. A project per run left the account accumulating soft-deleted projects
+ * (Railway deletes lazily, so they stay listed for days), and it kept the shape probe from being what
+ * it claims to be: it had to CREATE a project to have one to read, purely because it needed something
+ * linked. With a standing project it only links — read-only again, and to a project that is still its
+ * own, which is the point the borrowed-production-project bug made the expensive way.
+ *
+ * The deploy probe adds a service inside it and removes that service; the project itself outlives
+ * every run and belongs to no single one. It is created on first use, so a fresh account needs no
+ * manual setup.
+ */
+export const RAILWAY_PROBE_PROJECT = "fastagent-live-probes";

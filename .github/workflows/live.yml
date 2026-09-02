@@ -217,16 +217,23 @@ jobs:
       # Same reasoning as the Fly sweep above, with two Railway specifics: `delete` needs --project
       # outside a TTY even with --yes (the docs call that flag optional), and deletion is SOFT, so a
       # destroyed project keeps being listed — deletedAt, not absence, is what says it is gone.
-      - name: Destroy leftover live Railway projects
+      # SERVICES now, not projects: both railway probes work inside the standing `fastagent-live-probes`
+      # project, which must survive this sweep. A killed deploy probe leaves its service running — with
+      # the model credential and an unauthenticated `/invoke` — so this is still the net, one level down.
+      - name: Destroy leftover live Railway services
         if: always()
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: |
           set -o pipefail
-          railway list --json \
-            | jq -r '.[] | select(.deletedAt == null) | select(.name | test("^fastagent-live-[0-9a-f]{8}$")) | .id' \
+          dir="$(mktemp -d)"
+          cd "$dir"
+          # Nothing to sweep if the project does not exist: no probe reached the point of making one.
+          railway link --project fastagent-live-probes --environment production || exit 0
+          railway service list --json \
+            | jq -r '.[] | select(.name | test("^fastagent-live-[0-9a-f]{8}$")) | .name' \
             | tee /dev/stderr \
-            | xargs -r -n1 -I{} railway delete --yes --project {}
+            | xargs -r -n1 -I{} railway service delete --service {} --yes
 
       # Same reasoning as the sweeps above, with AgentCore's twist: THREE kinds are left behind,
       # because the bucket and repository are deliberately created outside the stack (plan.ts: so a
