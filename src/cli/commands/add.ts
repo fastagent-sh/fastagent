@@ -130,7 +130,7 @@ export async function runAddChannel(
           // from this machine when the agent first runs, so there is one sentence, not two.
           "until the agent runs somewhere Slack can reach, nothing you type in Slack arrives — " +
             "`fastagent dev --tunnel` (local) or `fastagent deploy` (hosted) starts it, and FastAgent points Slack at it for you",
-          "invite the app to each channel it should read (DMs need no invite)",
+          "invite the app to each channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]
       : setup.steps;
