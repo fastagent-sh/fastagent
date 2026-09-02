@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
 import { isSlackRequestUrlUnverified, updateSlackAppManifest } from "./config-api.ts";
-import { buildSlackManifest, slackBotEvents } from "./manifest.ts";
+import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";
 
 export interface RegisterSlackWebhookOptions {
@@ -35,13 +35,7 @@ export async function registerSlackWebhook(
     );
     return "manual";
   }
-  // A `--manual` app was created with no event subscription (Slack rejects one without a request_url),
-  // and this update is what would add it — so the console fallback names the events, not just the URL.
-  const consoleFallback =
-    `set ${publicBaseUrl}/slack as the Event Subscriptions Request URL in the Slack console` +
-    (state.tokenRotation === false
-      ? ` and subscribe the bot events ${slackBotEvents(state.groupBehavior).join(", ")}`
-      : "");
+  const consoleFallback = `set ${publicBaseUrl}/slack as the Event Subscriptions Request URL in the Slack console`;
   let current: Awaited<ReturnType<typeof currentSlackConfigToken>>;
   try {
     // Rotation is not retried with the manifest below: each rotate invalidates the previous pair, so a
@@ -76,10 +70,6 @@ export async function registerSlackWebhook(
           // Token-rotation manifests require at least one OAuth redirect URL even after installation.
           // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
           redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
-          // Setting a Request URL sends the WHOLE manifest, so this call decides rotation too. Carry
-          // the app's own setting: Slack refuses to disable rotation once enabled, so defaulting to
-          // true here would permanently convert a `--manual` app on its first `dev --tunnel`.
-          tokenRotation: current.state.tokenRotation ?? true,
         }),
         { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
       );

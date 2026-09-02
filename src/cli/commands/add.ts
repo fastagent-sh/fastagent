@@ -29,14 +29,7 @@ import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: {
-    createApp?: boolean;
-    ingress?: string;
-    groupBehavior?: string;
-    onboard?: boolean;
-    replaceConfig?: boolean;
-    manual?: boolean;
-  },
+  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
   // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
@@ -45,9 +38,6 @@ export async function runAddChannel(
   // follow.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
-  }
-  if (opts.manual && opts.onboard === false) {
-    failUsage("--manual selects how onboarding installs the app; it cannot be combined with --no-onboard");
   }
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
@@ -109,7 +99,6 @@ export async function runAddChannel(
       stateRoot: resolveStateRoot(target),
       groupBehavior,
       replaceConfig: opts.replaceConfig,
-      manual: opts.manual,
     })
       .then(() => undefined)
       .catch(failStartup);
@@ -117,15 +106,12 @@ export async function runAddChannel(
     created = await onboardFeishuCloudApp(target, channelKind, ingress, groupBehavior).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
-  // Slack's optional env IS its rotation set (refresh token, expiry, client id/secret). A `--manual`
-  // app has rotation off and Slack will not let it be turned on later, so "optionally set" would be
-  // an invitation to break the channel: bot-auth.ts reads those four as all-or-nothing.
-  const env = opts.manual ? setup.env.filter((e) => e.required) : setup.env;
+  const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
           // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and
-          // FastAgent sets that URL itself when the agent first runs (both install modes).
+          // FastAgent sets that URL itself when the agent first runs.
           "invite the app to each channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]

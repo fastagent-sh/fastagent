@@ -30,14 +30,9 @@ export class SlackConfigApiError extends Error {
  * platform's own readiness verdict on a freshly minted public URL, and the reason no local `/health`
  * poll precedes these calls (#421). Slack validates the manifest BEFORE acting on it, so a create that
  * ends here created nothing and is safe to retry.
- *
- * Wide on purpose: the message also carries the field's JSON pointer, so ANY complaint about
- * `request_url` retries. The exact wording of Slack's verification verdict is unrecorded, and a
- * narrower match that missed it would fail every fresh tunnel once, while the URL here is always one
- * we built (`https://<host>/slack`) — a permanent complaint about it costs 70s and still surfaces.
  */
 export function isSlackRequestUrlUnverified(error: unknown): boolean {
-  return /request_url|failed to verify/i.test(String(error));
+  return /request_url|verify_request_url|failed to verify/i.test(String(error));
 }
 
 async function slackJson<T>(
@@ -159,44 +154,15 @@ export async function rotateSlackConfigToken(
   };
 }
 
-/**
- * One installed app's runtime credentials, however they were obtained. The rotation pair is OPTIONAL
- * because a console install (`--manual`) issues a static bot token instead — the channel accepts both
- * (bot-auth.ts serves the static token when the rotation fields are absent).
- */
 export interface SlackOAuthResult {
   botToken: string;
-  botRefreshToken?: string;
-  botTokenExpiresAt?: number;
-  /** Which app the token belongs to, when the installer could observe it (`oauth.v2.access` always
-   *  says; `auth.test` may not). Absent means "not observed", never "the expected one". */
-  appId?: string;
+  botRefreshToken: string;
+  botTokenExpiresAt: number;
+  appId: string;
   teamId: string;
   teamName?: string;
   botUserId?: string;
-  /** The granted scopes, when the installer could observe them. Absent means "not observed" and skips
-   *  the scope check; an observed empty grant fails it. */
-  scopes?: string[];
-}
-
-/**
- * Who a bot token belongs to. The one call that can tell a real pasted token from a typo, which is why
- * the manual install path ends with it rather than trusting what came back from the terminal.
- */
-export async function slackAuthTest(
-  botToken: string,
-  options: { apiBaseUrl?: string; fetch?: typeof fetch } = {},
-): Promise<{ appId?: string; teamId: string; teamName?: string; botUserId?: string }> {
-  const data = await slackJson<{
-    ok: true;
-    app_id?: string;
-    team_id?: string;
-    team?: string;
-    bot_id?: string;
-    user_id?: string;
-  }>("auth.test", {}, { ...options, token: botToken });
-  if (!data.team_id) throw new Error("Slack auth.test accepted the token but returned no workspace identity");
-  return { appId: data.app_id, teamId: data.team_id, teamName: data.team, botUserId: data.user_id };
+  scopes: string[];
 }
 
 function slackOAuthFailure(status: number, code: unknown): Error {

@@ -2,11 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSlackBotTokenProvider } from "../src/channels/slack/bot-auth.ts";
 import { createSlackApp, exchangeSlackOAuthCode, SlackConfigApiError } from "../src/channels/slack/config-api.ts";
-import { installFromConsole, installViaOAuth } from "../src/cli/add-slack.ts";
 import { buildSlackManifest, slackBotEvents, slackBotScopes } from "../src/channels/slack/manifest.ts";
-import { newSlackOnboardingState, onboardSlackApp, type SlackOnboardIO } from "../src/channels/slack/onboard.ts";
+import { newSlackOnboardingState, onboardSlackApp } from "../src/channels/slack/onboard.ts";
 import {
   currentSlackConfigToken,
   readSlackOnboardingState,
@@ -14,17 +12,6 @@ import {
 } from "../src/channels/slack/onboarding-state.ts";
 import { registerSlackWebhook } from "../src/channels/slack/register-webhook.ts";
 import { startSlackSetupServer } from "../src/channels/slack/setup-server.ts";
-
-// `add slack`'s two installers are the only thing the modes implement differently, so they are tested
-// directly. The terminal and the browser are the parts that cannot run here.
-vi.mock("@clack/prompts", () => ({
-  isCancel: () => false,
-  log: { info: () => {} },
-  password: async () => "xoxb-pasted",
-  text: async () => "",
-  select: async () => "keep",
-}));
-vi.mock("../src/open-url.ts", () => ({ openExternalUrl: () => {} }));
 
 const roots: string[] = [];
 
@@ -163,6 +150,7 @@ describe("Slack internal-app onboarding", () => {
       configRefreshToken: "xoxe-refresh",
     });
     writeSlackOnboardingState(stateRoot, initial);
+    let oauthState = "";
     const secrets: { botToken?: string; signingSecret?: string }[] = [];
 
     const result = await onboardSlackApp(
@@ -174,15 +162,10 @@ describe("Slack internal-app onboarding", () => {
       },
       {
         note: () => {},
-        install: async () => ({
-          botToken: "xoxe.xoxb-bot",
-          botRefreshToken: "xoxe-bot-refresh",
-          botTokenExpiresAt: 2_000_000_000_000,
-          appId: "A1",
-          teamId: "T1",
-          teamName: "Acme",
-          scopes: slackBotScopes("mentions"),
-        }),
+        openUrl(url) {
+          oauthState = new URL(url).searchParams.get("state") ?? "";
+        },
+        waitForOAuth: async () => ({ code: "oauth-code", state: oauthState }),
         writeRuntimeSecrets: async (values) => {
           secrets.push(values);
         },
@@ -193,6 +176,15 @@ describe("Slack internal-app onboarding", () => {
           clientId: "C1",
           clientSecret: "client-secret",
           signingSecret: "signing-secret",
+        }),
+        exchangeCode: async () => ({
+          botToken: "xoxe.xoxb-bot",
+          botRefreshToken: "xoxe-bot-refresh",
+          botTokenExpiresAt: 2_000_000_000_000,
+          appId: "A1",
+          teamId: "T1",
+          teamName: "Acme",
+          scopes: slackBotScopes("mentions"),
         }),
       },
     );
@@ -250,9 +242,8 @@ describe("Slack internal-app onboarding", () => {
     });
     const io = {
       note: () => {},
-      install: async () => {
-        throw new Error("test: install must not be reached when create fails");
-      },
+      openUrl: () => {},
+      waitForOAuth: async () => ({ code: "unused", state: "unused" }),
       writeRuntimeSecrets: async () => {},
     };
     const input = {
@@ -270,64 +261,12 @@ describe("Slack internal-app onboarding", () => {
     expect(createApp).toHaveBeenCalledOnce();
   });
 
-  it("--manual builds an app that needs no callback: no rotation, no subscription, a token that travels alone", async () => {
-    // What the manual mode must get right, and the reason it is the SAME flow rather than a second
-    // one: rotation is off (a rotating token is issued THROUGH an OAuth redirect it does not have) and
-    // the whole event subscription is absent, because Slack rejects one without a request_url —
-    // `dev --tunnel`/`deploy` then sets the URL and the bot events in a single later manifest.
-    const stateRoot = await root();
-    const initial = newSlackOnboardingState({
-      appName: "Agent",
-      groupBehavior: "mentions",
-      configToken: "xoxe.config",
-      configRefreshToken: "xoxe-refresh",
-    });
-    writeSlackOnboardingState(stateRoot, initial);
-    let sent: ReturnType<typeof buildSlackManifest> | undefined;
-    const secrets: Parameters<SlackOnboardIO["writeRuntimeSecrets"]>[0][] = [];
-
-    const result = await onboardSlackApp(
-      { stateRoot, state: initial },
-      {
-        note: () => {},
-        // A console install cannot report the grant, so it omits it — and the flow must not then
-        // fail the scope check it had no answer for.
-        install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1", teamName: "Acme" }),
-        writeRuntimeSecrets: async (values) => {
-          secrets.push(values);
-        },
-      },
-      {
-        createApp: async (_token, manifest) => {
-          sent = manifest;
-          return { appId: "A1", clientId: "C1", clientSecret: "client-secret", signingSecret: "signing-secret" };
-        },
-      },
-    );
-
-    expect(sent?.settings.token_rotation_enabled).toBe(false);
-    expect(sent?.oauth_config.redirect_urls).toBeUndefined();
-    expect(sent?.settings.event_subscriptions).toBeUndefined();
-    expect(result.installedAt).toBeTruthy();
-    // Recorded so the first Request-URL update cannot flip it: Slack refuses to disable rotation once
-    // enabled, making that flip permanent.
-    expect(result.tokenRotation).toBe(false);
-    // A static token travels ALONE. bot-auth.ts reads the four rotation fields as all-or-nothing, so a
-    // client id/secret written beside a static token does not make it rotate — it makes the channel
-    // refuse to start. Assert the consequence, not just the shape.
-    const written = secrets.at(-1) as Parameters<typeof createSlackBotTokenProvider>[0];
-    expect(written).toEqual({ botToken: "xoxb-static" });
-    expect(() =>
-      createSlackBotTokenProvider({ ...written, statePath: join(stateRoot, "bot-auth.json") }),
-    ).not.toThrow();
-  });
-
   it("create retries while Slack cannot verify the setup URL, with the duplicate-guard marker OFF between attempts", async () => {
     // The #421 tension applies to `apps.manifest.create` exactly as to the registrars: Slack challenges
     // the fresh tunnel URL from its own network during the call, and rejects the manifest BEFORE
     // creating anything when it cannot. So the reject is retried — and because nothing was created, the
-    // createAttemptedAt marker must be gone while waiting: a Ctrl-C in that window used to wedge the
-    // next run on an app that never existed.
+    // createAttemptedAt marker must be gone while waiting: a Ctrl-C in that window would otherwise wedge
+    // the next run on an app that never existed.
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
       appName: "Agent",
@@ -354,6 +293,7 @@ describe("Slack internal-app onboarding", () => {
       if (++creates < 3) throw unverified();
       return { appId: "A1", clientId: "C1", clientSecret: "client-secret", signingSecret: "signing-secret" };
     });
+    let oauthState = "";
     await onboardSlackApp(
       {
         stateRoot,
@@ -366,7 +306,16 @@ describe("Slack internal-app onboarding", () => {
           if (message.includes("retrying"))
             markerDuringWait.push(readSlackOnboardingState(stateRoot)?.createAttemptedAt);
         },
-        install: async () => ({
+        openUrl: (url) => {
+          oauthState = new URL(url).searchParams.get("state") ?? "";
+        },
+        waitForOAuth: async () => ({ code: "oauth-code", state: oauthState }),
+        writeRuntimeSecrets: async () => {},
+      },
+      {
+        createApp,
+        retryMs: 1,
+        exchangeCode: async () => ({
           botToken: "xoxe.xoxb-bot",
           botRefreshToken: "xoxe-bot-refresh",
           botTokenExpiresAt: 2_000_000_000_000,
@@ -374,9 +323,7 @@ describe("Slack internal-app onboarding", () => {
           teamId: "T1",
           scopes: slackBotScopes("mentions"),
         }),
-        writeRuntimeSecrets: async () => {},
       },
-      { createApp, retryMs: 1 },
     );
     expect(creates).toBe(3);
     expect(markerDuringCall.every((m) => typeof m === "string")).toBe(true); // ON for each in-flight call
@@ -390,11 +337,7 @@ describe("Slack internal-app onboarding", () => {
     await expect(
       onboardSlackApp(
         { stateRoot: stateRoot2, state: initial, requestUrl: "https://x/r", redirectUrl: "https://x/o" },
-        {
-          note: () => {},
-          install: async () => ({ botToken: "x", teamId: "T" }),
-          writeRuntimeSecrets: async () => {},
-        },
+        { note: () => {}, openUrl: () => {}, waitForOAuth: async () => ({}), writeRuntimeSecrets: async () => {} },
         {
           createApp: async () => {
             throw unverified();
@@ -405,126 +348,6 @@ describe("Slack internal-app onboarding", () => {
       ),
     ).rejects.toThrow(/failed to verify request url/);
     expect(readSlackOnboardingState(stateRoot2)?.createAttemptedAt).toBeUndefined();
-  });
-
-  it("refuses to resume an app in the other install mode — the kind is fixed at creation", async () => {
-    // Rotation is decided by the manifest that CREATES the app and Slack will not undo it, so a resume
-    // must build its manifest for the app that exists, not for the flags of this run. Resuming a
-    // console-created (static) app through the OAuth path would flip rotation on for good and leave the
-    // record saying false — after which every Request-URL update fails with cannot_disable_once_enabled.
-    const stateRoot = await root();
-    const base = newSlackOnboardingState({
-      appName: "Agent",
-      groupBehavior: "mentions",
-      configToken: "xoxe.config",
-      configRefreshToken: "xoxe-refresh",
-    });
-    const updateManifest = vi.fn(async () => {});
-    const io = {
-      note: () => {},
-      install: async () => ({ botToken: "x", teamId: "T" }),
-      writeRuntimeSecrets: async () => {},
-    };
-
-    const staticApp = { ...base, appId: "A1", clientId: "C1", clientSecret: "S", tokenRotation: false };
-    writeSlackOnboardingState(stateRoot, staticApp);
-    await expect(
-      onboardSlackApp(
-        { stateRoot, state: staticApp, requestUrl: "https://x/r", redirectUrl: "https://x/o" }, // OAuth mode
-        io,
-        { updateManifest },
-      ),
-    ).rejects.toThrow(/console install.*--manual/);
-
-    const rotatingApp = { ...base, appId: "A2", clientId: "C2", clientSecret: "S", tokenRotation: true };
-    writeSlackOnboardingState(stateRoot, rotatingApp);
-    await expect(
-      onboardSlackApp({ stateRoot, state: rotatingApp }, io, { updateManifest }), // --manual mode
-    ).rejects.toThrow(/OAuth install.*without --manual/);
-
-    // A record from before the field existed came from the OAuth path — it resumes there, not in manual.
-    const legacy = { ...base, appId: "A3", clientId: "C3", clientSecret: "S" };
-    writeSlackOnboardingState(stateRoot, legacy);
-    await expect(onboardSlackApp({ stateRoot, state: legacy }, io, { updateManifest })).rejects.toThrow(
-      /OAuth install/,
-    );
-
-    expect(updateManifest).not.toHaveBeenCalled(); // no manifest reached Slack in any of the three
-  });
-
-  it("an install that cannot name its app skips the identity check and says so — it does not pass it", async () => {
-    const stateRoot = await root();
-    const initial = newSlackOnboardingState({
-      appName: "Agent",
-      groupBehavior: "mentions",
-      configToken: "xoxe.config",
-      configRefreshToken: "xoxe-refresh",
-    });
-    writeSlackOnboardingState(stateRoot, initial);
-    const notes: string[] = [];
-    const result = await onboardSlackApp(
-      { stateRoot, state: initial },
-      {
-        note: (m) => notes.push(m),
-        install: async () => ({ botToken: "xoxb-static", teamId: "T1" }), // no appId observed
-        writeRuntimeSecrets: async () => {},
-      },
-      { createApp: async () => ({ appId: "A1", clientId: "C1", clientSecret: "S", signingSecret: "sig" }) },
-    );
-    expect(result.installedAt).toBeTruthy();
-    expect(notes.join("\n")).toMatch(/did not report which app/);
-    // And one that DOES name a different app is still refused.
-    writeSlackOnboardingState(stateRoot, initial);
-    await expect(
-      onboardSlackApp(
-        { stateRoot, state: initial },
-        {
-          note: () => {},
-          install: async () => ({ botToken: "xoxb-static", appId: "A-other", teamId: "T1" }),
-          writeRuntimeSecrets: async () => {},
-        },
-        { createApp: async () => ({ appId: "A1", clientId: "C1", clientSecret: "S", signingSecret: "sig" }) },
-      ),
-    ).rejects.toThrow(/different app/);
-  });
-
-  it("an unobserved grant skips the scope check and says so; an observed short grant fails it", async () => {
-    // "Not observed" (no `scopes`) and "observed none" (`[]`) are different answers: the OAuth exchange
-    // reports `[]` when Slack returns no scope, and that must still fail rather than slip through as
-    // unanswered.
-    const stateRoot = await root();
-    const initial = newSlackOnboardingState({
-      appName: "Agent",
-      groupBehavior: "mentions",
-      configToken: "xoxe.config",
-      configRefreshToken: "xoxe-refresh",
-    });
-    const createApp = async () => ({ appId: "A1", clientId: "C1", clientSecret: "S", signingSecret: "sig" });
-    writeSlackOnboardingState(stateRoot, initial);
-    const notes: string[] = [];
-    await onboardSlackApp(
-      { stateRoot, state: initial },
-      {
-        note: (m) => notes.push(m),
-        install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1" }),
-        writeRuntimeSecrets: async () => {},
-      },
-      { createApp },
-    );
-    expect(notes.join("\n")).toMatch(/did not report which scopes/);
-
-    writeSlackOnboardingState(stateRoot, initial);
-    await expect(
-      onboardSlackApp(
-        { stateRoot, state: initial },
-        {
-          note: () => {},
-          install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1", scopes: [] }),
-          writeRuntimeSecrets: async () => {},
-        },
-        { createApp },
-      ),
-    ).rejects.toThrow(/without all required bot scopes/);
   });
 
   it("rotates expiring config credentials atomically and persists the replacement refresh token", async () => {
@@ -556,44 +379,33 @@ describe("Slack internal-app onboarding", () => {
   });
 
   it("rejects a forged OAuth callback state before exchanging the code", async () => {
-    // The nonce lives with the redirect it protects. A console install has no callback to forge, which
-    // is why this check belongs to the OAuth installer and not to the flow both installers share.
-    const fetchMock = vi.fn<typeof fetch>();
-    vi.stubGlobal("fetch", fetchMock);
-    const install = installViaOAuth("https://setup.test/oauth", async () => ({ code: "code", state: "forged" }));
+    const stateRoot = await root();
+    const state = {
+      ...newSlackOnboardingState({
+        appName: "Agent",
+        groupBehavior: "mentions" as const,
+        configToken: "xoxe.config",
+        configRefreshToken: "xoxe-refresh",
+      }),
+      appId: "A1",
+      clientId: "C1",
+      clientSecret: "secret",
+    };
+    writeSlackOnboardingState(stateRoot, state);
+    const exchangeCode = vi.fn();
     await expect(
-      install({ appId: "A1", clientId: "C1", clientSecret: "secret", scopes: slackBotScopes("mentions") }),
+      onboardSlackApp(
+        { stateRoot, state, requestUrl: "https://setup.test/request", redirectUrl: "https://setup.test/oauth" },
+        {
+          note: () => {},
+          openUrl: () => {},
+          waitForOAuth: async () => ({ code: "code", state: "forged" }),
+          writeRuntimeSecrets: async () => {},
+        },
+        { updateManifest: async () => {}, exchangeCode },
+      ),
     ).rejects.toThrow(/state mismatch/);
-    expect(fetchMock).not.toHaveBeenCalled(); // the code was never exchanged
-  });
-
-  it("a console install verifies the pasted token and reports no scopes it did not observe", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => Response.json({ ok: true, team_id: "T1", team: "Acme", user_id: "U1" }), // no app_id: not every auth.test carries one
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const install = installFromConsole();
-    await expect(
-      install({ appId: "A1", clientId: "C1", clientSecret: "secret", scopes: slackBotScopes("mentions") }),
-    ).resolves.toEqual({
-      botToken: "xoxb-pasted",
-      appId: undefined, // reported as NOT observed — never filled in with the expected value
-      teamId: "T1",
-      teamName: "Acme",
-      botUserId: "U1",
-      // Never a rotation pair: a console install issues a static token, and bot-auth.ts serves it.
-    });
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/auth.test");
-  });
-
-  it("a console install refuses a token Slack does not recognise", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => Response.json({ ok: false, error: "invalid_auth" })),
-    );
-    await expect(installFromConsole()({ appId: "A1", clientId: "C1", clientSecret: "s", scopes: [] })).rejects.toThrow(
-      /invalid_auth/,
-    );
+    expect(exchangeCode).not.toHaveBeenCalled();
   });
 
   it("serves only the temporary challenge and one OAuth callback", async () => {
@@ -657,41 +469,6 @@ describe("Slack Request URL registration", () => {
     );
   });
 
-  it("never flips a --manual app's token rotation on — Slack cannot undo that", async () => {
-    // Verified against the real API: apps.manifest.update answers `cannot_disable_once_enabled`. Since
-    // setting a Request URL sends the WHOLE manifest, a registrar defaulting rotation to true would
-    // permanently convert an app installed with a static token, on its first `dev --tunnel`.
-    const stateRoot = await root();
-    writeSlackOnboardingState(stateRoot, {
-      ...newSlackOnboardingState({
-        appName: "Agent",
-        groupBehavior: "context",
-        configToken: "xoxe.config",
-        configRefreshToken: "xoxe-refresh",
-      }),
-      appId: "A1",
-      installedAt: new Date().toISOString(),
-      tokenRotation: false,
-    });
-    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      const body = JSON.parse(String(init?.body)) as { manifest: string };
-      const manifest = JSON.parse(body.manifest) as ReturnType<typeof buildSlackManifest>;
-      expect(manifest.settings.token_rotation_enabled).toBe(false);
-      // The same update carries the events, which is what closes the gap left by an app created
-      // before any public URL existed.
-      expect(manifest.settings.event_subscriptions).toMatchObject({
-        request_url: "https://agent.test/slack",
-        bot_events: slackBotEvents("context"),
-      });
-      return Response.json({ ok: true });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock })).resolves.toBe(
-      "registered",
-    );
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
   it("retries while Slack cannot verify the Request URL yet, then registers", async () => {
     const stateRoot = await root();
     writeSlackOnboardingState(stateRoot, {
@@ -752,29 +529,5 @@ describe("Slack Request URL registration", () => {
     ).resolves.toBe("failed");
     expect(updates).toBe(1);
     expect(logs.join("\n")).toContain("invalid_auth");
-  });
-
-  it("a --manual app's console fallback names the bot events it was created without", async () => {
-    // The registrar is the one call that would have subscribed them; an operator who only sets the
-    // Request URL by hand gets an app that verifies and then hears nothing.
-    const stateRoot = await root();
-    writeSlackOnboardingState(stateRoot, {
-      ...newSlackOnboardingState({
-        appName: "Agent",
-        groupBehavior: "context",
-        configToken: "xoxe.config",
-        configRefreshToken: "xoxe-refresh",
-      }),
-      appId: "A1",
-      installedAt: new Date().toISOString(),
-      tokenRotation: false,
-    });
-    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ ok: false, error: "invalid_auth" }));
-    vi.stubGlobal("fetch", fetchMock);
-    const logs: string[] = [];
-    await expect(
-      registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock, log: (line) => logs.push(line) }),
-    ).resolves.toBe("failed");
-    expect(logs.join("\n")).toContain(`subscribe the bot events ${slackBotEvents("context").join(", ")}`);
   });
 });

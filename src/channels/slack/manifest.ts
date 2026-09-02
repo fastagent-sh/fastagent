@@ -36,7 +36,6 @@ export interface SlackAppManifest {
     redirect_urls?: string[];
   };
   settings: {
-    /** All-or-nothing: Slack rejects a subscription with no `request_url` unless Socket Mode is on. */
     event_subscriptions?: { request_url: string; bot_events: string[] };
     org_deploy_enabled: boolean;
     socket_mode_enabled: boolean;
@@ -67,10 +66,6 @@ export function buildSlackManifest(input: {
   groupBehavior: SlackGroupBehavior;
   requestUrl?: string;
   redirectUrl?: string;
-  /** Rotating bot tokens need an OAuth redirect URL to be issued through. A console install has none,
-   *  so `add slack --manual` builds the app without rotation and the channel reads a static token
-   *  (bot-auth.ts serves one when the rotation fields are absent). Defaults to on. */
-  tokenRotation?: boolean;
 }): SlackAppManifest {
   const name = input.name.trim().slice(0, 35) || "FastAgent";
   return {
@@ -99,11 +94,6 @@ export function buildSlackManifest(input: {
       ...(input.redirectUrl ? { redirect_urls: [input.redirectUrl] } : {}),
     },
     settings: {
-      // Subscription and URL travel TOGETHER because Slack requires it: `apps.manifest.create` rejects
-      // `event_subscriptions` without a `request_url` ("requires Socket Mode if no Request URL is
-      // provided"), verified against the real API. So an app created before a public URL exists
-      // subscribes to nothing yet — and the update that later sets `request_url` carries `bot_events`
-      // in the same manifest, which is what keeps that temporary gap from becoming a silent one.
       ...(input.requestUrl
         ? {
             event_subscriptions: {
@@ -114,7 +104,11 @@ export function buildSlackManifest(input: {
         : {}),
       org_deploy_enabled: false,
       socket_mode_enabled: false,
-      token_rotation_enabled: input.tokenRotation ?? true,
+      // Constant, and Slack makes it permanent: once an app has rotation on, an update carrying `false`
+      // is refused (`cannot_disable_once_enabled`, verified against the API). Every manifest update is a
+      // full replacement, so a caller that ever sent anything else here would be deciding this for the
+      // app's whole life.
+      token_rotation_enabled: true,
     },
   };
 }

@@ -155,14 +155,7 @@ src/
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   ├── slack/               # Slack Agent: native streams + inline tool traces, rotating bot auth, signed
-│   │                     # Events API ingress, durable threads/context, files + onboarding/scaffold.
-│   │                     # onboard.ts owns ONE install flow; how the app gets installed is the single
-│   │                     # injected step (SlackOnboardIO.install) — an OAuth redirect through a temp
-│   │                     # tunnel, or `--manual`'s console install for a machine no callback can reach.
-│   │                     # Everything else (manifest, creation, state, .env) is written once, because a
-│   │                     # second copy of it drifts: the manual path once shipped its own manifest and
-│   │                     # silently dropped the event subscriptions (#421)
+│   ├── slack/               # Slack Agent: native streams + inline tool traces, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
 │   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles

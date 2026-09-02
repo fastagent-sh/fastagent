@@ -315,12 +315,6 @@ const REPLACE_CONFIG: FlagSpec = {
     "Slack: replace the local App Configuration token pair (repairs automatic dev/deploy Request URL " +
     "updates after the tokens expire or are revoked; runs on the machine that onboarded the app)",
 };
-const MANUAL_INSTALL: FlagSpec = {
-  flags: "--manual",
-  description:
-    "Slack: install from Slack's console and paste the bot token, instead of catching an OAuth " +
-    "redirect through a temporary tunnel (for a machine that cannot receive a public callback)",
-};
 
 const channelSub = (
   kind: "github" | "telegram" | "slack" | "feishu" | "lark",
@@ -337,7 +331,7 @@ const channelSub = (
     ...(kind === "feishu" || kind === "lark"
       ? [INGRESS, GROUP_BEHAVIOR]
       : kind === "slack"
-        ? [GROUP_BEHAVIOR, NO_ONBOARD, REPLACE_CONFIG, MANUAL_INSTALL]
+        ? [GROUP_BEHAVIOR, NO_ONBOARD, REPLACE_CONFIG]
         : []),
   ],
   examples: [{ cmd: `fastagent add ${kind}` }],
@@ -349,7 +343,6 @@ const channelSub = (
       groupBehavior: f.groupBehavior as string | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,
-      manual: f.manual === true,
     }),
 });
 
@@ -380,9 +373,8 @@ const add: CommandSpec = {
         "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
         "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
       "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
-        "cloudflared tunnel. They stay in owner-readable local state and are never deployed. Where no " +
-        "public callback can reach this machine, --manual creates the same app and installs it from " +
-        "Slack's console (a static bot token, no rotation); --no-onboard keeps the scaffold-only path.",
+        "cloudflared tunnel. They stay in owner-readable local state and are never deployed; --no-onboard " +
+        "keeps the explicit manual/scaffold-only path.",
     ),
     channelSub(
       "feishu",
