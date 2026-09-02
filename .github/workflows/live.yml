@@ -67,6 +67,14 @@ jobs:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
 
+      # The driver spawns `fly`, the short name Fly's own installer also provides; this action ships
+      # only `flyctl`. Without the alias `deploy fly --run` fails with "flyctl not found" on a runner
+      # that demonstrably has it.
+      - name: Provide the `fly` alias the driver spawns
+        run: |
+          sudo ln -sf "$(command -v flyctl)" /usr/local/bin/fly
+          fly version
+
       # ONE credential mechanism for both probes: an auth.json, named by the product's own
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
       # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
