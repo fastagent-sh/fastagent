@@ -25,6 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toFlyAppName } from "../../src/deploy/fly/plan.ts";
+import { listHasName } from "../../src/deploy/fly/run.ts";
 import { liveVersion, requireEnv } from "./env.ts";
 
 // A container build's log is megabytes; execFile's 1 MB default would abort the deploy mid-flight.
@@ -61,12 +62,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Unconditional: a deploy that failed after `apps create` still leaves an app holding the staged
-  // model credential. Destroying a name that was never created exits non-zero and is reported, not
-  // swallowed — silence here is how a paid resource outlives the run that made it.
+  // Ask before destroying: a deploy that failed BEFORE `apps create` has nothing to remove, and an
+  // unconditional destroy answers `Could not find App` — a teardown error loud enough to bury the
+  // real failure it followed. A deploy that failed AFTER it still holds the staged model credential,
+  // so the destroy itself stays mandatory and its failure is reported.
   const errors: unknown[] = [];
   try {
-    await run("flyctl", ["apps", "destroy", APP, "--yes"]);
+    const { stdout } = await run("flyctl", ["apps", "list", "--json"]);
+    if (listHasName(stdout, APP)) await run("flyctl", ["apps", "destroy", APP, "--yes"]);
   } catch (error) {
     errors.push(error);
   }
@@ -93,9 +96,15 @@ const answerOf = (events: AgentEvent[]): string =>
 
 describe("deploy fly --run: a real app, provisioned and destroyed", () => {
   it("provisions, boots, and serves a turn on its fly.dev URL", async () => {
-    // Every gate in the driver exits non-zero, so a refusal surfaces here as this call's rejection,
-    // carrying the gate's own remediation text.
-    await run(process.execPath, [CLI, "deploy", "fly", "--run"], workspace);
+    // Every gate in the driver exits non-zero, so a refusal surfaces here as this call's rejection.
+    // flyctl's own output is spliced in: execFile's error carries stderr but its message does not,
+    // and "Command failed" is all an unattended nightly would otherwise report.
+    try {
+      await run(process.execPath, [CLI, "deploy", "fly", "--run"], workspace);
+    } catch (error) {
+      const { stderr, stdout } = error as { stderr?: string; stdout?: string };
+      throw new Error(`deploy fly --run failed for ${APP}:\n${(stderr || stdout || String(error)).slice(-4000)}`);
+    }
 
     // The URL is deterministic (run.ts builds it the same way), so reaching it proves the machine
     // is up under the name the driver provisioned — not merely that some deploy succeeded.
