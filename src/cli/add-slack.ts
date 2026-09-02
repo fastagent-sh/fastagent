@@ -102,9 +102,8 @@ export function installFromConsole(): SlackOnboardIO["install"] {
       teamId: identity.teamId,
       teamName: identity.teamName,
       botUserId: identity.botUserId,
-      // A console install reports the token's identity, never its grant. Empty means "not observed",
-      // and the shared flow then skips the scope check instead of asserting one it did not make.
-      scopes: [],
+      // A console install reports the token's identity, never its grant: no `scopes`, and the shared
+      // flow skips the scope check instead of asserting one it did not make.
     };
   };
 }

@@ -290,9 +290,9 @@ describe("Slack internal-app onboarding", () => {
       { stateRoot, state: initial },
       {
         note: () => {},
-        // A console install cannot report the grant, so it reports none — and the flow must not then
+        // A console install cannot report the grant, so it omits it — and the flow must not then
         // fail the scope check it had no answer for.
-        install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1", teamName: "Acme", scopes: [] }),
+        install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1", teamName: "Acme" }),
         writeRuntimeSecrets: async (values) => {
           secrets.push(values);
         },
@@ -314,8 +314,7 @@ describe("Slack internal-app onboarding", () => {
     expect(result.tokenRotation).toBe(false);
     // A static token travels ALONE. bot-auth.ts reads the four rotation fields as all-or-nothing, so a
     // client id/secret written beside a static token does not make it rotate — it makes the channel
-    // refuse to start. The first real `--manual` run hit exactly that; assert the consequence, not
-    // just the shape.
+    // refuse to start. Assert the consequence, not just the shape.
     const written = secrets.at(-1) as Parameters<typeof createSlackBotTokenProvider>[0];
     expect(written).toEqual({ botToken: "xoxb-static" });
     expect(() =>
@@ -393,7 +392,7 @@ describe("Slack internal-app onboarding", () => {
         { stateRoot: stateRoot2, state: initial, requestUrl: "https://x/r", redirectUrl: "https://x/o" },
         {
           note: () => {},
-          install: async () => ({ botToken: "x", teamId: "T", scopes: [] }),
+          install: async () => ({ botToken: "x", teamId: "T" }),
           writeRuntimeSecrets: async () => {},
         },
         {
@@ -423,7 +422,7 @@ describe("Slack internal-app onboarding", () => {
     const updateManifest = vi.fn(async () => {});
     const io = {
       note: () => {},
-      install: async () => ({ botToken: "x", teamId: "T", scopes: [] }),
+      install: async () => ({ botToken: "x", teamId: "T" }),
       writeRuntimeSecrets: async () => {},
     };
 
@@ -467,7 +466,7 @@ describe("Slack internal-app onboarding", () => {
       { stateRoot, state: initial },
       {
         note: (m) => notes.push(m),
-        install: async () => ({ botToken: "xoxb-static", teamId: "T1", scopes: [] }), // no appId observed
+        install: async () => ({ botToken: "xoxb-static", teamId: "T1" }), // no appId observed
         writeRuntimeSecrets: async () => {},
       },
       { createApp: async () => ({ appId: "A1", clientId: "C1", clientSecret: "S", signingSecret: "sig" }) },
@@ -481,12 +480,51 @@ describe("Slack internal-app onboarding", () => {
         { stateRoot, state: initial },
         {
           note: () => {},
-          install: async () => ({ botToken: "xoxb-static", appId: "A-other", teamId: "T1", scopes: [] }),
+          install: async () => ({ botToken: "xoxb-static", appId: "A-other", teamId: "T1" }),
           writeRuntimeSecrets: async () => {},
         },
         { createApp: async () => ({ appId: "A1", clientId: "C1", clientSecret: "S", signingSecret: "sig" }) },
       ),
     ).rejects.toThrow(/different app/);
+  });
+
+  it("an unobserved grant skips the scope check and says so; an observed short grant fails it", async () => {
+    // "Not observed" (no `scopes`) and "observed none" (`[]`) are different answers: the OAuth exchange
+    // reports `[]` when Slack returns no scope, and that must still fail rather than slip through as
+    // unanswered.
+    const stateRoot = await root();
+    const initial = newSlackOnboardingState({
+      appName: "Agent",
+      groupBehavior: "mentions",
+      configToken: "xoxe.config",
+      configRefreshToken: "xoxe-refresh",
+    });
+    const createApp = async () => ({ appId: "A1", clientId: "C1", clientSecret: "S", signingSecret: "sig" });
+    writeSlackOnboardingState(stateRoot, initial);
+    const notes: string[] = [];
+    await onboardSlackApp(
+      { stateRoot, state: initial },
+      {
+        note: (m) => notes.push(m),
+        install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1" }),
+        writeRuntimeSecrets: async () => {},
+      },
+      { createApp },
+    );
+    expect(notes.join("\n")).toMatch(/did not report which scopes/);
+
+    writeSlackOnboardingState(stateRoot, initial);
+    await expect(
+      onboardSlackApp(
+        { stateRoot, state: initial },
+        {
+          note: () => {},
+          install: async () => ({ botToken: "xoxb-static", appId: "A1", teamId: "T1", scopes: [] }),
+          writeRuntimeSecrets: async () => {},
+        },
+        { createApp },
+      ),
+    ).rejects.toThrow(/without all required bot scopes/);
   });
 
   it("rotates expiring config credentials atomically and persists the replacement refresh token", async () => {
@@ -544,7 +582,6 @@ describe("Slack internal-app onboarding", () => {
       teamName: "Acme",
       botUserId: "U1",
       // Never a rotation pair: a console install issues a static token, and bot-auth.ts serves it.
-      scopes: [],
     });
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/auth.test");
   });
@@ -715,5 +752,29 @@ describe("Slack Request URL registration", () => {
     ).resolves.toBe("failed");
     expect(updates).toBe(1);
     expect(logs.join("\n")).toContain("invalid_auth");
+  });
+
+  it("a --manual app's console fallback names the bot events it was created without", async () => {
+    // The registrar is the one call that would have subscribed them; an operator who only sets the
+    // Request URL by hand gets an app that verifies and then hears nothing.
+    const stateRoot = await root();
+    writeSlackOnboardingState(stateRoot, {
+      ...newSlackOnboardingState({
+        appName: "Agent",
+        groupBehavior: "context",
+        configToken: "xoxe.config",
+        configRefreshToken: "xoxe-refresh",
+      }),
+      appId: "A1",
+      installedAt: new Date().toISOString(),
+      tokenRotation: false,
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ ok: false, error: "invalid_auth" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const logs: string[] = [];
+    await expect(
+      registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock, log: (line) => logs.push(line) }),
+    ).resolves.toBe("failed");
+    expect(logs.join("\n")).toContain(`subscribe the bot events ${slackBotEvents("context").join(", ")}`);
   });
 });

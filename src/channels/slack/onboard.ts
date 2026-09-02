@@ -20,7 +20,7 @@ export interface SlackOnboardIO {
    * tunnel and exchanges the code, the `--manual` one has the operator install from Slack's console and
    * paste the token back. Everything around it — the manifest, app creation, what lands in state and in
    * `.env` — is this function's caller, once. An implementation that cannot report which scopes were
-   * granted returns `scopes: []`, and the caller then does not pretend to have checked them.
+   * granted omits `scopes`, and the caller then does not pretend to have checked them.
    */
   install(app: { appId: string; clientId: string; clientSecret: string; scopes: string[] }): Promise<SlackOAuthResult>;
   /** Stage runtime-only credentials into the gitignored .env. */
@@ -38,7 +38,7 @@ export interface SlackOnboardInput {
   stateRoot: string;
   state: SlackOnboardingState;
   /** Where events will arrive, when that is already known. `--manual` has no public URL yet: the app is
-   *  created subscribed to its events with no `request_url`, and `dev`/`deploy` fill it in later. */
+   *  created with no event subscription at all, and `dev`/`deploy` add it with the URL later. */
   requestUrl?: string;
   /** The one-shot OAuth callback. Its presence is what makes rotating bot tokens possible at all, so it
    *  also decides `token_rotation_enabled` — one fact, read in one place. */
@@ -198,13 +198,17 @@ export async function onboardSlackApp(
   } else if (oauth.appId !== state.appId) {
     throw new Error("Slack installed a different app than the manifest app");
   }
-  if (oauth.scopes.length > 0 && scopes.some((scope) => !oauth.scopes.includes(scope))) {
+  const granted = oauth.scopes;
+  if (granted === undefined) {
+    io.note(
+      "Slack did not report which scopes were granted; the app was installed with the ones its manifest asks for.",
+    );
+  } else if (scopes.some((scope) => !granted.includes(scope))) {
     throw new Error("Slack install completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
   // The client credentials have ONE runtime use: rotating the bot token. bot-auth.ts reads the four
   // rotation fields as all-or-nothing, so writing them next to a static token (the --manual install)
-  // does not make it rotate — it makes the channel refuse to start. Found by the first real `--manual`
-  // run; the e2e script's no-op secret writer could not see it.
+  // does not make it rotate — it makes the channel refuse to start.
   await io.writeRuntimeSecrets({
     botToken: oauth.botToken,
     ...(rotating

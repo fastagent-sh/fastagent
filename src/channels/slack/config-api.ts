@@ -30,9 +30,14 @@ export class SlackConfigApiError extends Error {
  * platform's own readiness verdict on a freshly minted public URL, and the reason no local `/health`
  * poll precedes these calls (#421). Slack validates the manifest BEFORE acting on it, so a create that
  * ends here created nothing and is safe to retry.
+ *
+ * Wide on purpose: the message also carries the field's JSON pointer, so ANY complaint about
+ * `request_url` retries. The exact wording of Slack's verification verdict is unrecorded, and a
+ * narrower match that missed it would fail every fresh tunnel once, while the URL here is always one
+ * we built (`https://<host>/slack`) — a permanent complaint about it costs 70s and still surfaces.
  */
 export function isSlackRequestUrlUnverified(error: unknown): boolean {
-  return /request_url|verify_request_url|failed to verify/i.test(String(error));
+  return /request_url|failed to verify/i.test(String(error));
 }
 
 async function slackJson<T>(
@@ -169,7 +174,9 @@ export interface SlackOAuthResult {
   teamId: string;
   teamName?: string;
   botUserId?: string;
-  scopes: string[];
+  /** The granted scopes, when the installer could observe them. Absent means "not observed" and skips
+   *  the scope check; an observed empty grant fails it. */
+  scopes?: string[];
 }
 
 /**
