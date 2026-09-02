@@ -64,8 +64,17 @@ let createdProject = "";
 
 afterAll(async () => {
   if (!createdProject) return;
-  const deleted = await railway(["delete", "--yes", "--project", createdProject], tmpdir());
-  // Loud: a project left behind is one an operator has to find and remove by hand.
+  // `delete --project` takes an ID, not a name (the assertion below says so, and railway-deploy's
+  // teardown and the workflow sweep both resolve one first) — so the id is looked up here too.
+  // `== null`, not `=== null`: a MISSING deletedAt must read as alive, so it ends in a delete attempt
+  // that fails loudly rather than in a silent skip.
+  const listed = await railway(["list", "--json"], tmpdir());
+  const projects = parseJson<{ id?: string; name?: string; deletedAt?: string | null }[]>(listed.stdout, "list --json");
+  const mine = projects.find((p) => p.name === createdProject && p.deletedAt == null);
+  // Loud in both directions: a project left behind is one an operator has to find and remove by hand,
+  // and a list this probe cannot find its own project in is the same leak wearing a clean exit.
+  if (!mine?.id) throw new Error(`could not find ${createdProject} to delete: ${listed.stdout.slice(0, 300)}`);
+  const deleted = await railway(["delete", "--yes", "--project", mine.id], tmpdir());
   if (deleted.code !== 0) throw new Error(`could not delete ${createdProject}: ${deleted.stderr.trim()}`);
 }, 120_000);
 

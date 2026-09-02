@@ -40,6 +40,19 @@ export const run = (file: string, args: string[], cwd?: string) =>
 /** The product entry every deploy probe drives, spawned as `process.execPath [CLI, …]`. */
 export const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
 
+/** One `aws` invocation, returning the exit code instead of throwing on it. The AgentCore probes both
+ *  need that: several assertions are ABOUT the failure (a name that does not exist must answer "not
+ *  found", never "access denied"), and teardown must attempt every deletion even after one fails. */
+export async function aws(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await run("aws", args);
+    return { code: 0, stdout, stderr };
+  } catch (error) {
+    const e = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+  }
+}
+
 /** POST one turn to a deployed agent and return its SSE events (the built-in `/invoke`, mounted
  *  because no channel is declared). Same reduction test/http.test.ts uses; `JSON.parse` is
  *  deliberately unguarded, since a payload that is not an event is a broken wire format, not a case to

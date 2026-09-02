@@ -489,6 +489,8 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
 describe("deploy/agentcore/run: helpers", () => {
   it("parseStackOutputs tolerates garbage and partial shapes", () => {
     expect(parseStackOutputs("not json")).toEqual({});
+    // A stack with no Outputs answers `null`, which must read as "no RuntimeArn" (the driver gates).
+    expect(parseStackOutputs("null")).toEqual({});
     expect(parseStackOutputs(JSON.stringify([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }]))).toEqual({
       A: "1",
     });

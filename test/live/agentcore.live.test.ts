@@ -3,39 +3,26 @@
  * `deploy-agentcore-run.test.ts` drives the whole deploy against a fake `CliRunner`; that covers the
  * orchestration and cannot cover the belief.
  *
- * READ-ONLY, and unlike the fly/railway pair this one carries real weight on its own: the generated
- * CloudFormation template is ~900 lines of YAML this repo emits by hand, and `validate-template` is
- * CloudFormation's own parser saying whether it would accept it — for free, in a second, without
- * creating anything. The deploy probe next door proves the stack CONVERGES; this proves the template
- * is well-formed even when nobody wants to wait eight minutes.
+ * READ-ONLY, and unlike the fly/railway pair this one carries real weight on its own: the CloudFormation
+ * template is YAML this repo emits line by line, and `validate-template` is CloudFormation's own parser
+ * saying whether it would accept it — for free, in a second, without creating anything. The deploy probe
+ * next door proves the stack CONVERGES; this proves the template is well-formed even when nobody wants
+ * to wait eight minutes.
  *
  * Needs `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` and the `aws` CLI. Nothing here
  * creates a resource: STS identity, a template validation, and two describes against names that do
  * not exist.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { parseCheckpointReply, parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { TEMPLATE_FILE, agentcoreName, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
-import { CLI, run, requireEnv } from "./env.ts";
+import { CLI, aws, run, requireEnv } from "./env.ts";
 
 requireEnv("AWS_ACCESS_KEY_ID", "an AWS key for an account that can reach Bedrock AgentCore");
 requireEnv("AWS_SECRET_ACCESS_KEY", "the secret for AWS_ACCESS_KEY_ID");
 requireEnv("AWS_REGION", "a region where Bedrock AgentCore is available, e.g. us-east-1");
-
-/** One aws invocation, capturing the exit code rather than throwing: several assertions below are
- *  ABOUT the failure (a name that does not exist must answer "not found", never "access denied"). */
-async function aws(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  try {
-    const { stdout, stderr } = await run("aws", args);
-    return { code: 0, stdout, stderr };
-  } catch (error) {
-    const e = error as { code?: number; stdout?: string; stderr?: string };
-    return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
-  }
-}
 
 /** Generated artifact dirs, removed however the run ends: this probe writes a template per run and
  *  creates nothing in AWS, so the only thing it can leak is disk. */
@@ -67,7 +54,18 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     const dir = await mkdtemp(join(tmpdir(), "live-probe-"));
     dirs.push(dir);
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+    // selfSchedule AND a schedule file, so the branch that carries the YAML most likely to be wrong is
+    // the one CloudFormation reads: a bare agent emits ~100 lines and NONE of the forwarder Lambda, its
+    // Function URL, the two Lambda permissions, the wake/scheduler IAM roles or an
+    // `AWS::Scheduler::Schedule`. This fixture emits all of them and still creates nothing.
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { model: "openai-codex/gpt-5.5", selfSchedule: true };\n`,
+    );
+    // A plain default export, not `defineSchedule(...)`: loadSchedules validates the SHAPE, and this
+    // fixture has no node_modules to import the package's helper from.
+    await mkdir(join(dir, "schedules"), { recursive: true });
+    await writeFile(join(dir, "schedules", "nightly.mjs"), `export default { cron: "0 3 * * *", prompt: "probe" };\n`);
     await writeFile(join(dir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);
     // Generation only: `deploy agentcore` without --run writes artifacts and touches no AWS API.
     const generated = await run(process.execPath, [CLI, "deploy", "agentcore"], dir);
@@ -97,20 +95,5 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     expect(repo.stderr, `describe-repositories on a missing repo now says: ${repo.stderr}`).toMatch(
       /RepositoryNotFound/i,
     );
-  });
-
-  it("the two output readers hold their shapes", async () => {
-    // `describe-stacks --query "Stacks[0].Outputs"` on a real stack is the deploy probe's business;
-    // here the readers are pinned against the shapes AWS documents, including the empty answers the
-    // driver must not mistake for success.
-    expect(parseStackOutputs('[{"OutputKey":"RuntimeArn","OutputValue":"arn:aws:x"}]')).toEqual({
-      RuntimeArn: "arn:aws:x",
-    });
-    // A stack with no Outputs answers `null`, which must read as "no RuntimeArn" (the driver gates).
-    expect(parseStackOutputs("null")).toEqual({});
-    expect(parseCheckpointReply('{"written":true}')).toEqual({ written: true, reason: undefined });
-    // Malformed must NOT read as a successful checkpoint — the comment on it says exactly this.
-    expect(parseCheckpointReply("not json")).toBeUndefined();
-    expect(parseCheckpointReply('{"ok":true}')).toBeUndefined();
   });
 });

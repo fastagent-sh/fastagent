@@ -1,24 +1,39 @@
 /**
  * A real AgentCore deployment, created and destroyed: `deploy agentcore --run` builds and pushes an
- * image to ECR, creates the state bucket, and converges a CloudFormation stack holding a Bedrock
- * AgentCore runtime, a forwarder Lambda with a Function URL, its IAM roles, and any schedule rules.
+ * image to ECR, then converges a CloudFormation stack holding a Bedrock AgentCore runtime and its
+ * execution role.
+ *
+ * THE FIXTURE DECLARES NO CHANNEL AND NO SCHEDULE, and that is what the topology follows from: with
+ * `needsForwarder` false (deploy.ts) there is no forwarder Lambda, no Function URL, no EventBridge
+ * rule and no state bucket — the driver skips creating one. The template's forwarder half is proven
+ * to PARSE by agentcore.live.test.ts, whose fixture turns it on; what this probe adds is that the
+ * minimal stack really converges and really serves. Teardown still sweeps the bucket, because the
+ * name is deterministic and a topology change here must not start leaking one.
  *
  * This host shares nothing with the fly/railway probes but the intent. There is NO public URL to curl:
  * AgentCore exposes `POST /invocations` behind `InvokeAgentRuntime`, an IAM-signed AWS API. So the
- * check that the deployment WORKS is the one the driver itself makes — a `checkpoint` envelope through
- * `aws bedrock-agentcore invoke-agent-runtime`, read back with the driver's own `parseCheckpointReply`.
+ * check that the deployment WORKS goes through that API — an `invoke` envelope, not the driver's
+ * `checkpoint`; the reason it cannot be a checkpoint is on the assertion itself.
  *
  * TEARDOWN IS THREE PLACES, and the product offers none of them: `delete-stack` is used only to clear
  * a ROLLBACK_COMPLETE husk. The state bucket and the ECR repository are created OUTSIDE the stack on
  * purpose — `plan.ts` says why: so a `delete-stack` "cannot take the agent's memory with it". Correct
- * for an operator, which makes cleanup this probe's own job: stack, then bucket (versioned, so every
- * version must go before the bucket will), then repository (with its images).
+ * for an operator, which makes cleanup this probe's own job: stack, then bucket, then repository (with
+ * its images).
  *
  * COSTS REAL RESOURCES and is the slowest probe here — a stack create plus delete is minutes.
  *
- * Needs AWS credentials scoped to the `fastagent-live-probe-*` namespace (see the IAM policy in the
- * `live` environment), a model credential, and the `aws` CLI. The directory name carries NO
- * `fastagent-` prefix: the driver adds one to every resource it names.
+ * Needs AWS credentials, a model credential, and the `aws` CLI. The IAM policy in the `live`
+ * environment must cover FOUR name shapes, because the driver derives each differently from the same
+ * directory name (`live-probe-<uuid8>`) — a policy written for the stack pattern alone rejects the
+ * bucket, the repository or the runtime, and does it only AFTER the image is built and pushed:
+ *
+ *   stack       `fastagent-live-probe-*`      (the driver prefixes `fastagent-`)
+ *   bucket      `fa-live-probe-*-<account>`   (stateBucketName: `fa-` prefix, account suffix)
+ *   repository  `fastagent/live-probe-*`      (a SLASH, not a hyphen)
+ *   runtime     `live_probe_*`                (toRuntimeName: underscores, no prefix at all)
+ *
+ * The directory name carries no `fastagent-` prefix of its own: the driver adds one.
  */
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -27,7 +42,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, ingressSessionId, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { CLI, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, aws, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("AWS_ACCESS_KEY_ID", "an AWS key scoped to fastagent-live-probe-* (this probe creates real resources)");
@@ -42,16 +57,6 @@ const REPO = `fastagent/${NAME}`;
 
 let workspace = "";
 let account = "";
-
-async function aws(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  try {
-    const { stdout, stderr } = await run("aws", args);
-    return { code: 0, stdout, stderr };
-  } catch (error) {
-    const e = error as { code?: number; stdout?: string; stderr?: string };
-    return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
-  }
-}
 
 beforeAll(async () => {
   const identity = await aws(["sts", "get-caller-identity", "--output", "json"]);
@@ -100,30 +105,35 @@ afterAll(async () => {
     STACK,
   ]);
   if (account) {
-    // The bucket has versioning ON (run.ts enables it), so `rb --force` alone leaves delete markers
-    // behind and the bucket refuses to go. Object versions must be removed first.
+    // UNREACHED BY THIS FIXTURE: with `needsForwarder` false the driver creates no bucket, so every
+    // call below answers NoSuchBucket and the emptying path never runs. It is kept because the name is
+    // deterministic and one line in the fixture (a channel, a schedule, `selfSchedule`) turns the
+    // bucket on — at which point a teardown that had not been written would leak it silently.
+    //
+    // What it must do then: the bucket has versioning ON (run.ts enables it), so `s3 rm` does not empty
+    // it — it writes a DELETE MARKER per object. Markers are not Versions (they come back under their
+    // own key), and a bucket still holding either refuses to go with BucketNotEmpty, which is not one
+    // of the tolerated patterns above. Both lists, or the bucket leaks holding the model credential seed.
     const bucket = stateBucketName(NAME, account);
     await attempt("s3 rm", ["s3", "rm", `s3://${bucket}`, "--recursive"]);
-    const versions = await aws([
-      "s3api",
-      "list-object-versions",
-      "--bucket",
-      bucket,
-      "--query",
-      "{Objects: Versions[].{Key:Key,VersionId:VersionId}}",
-      "--output",
-      "json",
-    ]);
-    if (versions.code === 0) {
-      const payload = JSON.parse(versions.stdout) as { Objects?: unknown[] | null };
-      if (Array.isArray(payload.Objects) && payload.Objects.length > 0) {
+    const listed = await aws(["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"]);
+    if (listed.code === 0) {
+      const payload = JSON.parse(listed.stdout) as {
+        Versions?: { Key: string; VersionId: string }[];
+        DeleteMarkers?: { Key: string; VersionId: string }[];
+      };
+      const objects = [...(payload.Versions ?? []), ...(payload.DeleteMarkers ?? [])].map(({ Key, VersionId }) => ({
+        Key,
+        VersionId,
+      }));
+      if (objects.length > 0) {
         await attempt("s3api delete-objects", [
           "s3api",
           "delete-objects",
           "--bucket",
           bucket,
           "--delete",
-          JSON.stringify({ Objects: payload.Objects }),
+          JSON.stringify({ Objects: objects }),
         ]);
       }
     }
