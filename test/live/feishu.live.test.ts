@@ -12,6 +12,12 @@
  * Needs `FEISHU_APP_ID` + `FEISHU_APP_SECRET` for an app of its own — this probe REWRITES that app's
  * event Request URL, so pointing it at an app serving real traffic would take that traffic down.
  * `fastagent add feishu` creates one in a scan-to-confirm flow.
+ *
+ * It does NOT restore the subscription afterwards, unlike the telegram probe's `deleteWebhook`. The
+ * app is left pointing at a closed `*.trycloudflare.com` until the next run rewrites it, which is
+ * inert for an app of the probe's own and is the state a failed run would leave anyway. Restoring
+ * would mean flipping the app back to `websocket` — a second mode change per run, on the very
+ * migration path this probe exists to verify — for no observable gain.
  */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -66,6 +72,11 @@ describe("feishu: registering an event URL the platform verifies by calling it",
         `  appId: process.env.FEISHU_APP_ID ?? "",\n` +
         `  appSecret: process.env.FEISHU_APP_SECRET ?? "",\n` +
         `  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",\n` +
+        // The scaffold carries this and the console flow marks it RECOMMENDED, so a probe app created
+        // that way HAS an Encrypt Key. Omitting it here would make the platform's url_verification
+        // arrive encrypted at a handler that refuses it (401), surfacing as a bare `registered`
+        // assertion failure with the real reason buried in the channel's own log.
+        `  encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,\n` +
         `});\n`,
     );
 

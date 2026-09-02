@@ -1,5 +1,5 @@
 /**
- * The Slack Bot API contract, against the real API. `slack-api.ts` is our own claude codepeline over a
+ * The Slack Bot API contract, against the real API. `slack-api.ts` is our own pipeline over a
  * surface Slack owns — argument spelling, response shape, the `ok:false` error envelope — and the
  * offline tests (slack-api.test.ts) drive it against a fake `fetch` that answers what we believe
  * today. This probe is the part that notices when that belief stops matching.
@@ -18,7 +18,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
-import { createSlackApi } from "../../src/channels/slack/slack-api.ts";
+import { createSlackApi, SlackApiError } from "../../src/channels/slack/slack-api.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { requireEnv } from "./env.ts";
 
@@ -65,17 +65,26 @@ describe("slack Bot API contract", () => {
     await api.updateMessage(CHANNEL, ts, `fastagent live probe ${marker} (edited)`);
   });
 
-  it("posts markdown through the blocks path", async () => {
-    // postMarkdown builds a different request body than postMessage (blocks, not text), and it is the
-    // one every agent reply actually goes through.
+  it("posts markdown through the markdown_text path", async () => {
+    // postMarkdown builds a different request body than postMessage (markdown_text, not text), and it
+    // is the one every agent reply actually goes through.
     const ts = await api.postMarkdown({ channelId: CHANNEL }, `**fastagent** live probe \`${randomUUID()}\``);
     posted.push(ts);
     expect(ts).toMatch(/^\d+\.\d+$/);
   });
 
   it("surfaces an API rejection as an error instead of a silent no-op", async () => {
-    // Slack answers `{ ok: false, error: "channel_not_found" }` with HTTP 200. A claude codepeline that only
+    // Slack answers `{ ok: false, error: "channel_not_found" }` with HTTP 200. A pipeline that only
     // checked the status would treat this as success and lose every message sent to a bad channel.
-    await expect(api.postMessage({ channelId: "C000000000000" }, "should not arrive")).rejects.toThrow();
+    // Asserted on the ENVELOPE, not merely on "it threw": a transport failure (an unreachable proxy,
+    // a timeout) arrives as status 0 or as something that is not a SlackApiError at all, and a bare
+    // `rejects.toThrow()` would count those as coverage. Not pinned to the literal `channel_not_found`
+    // — Slack may answer a malformed id with another code, and an `ok:false` code on HTTP 200 is the
+    // whole claim. A dead TOKEN still satisfies this shape (`invalid_auth` rides the same envelope);
+    // the three tests above are what fail then, and that is the right division of labour.
+    const error = await api.postMessage({ channelId: "C000000000000" }, "should not arrive").catch((e) => e);
+    expect(error, "a Slack rejection must arrive as SlackApiError").toBeInstanceOf(SlackApiError);
+    expect(error.status, "the ok:false envelope rides on HTTP 200").toBe(200);
+    expect(error.slackError, "no Slack error code on the rejection").toBeTruthy();
   });
 });

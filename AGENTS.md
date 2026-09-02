@@ -263,7 +263,7 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # real turn into the audit log (schedule), Telegram VERIFYING a webhook URL
                              # it was handed and Feishu CALLING one with a challenge (telegram/feishu —
                              # registration only; delivery needs a human to type), and Slack's Bot API
-                             # answering our claude codepeline (slack — OUTBOUND only: its inbound half needs a
+                             # answering our pipeline (slack — OUTBOUND only: its inbound half needs a
                              # 12h App Configuration Token, which no nightly can hold). Each one drives
                              # a PRODUCT ENTRY (`createPiAgentFromDir`, `deploy docker --run`,
                              # `npm install`, `startCloudflareTunnel`, `startSchedules`,

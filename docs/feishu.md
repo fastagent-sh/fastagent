@@ -95,9 +95,10 @@ device-authorization grant) as its default behavior. The CLI opens a one-time co
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1`. Onboarding requests
-`application:application:patch` when it must configure webhook mode or the recommended group-context
-scope. The CLI immediately persists App ID/Secret to `.secrets/.env` before starting later network
-work.
+`application:application:patch` for every app it creates, whichever ingress you pick: only webhook uses
+it on day one, but a WebSocket app that later moves to webhook cannot acquire it in passing, because
+changing mode is a migration the CLI refuses to perform. The CLI immediately persists App ID/Secret to
+`.secrets/.env` before starting later network work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
 generated Verification Token has no read API; its only programmatic delivery is the `url_verification`
