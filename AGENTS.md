@@ -271,8 +271,10 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
                              # `deploy docker --run`, `deploy fly --run`, `npm install`,
                              # `startCloudflareTunnel`, `startSchedules`, `registerTelegramWebhook`,
-                             # `registerFeishuWebhook`, `createSlackApi`, `listHasName`)
-                             # and observes from OUTSIDE it
+                             # `registerFeishuWebhook`, `createSlackApi`) and observes from OUTSIDE it
+                             # — except the read-only fly probe, which checks a real `flyctl`'s output
+                             # against the driver's PARSING assumptions about it (`listHasName`,
+                             # `hasIngressAddress`): the belief a faked CliRunner cannot test
                              # — a probe that rebuilds the assembly to get a better observation point
                              # measures the rebuild, and the entry's own steps (installProxyFetch,
                              # credential resolution, pinning pi's agent dir) go missing one at a time.

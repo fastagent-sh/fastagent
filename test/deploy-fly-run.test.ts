@@ -12,7 +12,9 @@ function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } 
   const fly: CliRunner = async (args, opts) => {
     calls.push({ args, input: opts?.input });
     const r = script(args);
-    return { code: r.code ?? 0, stdout: r.stdout ?? "" };
+    // An unscripted `--json` command answers an EMPTY LIST, not an empty string: flyctl cannot print
+    // the latter, and the driver's parse gates correctly refuse it. Scripting stays per-test.
+    return { code: r.code ?? 0, stdout: r.stdout ?? (args.includes("--json") ? "[]" : "") };
   };
   return { fly, calls, cmds: () => calls.map((c) => c.args.join(" ")) };
 }
@@ -76,6 +78,25 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
   });
 
+  it("allocates for an app whose only addresses are Flycast and egress", async () => {
+    // Every one of these carries a non-empty Address and NONE of them answers https://<app>.fly.dev.
+    // Treating them as ingress is #425 again, and it also stops flyctl's own first-deploy fallback,
+    // which returns early as soon as the app holds any assignment at all.
+    const internal = JSON.stringify([
+      { Address: "fdaa:0:1::3", Type: "private_v6" },
+      { Address: "66.241.125.9", Type: "egress_v4" },
+      { Address: "2a09:8280:1::5", Type: "egress_v6" },
+    ]);
+    const { fly, cmds } = fakeFly((a) => {
+      if (a[0] === "ips") return { stdout: internal };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: true });
+    expect(cmds()).toContain("ips allocate-v4 --shared -a bot");
+    expect(cmds()).toContain("ips allocate-v6 -a bot");
+  });
+
   it("gate: a failed `ips list` stops before deploying something unreachable", async () => {
     // Without an address the machine serves and https://<app>.fly.dev has no DNS record at all, so a
     // list we cannot read must not be treated as "probably fine" (#425).
@@ -85,6 +106,38 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     });
 
     expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("ips list") });
+  });
+
+  // Exit 0 with unreadable output is a THIRD answer, and every list gates on it rather than reading it
+  // as "absent". flyctl has dropped `--json` before (superfly/flyctl#1967), and each collapse has its
+  // own damage: a second volume, a create misreported as a name clash, an unreachable deploy (#425).
+  for (const [label, args] of [
+    ["apps list", ["apps"]],
+    ["volumes list", ["volumes"]],
+    ["ips list", ["ips"]],
+  ] as const) {
+    it(`gate: \`${label}\` exiting 0 with non-JSON is not read as "absent"`, async () => {
+      const { fly, cmds } = fakeFly((a) => {
+        if (a[0] === args[0]) return { stdout: "NAME\tSTATUS\nbot\tdeployed\n" }; // the pre-#1967 table
+        return a[0] === "apps" || a[0] === "volumes" || a[0] === "ips" ? { stdout: "[]" } : {};
+      });
+
+      expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining(label) });
+      // Gated BEFORE the write it would otherwise have guessed its way into.
+      expect(cmds().some((c) => c.startsWith(`${args[0]} create`) || c.startsWith(`${args[0]} allocate`))).toBe(false);
+    });
+  }
+
+  it("gate: `ips list` that exits 0 with unparseable output stops too", async () => {
+    // The other half of the same rule: exit 0 does not mean the answer was readable, and silently
+    // reading "no address" out of it would allocate a second one on every run.
+    const { fly, cmds } = fakeFly((a) => {
+      if (a[0] === "ips") return { stdout: "NAME\tTYPE\n" };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("unreadable") });
+    expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
   });
 
   it("dispatches Feishu and Lark registration through the per-kind seam", async () => {

@@ -35,6 +35,16 @@ async function flyctl(args: string[]): Promise<string> {
   return stdout;
 }
 
+/** The app the per-app readers run against. An EMPTY org is a failure, not a case to return from:
+ *  these assertions would then pass while checking nothing, which is exactly what test/live/env.ts
+ *  refuses. The deploy probe destroys the app it creates, so a dedicated org needs one app of its
+ *  own kept around — any app will do; nothing here writes to it. */
+function requireApp(apps: { Name?: string; name?: string }[]): string {
+  const app = apps[0]?.Name ?? apps[0]?.name;
+  expect(app, "this Fly org holds no app to read against — create one (any app) so these assertions run").toBeTruthy();
+  return app as string;
+}
+
 describe("flyctl output still matches what the Fly driver reads", () => {
   it("authenticates with the token the driver expects to inherit", async () => {
     // The driver's first gate is `auth whoami`; it only reads the exit code, so this asserts the same
@@ -62,19 +72,27 @@ describe("flyctl output still matches what the Fly driver reads", () => {
     }
   });
 
-  it("`ips list --json` still carries Address, which decides whether the deploy allocates one", async () => {
+  it("`ips list --json` still carries Address AND Type, which decide whether the deploy allocates", async () => {
     // The newest parsing assumption here (#425): reading this wrong in the "has an address" direction
     // ships an app nobody can reach, and in the other direction allocates a second address every run.
     const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string; name?: string }[];
-    const app = apps[0]?.Name ?? apps[0]?.name;
-    if (!app) return; // no app to inspect; the shape below is what an empty account would answer anyway
+    const app = requireApp(apps);
 
     const stdout = await flyctl(["ips", "list", "-a", app, "--json"]);
-    const ips = JSON.parse(stdout) as { Address?: string }[];
+    const ips = JSON.parse(stdout) as { Address?: string; Type?: string }[];
     expect(Array.isArray(ips), "ips list --json is no longer a JSON array").toBe(true);
-    // An account's first app is one this probe did not create, so it may legitimately have no address;
-    // assert the reader agrees with the payload either way rather than assuming a state.
-    expect(hasIngressAddress(stdout)).toBe(ips.some((ip) => typeof ip.Address === "string" && ip.Address !== ""));
+
+    // `Type` is HALF the reading, and the half a non-empty `Address` hides: Flycast (`private_v6`)
+    // and egress addresses are assignments that reach nothing. A renamed or dropped Type would make
+    // every one of them read as ingress, which is #425 on an app that already has an address.
+    const known = ["v4", "v6", "shared_v4", "private_v6", "egress_v4", "egress_v6", "egress_pair"];
+    for (const ip of ips) expect(known, `ips list --json carries an unknown Type ${ip.Type}`).toContain(ip.Type);
+
+    // An account's first app is one this probe did not create, so it may legitimately have no public
+    // address; assert the reader agrees with the payload either way rather than assuming a state.
+    const isPublic = (ip: { Address?: string; Type?: string }) =>
+      typeof ip.Address === "string" && ip.Address !== "" && ["v4", "v6", "shared_v4"].includes(ip.Type as string);
+    expect(hasIngressAddress(stdout)).toBe(ips.some(isPublic));
     expect(hasIngressAddress("[]"), "an app with no addresses must read as unallocated").toBe(false);
   });
 
@@ -82,8 +100,7 @@ describe("flyctl output still matches what the Fly driver reads", () => {
     // listHasName serves BOTH lists, so a divergence between the two shapes would break volume
     // detection while apps still worked — the driver would try to create an existing volume.
     const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string; name?: string }[];
-    const app = apps[0]?.Name ?? apps[0]?.name;
-    if (!app) return; // nothing to list against; the apps assertions above already covered the reader
+    const app = requireApp(apps);
 
     const stdout = await flyctl(["volumes", "list", "-a", app, "--json"]);
     expect(Array.isArray(JSON.parse(stdout)), "volumes list --json is no longer a JSON array").toBe(true);

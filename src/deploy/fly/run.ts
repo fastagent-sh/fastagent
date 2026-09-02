@@ -41,32 +41,66 @@ export interface FlyRunPlan {
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
 export type FlyRunOutcome = { ok: true } | { ok: false; gate: string };
 
+/** The `Type` values that put an app on `https://<app>.fly.dev`. The rest of flyctl's vocabulary —
+ *  `private_v6` (Flycast), `egress_v4`, `egress_v6`, `egress_pair` — is internal or outbound. */
+const PUBLIC_IP_TYPES = new Set(["v4", "v6", "shared_v4"]);
+
 /**
- * Whether `fly ips list --json` shows a public ingress address. Entries carry `Address` plus a `Type`
- * (`v6`, `shared_v4`, …); any non-empty address means the app is routable, which is the only question
- * the deploy has to answer.
+ * Whether `fly ips list --json` shows a PUBLIC ingress address. The list is EVERY assignment the app
+ * holds, and a Flycast or egress address carries a non-empty `Address` too — reading one as routable
+ * reproduces #425 on an app that has one, and pre-empts flyctl's own first-deploy fallback, which
+ * returns early once any assignment exists.
+ *
+ * Output that is not a JSON array THROWS rather than reading as "no address": the caller turns that
+ * into a gate, because a list we cannot read is not a state we can act on.
  */
 export function hasIngressAddress(stdout: string): boolean {
-  try {
-    const arr = JSON.parse(stdout) as { Address?: unknown }[];
-    return Array.isArray(arr) && arr.some((entry) => typeof entry?.Address === "string" && entry.Address !== "");
-  } catch {
-    return false;
-  }
+  const entries: unknown = JSON.parse(stdout);
+  if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
+  return (entries as { Address?: unknown; Type?: unknown }[]).some(
+    (entry) => typeof entry?.Address === "string" && entry.Address !== "" && PUBLIC_IP_TYPES.has(entry.Type as string),
+  );
 }
 
-/** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both).
- *  Exported for the same reason railway's parsers are: what it encodes is an assumption about another
- *  tool's output, and the live probe checks that assumption against the real `flyctl`. */
+/**
+ * Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept
+ * both). Exported for the same reason railway's parsers are: what it encodes is an assumption about
+ * another tool's output, and the live probe checks that assumption against the real `flyctl`.
+ *
+ * THROWS on output that is not a JSON array, for the same reason {@link hasIngressAddress} does —
+ * `false` here means "the host does not have it", and answering that for a list nobody could read
+ * creates a SECOND volume, or in teardown destroys nothing at all.
+ */
 export function listHasName(stdout: string, name: string): boolean {
+  const entries: unknown = JSON.parse(stdout);
+  if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
+  return entries.some(
+    (o) => (o as { Name?: string; name?: string }).Name === name || (o as { name?: string }).name === name,
+  );
+}
+
+/**
+ * A read-only `fly … list --json`, reduced to the question the next step asks of it — or the gate for
+ * a list we cannot act on. THE place the three answers stay three: the command failed, the output was
+ * unreadable, or the host gave a verdict. Collapsing the middle one into `false` is what shipped #425
+ * and what would have skipped a teardown.
+ */
+async function readList(
+  fly: CliRunner,
+  args: string[],
+  label: string,
+  read: (stdout: string) => boolean,
+): Promise<{ value: boolean } | { gate: string }> {
+  const result = await fly(args, { capture: true });
+  if (result.code !== 0) return { gate: `\`fly ${label}\` failed — see the flyctl output above; fix and re-run` };
   try {
-    const arr = JSON.parse(stdout) as unknown;
-    return (
-      Array.isArray(arr) &&
-      arr.some((o) => (o as { Name?: string; name?: string }).Name === name || (o as { name?: string }).name === name)
-    );
-  } catch {
-    return false;
+    return { value: read(result.stdout) };
+  } catch (error) {
+    return {
+      gate:
+        `\`fly ${label} --json\` was unreadable (${error instanceof Error ? error.message : String(error)}) — ` +
+        `run it yourself and check the flyctl version; fix and re-run`,
+    };
   }
 }
 
@@ -97,11 +131,14 @@ export async function deployFlyRun(
     );
   }
 
-  // 3. App — idempotent (create only if absent; a taken global name is a gate). A FAILED list is its own
-  //    gate: inferring "absent" from an errored query would then misreport the create as a name clash.
-  const appsList = await fly(["apps", "list", "--json"], { capture: true });
-  if (appsList.code !== 0) return gate("`fly apps list` failed — see the flyctl output above; fix and re-run");
-  if (listHasName(appsList.stdout, plan.appName)) {
+  // 3. App — idempotent (create only if absent; a taken global name is a gate). An unusable list is its
+  //    own gate ({@link readList}): inferring "absent" from a query nobody could read would then
+  //    misreport the create as a name clash.
+  const appExists = await readList(fly, ["apps", "list", "--json"], "apps list", (out) =>
+    listHasName(out, plan.appName),
+  );
+  if ("gate" in appExists) return gate(appExists.gate);
+  if (appExists.value) {
     log(`app ${plan.appName} exists — skipping create`);
   } else {
     log(`creating app ${plan.appName}…`);
@@ -115,9 +152,11 @@ export async function deployFlyRun(
 
   // 4. Volume — idempotent; region comes from fly.toml (must match the machine's region). A failed list
   //    gates for the same reason as the app list above.
-  const volList = await fly(["volumes", "list", "-a", plan.appName, "--json"], { capture: true });
-  if (volList.code !== 0) return gate("`fly volumes list` failed — see the flyctl output above; fix and re-run");
-  if (listHasName(volList.stdout, "data")) {
+  const volumeExists = await readList(fly, ["volumes", "list", "-a", plan.appName, "--json"], "volumes list", (out) =>
+    listHasName(out, "data"),
+  );
+  if ("gate" in volumeExists) return gate(volumeExists.gate);
+  if (volumeExists.value) {
     log(`volume data exists — skipping create`);
   } else {
     log(`creating volume data in ${plan.region}…`);
@@ -134,9 +173,11 @@ export async function deployFlyRun(
   //    so without this step the deploy succeeds, the machine serves, and `https://<app>.fly.dev` has no
   //    DNS record at all — reported as a healthy deploy, and handed to the webhook registrars as a URL
   //    they then fail to reach. Check-then-act like the volume above; both allocations are free.
-  const ipList = await fly(["ips", "list", "-a", plan.appName, "--json"], { capture: true });
-  if (ipList.code !== 0) return gate("`fly ips list` failed — see the flyctl output above; fix and re-run");
-  if (hasIngressAddress(ipList.stdout)) {
+  const addressExists = await readList(fly, ["ips", "list", "-a", plan.appName, "--json"], "ips list", (out) =>
+    hasIngressAddress(out),
+  );
+  if ("gate" in addressExists) return gate(addressExists.gate);
+  if (addressExists.value) {
     log("public address exists — skipping allocate");
   } else {
     log("allocating a public address…");

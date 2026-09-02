@@ -69,6 +69,10 @@ afterAll(async () => {
   const errors: unknown[] = [];
   try {
     const { stdout } = await run("flyctl", ["apps", "list", "--json"]);
+    // `listHasName` THROWS on output it cannot read, which is what makes asking safe here: the answer
+    // "not listed" now only ever means the host said so. Were it to answer `false` for an unreadable
+    // list, a flyctl that renamed a field would skip the destroy, report nothing, and leak a running
+    // app holding the model credential and serving `/invoke` unauthenticated.
     if (listHasName(stdout, APP)) await run("flyctl", ["apps", "destroy", APP, "--yes"]);
   } catch (error) {
     errors.push(error);
