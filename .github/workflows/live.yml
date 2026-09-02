@@ -85,6 +85,14 @@ jobs:
       # same release (its postinstall pulls releases/download/v<its own version>), so `latest` there
       # is the same build, resolved through a registry this job already depends on. Still LATEST, for
       # the cloudflared reason: this probe exists to find out when the CLI drifts, and a pin retires it.
+      # The AgentCore image must be linux/arm64 (the runtime's only architecture), which the driver
+      # cross-builds with `docker buildx`. Ubuntu runners ship docker, and this adds the plugin plus
+      # the QEMU emulation an arm64 build needs on an x86 runner.
+      - name: Set up QEMU and buildx for the arm64 image
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
       - name: Install the Railway CLI
         run: |
           # Without pipefail a failed `curl` feeds `sh` an empty script, which exits 0 — the step goes
@@ -165,6 +173,13 @@ jobs:
           # an operator who ran `railway login` and only names the variable in its gate message, so
           # here the token stands in for the session CI has no way to hold.
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          # Scoped to the `fastagent-live-probe-*` namespace by an inline IAM policy: the deploy probe
+          # creates a CloudFormation stack, an ECR repository and an S3 bucket, and destroys all three.
+          # The driver PREFIXES `fastagent-` onto the directory name, which is why the probe's
+          # directories are `live-probe-…` and the policy matches `fastagent-live-probe-*`.
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: npm run test:live
 
       # The deploy probe destroys its own app in afterAll, which a job timeout or a cancelled run
@@ -202,3 +217,31 @@ jobs:
             | jq -r '.[] | select(.deletedAt == null) | select(.name | test("^fastagent-live-[0-9a-f]{8}$")) | .id' \
             | tee /dev/stderr \
             | xargs -r -n1 -I{} railway delete --yes --project {}
+
+      # Same reasoning as the sweeps above, with AgentCore's twist: THREE kinds are left behind,
+      # because the bucket and repository are deliberately created outside the stack (plan.ts: so a
+      # `delete-stack` cannot take the agent's memory with it). The bucket is versioned, so every
+      # version goes before the bucket will.
+      #
+      # It reads names from a FILE the probe appends to, not from `list-stacks`: the IAM policy scopes
+      # this credential to `fastagent-live-probe-*` and account-wide listing is exactly what that
+      # refuses. Widening the policy to enumerate every stack in the account, so a cleanup can find
+      # the two it owns, is the wrong trade.
+      - name: Destroy leftover live AgentCore resources
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -o pipefail
+          [ -f "$RUNNER_TEMP/agentcore-probe-names" ] || { echo "no probe ran"; exit 0; }
+          account=$(aws sts get-caller-identity --query Account --output text)
+          sort -u "$RUNNER_TEMP/agentcore-probe-names" | tee /dev/stderr | while read -r name; do
+            [ -n "$name" ] || continue
+            aws cloudformation delete-stack --stack-name "fastagent-$name" || true
+            aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name" || true
+            aws s3 rm "s3://fa-$name-$account" --recursive || true
+            aws s3api delete-bucket --bucket "fa-$name-$account" || true
+            aws ecr delete-repository --repository-name "fastagent/$name" --force || true
+          done

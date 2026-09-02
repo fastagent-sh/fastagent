@@ -282,6 +282,12 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # file that dates the `Verified against CLI 5.15.0` claims in run.ts) plus
                              # a REAL Railway project provisioned and destroyed (railway-deploy — the
                              # only way to observe `railway domain`, which MINTS one when absent),
+                             # CloudFormation ACCEPTING the ~900 lines of YAML this repo emits by hand
+                             # (agentcore — read-only, free, and the only check that the template parses)
+                             # plus a REAL stack + ECR repo + S3 bucket provisioned and destroyed
+                             # (agentcore-deploy — no public URL exists, so it proves the deployment
+                             # works through InvokeAgentRuntime; teardown is THREE places because the
+                             # bucket and repo live outside the stack on purpose),
                              # `flyctl` still printing what the Fly driver reads (fly — read-only), and
                              # a REAL Fly app provisioned then destroyed (fly-deploy — which is how
                              # #425 was found: a deploy whose every step succeeded, serving on a URL
