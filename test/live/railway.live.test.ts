@@ -7,9 +7,15 @@
  * comments, and the CLI is past 5.45. A version pin in a comment is exactly the kind of claim that
  * stops being true without anything going red — this file is what makes it go red.
  *
- * READ-ONLY. The write half lives in railway-deploy.live.test.ts, because `railway domain` MINTS a
- * domain when the service has none (it is the driver's getter and its allocator at once), so there is
- * no way to observe that one without provisioning something to observe it on.
+ * The shape half. The DEPLOY half lives in railway-deploy.live.test.ts, because `railway domain`
+ * MINTS a domain when the service has none (it is the driver's getter and its allocator at once), so
+ * there is no way to observe that one without provisioning something to observe it on.
+ *
+ * This one creates an EMPTY project — no service, no build, no deploy — reads the shapes against it,
+ * and deletes it. It used to link whatever live project the account happened to hold, to stay purely
+ * read-only. That is a probe reaching for something that is not its own: once the account held no
+ * leftover probe project, it linked the operator's REAL one and failed against it. A probe owns what
+ * it asserts against.
  *
  * Needs `RAILWAY_API_TOKEN` — the ACCOUNT-scoped token, not the project-scoped `RAILWAY_TOKEN` a
  * Railway project hands out. The driver never reads it: it assumes an operator who ran `railway login`
@@ -17,11 +23,12 @@
  * session.
  */
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { isLinked, linkedName, parseHasVolume } from "../../src/deploy/railway/run.ts";
 import { requireEnv } from "./env.ts";
 
@@ -50,6 +57,17 @@ function parseJson<T>(stdout: string, what: string): T {
     throw new Error(`\`railway ${what}\` did not return JSON (${String(error)}): ${stdout.slice(0, 300)}`);
   }
 }
+
+/** The empty project the shape test owns. Named like the deploy probe's so one sweep finds both. */
+const shapeProject = `fastagent-live-${randomUUID().slice(0, 8)}`;
+let createdProject = "";
+
+afterAll(async () => {
+  if (!createdProject) return;
+  const deleted = await railway(["delete", "--yes", "--project", createdProject], tmpdir());
+  // Loud: a project left behind is one an operator has to find and remove by hand.
+  if (deleted.code !== 0) throw new Error(`could not delete ${createdProject}: ${deleted.stderr.trim()}`);
+}, 120_000);
 
 describe("railway CLI output still matches what the Railway driver reads", () => {
   it("an UNLINKED directory leaves stdout empty — the whole basis of isLinked", async () => {
@@ -86,27 +104,26 @@ describe("railway CLI output still matches what the Railway driver reads", () =>
   });
 
   it("`linkedName` and `parseHasVolume` read a linked project's shape", async () => {
-    // Against a project this probe did NOT create: both readers are pure, and linking is local state
-    // (a file in the directory), so nothing here writes to the account.
-    const projects = parseJson<{ name?: string; deletedAt?: string | null }[]>(
-      (await railway(["list", "--json"], tmpdir())).stdout,
-      "list --json",
-    );
-    const alive = projects.find((p) => p.deletedAt === null && typeof p.name === "string")?.name;
-    expect(alive, "this Railway account holds no live project to read against — create one").toBeTruthy();
+    // `init` both creates and links, in the directory it runs from.
+    const created = await mkdtemp(join(tmpdir(), "fa-live-railway-"));
+    const init = await railway(["init", "--name", shapeProject], created);
+    expect(init.code, `could not create ${shapeProject}: ${init.stderr.trim()}`).toBe(0);
+    createdProject = shapeProject;
 
+    // A SECOND directory, so `link` is exercised as its own command — it is what the driver runs, and
+    // the directory `init` linked would answer for it without it ever being called.
     const dir = await mkdtemp(join(tmpdir(), "fa-live-railway-"));
     // `--environment` too: interactive `link` prompts for workspace, project AND environment, and the
     // docs' non-interactive form passes both. `production` is the environment Railway gives every new
     // project — a project that renamed it fails here by name rather than by an unreadable prompt.
-    const link = await railway(["link", "--project", alive as string, "--environment", "production"], dir);
-    expect(link.code, `could not link ${alive}: ${link.stderr.trim()}`).toBe(0);
+    const link = await railway(["link", "--project", shapeProject, "--environment", "production"], dir);
+    expect(link.code, `could not link ${shapeProject}: ${link.stderr.trim()}`).toBe(0);
 
     const status = await railway(["status", "--json"], dir);
     expect(isLinked(status.stdout), "a linked directory reads as unlinked").toBe(true);
     // `linkedName` only feeds a gate message, but a rename would make that message say "(name
     // unreadable)" about a project the operator can see by name in their dashboard.
-    expect(linkedName(status.stdout), "`name` is no longer at the top level of status --json").toBe(alive);
+    expect(linkedName(status.stdout), "`name` is no longer at the top level of status --json").toBe(shapeProject);
 
     // `parseHasVolume` is shape-agnostic (any JSON string equal to the mount path), so what it needs is
     // for mount paths to keep appearing as strings at all. Asserted in both directions against the
