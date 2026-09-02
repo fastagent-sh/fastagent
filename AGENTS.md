@@ -274,8 +274,12 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # it was handed and Feishu CALLING one with a challenge (telegram/feishu —
                              # registration only; delivery needs a human to type), and Slack's Bot API
                              # answering our pipeline (slack — OUTBOUND only: its inbound half needs a
-                             # 12h App Configuration Token, which no nightly can hold), `flyctl` still
-                             # printing what the Fly driver reads (fly — read-only), and a REAL Fly app
+                             # 12h App Configuration Token, which no nightly can hold), the `railway`
+                             # CLI still printing what its driver reads (railway — read-only, and the
+                             # file that dates the `Verified against CLI 5.15.0` claims in run.ts) plus
+                             # a REAL Railway project provisioned and destroyed (railway-deploy — the
+                             # only way to observe `railway domain`, which MINTS one when absent),
+                             # `flyctl` still printing what the Fly driver reads (fly — read-only), and a REAL Fly app
                              # provisioned then destroyed (fly-deploy — which is how #425 was found: a
                              # deploy whose every step succeeded, serving on a URL that had no IP).
                              # Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
