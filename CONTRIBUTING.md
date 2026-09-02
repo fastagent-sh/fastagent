@@ -32,10 +32,31 @@ Tests use faux models by default, so they validate serving mechanics without net
 2. ... change code, iterate locally ...
 3. npm run lint && npm run typecheck && npm test
 4. git push -u origin feature/<thing>
-5. gh pr create --base main           # fill in the PR template
+5. gh pr create --base main --assignee @me   # fill in the PR template
 6. CI green → merge (see "Merge strategy")
 7. After merge: clean up local + remote tracking branches
 ```
+
+### Issue and PR metadata
+
+Most of the sidebar fills itself; the rest is one flag. What is automatic and what is not:
+
+| Field | Issues | Pull requests |
+| --- | --- | --- |
+| Type (`Bug` / `Feature` / `Task`) | Automatic — each issue form declares one | Not applicable |
+| Labels | Automatic — the form's `labels:` | Automatic — the branch prefix, via `.github/labeler.yml` |
+| Reviewer | Not applicable | Automatic — CODEOWNERS |
+| Assignee | Whoever picks it up | `--assignee @me` |
+| Projects, Priority, Milestone | Board fields; set them on the board | Follows the linked issue — write `Closes #<n>` |
+
+The one thing that defeats all of it is `gh issue create` with a bare `--title`: the CLI skips the templates entirely, so the issue lands with no type and no label. Name the template instead:
+
+```bash
+gh issue create --template bug_report.yml       # or feature_request.yml, task.yml
+gh pr create --base main --assignee @me        # labels and reviewers are added for you
+```
+
+A PR whose branch does not carry one of the prefixes above gets no label — that is the prefix convention failing loudly, not the labeler.
 
 ### After a PR merges
 

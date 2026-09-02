@@ -319,7 +319,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```bash
    npm run lint && npm run typecheck && npm test
    ```
-2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
+2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`. The prefix is also what labels the PR (`.github/labeler.yml`), and CODEOWNERS requests the reviewer — so `gh pr create --base main --assignee @me` is enough. `gh issue create` is the exception: a bare `--title` skips the templates and files an issue with no type and no label, so always pass `--template bug_report.yml` (or `feature_request.yml` / `task.yml`).
 3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
 4. **Review policy.** Merging is a maintainer's decision, never an agent's. Green CI makes a PR eligible; report "ready to merge" and stop — merge only when told to. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**

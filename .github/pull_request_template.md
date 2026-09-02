@@ -1,6 +1,12 @@
+<!--
+Labels come from the branch prefix and reviewers from CODEOWNERS — both automatic.
+Still yours: the assignee (`gh pr create --assignee @me`) and the issue link below.
+-->
+
 ## Summary
 
 <!-- What changed, and why? -->
+<!-- Add `Closes #<issue>` here when one exists — that is what carries Projects/Milestone/Priority over. -->
 
 ## Validation
 
@@ -11,6 +17,7 @@
 
 ## Checklist
 
+- [ ] Assignee is set, and the branch uses a prefix so the labeler can label it
 - [ ] Public-facing text is in English
 - [ ] Errors fail visibly; no silent fallbacks or swallowed exceptions
 - [ ] No secrets, local paths, or machine-specific state were committed

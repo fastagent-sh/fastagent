@@ -1,5 +1,10 @@
 # Ownership map for review routing. Maintainer-authored PRs do not require a second maintainer approval.
 
+# Fallback so every PR arrives with a reviewer requested. Branch protection does
+# not require code-owner approval, so a later, narrower rule still decides who
+# actually owns a path — this only fills the sidebar.
+*                        @kid7st @Sukitly
+
 # The locked contract and its types.
 /docs/SPEC.md            @kid7st @Sukitly
 /src/agent.ts            @kid7st @Sukitly
