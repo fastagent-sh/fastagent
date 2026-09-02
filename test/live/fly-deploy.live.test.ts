@@ -14,24 +14,15 @@
  *
  * Needs `FLY_API_TOKEN` with write scope, a model credential (`FASTAGENT_AUTH_PATH`), and `flyctl`.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { AgentEvent } from "../../src/agent.ts";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toFlyAppName } from "../../src/deploy/fly/plan.ts";
 import { listHasName } from "../../src/deploy/fly/run.ts";
-import { liveVersion, requireEnv } from "./env.ts";
-
-// A container build's log is megabytes; execFile's 1 MB default would abort the deploy mid-flight.
-const run = (file: string, args: string[], cwd?: string) =>
-  promisify(execFile)(file, args, { ...(cwd ? { cwd } : {}), maxBuffer: 64 << 20 });
-const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
+import { CLI, answerOf, invoke, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("FLY_API_TOKEN", "a Fly API token WITH write scope — this probe creates and destroys an app");
@@ -97,23 +88,6 @@ afterAll(async () => {
   if (errors.length > 0) throw new AggregateError(errors, `teardown failed — check whether app ${APP} still exists`);
 }, 300_000);
 
-/** POST one turn and return its SSE events (the built-in `/invoke`, mounted because no channel is declared). */
-async function invoke(session: string, text: string): Promise<AgentEvent[]> {
-  const response = await fetch(`${URL_BASE}/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ session, text }),
-  });
-  expect(response.status).toBe(200);
-  return (await response.text())
-    .split("\n\n")
-    .filter((block) => block.startsWith("data: "))
-    .map((block) => JSON.parse(block.slice("data: ".length)) as AgentEvent);
-}
-
-const answerOf = (events: AgentEvent[]): string =>
-  events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
-
 describe("deploy fly --run: a real app, provisioned and destroyed", () => {
   it("provisions, boots, and serves a turn on its fly.dev URL", async () => {
     // Every gate in the driver exits non-zero, so a refusal surfaces here as this call's rejection.
@@ -131,7 +105,7 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     expect(await waitForHealth(`${URL_BASE}/health`, 180_000, 3_000), `${URL_BASE}/health never came up`).toBe(true);
 
     const session = "live-fly";
-    const first = await invoke(session, "Remember this number: 47. Reply with just: ok");
+    const first = await invoke(URL_BASE, session, "Remember this number: 47. Reply with just: ok");
     expect(first.at(-1)).toMatchObject({ type: "completed" });
 
     // Restart BETWEEN the turns, which is what makes the next answer evidence about the VOLUME rather
@@ -142,7 +116,7 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     await run("flyctl", ["apps", "restart", APP]);
     expect(await waitForHealth(`${URL_BASE}/health`, 180_000, 3_000), `${URL_BASE}/health never came back`).toBe(true);
 
-    const second = await invoke(session, "What number did I ask you to remember? Reply with digits only.");
+    const second = await invoke(URL_BASE, session, "What number did I ask you to remember? Reply with digits only.");
     expect(second.at(-1)).toMatchObject({ type: "completed" });
     expect(answerOf(second)).toContain("47");
   }, 900_000);

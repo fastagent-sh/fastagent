@@ -314,7 +314,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
   it("gate: not logged in → stops before any side effect", async () => {
     const { railway, cmds } = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
     const out = await run(plan(), railway);
-    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/railway login|RAILWAY_API_KEY/) });
+    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/railway login|RAILWAY_API_TOKEN/) });
     expect(cmds()).toEqual(["whoami"]); // nothing after the gate
   });
 

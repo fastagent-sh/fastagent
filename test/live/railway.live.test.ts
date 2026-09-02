@@ -12,8 +12,9 @@
  * no way to observe that one without provisioning something to observe it on.
  *
  * Needs `RAILWAY_API_TOKEN` — the ACCOUNT-scoped token, not the project-scoped `RAILWAY_TOKEN` a
- * Railway project hands out. Nothing in `src/` names either variable: the driver assumes an operator
- * who ran `railway login`, and CI has no such session.
+ * Railway project hands out. The driver never reads it: it assumes an operator who ran `railway login`
+ * and only NAMES the variable in its gate message (`run.ts`), so in CI the token stands in for that
+ * session.
  */
 import { execFile } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
@@ -95,7 +96,11 @@ describe("railway CLI output still matches what the Railway driver reads", () =>
     expect(alive, "this Railway account holds no live project to read against — create one").toBeTruthy();
 
     const dir = await mkdtemp(join(tmpdir(), "fa-live-railway-"));
-    expect((await railway(["link", "--project", alive as string], dir)).code, `could not link ${alive}`).toBe(0);
+    // `--environment` too: interactive `link` prompts for workspace, project AND environment, and the
+    // docs' non-interactive form passes both. `production` is the environment Railway gives every new
+    // project — a project that renamed it fails here by name rather than by an unreadable prompt.
+    const link = await railway(["link", "--project", alive as string, "--environment", "production"], dir);
+    expect(link.code, `could not link ${alive}: ${link.stderr.trim()}`).toBe(0);
 
     const status = await railway(["status", "--json"], dir);
     expect(isLinked(status.stdout), "a linked directory reads as unlinked").toBe(true);
@@ -107,8 +112,14 @@ describe("railway CLI output still matches what the Railway driver reads", () =>
     // for mount paths to keep appearing as strings at all. Asserted in both directions against the
     // volumes this project really has.
     const volumes = await railway(["volume", "list", "--json"], dir);
-    const mounts =
-      parseJson<{ volumes?: { mountPath?: string }[] }>(volumes.stdout, "volume list --json").volumes ?? [];
+    // The `volumes` key must EXIST. `?? []` would have folded "the field is gone" into "this project
+    // has no volumes": the loop runs zero times, only the always-false negative assertion is left, and
+    // the shape change this file exists to catch goes green.
+    const mounts = parseJson<{ volumes?: { mountPath?: string }[] }>(volumes.stdout, "volume list --json").volumes;
+    if (!Array.isArray(mounts))
+      throw new Error(
+        `\`railway volume list --json\` no longer carries a volumes array: ${volumes.stdout.slice(0, 300)}`,
+      );
     for (const { mountPath } of mounts) {
       expect(parseHasVolume(volumes.stdout, mountPath as string), `mount ${mountPath} unreadable`).toBe(true);
     }

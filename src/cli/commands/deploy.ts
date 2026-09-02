@@ -43,7 +43,12 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { dockerfilePathVar, isGeneratedRailwayJson, planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import {
+  dockerfilePathVar,
+  isGeneratedRailwayJson,
+  planRailwayDeploy,
+  toRailwayName,
+} from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
@@ -306,12 +311,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
   // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
   if (host === "railway") {
-    // Railway service names are project-scoped (not globally unique like a Fly app); slug the dir
-    // basename so a name with spaces/odd chars can't break the `railway add --service <name>` command.
-    const serviceName =
-      basename(workspace)
-        .replace(/[^a-zA-Z0-9-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "agent";
+    const serviceName = toRailwayName(basename(workspace));
     const plan = planRailwayDeploy({
       serviceName,
       modelAuth,

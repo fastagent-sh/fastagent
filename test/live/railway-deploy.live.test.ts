@@ -17,30 +17,22 @@
  *
  * Needs `RAILWAY_API_TOKEN` (ACCOUNT-scoped), a model credential, and the `railway` CLI.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { AgentEvent } from "../../src/agent.ts";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
-import { liveVersion, requireEnv } from "./env.ts";
-
-// A container build's log is megabytes; execFile's 1 MB default would abort the deploy mid-flight.
-const run = (file: string, args: string[], cwd?: string) =>
-  promisify(execFile)(file, args, { ...(cwd ? { cwd } : {}), maxBuffer: 64 << 20 });
-const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
+import { toRailwayName } from "../../src/deploy/railway/plan.ts";
+import { CLI, answerOf, invoke, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("RAILWAY_API_TOKEN", "an ACCOUNT-scoped Railway token — this probe creates and destroys a project");
 
-/** The project name the driver derives from the directory (`toRailwayName(basename(workspace))`), so the
+/** Derived through the product's own slug rule (deploy.ts: `toRailwayName(basename(workspace))`), so the
  *  name this file tears down is the one the deploy provisions. Per-run uuid: concurrent runs must not
  *  collide, and teardown must never match another run's project. */
-const PROJECT = `fastagent-live-${randomUUID().slice(0, 8)}`;
+const PROJECT = toRailwayName(`fastagent-live-${randomUUID().slice(0, 8)}`);
 
 let workspace = "";
 
@@ -66,7 +58,15 @@ afterAll(async () => {
     // project it is deleting (the docs call the flag optional). Measured, not read.
     const { stdout } = await run("railway", ["list", "--json"]);
     const projects = JSON.parse(stdout) as { id?: string; name?: string; deletedAt?: string | null }[];
-    const mine = projects.find((p) => p.name === PROJECT && p.deletedAt === null);
+    // Refuse a list we cannot read, which is what makes asking safe at all: "not mine" now only ever
+    // means the account said so. A renamed field would otherwise match nothing, skip the delete
+    // silently, and leak a billing project holding the model credential and serving `/invoke`
+    // unauthenticated — the failure fly-deploy's throwing `listHasName` exists to prevent.
+    if (!Array.isArray(projects) || projects.some((p) => typeof p.name !== "string"))
+      throw new Error(`\`railway list --json\` is no longer a list of named projects: ${stdout.slice(0, 300)}`);
+    // `== null`, not `=== null`: a MISSING deletedAt must read as alive, so an absent field ends in a
+    // delete attempt that fails loudly rather than in a silent skip.
+    const mine = projects.find((p) => p.name === PROJECT && p.deletedAt == null);
     if (mine?.id) await run("railway", ["delete", "--yes", "--project", mine.id]);
   } catch (error) {
     errors.push(error);
@@ -74,23 +74,6 @@ afterAll(async () => {
   if (workspace) await rm(workspace, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
   if (errors.length > 0) throw new AggregateError(errors, `teardown failed — check whether project ${PROJECT} lives`);
 }, 300_000);
-
-/** POST one turn and return its SSE events (the built-in `/invoke`, mounted because no channel is declared). */
-async function invoke(url: string, session: string, text: string): Promise<AgentEvent[]> {
-  const response = await fetch(`${url}/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ session, text }),
-  });
-  expect(response.status).toBe(200);
-  return (await response.text())
-    .split("\n\n")
-    .filter((block) => block.startsWith("data: "))
-    .map((block) => JSON.parse(block.slice("data: ".length)) as AgentEvent);
-}
-
-const answerOf = (events: AgentEvent[]): string =>
-  events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
 
 describe("deploy railway --run: a real project, provisioned and destroyed", () => {
   it("provisions, mints a domain, and serves a turn on it", async () => {

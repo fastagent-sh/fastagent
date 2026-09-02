@@ -279,16 +279,18 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # file that dates the `Verified against CLI 5.15.0` claims in run.ts) plus
                              # a REAL Railway project provisioned and destroyed (railway-deploy — the
                              # only way to observe `railway domain`, which MINTS one when absent),
-                             # `flyctl` still printing what the Fly driver reads (fly — read-only), and a REAL Fly app
-                             # provisioned then destroyed (fly-deploy — which is how #425 was found: a
-                             # deploy whose every step succeeded, serving on a URL that had no IP).
-                             # Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
-                             # `deploy docker --run`, `deploy fly --run`, `npm install`,
-                             # `startCloudflareTunnel`, `startSchedules`, `registerTelegramWebhook`,
-                             # `registerFeishuWebhook`, `createSlackApi`) and observes from OUTSIDE it
-                             # — except the read-only fly probe, which checks a real `flyctl`'s output
-                             # against the driver's PARSING assumptions about it (`listHasName`,
-                             # `ingressAddresses`): the belief a faked CliRunner cannot test
+                             # `flyctl` still printing what the Fly driver reads (fly — read-only), and
+                             # a REAL Fly app provisioned then destroyed (fly-deploy — which is how
+                             # #425 was found: a deploy whose every step succeeded, serving on a URL
+                             # that had no IP). Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
+                             # `deploy docker --run`, `deploy fly --run`, `deploy railway --run`,
+                             # `npm install`, `startCloudflareTunnel`, `startSchedules`,
+                             # `registerTelegramWebhook`, `registerFeishuWebhook`, `createSlackApi`)
+                             # and observes from OUTSIDE it — except the two read-only CLI probes
+                             # (fly, railway), which check what a real host CLI prints against the
+                             # driver's PARSING assumptions about it (`listHasName`,
+                             # `ingressAddresses`, `isLinked`, `linkedName`, `parseHasVolume`): the
+                             # belief a faked CliRunner cannot test
                              # — a probe that rebuilds the assembly to get a better observation point
                              # measures the rebuild, and the entry's own steps (installProxyFetch,
                              # credential resolution, pinning pi's agent dir) go missing one at a time.

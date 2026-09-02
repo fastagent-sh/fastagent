@@ -70,17 +70,32 @@ jobs:
       # The driver spawns `fly`, the short name Fly's own installer also provides; this action ships
       # only `flyctl`. Without the alias `deploy fly --run` fails with "flyctl not found" on a runner
       # that demonstrably has it.
-      # The railway probes shell out to `railway`, the same binary `deploy railway --run` drives.
-      # Railway publishes no pinned action; the install script is their documented path.
-      - name: Install the Railway CLI
-        run: |
-          curl -fsSL https://railway.com/install.sh | sh
-          echo "$HOME/.railway/bin" >> "$GITHUB_PATH"
-
       - name: Provide the `fly` alias the driver spawns
         run: |
           sudo ln -sf "$(command -v flyctl)" /usr/local/bin/fly
           fly version
+
+      # The railway probes shell out to `railway`, the same binary `deploy railway --run` drives.
+      # Railway publishes no pinned action; the install script is their documented path.
+      #
+      # The VERSION comes from the npm registry, not from the script's own lookup. Unpinned, that
+      # lookup is an unauthenticated api.github.com call the script itself calls out as "rate limited
+      # to 60/hour per source IP, which shared CI runners exhaust" — and it exits 1 when the limit is
+      # hit, turning a nightly red for someone else's traffic. `@railway/cli` is published from the
+      # same release (its postinstall pulls releases/download/v<its own version>), so `latest` there
+      # is the same build, resolved through a registry this job already depends on. Still LATEST, for
+      # the cloudflared reason: this probe exists to find out when the CLI drifts, and a pin retires it.
+      - name: Install the Railway CLI
+        run: |
+          # Without pipefail a failed `curl` feeds `sh` an empty script, which exits 0 — the step goes
+          # green and the suite fails twenty minutes later with `spawn railway ENOENT`. The default
+          # shell here is `bash -e {0}`; `-o pipefail` is NOT included.
+          set -o pipefail
+          RAILWAY_VERSION="$(npm view @railway/cli version)"
+          test -n "$RAILWAY_VERSION" || { echo "could not resolve a Railway CLI version from npm"; exit 1; }
+          curl -fsSL https://railway.com/install.sh | RAILWAY_VERSION="$RAILWAY_VERSION" sh
+          echo "$HOME/.railway/bin" >> "$GITHUB_PATH"
+          "$HOME/.railway/bin/railway" --version
 
       # ONE credential mechanism for both probes: an auth.json, named by the product's own
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
@@ -146,8 +161,9 @@ jobs:
           # A read-only token makes the nightly red at `apps create`; a write token bills every night.
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           # ACCOUNT-scoped, NOT the project-scoped RAILWAY_TOKEN a project hands out: the deploy probe
-          # creates a project, which a project token cannot do. Nothing in src/ names either variable —
-          # the driver assumes an operator who ran `railway login`, and CI has no such session.
+          # creates a project, which a project token cannot do. The driver never reads it — it assumes
+          # an operator who ran `railway login` and only names the variable in its gate message, so
+          # here the token stands in for the session CI has no way to hold.
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: npm run test:live
 
