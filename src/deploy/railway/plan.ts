@@ -63,6 +63,14 @@ const MOUNT = "/data";
  *  convention); two mechanisms, two documented spellings, one fact each. */
 export const dockerfilePathVar = (prefix: string): string => `/${prefix}Dockerfile`;
 
+/** The name this tool gives BOTH the project and the service, derived from the workspace directory.
+ *  Railway names are project-scoped (not globally unique like a Fly app), so this only has to survive
+ *  the command — slug anything that would break `railway add --service <name>`, and name the fallback
+ *  rather than emitting an empty argument. Shared so the live probe tears down what the CLI creates. */
+export function toRailwayName(basename: string): string {
+  return basename.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+}
+
 /** railway.json is JSON, so its ownership marker is a KEY rather than a comment line. Railway ignores
  *  unknown keys; the predicate below is what lets `--force` reset OUR file and keep a hand-written one. */
 const GENERATED_RAILWAY_KEY = "x-generated-by";

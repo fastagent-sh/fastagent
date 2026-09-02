@@ -21,7 +21,8 @@
  *
  * Secrets go in one-per-`variable set --stdin` (value on stdin, never argv/process listing — Railway has
  * no bulk stdin import like Fly's `secrets import`). Auth needs an ACCOUNT credential (login or
- * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
+ * `RAILWAY_API_TOKEN`), not the project-scoped `RAILWAY_TOKEN`: `init` creates a project that a project
+ * token can't predate.
  */
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
@@ -141,11 +142,11 @@ export async function deployRailwayRun(
   // side effect. (Pre-checking the name means walking status's nested multi-service shape — not worth it.)
   const svc = ["--service", plan.name];
 
-  // 1. Auth needs an ACCOUNT credential (browser login or RAILWAY_API_KEY) — a project token can't
-  //    predate the project `init` creates. `whoami` succeeds with either.
+  // 1. Auth needs an ACCOUNT credential (browser login or RAILWAY_API_TOKEN) — the project-scoped
+  //    RAILWAY_TOKEN can't predate the project `init` creates. `whoami` succeeds with either.
   if ((await railway(["whoami"], { capture: true })).code !== 0) {
     return gate(
-      "not logged in to Railway — run `railway login`, or set RAILWAY_API_KEY (an account token), then re-run",
+      "not logged in to Railway — run `railway login`, or set RAILWAY_API_TOKEN (an account token), then re-run",
     );
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planRailwayDeploy } from "../src/deploy/railway/plan.ts";
+import { planRailwayDeploy, toRailwayName } from "../src/deploy/railway/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
 const json = (p: ReturnType<typeof planRailwayDeploy>) =>
@@ -206,6 +206,13 @@ describe("deploy/railway: planRailwayDeploy", () => {
         }),
       ),
     ).toContain("do NOT enable App Sleeping");
+  });
+
+  it("toRailwayName survives `railway add --service <name>` — and never yields an empty argument", () => {
+    // The live probe tears down the project by the name the CLI creates, so both go through this.
+    expect(toRailwayName("fastagent-live-a1b2c3d4")).toBe("fastagent-live-a1b2c3d4"); // the probe's own
+    expect(toRailwayName("My Agent (v2)")).toBe("My-Agent-v2");
+    expect(toRailwayName("___")).toBe("agent"); // nothing left to name it with
   });
 
   it("turns a non-env auth label into guidance, not a variable (shared secret logic)", () => {
