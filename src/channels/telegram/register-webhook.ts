@@ -22,8 +22,8 @@ import { callApi } from "./telegram-api.ts";
  * reach the webhook — which carries its connection layer's words verbatim (`Bad Request: bad webhook:
  * Connection timed out` / `Connection refused` for a host whose DNS answers before anything listens,
  * `Wrong response from the webhook: 530` for a tunnel edge without its origin). This is the ONLY gate
- * between "wait 70s" and "fail now", so it is wide on the reachability side. A permanent "bad webhook"
- * — an http:// URL, an unsupported port — matches nothing here and is reported.
+ * between "spend the caller's retry budget" and "fail now", so it is wide on the reachability side.
+ * A permanent "bad webhook" — an http:// URL, an unsupported port — matches nothing here and is reported.
  */
 function isTransientRegistrationError(error: string): boolean {
   return /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|timed out|connection refused|can't connect|connection to the host|wrong response from the webhook/i.test(
@@ -33,8 +33,9 @@ function isTransientRegistrationError(error: string): boolean {
 
 /**
  * Register `<baseUrl>/telegram` as the bot's webhook (with the .env secret). Missing tokens print the
- * manual instruction instead of failing. `opts` (attempt budget) exist for tests; production uses the
- * defaults.
+ * manual instruction instead of failing. `opts` carries the attempt budget: `--tunnel` takes the
+ * default, `deploy --run` passes `DEPLOY_REGISTRATION_ATTEMPTS` (a host starts slower than a tunnel),
+ * and tests shrink it.
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */

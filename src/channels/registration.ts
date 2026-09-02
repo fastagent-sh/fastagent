@@ -31,8 +31,16 @@ export const REGISTRATION_RETRY_MS = 10_000;
  * domain's DNS all happen after that, and railway-deploy.live.test.ts allows 180s for exactly this.
  * Registration failure GATES the deploy (registration-gate.ts), so a budget shorter than the host's
  * own start-up turns a working deployment into a re-run instruction.
+ *
+ * N attempts buy (N - 1) waits — {@link retryWhile} only waits BETWEEN calls — so 180s of patience is
+ * 19, not 18. At 18 the last call went out at t=170s and a host that started answering in the final
+ * ten seconds was still reported as a deploy to re-run.
  */
-export const DEPLOY_REGISTRATION_ATTEMPTS = 18;
+export const DEPLOY_REGISTRATION_ATTEMPTS = 19;
+
+/** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers — the
+ *  same reason feishu-api.ts does. What must happen BEFORE this wait is the point of `onRetry`. */
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Call, and while `retryable` says the failure is the platform not reaching the URL YET, call again —
@@ -44,10 +52,6 @@ export const DEPLOY_REGISTRATION_ATTEMPTS = 18;
  * `add slack` also drops its duplicate-guard marker so it never spans a sleep. The last error is
  * thrown, so a caller can tell "still unreachable" from "a config error" in one place.
  */
-/** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers — the
- *  same reason feishu-api.ts does. What must happen BEFORE this wait is the point of `onRetry`. */
-const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 export async function retryWhile<T>(
   call: () => Promise<T>,
   retryable: (error: unknown) => boolean,

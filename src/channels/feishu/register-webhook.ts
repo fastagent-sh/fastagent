@@ -27,8 +27,9 @@ import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistratio
 
 /**
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
- * the manual instruction instead of failing. `opts` exist for tests: the attempt budget + `apiBase` (a
- * fake platform — production derives it from the kind).
+ * the manual instruction instead of failing. `opts` carries the attempt budget — `--tunnel` takes the
+ * default, `deploy --run` passes `DEPLOY_REGISTRATION_ATTEMPTS` (a host starts slower than a tunnel) —
+ * plus `apiBase`, which is a test's fake platform (production derives it from the kind).
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */

@@ -103,6 +103,9 @@ describe("registration budgets", () => {
     // railway-deploy.live.test.ts allows a real deployment 180s to answer /health, because
     // `railway up --ci` returns when the BUILD ends. Registration failure gates the deploy, so a
     // budget shorter than that reports a working deployment as one to re-run.
-    expect(DEPLOY_REGISTRATION_ATTEMPTS * REGISTRATION_RETRY_MS).toBeGreaterThanOrEqual(180_000);
+    //
+    // (N - 1), not N: the loop waits only BETWEEN calls, so the last attempt goes out one interval
+    // earlier than the attempt count suggests. Counting it as N kept this green at 170s of patience.
+    expect((DEPLOY_REGISTRATION_ATTEMPTS - 1) * REGISTRATION_RETRY_MS).toBeGreaterThanOrEqual(180_000);
   });
 });

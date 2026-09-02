@@ -9,6 +9,17 @@ interface SlackErrorShape {
   errors?: { message?: string; pointer?: string }[];
 }
 
+/** One `errors[]` entry that means "Slack could not verify this URL", by either signal it may carry.
+ *  The pointer is the precise one but an INFERENCE — the only reply captured from the real API is the
+ *  PERMANENT shape error, which reports on the parent pointer (`/settings/event_subscriptions`). If the
+ *  unverifiable case reports there too, a pointer-only check would retry zero times and gate the deploy
+ *  immediately, which is the failure this whole path exists to prevent. So a message about VERIFICATION
+ *  (challenge wording included) counts as well, while one that merely names the field does not — the
+ *  captured permanent error says "Event Subscription requires a Request URL". */
+const rejectsRequestUrl = (e: { message?: string; pointer?: string }): boolean =>
+  e.pointer?.endsWith("/request_url") === true ||
+  (/request.?url/i.test(e.message ?? "") && /verif|challenge/i.test(e.message ?? ""));
+
 export class SlackConfigApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -35,21 +46,18 @@ export class SlackConfigApiError extends Error {
  * poll precedes these calls (#421). Slack validates the manifest BEFORE acting on it, so a call that
  * ends here changed nothing and is safe to repeat.
  *
- * Read from the STRUCTURE (`invalid_manifest` + which field), not the message: matching `request_url`
- * anywhere in the formatted string also matched errors that merely mention the field, and the message
- * is Slack's prose to reword at will.
+ * Read from the rejected FIELD (`invalid_manifest` + {@link rejectsRequestUrl}), not from `request_url`
+ * appearing anywhere in the formatted string: that also matched errors which merely mention the field.
  *
  * KNOWN IMPRECISION: this cannot separate "not reachable yet" from "this URL is unacceptable" — both
- * arrive on the same pointer, and the wording that would tell them apart has not been observed against
- * the real API, so guessing at it would risk never retrying at all. A permanently bad URL therefore
- * costs the full budget before it is reported. Every URL here is a tunnel's or a host's, so it is
- * well-formed https by construction; narrow this the day a real rejection is captured.
+ * arrive the same way, and the wording that would tell them apart has not been observed against the
+ * real API, so guessing at it would risk never retrying at all. A permanently bad URL therefore costs
+ * the full budget before it is reported. Every URL here is a tunnel's or a host's, so it is well-formed
+ * https by construction; narrow this the day a real rejection is captured.
  */
 export function isSlackRequestUrlUnverified(error: unknown): boolean {
   return (
-    error instanceof SlackConfigApiError &&
-    error.code === "invalid_manifest" &&
-    error.errors.some((e) => e.pointer?.endsWith("/request_url"))
+    error instanceof SlackConfigApiError && error.code === "invalid_manifest" && error.errors.some(rejectsRequestUrl)
   );
 }
 

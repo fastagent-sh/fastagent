@@ -101,7 +101,25 @@ describe("Slack internal-app manifest and control API", () => {
       },
       "unknown_error",
     );
+    // The `/request_url` pointer above is an inference — the captured reply is `badShape`, which
+    // reports on the PARENT pointer. If the unverifiable case reports there too, the pointer arm alone
+    // would retry zero times, so a verification-worded message on the parent pointer counts as well.
+    const unverifiedOnParentPointer = new SlackConfigApiError(
+      "apps.manifest.create",
+      200,
+      {
+        error: "invalid_manifest",
+        errors: [
+          {
+            pointer: "/settings/event_subscriptions",
+            message: "Your Request URL did not respond with the correct challenge value",
+          },
+        ],
+      },
+      "unknown_error",
+    );
     expect(isSlackRequestUrlUnverified(unverifiedUrl)).toBe(true);
+    expect(isSlackRequestUrlUnverified(unverifiedOnParentPointer)).toBe(true);
     expect(isSlackRequestUrlUnverified(badShape)).toBe(false);
     expect(isSlackRequestUrlUnverified(new Error("request_url something"))).toBe(false); // not Slack's
   });
