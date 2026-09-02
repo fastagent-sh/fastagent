@@ -139,7 +139,15 @@ export async function onboardSlackApp(
   authorize.searchParams.set("scope", slackBotScopes(state.groupBehavior).join(","));
   authorize.searchParams.set("redirect_uri", input.redirectUrl);
   authorize.searchParams.set("state", oauthState);
-  io.note(`Approve the internal app installation in Slack: ${authorize}`);
+  // Approving redirects the browser to the TUNNEL hostname, which THIS machine has to resolve — the
+  // one thing #421 says it can be a minute slower at than Slack's own resolver was a moment ago. The
+  // wait below then looks like a hang sitting next to a broken page, so say it before it happens.
+  io.note(
+    `Approve the internal app installation in Slack: ${authorize}\n` +
+      "If the page Slack returns to does not load, reload it after a few seconds — this machine can be " +
+      "slower to resolve the just-created tunnel hostname than Slack was. The approval is not spent " +
+      "until that page loads, so nothing is lost by reloading.",
+  );
   io.openUrl(authorize.toString());
 
   const callback = await io.waitForOAuth();
