@@ -81,9 +81,11 @@ export function installViaOAuth(
 export function installFromConsole(): SlackOnboardIO["install"] {
   return async ({ appId }) => {
     const installUrl = `${CONFIG_TOKEN_URL}/${appId}/install-on-team`;
+    // After Install → Allow the SAME page ("Installed App Settings") shows the token with a Copy button;
+    // no navigation is needed, so name nothing else.
     clackLog.info(
-      "Install the app into your workspace from its console page, then copy the Bot User OAuth Token " +
-        "it shows (OAuth & Permissions).",
+      "Install the app into your workspace from its console page (Install → Allow), then copy the " +
+        "Bot User OAuth Token the page shows.",
     );
     console.error(`[fastagent] ${installUrl}`);
     openExternalUrl(installUrl);
