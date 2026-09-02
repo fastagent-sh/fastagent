@@ -169,6 +169,16 @@ src/
 │       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy docker|fly|railway|agentcore`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/.
+│   │                        # BEFORE writing one: READ that host's docs for what it does NOT do implicitly
+│   │                        # — above all, whether a created resource is REACHABLE without a further
+│   │                        # step. Fly taught this eight rounds in a row: `[http_service]` declares a
+│   │                        # service and allocates no address, so every step succeeded and the URL had
+│   │                        # no DNS record (#425); v4 and v6 are separate free commands, so an app with
+│   │                        # only v6 is unreachable from an IPv4-only webhook sender. Five of the eight
+│   │                        # defects were sitting in Fly's own docs or fly-go's source; each was instead
+│   │                        # bought with a real deploy or a red nightly. A parser's judgement must also
+│   │                        # match the GRANULARITY of the action it drives (one question per command),
+│   │                        # and "we could not read the host" is a third answer, never "absent".
 │   │                        # The CLI branch that picks between them is cli/commands/deploy.ts; what it may NOT
 │   │                        # hold is a fact about ANOTHER host ("--into-linked is railway's" lived in three
 │   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per host-only flag
