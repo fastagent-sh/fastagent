@@ -1,6 +1,12 @@
+<!--
+Labels come from the branch prefix and reviewers from CODEOWNERS — both automatic.
+Still yours: the issue link below, and the assignee if you have push access (`gh pr create --assignee @me`).
+-->
+
 ## Summary
 
 <!-- What changed, and why? -->
+<!-- Add `Closes #<issue>` here when one exists — it closes the issue on merge. Board fields stay manual. -->
 
 ## Validation
 
@@ -11,6 +17,7 @@
 
 ## Checklist
 
+- [ ] The PR carries a label — from the branch prefix, or added by hand
 - [ ] Public-facing text is in English
 - [ ] Errors fail visibly; no silent fallbacks or swallowed exceptions
 - [ ] No secrets, local paths, or machine-specific state were committed

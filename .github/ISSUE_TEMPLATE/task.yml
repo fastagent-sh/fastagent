@@ -1,0 +1,25 @@
+name: Task
+description: Track internal work — refactor, chore, CI, test, or release follow-up.
+title: "task: "
+type: Task
+labels: [chore]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be true when this is done?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which files, commands, or docs does this touch? Name what is explicitly out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How will the change be proven — tests, a command to run, an observable behavior?
