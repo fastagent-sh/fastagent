@@ -12,9 +12,8 @@
  * verdicts ("Failed to resolve host", "Wrong response from the webhook") are retried, and only a
  * configuration error the operator must fix is reported once.
  */
-import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
-import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
+import { retryWhile, type RegistrationOutcome } from "../registration.ts";
 import { callApi } from "./telegram-api.ts";
 
 /**
@@ -54,33 +53,31 @@ export async function registerTelegramWebhook(
   }
 
   log.info(`[fastagent] telegram: registering the webhook — Telegram verifies ${webhookUrl} as it does…`);
-  let lastTransientError = "unknown transport error";
-  const attempts = opts.attempts ?? REGISTRATION_ATTEMPTS;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? REGISTRATION_RETRY_MS);
-    try {
-      await callApi("https://api.telegram.org", botToken, "setWebhook", { url: webhookUrl, secret_token: secret });
-      log.info(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
-      return "registered";
-    } catch (e) {
-      const error = String(e);
-      if (!isTransientRegistrationError(error)) {
-        log.error(`[fastagent] telegram: setWebhook failed (${error}). Register manually with url=${webhookUrl}`);
-        return "failed";
-      }
-      lastTransientError = error;
-      if (attempt + 1 < attempts) {
-        log.info(
-          `[fastagent] telegram: Telegram cannot reach ${webhookUrl} yet (attempt ${attempt + 1}/${attempts}); retrying…`,
-        );
-      }
-    }
+  try {
+    await retryWhile(
+      () => callApi("https://api.telegram.org", botToken, "setWebhook", { url: webhookUrl, secret_token: secret }),
+      (error) => isTransientRegistrationError(String(error)),
+      {
+        attempts: opts.attempts,
+        retryMs: opts.retryMs,
+        onRetry: ({ attempt, attempts }) =>
+          log.info(
+            `[fastagent] telegram: Telegram cannot reach ${webhookUrl} yet (attempt ${attempt}/${attempts}); retrying…`,
+          ),
+      },
+    );
+    log.info(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
+    return "registered";
+  } catch (e) {
+    // Both endings leave the webhook unregistered and the operator with work to do, so both are ERROR;
+    // they differ only in what to do about it.
+    const error = String(e);
+    log.error(
+      isTransientRegistrationError(error)
+        ? `[fastagent] telegram: Telegram could not reach ${webhookUrl} after retries (last error: ${error}). ` +
+            `Once it is up, register manually: curl "https://api.telegram.org/bot<token>/setWebhook" -d url=${webhookUrl} -d secret_token=<secret>`
+        : `[fastagent] telegram: setWebhook failed (${error}). Register manually with url=${webhookUrl}`,
+    );
+    return "failed";
   }
-  // Exhausted retries end in the same state as a permanent error (webhook not registered, manual
-  // action required) — report at the same level.
-  log.error(
-    `[fastagent] telegram: Telegram could not reach ${webhookUrl} after retries (last error: ${lastTransientError}). ` +
-      `Once it is up, register manually: curl "https://api.telegram.org/bot<token>/setWebhook" -d url=${webhookUrl} -d secret_token=<secret>`,
-  );
-  return "failed";
 }

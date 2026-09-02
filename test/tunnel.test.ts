@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { newSlackOnboardingState } from "../src/channels/slack/onboard.ts";
 import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
+import { REGISTRATION_RETRY_MS } from "../src/channels/registration.ts";
 import { announceWebhooks, parseTunnelUrl, startCloudflareTunnel } from "../src/tunnel.ts";
 
 // Mirrors TUNNEL_RETRY_MS in tunnel.ts (the constant is not exported).
@@ -304,7 +305,7 @@ describe("tunnel: announceWebhooks", () => {
     vi.useFakeTimers();
 
     const p = announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["telegram"]));
-    await vi.advanceTimersByTimeAsync(6000); // past the 5s retry backoff
+    await vi.advanceTimersByTimeAsync(REGISTRATION_RETRY_MS); // spend the backoff without spending it
     await p;
 
     expect(setWebhookCount(fetchMock)).toBe(2); // retried once, then registered

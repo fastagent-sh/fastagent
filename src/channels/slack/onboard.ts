@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
-import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS } from "../registration.ts";
+import { retryWhile } from "../registration.ts";
 import {
   createSlackApp,
   exchangeSlackOAuthCode,
@@ -34,32 +33,6 @@ export interface SlackOnboardInput {
   redirectUrl: string;
 }
 
-/**
- * Repeat a manifest call while Slack reports it cannot VERIFY the request_url it carries. Slack
- * challenges that URL from its own network during the call — the readiness signal #421 is about; the
- * machine running `add slack` often cannot reach the fresh tunnel hostname at all, so it is not the one
- * asked — and validates the whole manifest BEFORE acting on it, so a call that ends this way did
- * nothing. `onAttemptFailed` runs before the wait, which is how the create path keeps its duplicate-guard
- * marker on for exactly one in-flight call and off during the sleep. Any other failure propagates.
- */
-async function retryWhileUnverified<T>(
-  io: Pick<SlackOnboardIO, "note">,
-  budget: { attempts: number; retryMs: number },
-  call: () => Promise<T>,
-  onAttemptFailed: () => void = () => {},
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await call();
-    } catch (error) {
-      if (!isSlackRequestUrlUnverified(error) || attempt >= budget.attempts) throw error;
-      onAttemptFailed();
-      io.note(`Slack cannot reach the temporary setup URL yet (attempt ${attempt}/${budget.attempts}); retrying…`);
-      await sleep(budget.retryMs);
-    }
-  }
-}
-
 /** Create/resume one internal Slack app and complete its workspace OAuth installation. */
 export async function onboardSlackApp(
   input: SlackOnboardInput,
@@ -76,7 +49,17 @@ export async function onboardSlackApp(
   let state = input.state;
   const current = await currentSlackConfigToken(input.stateRoot, state);
   state = current.state;
-  const budget = { attempts: deps.attempts ?? REGISTRATION_ATTEMPTS, retryMs: deps.retryMs ?? REGISTRATION_RETRY_MS };
+  /** Slack challenges request_url from ITS network during a manifest call and validates the whole
+   *  manifest before acting, so an unverifiable URL created nothing and the call is safe to repeat. */
+  const whileUnverified = <T>(call: () => Promise<T>, onRetry?: () => void): Promise<T> =>
+    retryWhile(call, isSlackRequestUrlUnverified, {
+      attempts: deps.attempts,
+      retryMs: deps.retryMs,
+      onRetry: ({ attempt, attempts }) => {
+        onRetry?.();
+        io.note(`Slack cannot reach the temporary setup URL yet (attempt ${attempt}/${attempts}); retrying…`);
+      },
+    });
   const manifest = buildSlackManifest({
     name: state.appName,
     groupBehavior: state.groupBehavior,
@@ -98,9 +81,7 @@ export async function onboardSlackApp(
     };
     let created: Awaited<ReturnType<typeof createSlackApp>>;
     try {
-      created = await retryWhileUnverified(
-        io,
-        budget,
+      created = await whileUnverified(
         () => {
           // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the
           // app; refusing a blind retry is safer than silently producing duplicates. The marker spans
@@ -140,9 +121,7 @@ export async function onboardSlackApp(
     }
     const appId = state.appId;
     io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
-    await retryWhileUnverified(io, budget, () =>
-      (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest),
-    );
+    await whileUnverified(() => (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest));
   }
 
   if (state.signingSecret) {

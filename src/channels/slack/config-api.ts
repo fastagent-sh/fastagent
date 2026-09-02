@@ -12,6 +12,9 @@ interface SlackErrorShape {
 export class SlackConfigApiError extends Error {
   readonly code: string;
   readonly status: number;
+  /** Kept, not just formatted into the message: which FIELD Slack rejected is how a caller tells a
+   *  not-yet-reachable URL from a malformed one, and a message match cannot see the difference. */
+  readonly errors: { message?: string; pointer?: string }[];
 
   constructor(method: string, status: number, data: SlackErrorShape, fallback: string) {
     const code = data.error ?? fallback;
@@ -22,17 +25,32 @@ export class SlackConfigApiError extends Error {
     this.name = "SlackConfigApiError";
     this.code = code;
     this.status = status;
+    this.errors = data.errors ?? [];
   }
 }
 
 /**
  * Whether a manifest call failed because Slack could not verify the `request_url` it carries — the
  * platform's own readiness verdict on a freshly minted public URL, and the reason no local `/health`
- * poll precedes these calls (#421). Slack validates the manifest BEFORE acting on it, so a create that
- * ends here created nothing and is safe to retry.
+ * poll precedes these calls (#421). Slack validates the manifest BEFORE acting on it, so a call that
+ * ends here changed nothing and is safe to repeat.
+ *
+ * Read from the STRUCTURE (`invalid_manifest` + which field), not the message: matching `request_url`
+ * anywhere in the formatted string also matched errors that merely mention the field, and the message
+ * is Slack's prose to reword at will.
+ *
+ * KNOWN IMPRECISION: this cannot separate "not reachable yet" from "this URL is unacceptable" — both
+ * arrive on the same pointer, and the wording that would tell them apart has not been observed against
+ * the real API, so guessing at it would risk never retrying at all. A permanently bad URL therefore
+ * costs the full budget before it is reported. Every URL here is a tunnel's or a host's, so it is
+ * well-formed https by construction; narrow this the day a real rejection is captured.
  */
 export function isSlackRequestUrlUnverified(error: unknown): boolean {
-  return /request_url|verify_request_url|failed to verify/i.test(String(error));
+  return (
+    error instanceof SlackConfigApiError &&
+    error.code === "invalid_manifest" &&
+    error.errors.some((e) => e.pointer?.endsWith("/request_url"))
+  );
 }
 
 async function slackJson<T>(
@@ -88,7 +106,9 @@ interface CreateManifestResponse {
   };
 }
 
-/** Create is intentionally single-attempt: an ambiguous response may already have created the app. */
+/** Single-attempt BY DESIGN: an ambiguous response may already have created the app, so this never
+ *  retries itself. The one repeatable failure — a `request_url` Slack could not verify, which it
+ *  rejects before creating anything — is retried by the caller ({@link isSlackRequestUrlUnverified}). */
 export async function createSlackApp(
   configToken: string,
   manifest: SlackAppManifest,

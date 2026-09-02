@@ -1,5 +1,4 @@
-import { setTimeout as sleep } from "node:timers/promises";
-import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
+import { retryWhile, type RegistrationOutcome } from "../registration.ts";
 import { isSlackRequestUrlUnverified, updateSlackAppManifest } from "./config-api.ts";
 import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";
@@ -55,46 +54,42 @@ export async function registerSlackWebhook(
   // Slack verifies the new request_url with a challenge DURING apps.manifest.update, from Slack's own
   // network — that verdict IS the readiness signal, so it is retried while a fresh tunnel/container
   // warms up. No local `/health` poll precedes it: this machine's reach is the wrong question (#421).
-  const attempts = options.attempts ?? REGISTRATION_ATTEMPTS;
-  let lastUnverified = "unknown error";
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(options.retryMs ?? REGISTRATION_RETRY_MS);
-    try {
-      await updateSlackAppManifest(
-        current.token,
-        current.state.appId as string,
-        buildSlackManifest({
-          name: current.state.appName,
-          groupBehavior: current.state.groupBehavior,
-          requestUrl: `${publicBaseUrl}/slack`,
-          // Token-rotation manifests require at least one OAuth redirect URL even after installation.
-          // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
-          redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
-        }),
-        { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
-      );
-      note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
-      return "registered";
-    } catch (error) {
-      if (!isSlackRequestUrlUnverified(error)) {
-        note(
-          `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
+  try {
+    await retryWhile(
+      () =>
+        updateSlackAppManifest(
+          current.token,
+          current.state.appId as string,
+          buildSlackManifest({
+            name: current.state.appName,
+            groupBehavior: current.state.groupBehavior,
+            requestUrl: `${publicBaseUrl}/slack`,
+            // Token-rotation manifests require at least one OAuth redirect URL even after installation.
+            // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
+            redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
+          }),
+          { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
+        ),
+      isSlackRequestUrlUnverified,
+      {
+        attempts: options.attempts,
+        retryMs: options.retryMs,
+        onRetry: ({ attempt, attempts }) =>
+          note(
+            `[fastagent] slack: Slack cannot verify ${publicBaseUrl}/slack yet (attempt ${attempt}/${attempts}); retrying…`,
+          ),
+      },
+    );
+    note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
+    return "registered";
+  } catch (error) {
+    note(
+      isSlackRequestUrlUnverified(error)
+        ? `[fastagent] slack: Slack could not verify ${publicBaseUrl}/slack after retries (last error: ${String(error)}) — ` +
+            `once the app is up, ${consoleFallback}`
+        : `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
             `re-run \`fastagent add slack --replace-config\` to repair the configuration tokens, or ${consoleFallback}`,
-        );
-        return "failed";
-      }
-      lastUnverified = String(error);
-      // The wait is otherwise silent for over a minute, which reads as a hang.
-      if (attempt + 1 < attempts) {
-        note(
-          `[fastagent] slack: Slack cannot verify ${publicBaseUrl}/slack yet (attempt ${attempt + 1}/${attempts}); retrying…`,
-        );
-      }
-    }
+    );
+    return "failed";
   }
-  note(
-    `[fastagent] slack: Slack could not verify ${publicBaseUrl}/slack after retries (last error: ${lastUnverified}) — ` +
-      `once the app is up, ${consoleFallback}`,
-  );
-  return "failed";
 }

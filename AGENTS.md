@@ -123,8 +123,12 @@ src/
 │   ├── wait-health.ts       # readiness probe for a server THIS process reaches directly (deploy's
 │   │                     # published local port). NOT for a public URL a platform must reach: the
 │   │                     # registrars let the platform's own URL verification be the probe (#421)
-│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) + the one warm-up
-│   │                     # budget every registrar spends on the platform's own URL check — same reason
+│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) + the ONE retry loop
+│   │                     # every registrar spends its warm-up budget through (retryWhile). Each platform
+│   │                     # keeps only what differs: which errors mean "not reachable YET" and what a
+│   │                     # final failure MEANS (one's terminal state is another's `manual`). Two budgets,
+│   │                     # because a tunnel is live when its URL prints and a deploy is not — a registrar
+│   │                     # that gives up first GATES the deploy (#428) — same reason
 │   ├── kit/                 # WRITING a channel — the parts every chat platform needs and none should
 │   │   │                     # reinvent. The split from the mechanism beside it is a FACT about
 │   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
