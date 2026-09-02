@@ -20,11 +20,14 @@ import { callApi } from "./telegram-api.ts";
 /**
  * Whether a setWebhook failure is the URL still warming up rather than a configuration error. Two
  * families: transport failures reaching Telegram at all, and Telegram's own verdict after it fails to
- * reach the webhook (a not-yet-routable host, or a tunnel edge still answering 530 without its origin).
- * A permanent "bad webhook" — an http:// URL, an unsupported port — matches neither and is reported.
+ * reach the webhook — which carries its connection layer's words verbatim (`Bad Request: bad webhook:
+ * Connection timed out` / `Connection refused` for a host whose DNS answers before anything listens,
+ * `Wrong response from the webhook: 530` for a tunnel edge without its origin). This is the ONLY gate
+ * between "wait 70s" and "fail now", so it is wide on the reachability side. A permanent "bad webhook"
+ * — an http:// URL, an unsupported port — matches nothing here and is reported.
  */
 function isTransientRegistrationError(error: string): boolean {
-  return /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|connection to the host|wrong response from the webhook/i.test(
+  return /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|timed out|connection refused|can't connect|connection to the host|wrong response from the webhook/i.test(
     error,
   );
 }

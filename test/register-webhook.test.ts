@@ -47,23 +47,22 @@ describe("registerTelegramWebhook: setWebhook is its own readiness probe", () =>
       "fetch",
       vi.fn(async () => {
         calls++;
-        // 1: the tunnel edge answers 530 with no origin; 2: Telegram's resolver still lags.
-        if (calls === 1) {
-          return new Response(
-            JSON.stringify({
-              ok: false,
-              description: "Bad Request: bad webhook: Wrong response from the webhook: 530 Origin DNS error",
-            }),
-            { status: 400 },
-          );
-        }
-        if (calls === 2) throw new Error("getaddrinfo ENOTFOUND api.telegram.org");
+        // Telegram's own verdicts, in the order a fresh deploy produces them: 1: DNS answers but nothing
+        // listens yet (its connection layer's words, verbatim); 2: a tunnel edge with no origin; 3: our
+        // own transport to Telegram hiccups.
+        const verdicts = [
+          "Bad Request: bad webhook: Connection timed out",
+          "Bad Request: bad webhook: Wrong response from the webhook: 530 Origin DNS error",
+        ];
+        const verdict = verdicts[calls - 1];
+        if (verdict) return new Response(JSON.stringify({ ok: false, description: verdict }), { status: 400 });
+        if (calls === 3) throw new Error("getaddrinfo ENOTFOUND api.telegram.org");
         return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
       }),
     );
     const ok = await registerTelegramWebhook("https://x.trycloudflare.com", { retryMs: 1 });
     expect(ok).toBe("registered");
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
   });
 
   it("does NOT retry a PERMANENT setWebhook error (a config problem, not a race)", async () => {

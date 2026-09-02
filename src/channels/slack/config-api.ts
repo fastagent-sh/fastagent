@@ -163,7 +163,9 @@ export interface SlackOAuthResult {
   botToken: string;
   botRefreshToken?: string;
   botTokenExpiresAt?: number;
-  appId: string;
+  /** Which app the token belongs to, when the installer could observe it (`oauth.v2.access` always
+   *  says; `auth.test` may not). Absent means "not observed", never "the expected one". */
+  appId?: string;
   teamId: string;
   teamName?: string;
   botUserId?: string;

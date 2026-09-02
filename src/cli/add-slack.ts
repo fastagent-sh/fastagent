@@ -96,7 +96,9 @@ export function installFromConsole(): SlackOnboardIO["install"] {
     const identity = await slackAuthTest(botToken);
     return {
       botToken,
-      appId: identity.appId ?? appId,
+      // Reported as observed: `auth.test` may omit app_id, and filling in the expected value would turn
+      // the shared flow's "different app" check into one that cannot fail.
+      appId: identity.appId,
       teamId: identity.teamId,
       teamName: identity.teamName,
       botUserId: identity.botUserId,
@@ -144,12 +146,14 @@ export async function onboardSlackInternalApp(input: {
         if (error.code === "ENOENT") return new Map<string, string>();
         throw error;
       });
+    // What "installed" must have written depends on the KIND of app the record says this is: a console
+    // install (`--manual`) runs on a static token and has no rotation fields to be missing.
+    const rotation = state.tokenRotation ?? true;
     const missingRuntime = [
       "SLACK_BOT_TOKEN",
-      "SLACK_BOT_REFRESH_TOKEN",
-      "SLACK_BOT_TOKEN_EXPIRES_AT",
-      "SLACK_CLIENT_ID",
-      "SLACK_CLIENT_SECRET",
+      ...(rotation
+        ? ["SLACK_BOT_REFRESH_TOKEN", "SLACK_BOT_TOKEN_EXPIRES_AT", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"]
+        : []),
       "SLACK_SIGNING_SECRET",
     ].filter((name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""));
     if (missingRuntime.length > 0) {
@@ -299,8 +303,9 @@ export async function onboardSlackInternalApp(input: {
   console.error(`[fastagent] temporary Slack setup tunnel ready → ${tunnel.url}`);
   try {
     // No local readiness probe: Slack challenges requestUrl from ITS network during app creation, and
-    // that is the reachability that matters (#421). A machine that cannot host the callback at all is
-    // what --manual is for.
+    // that is the reachability that matters (#421); onboardSlackApp retries the create while Slack
+    // cannot verify a still-warming tunnel. A machine that can never host the callback is a different
+    // case, and --manual is for that one.
     await onboardSlackApp(
       { stateRoot: input.stateRoot, state, requestUrl, redirectUrl },
       {

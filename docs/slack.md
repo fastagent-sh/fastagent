@@ -87,7 +87,10 @@ nothing has to be ticked by hand — and that update runs from this machine agai
 inbound callback. Until it runs, the app is installed but idle.
 
 App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
-re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:
+re-run `fastagent add slack`; it resumes the same App rather than creating another. Resume in the mode the
+app was created for: an app created with `--manual` resumes only with `--manual`, and one created without
+it only without — the two kinds differ in a setting Slack will not let a later update change, and the
+command refuses rather than convert the app silently. Once installed, run:
 
 ```bash
 fastagent dev --tunnel

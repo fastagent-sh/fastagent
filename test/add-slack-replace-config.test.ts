@@ -110,6 +110,40 @@ describe("add slack --replace-config", () => {
     expect(await readFile(join(target, ".secrets", ".env"), "utf8")).toBe(RUNTIME_ENV); // untouched
   });
 
+  it("installed --manual app: a static token is a complete installation, so repair is reachable", async () => {
+    // The installed-gate used to demand the four rotation variables of EVERY installed app. A console
+    // install writes none of them by design, so this command — the only repair path the registrar's
+    // error message points at — refused every --manual app with "missing SLACK_BOT_REFRESH_TOKEN".
+    await writeFile(join(target, ".secrets", ".env"), "SLACK_BOT_TOKEN=xoxb-static\nSLACK_SIGNING_SECRET=signing");
+    writeSlackOnboardingState(stateRoot, {
+      version: 1,
+      appName: "App",
+      groupBehavior: "mentions",
+      appId: "A1",
+      configToken: "xoxe.xoxp-old",
+      configRefreshToken: "xoxe-old",
+      configTokenExpiresAt: 1,
+      installedAt: "2026-01-01T00:00:00.000Z",
+      tokenRotation: false,
+    });
+    prompts.passwordAnswers.push("xoxe.xoxp-new", "xoxe-new");
+    await run();
+    expect((await readState()).configToken).toBe("xoxe.xoxp-new");
+    // A ROTATING app with the same two-line .env is still incomplete — the gate did not just get looser.
+    writeSlackOnboardingState(stateRoot, {
+      version: 1,
+      appName: "App",
+      groupBehavior: "mentions",
+      appId: "A1",
+      configToken: "xoxe.xoxp-old",
+      configRefreshToken: "xoxe-old",
+      configTokenExpiresAt: 1,
+      installedAt: "2026-01-01T00:00:00.000Z",
+      tokenRotation: true,
+    });
+    await expect(run()).rejects.toThrow(/missing SLACK_BOT_REFRESH_TOKEN/);
+  });
+
   it("installed app: rejects a token pair with the wrong prefixes", async () => {
     await writeFile(join(target, ".secrets", ".env"), RUNTIME_ENV);
     writeSlackOnboardingState(stateRoot, {

@@ -1,5 +1,12 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS } from "../registration.ts";
 import type { SlackOAuthResult } from "./config-api.ts";
-import { createSlackApp, SlackConfigApiError, updateSlackAppManifest } from "./config-api.ts";
+import {
+  createSlackApp,
+  isSlackRequestUrlUnverified,
+  SlackConfigApiError,
+  updateSlackAppManifest,
+} from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
 import { currentSlackConfigToken, type SlackOnboardingState, writeSlackOnboardingState } from "./onboarding-state.ts";
 
@@ -38,6 +45,31 @@ export interface SlackOnboardInput {
   redirectUrl?: string;
 }
 
+/**
+ * Repeat a manifest call while Slack reports it cannot VERIFY the request_url it carries. Slack
+ * challenges that URL from its own network during the call — the readiness signal #421 is about — and
+ * validates the whole manifest BEFORE acting on it, so a call that ends this way did nothing.
+ * `onAttemptFailed` runs before the wait, which is how the create path keeps its duplicate-guard
+ * marker on for exactly one in-flight call and off during the sleep. Any other failure propagates.
+ */
+async function retryWhileUnverified<T>(
+  io: Pick<SlackOnboardIO, "note">,
+  budget: { attempts: number; retryMs: number },
+  call: () => Promise<T>,
+  onAttemptFailed: () => void = () => {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isSlackRequestUrlUnverified(error) || attempt >= budget.attempts) throw error;
+      onAttemptFailed();
+      io.note(`Slack cannot reach the temporary setup URL yet (attempt ${attempt}/${budget.attempts}); retrying…`);
+      await sleep(budget.retryMs);
+    }
+  }
+}
+
 /** Create/resume one internal Slack app and complete its workspace installation. */
 export async function onboardSlackApp(
   input: SlackOnboardInput,
@@ -45,17 +77,39 @@ export async function onboardSlackApp(
   deps: {
     createApp?: typeof createSlackApp;
     updateManifest?: typeof updateSlackAppManifest;
+    /** Attempts absorbing the setup tunnel's warm-up before Slack can verify its URL. */
+    attempts?: number;
+    retryMs?: number;
   } = {},
 ): Promise<SlackOnboardingState> {
   let state = input.state;
   const current = await currentSlackConfigToken(input.stateRoot, state);
   state = current.state;
+  const budget = { attempts: deps.attempts ?? REGISTRATION_ATTEMPTS, retryMs: deps.retryMs ?? REGISTRATION_RETRY_MS };
+
+  // The KIND of app — rotating token (installed through an OAuth redirect) or static token (installed
+  // from the console) — is decided ONCE, when the app is created, and Slack makes it permanent: rotation
+  // cannot be disabled, and a static-token app has no redirect to rotate through. This run's MODE
+  // (whether it holds a redirect URL) chooses the kind only at creation. On a resume it must MATCH the
+  // record, because every later manifest is written whole and would otherwise convert the app in
+  // silence — then disagree with the record on every Request-URL update after that.
+  const rotating = input.redirectUrl !== undefined;
+  if (state.appId) {
+    const recorded = state.tokenRotation ?? true; // absent: predates the record; only the OAuth path existed
+    if (recorded !== rotating) {
+      throw new Error(
+        recorded
+          ? `Slack app ${state.appId} was created for an OAuth install (rotating token) — re-run \`fastagent add slack\` without --manual to resume it`
+          : `Slack app ${state.appId} was created for a console install (static token) — re-run \`fastagent add slack --manual\` to resume it`,
+      );
+    }
+  }
   const manifest = buildSlackManifest({
     name: state.appName,
     groupBehavior: state.groupBehavior,
     requestUrl: input.requestUrl,
     redirectUrl: input.redirectUrl,
-    tokenRotation: input.redirectUrl !== undefined,
+    tokenRotation: rotating,
   });
 
   if (!state.appId) {
@@ -66,24 +120,32 @@ export async function onboardSlackApp(
       );
     }
     io.note("Creating the internal Slack app from its FastAgent manifest…");
-    // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the app;
-    // refusing a blind retry is safer than silently producing duplicates. The marker spans exactly one
-    // in-flight call — anything that widens that window turns a Ctrl-C into a wedged next run.
-    state = { ...state, createAttemptedAt: new Date().toISOString() };
-    writeSlackOnboardingState(input.stateRoot, state);
+    const setMarker = (value: string | undefined): void => {
+      state = { ...state, createAttemptedAt: value };
+      writeSlackOnboardingState(input.stateRoot, state);
+    };
     let created: Awaited<ReturnType<typeof createSlackApp>>;
     try {
-      created = await (deps.createApp ?? createSlackApp)(current.token, manifest);
+      created = await retryWhileUnverified(
+        io,
+        budget,
+        () => {
+          // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the
+          // app; refusing a blind retry is safer than silently producing duplicates. The marker spans
+          // exactly one in-flight call: an unverifiable URL created nothing, so it comes off again before
+          // the wait — a Ctrl-C during that wait must not wedge the next run on an app that never existed.
+          setMarker(new Date().toISOString());
+          return (deps.createApp ?? createSlackApp)(current.token, manifest);
+        },
+        () => setMarker(undefined),
+      );
     } catch (error) {
       const ambiguous =
         !(error instanceof SlackConfigApiError) ||
         ["fatal_error", "internal_error", "request_timeout", "service_unavailable", "failed_creating_app"].includes(
           error.code,
         );
-      if (!ambiguous) {
-        state = { ...state, createAttemptedAt: undefined };
-        writeSlackOnboardingState(input.stateRoot, state);
-      }
+      if (!ambiguous) setMarker(undefined);
       throw error;
     }
     state = {
@@ -93,8 +155,7 @@ export async function onboardSlackApp(
       clientId: created.clientId,
       clientSecret: created.clientSecret,
       signingSecret: created.signingSecret,
-      // Read off the manifest actually sent, so the record cannot disagree with the app.
-      tokenRotation: manifest.settings.token_rotation_enabled,
+      tokenRotation: rotating,
     };
     // Irreversible boundary first: a cancellation or .env write failure can resume without creating a duplicate.
     writeSlackOnboardingState(input.stateRoot, state);
@@ -106,8 +167,11 @@ export async function onboardSlackApp(
           "the app appears already installed; set SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET in .env or remove the app and onboarding state to start over",
       );
     }
-    io.note(`Resuming Slack app ${state.appId}; refreshing its temporary setup URLs…`);
-    await (deps.updateManifest ?? updateSlackAppManifest)(current.token, state.appId, manifest);
+    const appId = state.appId;
+    io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
+    await retryWhileUnverified(io, budget, () =>
+      (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest),
+    );
   }
 
   if (state.signingSecret) {
@@ -126,9 +190,14 @@ export async function onboardSlackApp(
     clientSecret: state.clientSecret,
     scopes,
   });
-  if (oauth.appId !== state.appId) throw new Error("Slack installed a different app than the manifest app");
-  // An install that reports no scopes could not observe them (a console install answers with the
-  // token's identity, not its grant). Saying nothing beats asserting a check that did not happen.
+  // Two checks an installer may be unable to answer (a console install has only what `auth.test`
+  // returns). An unanswered check is SKIPPED and said so — never passed by substituting the expected
+  // value, which would make "a different app's token was pasted" indistinguishable from success.
+  if (oauth.appId === undefined) {
+    io.note("Slack did not report which app this token belongs to; make sure it is the one just created.");
+  } else if (oauth.appId !== state.appId) {
+    throw new Error("Slack installed a different app than the manifest app");
+  }
   if (oauth.scopes.length > 0 && scopes.some((scope) => !oauth.scopes.includes(scope))) {
     throw new Error("Slack install completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
@@ -138,7 +207,7 @@ export async function onboardSlackApp(
   // run; the e2e script's no-op secret writer could not see it.
   await io.writeRuntimeSecrets({
     botToken: oauth.botToken,
-    ...(manifest.settings.token_rotation_enabled
+    ...(rotating
       ? {
           botRefreshToken: oauth.botRefreshToken,
           botTokenExpiresAt: oauth.botTokenExpiresAt,
