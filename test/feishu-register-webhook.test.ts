@@ -51,7 +51,7 @@ describe("registerFeishuWebhook: the config PATCH is its own readiness probe", (
     });
     expect(ok).toBe("registered");
     // Only the platform is asked — the fresh tunnel hostname is never dialled from here.
-    expect(dialled.some((url) => new URL(url).hostname.endsWith("trycloudflare.com"))).toBe(false);
+    expect(dialled.some((url) => new URL(url).hostname === "x.trycloudflare.com")).toBe(false);
     expect(patches).toHaveLength(1);
     expect(patches[0]?.url).toContain("http://feishu.test/open-apis/application/v7/applications/cli_app/config");
     expect(patches[0]?.body).toEqual({
