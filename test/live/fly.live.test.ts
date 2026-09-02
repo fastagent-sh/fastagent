@@ -19,7 +19,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { listHasName } from "../../src/deploy/fly/run.ts";
+import { hasIngressAddress, listHasName } from "../../src/deploy/fly/run.ts";
 import { requireEnv } from "./env.ts";
 
 const run = promisify(execFile);
@@ -60,6 +60,22 @@ describe("flyctl output still matches what the Fly driver reads", () => {
       expect(name, "an app entry carries neither Name nor name").toBeTruthy();
       expect(listHasName(stdout, name as string), "listHasName cannot find an app that is listed").toBe(true);
     }
+  });
+
+  it("`ips list --json` still carries Address, which decides whether the deploy allocates one", async () => {
+    // The newest parsing assumption here (#425): reading this wrong in the "has an address" direction
+    // ships an app nobody can reach, and in the other direction allocates a second address every run.
+    const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string; name?: string }[];
+    const app = apps[0]?.Name ?? apps[0]?.name;
+    if (!app) return; // no app to inspect; the shape below is what an empty account would answer anyway
+
+    const stdout = await flyctl(["ips", "list", "-a", app, "--json"]);
+    const ips = JSON.parse(stdout) as { Address?: string }[];
+    expect(Array.isArray(ips), "ips list --json is no longer a JSON array").toBe(true);
+    // An account's first app is one this probe did not create, so it may legitimately have no address;
+    // assert the reader agrees with the payload either way rather than assuming a state.
+    expect(hasIngressAddress(stdout)).toBe(ips.some((ip) => typeof ip.Address === "string" && ip.Address !== ""));
+    expect(hasIngressAddress("[]"), "an app with no addresses must read as unallocated").toBe(false);
   });
 
   it("`volumes list --json` parses through the same reader", async () => {

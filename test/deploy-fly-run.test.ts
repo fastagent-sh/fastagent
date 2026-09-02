@@ -32,9 +32,11 @@ const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async (): Promise<Registr
   deployFlyRun(p, fly, () => {}, { telegram: tg });
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
-  it("happy path: auth → create app+volume → set secrets → deploy → telegram webhook", async () => {
-    // Fresh account: apps/volumes lists are empty, everything succeeds.
-    const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+  it("happy path: auth → create app+volume+address → set secrets → deploy → telegram webhook", async () => {
+    // Fresh account: apps/volumes/ips lists are empty, everything succeeds.
+    const { fly, cmds } = fakeFly((a) =>
+      a[0] === "apps" || a[0] === "volumes" || a[0] === "ips" ? { stdout: "[]" } : {},
+    );
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
@@ -52,10 +54,37 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "apps create bot",
       "volumes list -a bot --json",
       "volumes create data -a bot --region iad --size 1 --yes",
+      "ips list -a bot --json",
+      "ips allocate-v4 --shared -a bot",
+      "ips allocate-v6 -a bot",
       "secrets import --stage -a bot",
       "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
+  });
+
+  it("an app that already has an address is not allocated a second one", async () => {
+    // The shape `fly ips list --json` really returns (Address + Type), from a deployed app.
+    const existing = JSON.stringify([{ ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" }]);
+    const { fly, cmds } = fakeFly((a) => {
+      if (a[0] === "ips") return { stdout: existing };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: true });
+    expect(cmds()).toContain("ips list -a bot --json");
+    expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
+  });
+
+  it("gate: a failed `ips list` stops before deploying something unreachable", async () => {
+    // Without an address the machine serves and https://<app>.fly.dev has no DNS record at all, so a
+    // list we cannot read must not be treated as "probably fine" (#425).
+    const { fly } = fakeFly((a) => {
+      if (a[0] === "ips") return { code: 1 };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("ips list") });
   });
 
   it("dispatches Feishu and Lark registration through the per-kind seam", async () => {

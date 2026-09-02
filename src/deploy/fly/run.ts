@@ -41,6 +41,20 @@ export interface FlyRunPlan {
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
 export type FlyRunOutcome = { ok: true } | { ok: false; gate: string };
 
+/**
+ * Whether `fly ips list --json` shows a public ingress address. Entries carry `Address` plus a `Type`
+ * (`v6`, `shared_v4`, …); any non-empty address means the app is routable, which is the only question
+ * the deploy has to answer.
+ */
+export function hasIngressAddress(stdout: string): boolean {
+  try {
+    const arr = JSON.parse(stdout) as { Address?: unknown }[];
+    return Array.isArray(arr) && arr.some((entry) => typeof entry?.Address === "string" && entry.Address !== "");
+  } catch {
+    return false;
+  }
+}
+
 /** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both).
  *  Exported for the same reason railway's parsers are: what it encodes is an assumption about another
  *  tool's output, and the live probe checks that assumption against the real `flyctl`. */
@@ -115,7 +129,28 @@ export async function deployFlyRun(
     }
   }
 
-  // 5. Secrets — staged (no deploy yet; we deploy with fly.toml next). Values over stdin, not argv.
+  // 5. Ingress address — `[http_service]` in fly.toml DECLARES a service; it does not create an address
+  //    to reach it on. `fly launch` allocates one as part of its flow, and this driver does not use it,
+  //    so without this step the deploy succeeds, the machine serves, and `https://<app>.fly.dev` has no
+  //    DNS record at all — reported as a healthy deploy, and handed to the webhook registrars as a URL
+  //    they then fail to reach. Check-then-act like the volume above; both allocations are free.
+  const ipList = await fly(["ips", "list", "-a", plan.appName, "--json"], { capture: true });
+  if (ipList.code !== 0) return gate("`fly ips list` failed — see the flyctl output above; fix and re-run");
+  if (hasIngressAddress(ipList.stdout)) {
+    log("public address exists — skipping allocate");
+  } else {
+    log("allocating a public address…");
+    // v4 SHARED (free, and what every client can reach) plus v6. A dedicated v4 is billed, so it stays
+    // an operator decision — `fly ips allocate-v4 -a <app>` after the fact, which this step then skips.
+    if ((await fly(["ips", "allocate-v4", "--shared", "-a", plan.appName])).code !== 0) {
+      return gate("`fly ips allocate-v4 --shared` failed — see the flyctl output above");
+    }
+    if ((await fly(["ips", "allocate-v6", "-a", plan.appName])).code !== 0) {
+      return gate("`fly ips allocate-v6` failed — see the flyctl output above");
+    }
+  }
+
+  // 6. Secrets — staged (no deploy yet; we deploy with fly.toml next). Values over stdin, not argv.
   const keys = Object.keys(plan.secrets);
   if (keys.length > 0) {
     log(`setting ${keys.length} secret(s): ${keys.join(", ")}`);
@@ -125,7 +160,7 @@ export async function deployFlyRun(
     }
   }
 
-  // 6. Deploy — remote builder (no local Docker), one machine. Context + Dockerfile are passed
+  // 7. Deploy — remote builder (no local Docker), one machine. Context + Dockerfile are passed
   //    explicitly (the workspace root is the context; the Dockerfile lives under fastagent/).
   log("deploying (remote build)…");
   const deployArgs = [
@@ -145,7 +180,7 @@ export async function deployFlyRun(
     return gate("`fly deploy` failed — see the flyctl output above; fix and re-run");
   }
 
-  // 7. Post-deploy webhook — which channels, in what words, and the gate policy are all the shared
+  // 8. Post-deploy webhook — which channels, in what words, and the gate policy are all the shared
   //    kernel's; Fly contributes its deterministic URL and how to retry.
   const registrationGateMsg = await registerWebhooks({
     baseUrl: `https://${plan.appName}.fly.dev`,
