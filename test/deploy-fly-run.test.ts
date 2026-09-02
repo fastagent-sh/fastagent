@@ -65,9 +65,12 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
   });
 
-  it("an app that already has an address is not allocated a second one", async () => {
+  it("an app that already has both families is not allocated a second address", async () => {
     // The shape `fly ips list --json` really returns (Address + Type), from a deployed app.
-    const existing = JSON.stringify([{ ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" }]);
+    const existing = JSON.stringify([
+      { ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" },
+      { ID: "ip_y", Address: "2a09:8280:1::1:2", Type: "v6" },
+    ]);
     const { fly, cmds } = fakeFly((a) => {
       if (a[0] === "ips") return { stdout: existing };
       return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
@@ -77,6 +80,25 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(cmds()).toContain("ips list -a bot --json");
     expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
   });
+
+  // The check is per family because the ACTION is: "has an ingress address" would read either of
+  // these as done. The v6-only app is #425 itself — it resolves, to an AAAA record alone, which an
+  // IPv4-only webhook sender (Telegram, GitHub) cannot reach. The v4-only app is how it gets there:
+  // allocate-v4 succeeds, allocate-v6 gates, and the re-run the gate asks for sees v4 and skips.
+  for (const [held, missing, expected] of [
+    [{ ID: "ip_y", Address: "2a09:8280:1::1:2", Type: "v6" }, "v4", "ips allocate-v4 --shared -a bot"],
+    [{ ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" }, "v6", "ips allocate-v6 -a bot"],
+  ] as const) {
+    it(`allocates the missing ${missing} for an app that holds only the other family`, async () => {
+      const { fly, cmds } = fakeFly((a) => {
+        if (a[0] === "ips") return { stdout: JSON.stringify([held]) };
+        return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+      });
+
+      expect(await run(plan(), fly)).toEqual({ ok: true });
+      expect(cmds().filter((c) => c.startsWith("ips allocate"))).toEqual([expected]);
+    });
+  }
 
   it("allocates for an app whose only addresses are Flycast and egress", async () => {
     // Every one of these carries a non-empty Address and NONE of them answers https://<app>.fly.dev.

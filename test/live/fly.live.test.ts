@@ -19,7 +19,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { hasIngressAddress, listHasName } from "../../src/deploy/fly/run.ts";
+import { ingressAddresses, listHasName } from "../../src/deploy/fly/run.ts";
 import { requireEnv } from "./env.ts";
 
 const run = promisify(execFile);
@@ -90,10 +90,16 @@ describe("flyctl output still matches what the Fly driver reads", () => {
 
     // An account's first app is one this probe did not create, so it may legitimately have no public
     // address; assert the reader agrees with the payload either way rather than assuming a state.
-    const isPublic = (ip: { Address?: string; Type?: string }) =>
-      typeof ip.Address === "string" && ip.Address !== "" && ["v4", "v6", "shared_v4"].includes(ip.Type as string);
-    expect(hasIngressAddress(stdout)).toBe(ips.some(isPublic));
-    expect(hasIngressAddress("[]"), "an app with no addresses must read as unallocated").toBe(false);
+    const holds = (types: string[]) => (ip: { Address?: string; Type?: string }) =>
+      typeof ip.Address === "string" && ip.Address !== "" && types.includes(ip.Type as string);
+    expect(ingressAddresses(stdout)).toEqual({
+      v4: ips.some(holds(["v4", "shared_v4"])),
+      v6: ips.some(holds(["v6"])),
+    });
+    expect(ingressAddresses("[]"), "an app with no addresses must read as unallocated").toEqual({
+      v4: false,
+      v6: false,
+    });
   });
 
   it("`volumes list --json` parses through the same reader", async () => {

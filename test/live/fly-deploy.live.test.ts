@@ -118,8 +118,14 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     const first = await invoke(session, "Remember this number: 47. Reply with just: ok");
     expect(first.at(-1)).toMatchObject({ type: "completed" });
 
-    // The volume is the deployment's continuity, and on Fly it is the one piece the driver had to
-    // create separately — a machine that came up without it answers this turn from nothing.
+    // Restart BETWEEN the turns, which is what makes the next answer evidence about the VOLUME rather
+    // than about the record store: a rolling restart replaces the machine's filesystem, so anything
+    // that survives came off the `data` volume mounted at /data (fly.toml's `[mounts]`, the one piece
+    // this driver creates in a step of its own). Without it both turns hit one running machine and a
+    // container-local store would answer identically — the same reason docker.live.test.ts restarts.
+    await run("flyctl", ["apps", "restart", APP]);
+    expect(await waitForHealth(`${URL_BASE}/health`, 180_000, 3_000), `${URL_BASE}/health never came back`).toBe(true);
+
     const second = await invoke(session, "What number did I ask you to remember? Reply with digits only.");
     expect(second.at(-1)).toMatchObject({ type: "completed" });
     expect(answerOf(second)).toContain("47");

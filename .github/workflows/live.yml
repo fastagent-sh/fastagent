@@ -153,6 +153,10 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
+          # Without this the pipeline's exit code is `xargs`'s, which is 0 on empty input: a failed
+          # `apps list` (expired token, Fly 5xx) or a `jq` error would report a clean sweep having
+          # deleted nothing. The default shell here is `bash -e {0}` — `-o pipefail` is NOT included.
+          set -o pipefail
           flyctl apps list --json \
             | jq -r '.[] | (.Name // .name) | select(test("^fastagent-live-[0-9a-f]{8}$"))' \
             | tee /dev/stderr \
