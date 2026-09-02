@@ -27,7 +27,13 @@ jobs:
     # vitest's own ceiling covers the tests; `npm ci` and a container build sit outside it. Nobody is
     # watching a nightly run, and the 6h default would hold the next one behind it (the group does not
     # cancel in progress).
-    timeout-minutes: 60
+    #
+    # 120, not 60: the probes run SERIALLY (`fileParallelism: false`) and their own budgets already add
+    # up past an hour — the AgentCore deploy alone declares 30 minutes for the stack plus 15 for its
+    # teardown, on top of the fly and railway deploys and a container build. At 60 this job would hit
+    # the ceiling on a normal-but-slow night, and it would hit it DURING the most expensive probe, in
+    # the one place where the sweeps below are all that stand between a kill and a billing leak.
+    timeout-minutes: 120
     environment: live # holds FASTAGENT_LIVE_MODEL and the provider key
     steps:
       - name: Check out repository
@@ -97,6 +103,14 @@ jobs:
           echo "$HOME/.railway/bin" >> "$GITHUB_PATH"
           "$HOME/.railway/bin/railway" --version
 
+      # The AgentCore image must be linux/arm64 (the runtime's only architecture), which the driver
+      # cross-builds with `docker buildx`. Ubuntu runners ship docker, and this adds the plugin plus
+      # the QEMU emulation an arm64 build needs on an x86 runner.
+      - name: Set up QEMU and buildx for the arm64 image
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
       # ONE credential mechanism for both probes: an auth.json, named by the product's own
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
       # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
@@ -165,6 +179,17 @@ jobs:
           # an operator who ran `railway login` and only names the variable in its gate message, so
           # here the token stands in for the session CI has no way to hold.
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          # Scoped by an inline IAM policy to the resources the deploy probe creates and destroys: a
+          # CloudFormation stack, an ECR repository, an S3 bucket and an AgentCore runtime. The policy
+          # needs FOUR patterns, not one — the driver derives each name differently from the same
+          # `live-probe-<uuid8>` directory, and only the stack wears the `fastagent-` prefix:
+          #   stack `fastagent-live-probe-*` / bucket `fa-live-probe-*-<account>` /
+          #   repository `fastagent/live-probe-*` (slash) / runtime `live_probe_*` (underscores).
+          # A policy written for the stack pattern alone denies the other three, and does it only after
+          # the image is built and pushed. test/live/agentcore-deploy.live.test.ts carries the same map.
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: npm run test:live
 
       # The deploy probe destroys its own app in afterAll, which a job timeout or a cancelled run
@@ -202,3 +227,70 @@ jobs:
             | jq -r '.[] | select(.deletedAt == null) | select(.name | test("^fastagent-live-[0-9a-f]{8}$")) | .id' \
             | tee /dev/stderr \
             | xargs -r -n1 -I{} railway delete --yes --project {}
+
+      # Same reasoning as the sweeps above, with AgentCore's twist: THREE kinds are left behind,
+      # because the bucket and repository are deliberately created outside the stack (plan.ts: so a
+      # `delete-stack` cannot take the agent's memory with it). The bucket is versioned, so every
+      # version AND every delete marker goes before the bucket will.
+      #
+      # Fail-loud like the two sweeps above, and for a sharper reason: this step is the net under a
+      # probe that was KILLED, so the run it reports into is already red or cancelled and nobody will
+      # read its log. A swallowed `delete-stack` failure (DELETE_FAILED) or a bucket that refuses to go
+      # is a Bedrock runtime, a Lambda, an image and a credential-bearing bucket still billing, with
+      # nothing else in the world collecting them. Every deletion is still ATTEMPTED even after one
+      # fails; "already gone" is the goal state, not a failure.
+      #
+      # It reads names from a FILE the probe appends to, not from `list-stacks`: the IAM policy scopes
+      # this credential to `fastagent-live-probe-*` and account-wide listing is exactly what that
+      # refuses. Widening the policy to enumerate every stack in the account, so a cleanup can find
+      # the two it owns, is the wrong trade.
+      - name: Destroy leftover live AgentCore resources
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -o pipefail
+          [ -f "$RUNNER_TEMP/agentcore-probe-names" ] || { echo "no probe ran"; exit 0; }
+          account=$(aws sts get-caller-identity --query Account --output text)
+          failed=0
+          # Tolerates only the goal state; anything else is reported and fails the step.
+          attempt() {
+            label="$1"; shift
+            if ! out=$("$@" 2>&1); then
+              case "$out" in
+                *"does not exist"*|*NotFound*|*NoSuchBucket*) ;;
+                *) echo "::error::$label failed: $out"; failed=1 ;;
+              esac
+            fi
+          }
+          # A FILE, not a pipe into `while`: a piped loop runs in a subshell, where every `failed=1`
+          # would be discarded at the `done` and this step would go green having reported errors.
+          sort -u "$RUNNER_TEMP/agentcore-probe-names" > "$RUNNER_TEMP/agentcore-sweep"
+          cat "$RUNNER_TEMP/agentcore-sweep" >&2
+          while read -r name; do
+            [ -n "$name" ] || continue
+            bucket="fa-$name-$account"
+            attempt "delete-stack $name" aws cloudformation delete-stack --stack-name "fastagent-$name"
+            attempt "wait stack-delete $name" aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name"
+            # `s3 rm` does not empty a versioned bucket — it writes a delete marker per object, and a
+            # marker comes back under DeleteMarkers, not Versions. Deleting only Versions leaves the
+            # bucket non-empty and `delete-bucket` answers BucketNotEmpty.
+            attempt "s3 rm $bucket" aws s3 rm "s3://$bucket" --recursive
+            if objects=$(aws s3api list-object-versions --bucket "$bucket" --output json 2>&1); then
+              payload=$(printf '%s' "$objects" \
+                | jq -c '{Objects: [(.Versions // []) + (.DeleteMarkers // [])] | flatten | map({Key, VersionId})}')
+              if [ "$(printf '%s' "$payload" | jq '.Objects | length')" -gt 0 ]; then
+                attempt "delete-objects $bucket" aws s3api delete-objects --bucket "$bucket" --delete "$payload"
+              fi
+            else
+              case "$objects" in
+                *NoSuchBucket*) ;;
+                *) echo "::error::list-object-versions $bucket failed: $objects"; failed=1 ;;
+              esac
+            fi
+            attempt "delete-bucket $bucket" aws s3api delete-bucket --bucket "$bucket"
+            attempt "delete-repository $name" aws ecr delete-repository --repository-name "fastagent/$name" --force
+          done < "$RUNNER_TEMP/agentcore-sweep"
+          exit "$failed"
