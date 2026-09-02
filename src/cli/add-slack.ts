@@ -278,13 +278,10 @@ export async function onboardSlackInternalApp(input: {
         writeRuntimeSecrets: writeRuntimeSecrets(input.target),
       },
     );
-    console.error(
-      `[fastagent] Slack app installed; bot token and Signing Secret written to ${dotEnvPath(input.target)}`,
-    );
-    console.error(
-      "[fastagent] the app has no Events Request URL yet — `fastagent dev --tunnel` or `deploy` sets it " +
-        "automatically from this machine, or set <public-url>/slack under Event Subscriptions by hand",
-    );
+    // What happened, once. What to do next is `add`'s "next steps" block, which says it in the user's
+    // terms (messages do not arrive until the agent runs somewhere Slack can reach) — the same truth
+    // for both install modes, so neither branch narrates its own mechanism here.
+    console.error(`[fastagent] Slack app installed; credentials written to ${dotEnvPath(input.target)}`);
     return;
   }
 
@@ -312,13 +309,7 @@ export async function onboardSlackInternalApp(input: {
         writeRuntimeSecrets: writeRuntimeSecrets(input.target),
       },
     );
-    console.error(
-      `[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to ${dotEnvPath(input.target)}`,
-    );
-    console.error(
-      `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
-        "replace the temporary Events API URL automatically",
-    );
+    console.error(`[fastagent] Slack app installed; credentials written to ${dotEnvPath(input.target)}`);
   } finally {
     tunnel.close();
     await server.close().catch(() => {});

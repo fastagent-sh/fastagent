@@ -124,13 +124,13 @@ export async function runAddChannel(
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          opts.manual
-            ? `Slack internal app created and installed from its console; runtime credentials are in ${envLabel}`
-            : `Slack internal app created/configured/installed through OAuth; runtime credentials are in ${envLabel}`,
-          opts.manual
-            ? "run fastagent dev --tunnel (or deploy) to set the Events API Request URL — the app has none yet"
-            : "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
-          "invite the app to every channel it should read",
+          // In the user's terms, not Slack's: what a "Request URL" is does not matter to them, what
+          // happens to their messages does. True of both install modes — the OAuth one points Slack
+          // at a throwaway setup URL, the console one at nothing — and in both FastAgent fixes it
+          // from this machine when the agent first runs, so there is one sentence, not two.
+          "until the agent runs somewhere Slack can reach, nothing you type in Slack arrives — " +
+            "`fastagent dev --tunnel` (local) or `fastagent deploy` (hosted) starts it, and FastAgent points Slack at it for you",
+          "invite the app to each channel it should read (DMs need no invite)",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]
       : setup.steps;
@@ -186,7 +186,7 @@ export async function runAddChannel(
     console.error(`    fastagent dev            # no public URL or tunnel required`);
   } else if (channelKind === "slack") {
     console.error(
-      `    fastagent dev --tunnel   # serve locally; ${opts.onboard === false ? "print the Request URL for manual Slack setup" : "auto-update the onboarded Slack Request URL"}`,
+      `    fastagent dev --tunnel   # ${opts.onboard === false ? "serve locally + print the URL to paste into the Slack app's Event Subscriptions" : "serve locally on a public URL — Slack starts delivering messages to the agent"}`,
     );
   } else if (channelKind === "github") {
     console.error(`    fastagent dev --tunnel   # serve locally + print the URL for manual GitHub webhook setup`);
