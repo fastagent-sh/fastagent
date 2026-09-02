@@ -226,16 +226,18 @@ async function resolveIngress(
   }
   const answer = await select<FeishuSubscriptionMode>({
     message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
+    // Webhook leads because the menu's default must match the non-interactive one above, and because
+    // websocket -> webhook is a migration this command refuses (see existsAlready) while the reverse costs nothing.
     options: [
-      {
-        value: "websocket",
-        label: "WebSocket long connection",
-        hint: "no public URL; requires an always-on process",
-      },
       {
         value: "webhook",
         label: "Webhook endpoint",
-        hint: "supports scale-to-zero; requires a public HTTPS URL",
+        hint: "works on every deploy target; scales to zero; requires a public HTTPS URL",
+      },
+      {
+        value: "websocket",
+        label: "WebSocket long connection",
+        hint: "no public URL; needs an always-on process (not on AgentCore)",
       },
     ],
   });
