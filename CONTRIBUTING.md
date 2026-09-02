@@ -32,7 +32,7 @@ Tests use faux models by default, so they validate serving mechanics without net
 2. ... change code, iterate locally ...
 3. npm run lint && npm run typecheck && npm test
 4. git push -u origin feature/<thing>
-5. gh pr create --base main --assignee @me   # fill in the PR template
+5. gh pr create --base main --assignee @me   # drop --assignee without push access
 6. CI green → merge (see "Merge strategy")
 7. After merge: clean up local + remote tracking branches
 ```
@@ -43,20 +43,22 @@ Most of the sidebar fills itself; the rest is one flag. What is automatic and wh
 
 | Field | Issues | Pull requests |
 | --- | --- | --- |
-| Type (`Bug` / `Feature` / `Task`) | Automatic — each issue form declares one | Not applicable |
-| Labels | Automatic — the form's `labels:` | Automatic — the branch prefix, via `.github/labeler.yml` |
+| Type (`Bug` / `Feature` / `Task`) | Automatic in the browser — each issue form declares one | Not applicable |
+| Labels | Automatic in the browser — the form's `labels:` (Task files as `chore`) | Automatic — the branch prefix, via `.github/labeler.yml` |
 | Reviewer | Not applicable | Automatic — CODEOWNERS |
-| Assignee | Whoever picks it up | `--assignee @me` |
-| Projects, Priority, Milestone | Board fields; set them on the board | Follows the linked issue — write `Closes #<n>` |
+| Assignee | Whoever picks it up | `--assignee @me`, and only with push access |
+| Projects, Priority, Milestone | Board fields; set them on the board | Board fields too — `Closes #<n>` closes the issue, it does not carry them over |
 
-The one thing that defeats all of it is `gh issue create` with a bare `--title`: the CLI skips the templates entirely, so the issue lands with no type and no label. Name the template instead:
+The forms fill the sidebar only in the browser — which is where contributors without push access should open issues, since the API silently drops `--type` and `--label` for them. `gh issue create` cannot use the forms at all: it discovers templates through GraphQL `repository.issueTemplates`, which does not return issue forms ([cli/cli#5865](https://github.com/cli/cli/issues/5865)). With push access, pass the two fields explicitly:
 
 ```bash
-gh issue create --template bug_report.yml       # or feature_request.yml, task.yml
+gh issue create --title "bug: <what>" --body "<detail>" --type Bug --label bug   # Feature/enhancement, Task/chore
 gh pr create --base main --assignee @me        # labels and reviewers are added for you
 ```
 
-A PR whose branch does not carry one of the prefixes above gets no label — that is the prefix convention failing loudly, not the labeler.
+Without push access, drop `--assignee`: `gh` resolves the login against the repository's assignable users and aborts with `'<login>' not found` before the pull request is created.
+
+A PR whose branch prefix matches no rule in `.github/labeler.yml` gets no label, and nothing says so: the job stays green and the label field is silently empty.
 
 ### After a PR merges
 

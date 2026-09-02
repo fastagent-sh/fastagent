@@ -5,7 +5,8 @@
 bug:
   - head-branch: ['^fix/']
 enhancement:
-  - head-branch: ['^feature/']
+  # `feat/` is a fifth of this repo's feature branches, despite the documented prefix.
+  - head-branch: ['^feat(ure)?/']
 documentation:
   - head-branch: ['^docs/']
 refactor:

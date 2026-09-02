@@ -2,6 +2,7 @@ name: Task
 description: Track internal work — refactor, chore, CI, test, or release follow-up.
 title: "task: "
 type: Task
+labels: [chore]
 body:
   - type: textarea
     id: goal
