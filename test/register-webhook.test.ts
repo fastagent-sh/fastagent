@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramWebhook } from "../src/channels/telegram/register-webhook.ts";
 import { log } from "../src/log.ts";
 
-// G5: the webhook must be registered only AFTER the server is reachable — Telegram verifies the URL when
-// you set it, and a fresh deploy's container (or tunnel DNS) isn't routable for some seconds after the
-// deploy command returns. These pin "poll /health, then register", the fix for the deploy-race that made
-// the first real deploy need a manual setWebhook.
-describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
+// G5: the webhook must end up registered even though a fresh deploy's container (or a fresh tunnel's
+// edge) is not routable for some seconds. setWebhook itself is the probe — Telegram VERIFIES the URL
+// during the call, from Telegram's network — so its "could not reach it" verdicts are retried while a
+// configuration error is reported once. No local /health poll precedes it: this machine's reach is a
+// different question, and a freshly minted hostname is routinely unreachable from here (#421).
+describe("registerTelegramWebhook: setWebhook is its own readiness probe", () => {
   const prevBot = process.env.TELEGRAM_BOT_TOKEN;
   const prevSecret = process.env.TELEGRAM_SECRET_TOKEN;
   afterEach(() => {
@@ -16,163 +17,116 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
     process.env.TELEGRAM_SECRET_TOKEN = prevSecret;
   });
 
-  it("polls /health until reachable, THEN registers exactly once", async () => {
+  it("registers exactly once, without probing the URL from this machine", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "bt";
     process.env.TELEGRAM_SECRET_TOKEN = "st";
-    let health = 0;
-    const setWebhook: string[] = [];
+    const called: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) {
-          health++;
-          return new Response(null, { status: health < 3 ? 503 : 200 }); // not ready until the 3rd poll
-        }
+        called.push(url);
         if (url.includes("/setWebhook")) {
-          setWebhook.push(url);
           return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
         }
         return new Response(null, { status: 404 });
       }),
     );
-    const ok = await registerTelegramWebhook("https://app.up.railway.app", {
-      readyTimeoutMs: 5000,
-      readyIntervalMs: 1,
-    });
+    const ok = await registerTelegramWebhook("https://app.up.railway.app");
     expect(ok).toBe("registered");
-    expect(health).toBeGreaterThanOrEqual(3); // waited for readiness, not a fixed timer
-    expect(setWebhook).toHaveLength(1); // registered once, AFTER /health returned 200
+    expect(called).toHaveLength(1);
+    expect(called[0]).toContain("/setWebhook");
+    // The fresh hostname is never dialled from here — only Telegram has to reach it.
+    expect(called.some((url) => url.includes("app.up.railway.app"))).toBe(false);
   });
 
-  it("never setWebhooks against a URL that isn't up — gives up with a manual instruction", async () => {
+  it("retries while TELEGRAM cannot reach the URL yet, then succeeds", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "bt";
     process.env.TELEGRAM_SECRET_TOKEN = "st";
-    const setWebhook: string[] = [];
+    let calls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string) => {
-        if (url.includes("/setWebhook")) {
-          setWebhook.push(url);
-          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+      vi.fn(async () => {
+        calls++;
+        // 1: the tunnel edge answers 530 with no origin; 2: Telegram's resolver still lags.
+        if (calls === 1) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              description: "Bad Request: bad webhook: Wrong response from the webhook: 530 Origin DNS error",
+            }),
+            { status: 400 },
+          );
         }
-        throw new Error("ECONNREFUSED"); // /health never reachable
+        if (calls === 2) throw new Error("getaddrinfo ENOTFOUND api.telegram.org");
+        return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
       }),
     );
-    const ok = await registerTelegramWebhook("https://dead.up.railway.app", { readyTimeoutMs: 20, readyIntervalMs: 5 });
-    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
-    expect(setWebhook).toHaveLength(0); // no registration against a URL Telegram couldn't reach either
-  });
-
-  it("after /health is up, retries a TRANSIENT setWebhook failure and succeeds", async () => {
-    // Telegram's resolver can lag /health by a moment — the first setWebhook may hit "resolve host".
-    process.env.TELEGRAM_BOT_TOKEN = "bt";
-    process.env.TELEGRAM_SECRET_TOKEN = "st";
-    let setWebhookCalls = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
-        if (url.includes("/setWebhook")) {
-          setWebhookCalls++;
-          if (setWebhookCalls === 1) throw new Error("getaddrinfo ENOTFOUND api.telegram.org"); // transient
-          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
-        }
-        return new Response(null, { status: 404 });
-      }),
-    );
-    const ok = await registerTelegramWebhook("https://app.up.railway.app", {
-      readyTimeoutMs: 5000,
-      readyIntervalMs: 1,
-    });
+    const ok = await registerTelegramWebhook("https://x.trycloudflare.com", { retryMs: 1 });
     expect(ok).toBe("registered");
-    expect(setWebhookCalls).toBe(2); // retried the transient failure, then succeeded
+    expect(calls).toBe(3);
   });
 
   it("does NOT retry a PERMANENT setWebhook error (a config problem, not a race)", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "bt";
     process.env.TELEGRAM_SECRET_TOKEN = "st";
-    let setWebhookCalls = 0;
+    let calls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
-        if (url.includes("/setWebhook")) {
-          setWebhookCalls++;
-          // A permanent Bad Request (e.g. HTTPS url required) — ok:false, not a network error.
-          return new Response(JSON.stringify({ ok: false, description: "Bad Request: bad webhook" }), { status: 400 });
-        }
-        return new Response(null, { status: 404 });
+      vi.fn(async () => {
+        calls++;
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            description: "Bad Request: bad webhook: HTTPS url must be provided for webhook",
+          }),
+          { status: 400 },
+        );
       }),
     );
-    const ok = await registerTelegramWebhook("https://app.up.railway.app", {
-      readyTimeoutMs: 5000,
-      readyIntervalMs: 1,
-    });
+    const ok = await registerTelegramWebhook("http://app.up.railway.app", { retryMs: 1 });
     expect(ok).toBe("failed"); // a config error the operator must fix → deploy --run gates
-    expect(setWebhookCalls).toBe(1); // reported, not retried
+    expect(calls).toBe(1); // reported, not retried
   });
 
-  it("reports the last transient error after exhausting setWebhook retries", async () => {
+  it("reports the last unreachable-URL error after exhausting retries", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "bt";
     process.env.TELEGRAM_SECRET_TOKEN = "st";
-    let setWebhookCalls = 0;
+    let calls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
-        setWebhookCalls++;
-        throw new Error(`fetch failed attempt ${setWebhookCalls}`);
+      vi.fn(async () => {
+        calls++;
+        throw new Error(`fetch failed attempt ${calls}`);
       }),
     );
     const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await registerTelegramWebhook("https://app.up.railway.app", {
-      readyTimeoutMs: 5000,
-      readyIntervalMs: 1,
-      retryMs: 1,
-    });
+    await registerTelegramWebhook("https://app.up.railway.app", { attempts: 3, retryMs: 1 });
 
-    expect(setWebhookCalls).toBe(3);
+    expect(calls).toBe(3);
     expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/last error: .*fetch failed attempt 3/));
   });
 
-  it("terminal failures log at ERROR (webhook not registered → operator must act, same level as a permanent error)", async () => {
+  it("terminal failures log at ERROR (webhook not registered → operator must act)", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "bt";
     process.env.TELEGRAM_SECRET_TOKEN = "st";
     const errors: string[] = [];
     vi.spyOn(log, "error").mockImplementation((m: string) => {
       errors.push(m);
     });
-
-    // Transient setWebhook failures exhaust all retries.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
-        throw new Error("fetch failed");
-      }),
-    );
-    const exhausted = await registerTelegramWebhook("https://app.up.railway.app", {
-      readyTimeoutMs: 5000,
-      readyIntervalMs: 1,
-      retryMs: 1,
-    });
-    expect(exhausted).toBe("failed");
-    expect(errors.join("\n")).toMatch(/still failing after retries.*Register manually/);
-
-    // /health never comes up.
-    errors.length = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        throw new Error("ECONNREFUSED");
+        throw new Error("fetch failed");
       }),
     );
-    await registerTelegramWebhook("https://dead.up.railway.app", { readyTimeoutMs: 20, readyIntervalMs: 5 });
-    expect(errors.join("\n")).toMatch(/did not come up in time.*Register the webhook manually/);
+
+    const exhausted = await registerTelegramWebhook("https://app.up.railway.app", { attempts: 2, retryMs: 1 });
+    expect(exhausted).toBe("failed");
+    expect(errors.join("\n")).toMatch(/could not reach .*after retries.*register manually/is);
   });
 
-  it("missing tokens → manual instruction, no health poll and no setWebhook", async () => {
+  it("missing tokens → manual instruction, no API call at all", async () => {
     delete process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_SECRET_TOKEN;
     const fetchSpy = vi.fn(async () => new Response(null, { status: 200 }));

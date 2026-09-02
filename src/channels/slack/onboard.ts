@@ -1,5 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { createSlackApp, exchangeSlackOAuthCode, SlackConfigApiError, updateSlackAppManifest } from "./config-api.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+  createSlackApp,
+  exchangeSlackOAuthCode,
+  isSlackRequestUrlUnverified,
+  SlackConfigApiError,
+  updateSlackAppManifest,
+} from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
 import { currentSlackConfigToken, type SlackOnboardingState, writeSlackOnboardingState } from "./onboarding-state.ts";
 
@@ -26,6 +33,29 @@ export interface SlackOnboardInput {
   redirectUrl: string;
 }
 
+/**
+ * Repeat a manifest call while Slack cannot yet VERIFY the request_url it carries. Slack challenges
+ * that URL from its own network during the call, which is the only readiness signal that matters here
+ * — the machine running `add slack` often cannot reach a freshly minted tunnel hostname at all (#421),
+ * so it must not be the one asked. Any other failure propagates on the first attempt.
+ */
+async function retryUnverifiedRequestUrl<T>(
+  deps: { attempts?: number; retryMs?: number },
+  io: Pick<SlackOnboardIO, "note">,
+  call: () => Promise<T>,
+): Promise<T> {
+  const attempts = deps.attempts ?? 8;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isSlackRequestUrlUnverified(error) || attempt >= attempts) throw error;
+      io.note(`Slack cannot reach the temporary setup URL yet (attempt ${attempt}/${attempts}); retrying…`);
+      await sleep(deps.retryMs ?? 10_000);
+    }
+  }
+}
+
 /** Create/resume one internal Slack app and complete its workspace OAuth installation. */
 export async function onboardSlackApp(
   input: SlackOnboardInput,
@@ -34,6 +64,9 @@ export async function onboardSlackApp(
     createApp?: typeof createSlackApp;
     updateManifest?: typeof updateSlackAppManifest;
     exchangeCode?: typeof exchangeSlackOAuthCode;
+    /** Attempts absorbing the setup tunnel's warm-up before Slack can verify its URL (~80s). */
+    attempts?: number;
+    retryMs?: number;
   } = {},
 ): Promise<SlackOnboardingState> {
   let state = input.state;
@@ -60,7 +93,11 @@ export async function onboardSlackApp(
     writeSlackOnboardingState(input.stateRoot, state);
     let created: Awaited<ReturnType<typeof createSlackApp>>;
     try {
-      created = await (deps.createApp ?? createSlackApp)(current.token, manifest);
+      // The single-attempt rule guards an AMBIGUOUS create; retryUnverifiedRequestUrl repeats only the
+      // unambiguous one, where Slack rejected the manifest before creating anything.
+      created = await retryUnverifiedRequestUrl(deps, io, () =>
+        (deps.createApp ?? createSlackApp)(current.token, manifest),
+      );
     } catch (error) {
       const ambiguous =
         !(error instanceof SlackConfigApiError) ||
@@ -91,8 +128,11 @@ export async function onboardSlackApp(
           "the app appears already installed; set SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET in .env or remove the app and onboarding state to start over",
       );
     }
-    io.note(`Resuming Slack app ${state.appId}; refreshing its temporary setup URLs…`);
-    await (deps.updateManifest ?? updateSlackAppManifest)(current.token, state.appId, manifest);
+    const appId = state.appId;
+    io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
+    await retryUnverifiedRequestUrl(deps, io, () =>
+      (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest),
+    );
   }
 
   if (state.signingSecret) {

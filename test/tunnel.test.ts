@@ -152,8 +152,8 @@ describe("tunnel: parseTunnelUrl", () => {
 });
 
 describe("tunnel: announceWebhooks", () => {
-  // announceWebhooks first polls <url>/health until the tunnel serves, then registers. The stub
-  // returns 200 for everything, so the health poll passes on the first try.
+  // announceWebhooks registers straight away — the platform's own URL verification is the readiness
+  // probe, so the stub only has to answer the platform API call.
   const setWebhookCall = (m: ReturnType<typeof vi.fn>) =>
     m.mock.calls.find((c) => String(c[0]).includes("setWebhook")) as [string, RequestInit] | undefined;
 

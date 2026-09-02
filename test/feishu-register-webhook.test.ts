@@ -3,10 +3,11 @@ import { registerFeishuWebhook } from "../src/channels/feishu/register-webhook.t
 import { log } from "../src/log.ts";
 
 // Mirrors the telegram registrar's G5 discipline: the application-v7 config PATCH triggers the
-// platform's url_verification challenge against the new Request URL, so registration must wait until
-// the server actually serves — and a permanent config error degrades to the manual console path.
+// platform's url_verification challenge against the new Request URL, so the PATCH is itself the
+// readiness probe — retried while the platform cannot verify the URL, and degrading to the manual
+// console path on a permanent config error. Nothing polls the URL from this machine (#421).
 // The registrar serves BOTH kinds (feishu/lark): the kind picks the env namespace, API base, and path.
-describe("registerFeishuWebhook: waits for /health, then PATCHes the event subscription", () => {
+describe("registerFeishuWebhook: the config PATCH is its own readiness probe", () => {
   const prev = {
     id: process.env.LARK_APP_ID,
     secret: process.env.LARK_APP_SECRET,
@@ -27,17 +28,14 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     process.env[`${prefix}_APP_SECRET`] = "sec";
   }
 
-  it("polls /health until reachable, THEN PATCHes webhook mode + the request URL exactly once", async () => {
+  it("PATCHes webhook mode + the request URL exactly once, without probing the URL from here", async () => {
     creds();
-    let health = 0;
+    const dialled: string[] = [];
     const patches: { url: string; body: Record<string, unknown> }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit = {}) => {
-        if (url.endsWith("/health")) {
-          health++;
-          return new Response(null, { status: health < 3 ? 503 : 200 }); // not ready until the 3rd poll
-        }
+        dialled.push(url);
         if (url.includes("tenant_access_token")) {
           return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
         }
@@ -49,12 +47,11 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       }),
     );
     const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
-      readyTimeoutMs: 5000,
-      readyIntervalMs: 1,
       apiBase: "http://feishu.test",
     });
     expect(ok).toBe("registered");
-    expect(health).toBeGreaterThanOrEqual(3); // waited for readiness, not a fixed timer
+    // Only the platform is asked — the fresh tunnel hostname is never dialled from here.
+    expect(dialled.some((url) => url.includes("trycloudflare.com"))).toBe(false);
     expect(patches).toHaveLength(1);
     expect(patches[0]?.url).toContain("http://feishu.test/open-apis/application/v7/applications/cli_app/config");
     expect(patches[0]?.body).toEqual({
@@ -70,7 +67,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit = {}) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
         if (url.includes("tenant_access_token")) {
           return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
         }
@@ -82,8 +78,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       }),
     );
     await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
-      readyTimeoutMs: 100,
-      readyIntervalMs: 1,
       apiBase: "http://larksuite.test",
     });
     expect(patches).toHaveLength(1);
@@ -93,34 +87,12 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     });
   });
 
-  it("never PATCHes against a URL that isn't up — gives up with the manual instruction", async () => {
-    creds();
-    const patches: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url.includes("/application/v7/")) {
-          patches.push(url);
-          return Response.json({ code: 0, msg: "ok", data: {} });
-        }
-        throw new Error("ECONNREFUSED"); // /health never reachable
-      }),
-    );
-    const ok = await registerFeishuWebhook("https://dead.example", "feishu", {
-      readyTimeoutMs: 20,
-      readyIntervalMs: 5,
-    });
-    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
-    expect(patches).toHaveLength(0);
-  });
-
   it("210042 request_url validation (the platform's path to a fresh edge lagging) is retried until it lands", async () => {
     creds();
     let patches = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
         if (url.includes("tenant_access_token")) {
           return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
         }
@@ -134,8 +106,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       }),
     );
     await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
-      readyTimeoutMs: 100,
-      readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://feishu.test",
     });
@@ -148,7 +118,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
         if (url.includes("tenant_access_token")) {
           return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
         }
@@ -165,8 +134,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     });
     const onManualRegistration = vi.fn();
     const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
-      readyTimeoutMs: 100,
-      readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://feishu.test",
       onManualRegistration,
@@ -174,7 +141,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
     expect(patches).toBe(8);
     // Exhausted retries are a terminal failure (event URL not registered) — reported at ERROR.
-    expect(errors.join("\n")).toMatch(/still failing after retries/);
+    expect(errors.join("\n")).toMatch(/could not verify .*after retries/);
     expect(onManualRegistration).toHaveBeenCalledOnce();
     expect(onManualRegistration).toHaveBeenCalledWith({
       consoleUrl: "http://feishu.test/app/cli_app/event",
@@ -188,7 +155,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
         if (url.includes("tenant_access_token")) {
           return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
         }
@@ -200,8 +166,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       }),
     );
     const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
-      readyTimeoutMs: 100,
-      readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://feishu.test",
     });
@@ -215,7 +179,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/health")) return new Response(null, { status: 200 });
         if (url.includes("tenant_access_token")) {
           return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
         }
@@ -237,8 +200,6 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     });
     const onManualRegistration = vi.fn();
     const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
-      readyTimeoutMs: 100,
-      readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://larksuite.test", // the intl cloud — no v7 config route
       onManualRegistration,

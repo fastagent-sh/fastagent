@@ -5,8 +5,8 @@
  * what the telegram probe can reach (Telegram only checks that the URL answers).
  *
  * The chain is all product entries: `createAgentService` mounts `channels/feishu.ts` at `POST /feishu`
- * and serves `/health` → `serveNode` binds it → `startCloudflareTunnel` publishes it →
- * `registerFeishuWebhook` waits for readiness, PATCHes the subscription, and reports what the platform
+ * → `serveNode` binds it → `startCloudflareTunnel` publishes it → `registerFeishuWebhook` PATCHes the
+ * subscription, retrying while the platform reports it could not verify the URL, and reports what it
  * answered. A `registered` outcome IS the platform's verdict on that round trip.
  *
  * Needs `FEISHU_APP_ID` + `FEISHU_APP_SECRET` for an app of its own — this probe REWRITES that app's

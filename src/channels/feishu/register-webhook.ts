@@ -7,11 +7,13 @@
  * Mechanism: the application-v7 config PATCH (`updateEventSubscription`) flips the app's event
  * subscription to webhook mode and points it at `<baseUrl>/<kind>`. Two properties make this the full
  * telegram-setWebhook parity: the platform applies a request-URL change IMMEDIATELY (no version
- * publish), and it VERIFIES the URL with a url_verification challenge during the PATCH — which is why
- * this waits for `<baseUrl>/health` to serve first (the same readiness race the telegram registrar
- * fixes). Requires the `application:application:patch` scope (field-tested: `self_manage` does NOT
- * cover this PATCH) — `add feishu` requests it at creation via addons; without it the PATCH fails
- * visibly and the manual console instruction is printed.
+ * publish), and it VERIFIES the URL with a url_verification challenge during the PATCH — which makes
+ * the PATCH its own readiness probe, retried below. (It used to poll `<baseUrl>/health` from here
+ * first; that asked whether THIS machine could reach a freshly minted hostname, which is routinely
+ * false for a minute or more while the platform reaches it fine — #421.) Requires the
+ * `application:application:patch` scope (field-tested: `self_manage` does NOT cover this PATCH) —
+ * `add feishu` requests it at creation via addons; without it the PATCH fails visibly and the manual
+ * console instruction is printed.
  *
  * CLOUD LAG: the application-v7 config API exists on open.feishu.cn but (as of 2026-07) is NOT
  * deployed on open.larksuite.com — the route 404s there. The registrar still attempts it (the day the
@@ -21,9 +23,12 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
 import type { RegistrationOutcome } from "../registration.ts";
-import { waitForHealth } from "../wait-health.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistrationError } from "./feishu-api.ts";
+
+/** PATCH attempts, and the wait between them: ~80s of warm-up for a fresh tunnel/container. */
+const ATTEMPTS = 8;
+const RETRY_MS = 10_000;
 
 /**
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
@@ -38,8 +43,7 @@ interface FeishuManualRegistration {
 }
 
 export interface RegisterFeishuWebhookOptions {
-  readyTimeoutMs?: number;
-  readyIntervalMs?: number;
+  attempts?: number;
   retryMs?: number;
   apiBase?: string;
   /** Manual fallback after a definitive config error or exhausted retries. Local dev opens this App. */
@@ -65,19 +69,6 @@ export async function registerFeishuWebhook(
     return "manual";
   }
 
-  // Align registration with the server actually serving: the PATCH triggers the platform's
-  // url_verification challenge against requestUrl — registering before /health serves would fail.
-  log.info(`[fastagent] ${kind}: waiting for ${baseUrl} to be reachable before registering the event URL…`);
-  const ready = await waitForHealth(`${baseUrl}/health`, opts.readyTimeoutMs ?? 120_000, opts.readyIntervalMs ?? 3_000);
-  if (!ready) {
-    // Terminal for this run (registration will not be retried) — error, not warn: the event URL is NOT
-    // registered and the operator must act. Same taxonomy as the permanent PATCH failure below.
-    log.error(
-      `[fastagent] ${kind}: ${baseUrl}/health did not come up in time — the app may still be starting. ${manual}`,
-    );
-    return "failed";
-  }
-
   const api = createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret });
   const consoleUrl = `${apiBase}/app/${encodeURIComponent(appId)}/event`;
   const versionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/version`;
@@ -98,14 +89,13 @@ export async function registerFeishuWebhook(
     }
   };
 
-  // Reachable → register. The PATCH is the real probe (same lesson as the token bootstrap): the
-  // platform verifies request_url with a challenge DURING the call, and a fresh tunnel's edge can be
-  // reachable from here while the platform's own path still lags — its 210042 "request_url validation
-  // failed" is therefore retried with backoff, alongside transient network errors. Only a permanent
-  // config error (missing scope, app under review, the intl 404) is reported once with the manual path.
-  const attempts = 8;
+  // The PATCH is the probe (same lesson as the token bootstrap): the platform verifies request_url
+  // with a challenge DURING the call, so its 210042 "request_url validation failed" is the readiness
+  // signal and is retried with backoff, alongside transient network errors. Only a permanent config
+  // error (missing scope, app under review, the intl 404) is reported once with the manual path.
+  const attempts = opts.attempts ?? ATTEMPTS;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? 10_000);
+    if (attempt > 0) await sleep(opts.retryMs ?? RETRY_MS);
     try {
       await api.updateEventSubscription(appId, { subscriptionType: "webhook", requestUrl });
       log.info(`[fastagent] ${kind}: event Request URL registered → ${requestUrl}`);
@@ -141,7 +131,9 @@ export async function registerFeishuWebhook(
   // Exhausted retries end in the same state as a permanent error (event URL not registered, manual
   // action required) — report at the same level. The cloud-lag 404 above stays warn: on that cloud the
   // manual path is the known norm, not an exceptional failure.
-  log.error(`[fastagent] ${kind}: registration still failing after retries — manual registration is required`);
+  log.error(
+    `[fastagent] ${kind}: the platform could not verify ${requestUrl} after retries — manual registration is required`,
+  );
   manualRegistration();
   return "failed";
 }

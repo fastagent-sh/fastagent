@@ -1,17 +1,40 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
-import { waitForHealth } from "../channels/wait-health.ts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
 import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
 import { readSlackOnboardingState, writeSlackOnboardingState } from "../channels/slack/onboarding-state.ts";
+import { buildSlackManifest } from "../channels/slack/manifest.ts";
 import { startSlackSetupServer } from "../channels/slack/setup-server.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
 const CONFIG_TOKEN_URL = "https://api.slack.com/apps";
+
+/**
+ * The route that needs no public callback. Automatic onboarding exists only to catch ONE OAuth
+ * redirect, so any environment without a reachable public URL — strict egress, no cloudflared, a
+ * hostname this machine cannot resolve (#421) — can still finish by hand. Printed on every failure of
+ * the automated path, because that path is unavailable rather than broken in those environments.
+ */
+function printManualRoute(
+  target: string,
+  app: { appName: string; groupBehavior: GroupBehaviorChoice["behavior"] },
+): void {
+  const manifest = buildSlackManifest({ name: app.appName, groupBehavior: app.groupBehavior });
+  console.error(
+    `[fastagent] slack: no public callback is needed to create the app by hand.\n` +
+      `  1. ${CONFIG_TOKEN_URL} → Create New App → From an app manifest, and paste:\n` +
+      `${JSON.stringify(manifest, null, 2)}\n` +
+      `  2. Install to Workspace — the console SHOWS the credentials instead of redirecting.\n` +
+      `  3. Copy into ${dotEnvPath(target)}: SLACK_BOT_TOKEN, SLACK_BOT_REFRESH_TOKEN and\n` +
+      `     SLACK_BOT_TOKEN_EXPIRES_AT (OAuth & Permissions — the manifest enables token rotation),\n` +
+      `     SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_SIGNING_SECRET (Basic Information).\n` +
+      `  4. Set Event Subscriptions → Request URL to <public-url>/slack once the agent is serving.`,
+  );
+}
 
 async function promptValue(message: string, hidden = false, initialValue?: string): Promise<string> {
   const result = hidden ? await password({ message }) : await clackText({ message, initialValue });
@@ -176,19 +199,20 @@ export async function onboardSlackInternalApp(input: {
     }
   }
 
+  const app = { appName: state.appName, groupBehavior: state.groupBehavior };
   const server = await startSlackSetupServer();
   const tunnel = await startCloudflareTunnel(server.port);
   if (!tunnel) {
     await server.close();
+    printManualRoute(input.target, app);
     throw new Error("Slack onboarding needs a temporary HTTPS tunnel — install cloudflared and re-run");
   }
   const requestUrl = `${tunnel.url}${server.requestPath}`;
   const redirectUrl = `${tunnel.url}${server.redirectPath}`;
   console.error(`[fastagent] temporary Slack setup tunnel ready → ${tunnel.url}`);
   try {
-    if (!(await waitForHealth(`${tunnel.url}/health`, 45_000, 500))) {
-      throw new Error("the temporary Slack setup tunnel did not become reachable; no app was created");
-    }
+    // No local readiness probe: Slack challenges requestUrl from ITS network during app creation, and
+    // that is the reachability that matters. onboardSlackApp retries while Slack cannot verify it.
     await onboardSlackApp(
       { stateRoot: input.stateRoot, state, requestUrl, redirectUrl },
       {
@@ -224,6 +248,9 @@ export async function onboardSlackInternalApp(input: {
       `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
         "replace the temporary Events API URL automatically",
     );
+  } catch (error) {
+    printManualRoute(input.target, app);
+    throw error;
   } finally {
     tunnel.close();
     await server.close().catch(() => {});
