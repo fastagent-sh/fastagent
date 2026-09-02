@@ -3,10 +3,10 @@
  * that no fake can stand in for, because Telegram itself decides it: `setWebhook` VERIFIES the URL
  * (DNS, TLS, reachability) before it stores it. A mocked Bot API always says yes.
  *
- * The chain, all product entries: `createAgentService` composes the surface (its `/health` is what the
- * registrar waits on) → `serveNode` binds it → `startCloudflareTunnel` publishes it →
- * `registerTelegramWebhook` waits for readiness and calls `setWebhook` → Telegram's own
- * `getWebhookInfo` is asked whether it kept what we sent.
+ * The chain, all product entries: `createAgentService` composes the surface → `serveNode` binds it →
+ * `startCloudflareTunnel` publishes it → `registerTelegramWebhook` calls `setWebhook`, retrying while
+ * Telegram reports it cannot reach the URL → Telegram's own `getWebhookInfo` is asked whether it kept
+ * what we sent.
  *
  * Scope: REGISTRATION, not delivery. A real inbound update needs a human to type into a chat, so the
  * probe stops where automation honestly ends. The agent dir declares no channel, which means no
@@ -93,8 +93,9 @@ describe("telegram: registering a webhook against a live tunnel", () => {
     // every inbound update; minted per run so a probe never reuses a value that reached Telegram before.
     process.env.TELEGRAM_SECRET_TOKEN = randomBytes(16).toString("hex");
 
-    // Registration waits for /health through the tunnel, then calls setWebhook — Telegram verifies the
-    // URL itself, so "registered" is Telegram's verdict on the tunnel, not ours.
+    // Nothing probes the tunnel from here: setWebhook is the probe, and "registered" is Telegram's own
+    // verdict on the tunnel. This machine's ability to reach a fresh hostname is a different question
+    // (#421) and answering it first is what used to make this probe time out behind a proxy.
     const outcome = await registerTelegramWebhook(tunnel.url);
     expect(outcome, "telegram refused the webhook (see the registrar's log line for its reason)").toBe("registered");
 

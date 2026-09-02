@@ -1,8 +1,11 @@
 /**
- * Readiness probe shared by the webhook registrars (telegram setWebhook, lark config PATCH): both
- * platforms VERIFY the URL at registration time, and a fresh deploy's container or a fresh tunnel's
- * DNS is not routable for some seconds — registering before the server actually serves would fail.
- * Tracking real readiness (not a fixed timer) is what fixes that race.
+ * Readiness probe for a server THIS process can reach directly — the local port `deploy docker --run`
+ * just published, and the live probes' own origins.
+ *
+ * NOT a probe for a public URL a platform must reach: a freshly minted hostname (a quick tunnel, a
+ * fresh deploy) is routinely unreachable from here for a minute or more while the platform reaches it
+ * fine, and polling it hard from t+0 makes that worse (#421). The webhook registrars therefore let the
+ * platform's own URL verification be the probe, retried, instead of gating on this.
  */
 import { setTimeout as sleep } from "node:timers/promises";
 

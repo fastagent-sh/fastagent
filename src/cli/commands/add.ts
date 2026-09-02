@@ -110,9 +110,9 @@ export async function runAddChannel(
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          `Slack internal app created/configured/installed through OAuth; runtime credentials are in ${envLabel}`,
-          "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
-          "invite the app to every channel it should read",
+          // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and
+          // FastAgent sets that URL itself when the agent first runs.
+          "invite the app to each channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]
       : setup.steps;
@@ -168,7 +168,7 @@ export async function runAddChannel(
     console.error(`    fastagent dev            # no public URL or tunnel required`);
   } else if (channelKind === "slack") {
     console.error(
-      `    fastagent dev --tunnel   # serve locally; ${opts.onboard === false ? "print the Request URL for manual Slack setup" : "auto-update the onboarded Slack Request URL"}`,
+      `    fastagent dev --tunnel   # ${opts.onboard === false ? "serve locally + print the URL to paste into the Slack app's Event Subscriptions" : "start the agent — then message it in Slack"}`,
     );
   } else if (channelKind === "github") {
     console.error(`    fastagent dev --tunnel   # serve locally + print the URL for manual GitHub webhook setup`);

@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
-import { waitForHealth } from "../channels/wait-health.ts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
@@ -186,9 +185,9 @@ export async function onboardSlackInternalApp(input: {
   const redirectUrl = `${tunnel.url}${server.redirectPath}`;
   console.error(`[fastagent] temporary Slack setup tunnel ready → ${tunnel.url}`);
   try {
-    if (!(await waitForHealth(`${tunnel.url}/health`, 45_000, 500))) {
-      throw new Error("the temporary Slack setup tunnel did not become reachable; no app was created");
-    }
+    // No local readiness probe: Slack challenges requestUrl from ITS network during app creation, and
+    // that is the reachability that matters (#421) — this machine often cannot reach a fresh tunnel
+    // hostname for a minute. onboardSlackApp retries the create while Slack cannot verify it yet.
     await onboardSlackApp(
       { stateRoot: input.stateRoot, state, requestUrl, redirectUrl },
       {
@@ -217,13 +216,8 @@ export async function onboardSlackInternalApp(input: {
         },
       },
     );
-    console.error(
-      `[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to ${dotEnvPath(input.target)}`,
-    );
-    console.error(
-      `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
-        "replace the temporary Events API URL automatically",
-    );
+    // What happened, once. What to do next is `add`'s "next steps" block.
+    console.error(`[fastagent] Slack app installed; credentials written to ${dotEnvPath(input.target)}`);
   } finally {
     tunnel.close();
     await server.close().catch(() => {});

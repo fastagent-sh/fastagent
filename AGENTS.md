@@ -120,8 +120,11 @@ src/
 │   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
 │   │                     # so it lives here and not under engines/ (#365)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
-│   ├── wait-health.ts       # SHARED readiness probe — channels AND deploy use it, so NOT in kit/
-│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) — same reason
+│   ├── wait-health.ts       # readiness probe for a server THIS process reaches directly (deploy's
+│   │                     # published local port). NOT for a public URL a platform must reach: the
+│   │                     # registrars let the platform's own URL verification be the probe (#421)
+│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) + the one warm-up
+│   │                     # budget every registrar spends on the platform's own URL check — same reason
 │   ├── kit/                 # WRITING a channel — the parts every chat platform needs and none should
 │   │   │                     # reinvent. The split from the mechanism beside it is a FACT about
 │   │   │                     # imports, asserted in package-boundary.test.ts: every file here has

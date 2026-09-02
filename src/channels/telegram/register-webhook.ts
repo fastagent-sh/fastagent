@@ -2,26 +2,46 @@
  * Telegram webhook registration — the TELEGRAM-domain step both `--tunnel` (dev, tunnel.ts) and
  * `deploy … --run` (the host runners' post-deploy step) invoke. What "registering telegram" means lives
  * here, beside the channel it serves; it reads the same .env tokens the channel uses.
+ *
+ * READINESS IS setWebhook'S OWN VERDICT, not a local probe. Telegram VERIFIES the URL during the call,
+ * from Telegram's network — which is the only network that has to reach it. This used to poll
+ * `<baseUrl>/health` from here first, and that probe answered a different question badly: a freshly
+ * minted hostname (a quick tunnel, a fresh deploy) is routinely unreachable from the machine running
+ * the CLI for a minute or more — behind a proxy, or while its own resolver still says ENOTFOUND — long
+ * after Telegram can reach it (#421). So the retry loop below IS the wait: Telegram's reachability
+ * verdicts ("Failed to resolve host", "Wrong response from the webhook") are retried, and only a
+ * configuration error the operator must fix is reported once.
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
-import type { RegistrationOutcome } from "../registration.ts";
-import { waitForHealth } from "../wait-health.ts";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
 import { callApi } from "./telegram-api.ts";
 
 /**
- * Register `<baseUrl>/telegram` as the bot's webhook (with the .env secret). Waits for the server to be
- * REACHABLE first — polling `<baseUrl>/health` — because Telegram VERIFIES the URL when you set it, and a
- * fresh deploy's container (healthcheck + routing) or a fresh tunnel's DNS is not routable for some
- * seconds after the deploy/tunnel command returns. Tracking real readiness (not a fixed timer) is what
- * fixes the race that made the first real deploy need a manual `setWebhook`. Missing tokens print the
- * manual instruction instead of failing. `opts` (timeouts) exist for tests; production uses the defaults.
+ * Whether a setWebhook failure is the URL still warming up rather than a configuration error. Two
+ * families: transport failures reaching Telegram at all, and Telegram's own verdict after it fails to
+ * reach the webhook — which carries its connection layer's words verbatim (`Bad Request: bad webhook:
+ * Connection timed out` / `Connection refused` for a host whose DNS answers before anything listens,
+ * `Wrong response from the webhook: 530` for a tunnel edge without its origin). This is the ONLY gate
+ * between "wait 70s" and "fail now", so it is wide on the reachability side. A permanent "bad webhook"
+ * — an http:// URL, an unsupported port — matches nothing here and is reported.
+ */
+function isTransientRegistrationError(error: string): boolean {
+  return /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|timed out|connection refused|can't connect|connection to the host|wrong response from the webhook/i.test(
+    error,
+  );
+}
+
+/**
+ * Register `<baseUrl>/telegram` as the bot's webhook (with the .env secret). Missing tokens print the
+ * manual instruction instead of failing. `opts` (attempt budget) exist for tests; production uses the
+ * defaults.
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */
 export async function registerTelegramWebhook(
   baseUrl: string,
-  opts: { readyTimeoutMs?: number; readyIntervalMs?: number; retryMs?: number } = {},
+  opts: { attempts?: number; retryMs?: number } = {},
 ): Promise<RegistrationOutcome> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const secret = process.env.TELEGRAM_SECRET_TOKEN;
@@ -33,43 +53,34 @@ export async function registerTelegramWebhook(
     return "manual";
   }
 
-  // Align registration with the server actually serving. Don't setWebhook against a URL Telegram can't
-  // yet reach — it would fail, and a fixed retry window guesses the readiness delay (the deploy race).
-  log.info(`[fastagent] telegram: waiting for ${baseUrl} to be reachable before registering the webhook…`);
-  const ready = await waitForHealth(`${baseUrl}/health`, opts.readyTimeoutMs ?? 120_000, opts.readyIntervalMs ?? 3_000);
-  if (!ready) {
-    // Terminal for this run (registration will not be retried) — error, not warn: the webhook is NOT
-    // registered and the operator must act. Same taxonomy as the permanent setWebhook failure below.
-    log.error(
-      `[fastagent] telegram: ${baseUrl}/health did not come up in time — the app may still be starting. ` +
-        `Register the webhook manually once it's up: curl "https://api.telegram.org/bot<token>/setWebhook" -d url=${webhookUrl} -d secret_token=<secret>`,
-    );
-    return "failed";
-  }
-
-  // Reachable → register. A short retry backstops Telegram's resolver lagging /health by a moment; only
-  // network-transient errors retry (a permanent "bad webhook" config error is reported, not retried).
+  log.info(`[fastagent] telegram: registering the webhook — Telegram verifies ${webhookUrl} as it does…`);
   let lastTransientError = "unknown transport error";
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? 2000);
+  const attempts = opts.attempts ?? REGISTRATION_ATTEMPTS;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(opts.retryMs ?? REGISTRATION_RETRY_MS);
     try {
       await callApi("https://api.telegram.org", botToken, "setWebhook", { url: webhookUrl, secret_token: secret });
       log.info(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
       return "registered";
     } catch (e) {
       const error = String(e);
-      if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(error)) {
+      if (!isTransientRegistrationError(error)) {
         log.error(`[fastagent] telegram: setWebhook failed (${error}). Register manually with url=${webhookUrl}`);
         return "failed";
       }
       lastTransientError = error;
+      if (attempt + 1 < attempts) {
+        log.info(
+          `[fastagent] telegram: Telegram cannot reach ${webhookUrl} yet (attempt ${attempt + 1}/${attempts}); retrying…`,
+        );
+      }
     }
   }
   // Exhausted retries end in the same state as a permanent error (webhook not registered, manual
   // action required) — report at the same level.
   log.error(
-    `[fastagent] telegram: setWebhook still failing after retries (last error: ${lastTransientError}). ` +
-      `Register manually with url=${webhookUrl}`,
+    `[fastagent] telegram: Telegram could not reach ${webhookUrl} after retries (last error: ${lastTransientError}). ` +
+      `Once it is up, register manually: curl "https://api.telegram.org/bot<token>/setWebhook" -d url=${webhookUrl} -d secret_token=<secret>`,
   );
   return "failed";
 }

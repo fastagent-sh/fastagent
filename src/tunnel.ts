@@ -56,8 +56,8 @@ type TunnelSpawn =
  * cloudflared sometimes exits before printing a URL (a transient trycloudflare API error), so retry a
  * few times. ALWAYS resolves to undefined WITH an operator log saying why — missing binary, the exit
  * reason, or "gave up after retries" — never silently; serving continues without a tunnel either way.
- * (Edge warmup AFTER the URL appears is handled downstream: the telegram registrar polls /health before
- * it calls setWebhook, so a not-yet-routable tunnel just delays registration rather than failing it.)
+ * (Edge warmup AFTER the URL appears is handled downstream: each registrar retries while the platform
+ * reports it cannot yet verify the URL, so a not-yet-routable tunnel delays registration, not fails it.)
  */
 export async function startCloudflareTunnel(
   port: number,
@@ -163,8 +163,8 @@ export async function announceWebhooks(
     log.warn(`[fastagent] could not read ${dotEnvPath(dir)}: ${(error as Error).message} — continuing without it`);
   }
   // Readiness is the registrar's job: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before its
-  // origin connects, and the automatic registrars poll /health before configuring the platform (the same
-  // wait the deploy runners rely on). GitHub needs no wait — the operator adds that webhook by hand.
+  // origin connects, and each registrar absorbs that by retrying the platform call whose own URL
+  // verification reports it. GitHub needs no wait — the operator adds that webhook by hand.
   //
   // The registrars differ from the deploy path's in what they carry, not in which channels they answer
   // for: this one narrates to the log and opens the console for a manual Feishu step.

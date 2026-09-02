@@ -104,6 +104,10 @@ export function buildSlackManifest(input: {
         : {}),
       org_deploy_enabled: false,
       socket_mode_enabled: false,
+      // Constant, and Slack makes it permanent: once an app has rotation on, an update carrying `false`
+      // is refused (`cannot_disable_once_enabled`, verified against the API). Every manifest update is a
+      // full replacement, so a caller that ever sent anything else here would be deciding this for the
+      // app's whole life.
       token_rotation_enabled: true,
     },
   };

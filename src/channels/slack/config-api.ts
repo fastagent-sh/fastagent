@@ -25,6 +25,16 @@ export class SlackConfigApiError extends Error {
   }
 }
 
+/**
+ * Whether a manifest call failed because Slack could not verify the `request_url` it carries — the
+ * platform's own readiness verdict on a freshly minted public URL, and the reason no local `/health`
+ * poll precedes these calls (#421). Slack validates the manifest BEFORE acting on it, so a create that
+ * ends here created nothing and is safe to retry.
+ */
+export function isSlackRequestUrlUnverified(error: unknown): boolean {
+  return /request_url|verify_request_url|failed to verify/i.test(String(error));
+}
+
 async function slackJson<T>(
   method: string,
   body: Record<string, unknown>,

@@ -59,8 +59,10 @@ describe("cloudflare quick tunnel", () => {
     cleanups.push(() => tunnel.close());
     expect(tunnel.url).toMatch(/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i);
 
-    // A fresh hostname's DNS takes seconds to become resolvable — the same wait the webhook
-    // registrars do before handing a platform a URL to verify.
+    // A fresh hostname can take a minute to become resolvable FROM HERE — and on a machine whose
+    // resolver or proxy is slow about it, longer than this budget (#421). That is why the webhook
+    // registrars no longer ask this question at all; this probe still does, because reaching the URL
+    // from outside cloudflared is the only way to prove the tunnel carries a request home.
     expect(await waitForHealth(tunnel.url, 60_000, 1000), `${tunnel.url} never became reachable`).toBe(true);
     expect(await fetch(tunnel.url).then((r) => r.text())).toBe(token);
   });

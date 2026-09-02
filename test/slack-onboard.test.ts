@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSlackApp, exchangeSlackOAuthCode } from "../src/channels/slack/config-api.ts";
+import { createSlackApp, exchangeSlackOAuthCode, SlackConfigApiError } from "../src/channels/slack/config-api.ts";
 import { buildSlackManifest, slackBotEvents, slackBotScopes } from "../src/channels/slack/manifest.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../src/channels/slack/onboard.ts";
 import {
@@ -261,6 +261,95 @@ describe("Slack internal-app onboarding", () => {
     expect(createApp).toHaveBeenCalledOnce();
   });
 
+  it("create retries while Slack cannot verify the setup URL, with the duplicate-guard marker OFF between attempts", async () => {
+    // The #421 tension applies to `apps.manifest.create` exactly as to the registrars: Slack challenges
+    // the fresh tunnel URL from its own network during the call, and rejects the manifest BEFORE
+    // creating anything when it cannot. So the reject is retried — and because nothing was created, the
+    // createAttemptedAt marker must be gone while waiting: a Ctrl-C in that window would otherwise wedge
+    // the next run on an app that never existed.
+    const stateRoot = await root();
+    const initial = newSlackOnboardingState({
+      appName: "Agent",
+      groupBehavior: "mentions",
+      configToken: "xoxe.config",
+      configRefreshToken: "xoxe-refresh",
+    });
+    writeSlackOnboardingState(stateRoot, initial);
+    const unverified = () =>
+      new SlackConfigApiError(
+        "apps.manifest.create",
+        200,
+        {
+          error: "invalid_manifest",
+          errors: [{ pointer: "/settings/event_subscriptions/request_url", message: "failed to verify request url" }],
+        },
+        "unknown_error",
+      );
+    let creates = 0;
+    const markerDuringCall: (string | undefined)[] = [];
+    const markerDuringWait: (string | undefined)[] = [];
+    const createApp = vi.fn(async () => {
+      markerDuringCall.push(readSlackOnboardingState(stateRoot)?.createAttemptedAt);
+      if (++creates < 3) throw unverified();
+      return { appId: "A1", clientId: "C1", clientSecret: "client-secret", signingSecret: "signing-secret" };
+    });
+    let oauthState = "";
+    await onboardSlackApp(
+      {
+        stateRoot,
+        state: initial,
+        requestUrl: "https://x.trycloudflare.com/request",
+        redirectUrl: "https://x.trycloudflare.com/oauth",
+      },
+      {
+        note: (message) => {
+          if (message.includes("retrying"))
+            markerDuringWait.push(readSlackOnboardingState(stateRoot)?.createAttemptedAt);
+        },
+        openUrl: (url) => {
+          oauthState = new URL(url).searchParams.get("state") ?? "";
+        },
+        waitForOAuth: async () => ({ code: "oauth-code", state: oauthState }),
+        writeRuntimeSecrets: async () => {},
+      },
+      {
+        createApp,
+        retryMs: 1,
+        exchangeCode: async () => ({
+          botToken: "xoxe.xoxb-bot",
+          botRefreshToken: "xoxe-bot-refresh",
+          botTokenExpiresAt: 2_000_000_000_000,
+          appId: "A1",
+          teamId: "T1",
+          scopes: slackBotScopes("mentions"),
+        }),
+      },
+    );
+    expect(creates).toBe(3);
+    expect(markerDuringCall.every((m) => typeof m === "string")).toBe(true); // ON for each in-flight call
+    expect(markerDuringWait).toEqual([undefined, undefined]); // OFF during each wait
+    expect(readSlackOnboardingState(stateRoot)?.appId).toBe("A1");
+
+    // Exhausting the budget on the same reject is not ambiguous either: the marker comes off, so the
+    // next run creates instead of demanding a manual inspection of an app that does not exist.
+    const stateRoot2 = await root();
+    writeSlackOnboardingState(stateRoot2, initial);
+    await expect(
+      onboardSlackApp(
+        { stateRoot: stateRoot2, state: initial, requestUrl: "https://x/r", redirectUrl: "https://x/o" },
+        { note: () => {}, openUrl: () => {}, waitForOAuth: async () => ({}), writeRuntimeSecrets: async () => {} },
+        {
+          createApp: async () => {
+            throw unverified();
+          },
+          attempts: 2,
+          retryMs: 1,
+        },
+      ),
+    ).rejects.toThrow(/failed to verify request url/);
+    expect(readSlackOnboardingState(stateRoot2)?.createAttemptedAt).toBeUndefined();
+  });
+
   it("rotates expiring config credentials atomically and persists the replacement refresh token", async () => {
     const stateRoot = await root();
     const state = {
@@ -360,7 +449,8 @@ describe("Slack Request URL registration", () => {
       installedAt: new Date().toISOString(),
     });
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      if (String(input).endsWith("/health")) return new Response("ok");
+      // The agent's own URL is never dialled from here — Slack challenges it from Slack's network.
+      expect(String(input)).not.toContain("agent.test");
       expect(init?.headers).toMatchObject({ authorization: "Bearer xoxe.config" });
       const body = JSON.parse(String(init?.body)) as { app_id: string; manifest: string };
       expect(body.app_id).toBe("A1");
@@ -374,8 +464,70 @@ describe("Slack Request URL registration", () => {
       return Response.json({ ok: true });
     });
     vi.stubGlobal("fetch", fetchMock);
+    await expect(registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock })).resolves.toBe(
+      "registered",
+    );
+  });
+
+  it("retries while Slack cannot verify the Request URL yet, then registers", async () => {
+    const stateRoot = await root();
+    writeSlackOnboardingState(stateRoot, {
+      ...newSlackOnboardingState({
+        appName: "Agent",
+        groupBehavior: "context",
+        configToken: "xoxe.config",
+        configRefreshToken: "xoxe-refresh",
+      }),
+      appId: "A1",
+      installedAt: new Date().toISOString(),
+    });
+    let updates = 0;
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      updates++;
+      // Slack's own verdict on a tunnel it cannot reach yet IS the readiness signal.
+      return updates < 3
+        ? Response.json({
+            ok: false,
+            error: "invalid_manifest",
+            errors: [{ pointer: "/settings/event_subscriptions/request_url", message: "failed to verify request url" }],
+          })
+        : Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     await expect(
-      registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock, healthTimeoutMs: 1 }),
+      registerSlackWebhook("https://x.trycloudflare.com", { stateRoot, fetch: fetchMock, retryMs: 1 }),
     ).resolves.toBe("registered");
+    expect(updates).toBe(3);
+  });
+
+  it("reports a credential failure once instead of retrying it", async () => {
+    const stateRoot = await root();
+    writeSlackOnboardingState(stateRoot, {
+      ...newSlackOnboardingState({
+        appName: "Agent",
+        groupBehavior: "context",
+        configToken: "xoxe.config",
+        configRefreshToken: "xoxe-refresh",
+      }),
+      appId: "A1",
+      installedAt: new Date().toISOString(),
+    });
+    let updates = 0;
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      updates++;
+      return Response.json({ ok: false, error: "invalid_auth" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const logs: string[] = [];
+    await expect(
+      registerSlackWebhook("https://agent.test", {
+        stateRoot,
+        fetch: fetchMock,
+        retryMs: 1,
+        log: (line) => logs.push(line),
+      }),
+    ).resolves.toBe("failed");
+    expect(updates).toBe(1);
+    expect(logs.join("\n")).toContain("invalid_auth");
   });
 });

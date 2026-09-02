@@ -1,13 +1,14 @@
-import type { RegistrationOutcome } from "../registration.ts";
-import { waitForHealth } from "../wait-health.ts";
-import { updateSlackAppManifest } from "./config-api.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
+import { isSlackRequestUrlUnverified, updateSlackAppManifest } from "./config-api.ts";
 import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";
 
 export interface RegisterSlackWebhookOptions {
   stateRoot: string;
   log?: (message: string) => void;
-  healthTimeoutMs?: number;
+  attempts?: number;
+  retryMs?: number;
   apiBaseUrl?: string;
   fetch?: typeof fetch;
 }
@@ -34,36 +35,66 @@ export async function registerSlackWebhook(
     );
     return "manual";
   }
-  const healthy = await waitForHealth(`${publicBaseUrl}/health`, options.healthTimeoutMs ?? 45_000, 500);
-  if (!healthy) {
-    note(`[fastagent] slack: ${publicBaseUrl}/health did not become reachable; Request URL was not changed`);
-    return "failed";
-  }
+  const consoleFallback = `set ${publicBaseUrl}/slack as the Event Subscriptions Request URL in the Slack console`;
+  let current: Awaited<ReturnType<typeof currentSlackConfigToken>>;
   try {
-    const current = await currentSlackConfigToken(options.stateRoot, state, {
+    // Rotation is not retried with the manifest below: each rotate invalidates the previous pair, so a
+    // repeat would spend tokens on a failure that is about the URL, not about the credential.
+    current = await currentSlackConfigToken(options.stateRoot, state, {
       apiBaseUrl: options.apiBaseUrl,
       fetch: options.fetch,
     });
-    await updateSlackAppManifest(
-      current.token,
-      current.state.appId as string,
-      buildSlackManifest({
-        name: current.state.appName,
-        groupBehavior: current.state.groupBehavior,
-        requestUrl: `${publicBaseUrl}/slack`,
-        // Token-rotation manifests require at least one OAuth redirect URL even after installation.
-        // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
-        redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
-      }),
-      { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
-    );
-    note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
-    return "registered";
   } catch (error) {
     note(
-      `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
-        `re-run \`fastagent add slack --replace-config\` to repair the configuration tokens, or set ${publicBaseUrl}/slack in the Slack console`,
+      `[fastagent] slack: could not refresh the App Configuration token: ${String(error)} — ` +
+        `re-run \`fastagent add slack --replace-config\` to repair it, or ${consoleFallback}`,
     );
     return "failed";
   }
+
+  // Slack verifies the new request_url with a challenge DURING apps.manifest.update, from Slack's own
+  // network — that verdict IS the readiness signal, so it is retried while a fresh tunnel/container
+  // warms up. No local `/health` poll precedes it: this machine's reach is the wrong question (#421).
+  const attempts = options.attempts ?? REGISTRATION_ATTEMPTS;
+  let lastUnverified = "unknown error";
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(options.retryMs ?? REGISTRATION_RETRY_MS);
+    try {
+      await updateSlackAppManifest(
+        current.token,
+        current.state.appId as string,
+        buildSlackManifest({
+          name: current.state.appName,
+          groupBehavior: current.state.groupBehavior,
+          requestUrl: `${publicBaseUrl}/slack`,
+          // Token-rotation manifests require at least one OAuth redirect URL even after installation.
+          // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
+          redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
+        }),
+        { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
+      );
+      note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
+      return "registered";
+    } catch (error) {
+      if (!isSlackRequestUrlUnverified(error)) {
+        note(
+          `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
+            `re-run \`fastagent add slack --replace-config\` to repair the configuration tokens, or ${consoleFallback}`,
+        );
+        return "failed";
+      }
+      lastUnverified = String(error);
+      // The wait is otherwise silent for over a minute, which reads as a hang.
+      if (attempt + 1 < attempts) {
+        note(
+          `[fastagent] slack: Slack cannot verify ${publicBaseUrl}/slack yet (attempt ${attempt + 1}/${attempts}); retrying…`,
+        );
+      }
+    }
+  }
+  note(
+    `[fastagent] slack: Slack could not verify ${publicBaseUrl}/slack after retries (last error: ${lastUnverified}) — ` +
+      `once the app is up, ${consoleFallback}`,
+  );
+  return "failed";
 }

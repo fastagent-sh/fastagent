@@ -1,5 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { createSlackApp, exchangeSlackOAuthCode, SlackConfigApiError, updateSlackAppManifest } from "./config-api.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS } from "../registration.ts";
+import {
+  createSlackApp,
+  exchangeSlackOAuthCode,
+  isSlackRequestUrlUnverified,
+  SlackConfigApiError,
+  updateSlackAppManifest,
+} from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
 import { currentSlackConfigToken, type SlackOnboardingState, writeSlackOnboardingState } from "./onboarding-state.ts";
 
@@ -26,6 +34,32 @@ export interface SlackOnboardInput {
   redirectUrl: string;
 }
 
+/**
+ * Repeat a manifest call while Slack reports it cannot VERIFY the request_url it carries. Slack
+ * challenges that URL from its own network during the call — the readiness signal #421 is about; the
+ * machine running `add slack` often cannot reach the fresh tunnel hostname at all, so it is not the one
+ * asked — and validates the whole manifest BEFORE acting on it, so a call that ends this way did
+ * nothing. `onAttemptFailed` runs before the wait, which is how the create path keeps its duplicate-guard
+ * marker on for exactly one in-flight call and off during the sleep. Any other failure propagates.
+ */
+async function retryWhileUnverified<T>(
+  io: Pick<SlackOnboardIO, "note">,
+  budget: { attempts: number; retryMs: number },
+  call: () => Promise<T>,
+  onAttemptFailed: () => void = () => {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isSlackRequestUrlUnverified(error) || attempt >= budget.attempts) throw error;
+      onAttemptFailed();
+      io.note(`Slack cannot reach the temporary setup URL yet (attempt ${attempt}/${budget.attempts}); retrying…`);
+      await sleep(budget.retryMs);
+    }
+  }
+}
+
 /** Create/resume one internal Slack app and complete its workspace OAuth installation. */
 export async function onboardSlackApp(
   input: SlackOnboardInput,
@@ -34,11 +68,15 @@ export async function onboardSlackApp(
     createApp?: typeof createSlackApp;
     updateManifest?: typeof updateSlackAppManifest;
     exchangeCode?: typeof exchangeSlackOAuthCode;
+    /** Attempts absorbing the setup tunnel's warm-up before Slack can verify its URL. */
+    attempts?: number;
+    retryMs?: number;
   } = {},
 ): Promise<SlackOnboardingState> {
   let state = input.state;
   const current = await currentSlackConfigToken(input.stateRoot, state);
   state = current.state;
+  const budget = { attempts: deps.attempts ?? REGISTRATION_ATTEMPTS, retryMs: deps.retryMs ?? REGISTRATION_RETRY_MS };
   const manifest = buildSlackManifest({
     name: state.appName,
     groupBehavior: state.groupBehavior,
@@ -54,23 +92,32 @@ export async function onboardSlackApp(
       );
     }
     io.note("Creating the internal Slack app from its FastAgent manifest…");
-    // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the app;
-    // refusing a blind retry is safer than silently producing duplicates.
-    state = { ...state, createAttemptedAt: new Date().toISOString() };
-    writeSlackOnboardingState(input.stateRoot, state);
+    const setMarker = (value: string | undefined): void => {
+      state = { ...state, createAttemptedAt: value };
+      writeSlackOnboardingState(input.stateRoot, state);
+    };
     let created: Awaited<ReturnType<typeof createSlackApp>>;
     try {
-      created = await (deps.createApp ?? createSlackApp)(current.token, manifest);
+      created = await retryWhileUnverified(
+        io,
+        budget,
+        () => {
+          // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the
+          // app; refusing a blind retry is safer than silently producing duplicates. The marker spans
+          // exactly one in-flight call: an unverifiable URL created nothing, so it comes off again before
+          // the wait — a Ctrl-C during that wait must not wedge the next run on an app that never existed.
+          setMarker(new Date().toISOString());
+          return (deps.createApp ?? createSlackApp)(current.token, manifest);
+        },
+        () => setMarker(undefined),
+      );
     } catch (error) {
       const ambiguous =
         !(error instanceof SlackConfigApiError) ||
         ["fatal_error", "internal_error", "request_timeout", "service_unavailable", "failed_creating_app"].includes(
           error.code,
         );
-      if (!ambiguous) {
-        state = { ...state, createAttemptedAt: undefined };
-        writeSlackOnboardingState(input.stateRoot, state);
-      }
+      if (!ambiguous) setMarker(undefined);
       throw error;
     }
     state = {
@@ -91,8 +138,11 @@ export async function onboardSlackApp(
           "the app appears already installed; set SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET in .env or remove the app and onboarding state to start over",
       );
     }
-    io.note(`Resuming Slack app ${state.appId}; refreshing its temporary setup URLs…`);
-    await (deps.updateManifest ?? updateSlackAppManifest)(current.token, state.appId, manifest);
+    const appId = state.appId;
+    io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
+    await retryWhileUnverified(io, budget, () =>
+      (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest),
+    );
   }
 
   if (state.signingSecret) {
