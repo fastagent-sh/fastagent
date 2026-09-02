@@ -61,6 +61,20 @@ jobs:
           sudo apt-get install -y cloudflared
           cloudflared --version
 
+      # The Fly probe shells out to `flyctl`, the same binary `deploy fly --run` drives. Pinned to a
+      # commit like every other action here; it only installs the CLI, which then reads FLY_API_TOKEN
+      # from the environment below.
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+
+      # The driver spawns `fly`, the short name Fly's own installer also provides; this action ships
+      # only `flyctl`. Without the alias `deploy fly --run` fails with "flyctl not found" on a runner
+      # that demonstrably has it.
+      - name: Provide the `fly` alias the driver spawns
+        run: |
+          sudo ln -sf "$(command -v flyctl)" /usr/local/bin/fly
+          fly version
+
       # ONE credential mechanism for both probes: an auth.json, named by the product's own
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
       # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
@@ -119,4 +133,31 @@ jobs:
           # refreshed pair, so a rotating credential would be revoked by its own first refresh.
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_TEST_CHANNEL: ${{ secrets.SLACK_TEST_CHANNEL }}
+          # WRITE scope. `vitest.live.config.ts` includes the whole test/live directory, so this ONE
+          # token serves both fly probes: fly.live.test.ts only reads, but fly-deploy.live.test.ts
+          # creates a real app + volume, stages secrets, runs a remote build and destroys it again.
+          # A read-only token makes the nightly red at `apps create`; a write token bills every night.
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: npm run test:live
+
+      # The deploy probe destroys its own app in afterAll, which a job timeout or a cancelled run
+      # never reaches — and what it leaves behind is a running Fly app holding the model credential
+      # that was staged into it, with nothing else in the world collecting it. `always()` still
+      # reaches this step on cancellation, so the sweep lives here rather than in the probe.
+      #
+      # Scoped to the name the probe mints (`fastagent-live-<uuid8>`, see test/live/fly-deploy) and
+      # serialized by the `live` concurrency group, so it cannot destroy another CI run's app. A
+      # LOCAL probe run against this same org at this same moment is the one case it would.
+      - name: Destroy leftover live Fly apps
+        if: always()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          # Without this the pipeline's exit code is `xargs`'s, which is 0 on empty input: a failed
+          # `apps list` (expired token, Fly 5xx) or a `jq` error would report a clean sweep having
+          # deleted nothing. The default shell here is `bash -e {0}` — `-o pipefail` is NOT included.
+          set -o pipefail
+          flyctl apps list --json \
+            | jq -r '.[] | (.Name // .name) | select(test("^fastagent-live-[0-9a-f]{8}$"))' \
+            | tee /dev/stderr \
+            | xargs -r -n1 -I{} flyctl apps destroy {} --yes

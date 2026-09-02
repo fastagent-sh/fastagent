@@ -103,9 +103,10 @@ Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy 
 
 1. `fly apps create <name>` — one-time (Fly app names are globally unique; if taken, edit `app` in `fly.toml` and re-run `deploy`).
 2. `fly volumes create data --region <region> --size 1` — one-time; the region **must** match `primary_region` in `fly.toml`.
-3. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
-4. `fly deploy` — build and ship. **A redeploy is this step alone.**
-5. Register each route channel's webhook at the live URL. Locally onboarded Slack updates its App Manifest from the builder machine; scaffold-only/manual Slack prints the console URL. WebSocket long-connection channels make no registration call.
+3. `fly ips allocate-v4 --shared` + `fly ips allocate-v6` — one-time, free. `[http_service]` declares a service; it does not allocate an address to reach it on. `fly deploy` does that on a *first* deploy only, and just warns when it fails — leaving a machine that serves and a `https://<name>.fly.dev` with no DNS record. Skip if `fly ips list` already shows one.
+4. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
+5. `fly deploy` — build and ship. **A redeploy is this step alone.**
+6. Register each route channel's webhook at the live URL. Locally onboarded Slack updates its App Manifest from the builder machine; scaffold-only/manual Slack prints the console URL. WebSocket long-connection channels make no registration call.
 
 Or let the CLI do all of it:
 

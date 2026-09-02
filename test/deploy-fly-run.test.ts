@@ -12,7 +12,9 @@ function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } 
   const fly: CliRunner = async (args, opts) => {
     calls.push({ args, input: opts?.input });
     const r = script(args);
-    return { code: r.code ?? 0, stdout: r.stdout ?? "" };
+    // An unscripted `--json` command answers an EMPTY LIST, not an empty string: flyctl cannot print
+    // the latter, and the driver's parse gates correctly refuse it. Scripting stays per-test.
+    return { code: r.code ?? 0, stdout: r.stdout ?? (args.includes("--json") ? "[]" : "") };
   };
   return { fly, calls, cmds: () => calls.map((c) => c.args.join(" ")) };
 }
@@ -32,9 +34,11 @@ const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async (): Promise<Registr
   deployFlyRun(p, fly, () => {}, { telegram: tg });
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
-  it("happy path: auth → create app+volume → set secrets → deploy → telegram webhook", async () => {
-    // Fresh account: apps/volumes lists are empty, everything succeeds.
-    const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+  it("happy path: auth → create app+volume+address → set secrets → deploy → telegram webhook", async () => {
+    // Fresh account: apps/volumes/ips lists are empty, everything succeeds.
+    const { fly, cmds } = fakeFly((a) =>
+      a[0] === "apps" || a[0] === "volumes" || a[0] === "ips" ? { stdout: "[]" } : {},
+    );
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
@@ -52,10 +56,110 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "apps create bot",
       "volumes list -a bot --json",
       "volumes create data -a bot --region iad --size 1 --yes",
+      "ips list -a bot --json",
+      "ips allocate-v4 --shared -a bot",
+      "ips allocate-v6 -a bot",
       "secrets import --stage -a bot",
       "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
+  });
+
+  it("an app that already has both families is not allocated a second address", async () => {
+    // The shape `fly ips list --json` really returns (Address + Type), from a deployed app.
+    const existing = JSON.stringify([
+      { ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" },
+      { ID: "ip_y", Address: "2a09:8280:1::1:2", Type: "v6" },
+    ]);
+    const { fly, cmds } = fakeFly((a) => {
+      if (a[0] === "ips") return { stdout: existing };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: true });
+    expect(cmds()).toContain("ips list -a bot --json");
+    expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
+  });
+
+  // The check is per family because the ACTION is: "has an ingress address" would read either of
+  // these as done. The v6-only app is #425 itself — it resolves, to an AAAA record alone, which an
+  // IPv4-only webhook sender (Telegram, GitHub) cannot reach. The v4-only app is how it gets there:
+  // allocate-v4 succeeds, allocate-v6 gates, and the re-run the gate asks for sees v4 and skips.
+  for (const [held, missing, expected] of [
+    [{ ID: "ip_y", Address: "2a09:8280:1::1:2", Type: "v6" }, "v4", "ips allocate-v4 --shared -a bot"],
+    [{ ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" }, "v6", "ips allocate-v6 -a bot"],
+  ] as const) {
+    it(`allocates the missing ${missing} for an app that holds only the other family`, async () => {
+      const { fly, cmds } = fakeFly((a) => {
+        if (a[0] === "ips") return { stdout: JSON.stringify([held]) };
+        return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+      });
+
+      expect(await run(plan(), fly)).toEqual({ ok: true });
+      expect(cmds().filter((c) => c.startsWith("ips allocate"))).toEqual([expected]);
+    });
+  }
+
+  it("allocates for an app whose only addresses are Flycast and egress", async () => {
+    // Every one of these carries a non-empty Address and NONE of them answers https://<app>.fly.dev.
+    // Treating them as ingress is #425 again, and it also stops flyctl's own first-deploy fallback,
+    // which returns early as soon as the app holds any assignment at all.
+    const internal = JSON.stringify([
+      { Address: "fdaa:0:1::3", Type: "private_v6" },
+      { Address: "66.241.125.9", Type: "egress_v4" },
+      { Address: "2a09:8280:1::5", Type: "egress_v6" },
+    ]);
+    const { fly, cmds } = fakeFly((a) => {
+      if (a[0] === "ips") return { stdout: internal };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: true });
+    expect(cmds()).toContain("ips allocate-v4 --shared -a bot");
+    expect(cmds()).toContain("ips allocate-v6 -a bot");
+  });
+
+  it("gate: a failed `ips list` stops before deploying something unreachable", async () => {
+    // Without an address the machine serves and https://<app>.fly.dev has no DNS record at all, so a
+    // list we cannot read must not be treated as "probably fine" (#425).
+    const { fly } = fakeFly((a) => {
+      if (a[0] === "ips") return { code: 1 };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("ips list") });
+  });
+
+  // Exit 0 with unreadable output is a THIRD answer, and every list gates on it rather than reading it
+  // as "absent". flyctl has dropped `--json` before (superfly/flyctl#1967), and each collapse has its
+  // own damage: a second volume, a create misreported as a name clash, an unreachable deploy (#425).
+  for (const [label, args] of [
+    ["apps list", ["apps"]],
+    ["volumes list", ["volumes"]],
+    ["ips list", ["ips"]],
+  ] as const) {
+    it(`gate: \`${label}\` exiting 0 with non-JSON is not read as "absent"`, async () => {
+      const { fly, cmds } = fakeFly((a) => {
+        if (a[0] === args[0]) return { stdout: "NAME\tSTATUS\nbot\tdeployed\n" }; // the pre-#1967 table
+        return a[0] === "apps" || a[0] === "volumes" || a[0] === "ips" ? { stdout: "[]" } : {};
+      });
+
+      expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining(label) });
+      // Gated BEFORE the write it would otherwise have guessed its way into.
+      expect(cmds().some((c) => c.startsWith(`${args[0]} create`) || c.startsWith(`${args[0]} allocate`))).toBe(false);
+    });
+  }
+
+  it("gate: `ips list` that exits 0 with unparseable output stops too", async () => {
+    // The other half of the same rule: exit 0 does not mean the answer was readable, and silently
+    // reading "no address" out of it would allocate a second one on every run.
+    const { fly, cmds } = fakeFly((a) => {
+      if (a[0] === "ips") return { stdout: "NAME\tTYPE\n" };
+      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+    });
+
+    expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("unreadable") });
+    expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
   });
 
   it("dispatches Feishu and Lark registration through the per-kind seam", async () => {

@@ -84,6 +84,15 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(def).toContain("min_machines_running = 0");
   });
 
+  it("gives the runbook an address to be reached on, both families", () => {
+    // The runbook is the DEFAULT path (`--run` is opt-in), so #425 reaches an operator through it
+    // first. `[http_service]` declares a service without allocating an address, and both commands
+    // are needed: an AAAA-only app is unreachable to IPv4-only webhook senders.
+    const out = runbook(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
+    expect(out).toContain("fly ips allocate-v4 --shared --app bot");
+    expect(out).toContain("fly ips allocate-v6 --app bot");
+  });
+
   it("computes the secret list from the model key + discovered channels + config deploy.secrets", () => {
     const out = runbook(
       planFlyDeploy({

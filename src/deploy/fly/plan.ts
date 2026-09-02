@@ -163,6 +163,13 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `# <region> MUST equal primary_region in fly.toml (a volume in another region can't mount) — fly.toml`,
     `# is the single source for the region; skip this if the volume exists (fly volumes list --app ${appName}):`,
     `fly volumes create data --app ${appName} --region <region> --size 1`,
+    ``,
+    `# An address to be reached ON: [http_service] declares a service, it does not allocate an IP.`,
+    `# \`fly deploy\` allocates one on a FIRST deploy only, and merely WARNS when that fails — which`,
+    `# leaves the machine serving and https://${appName}.fly.dev with no DNS record at all. Both are`,
+    `# free; skip if \`fly ips list --app ${appName}\` already shows a v4/v6/shared_v4 address:`,
+    `fly ips allocate-v4 --shared --app ${appName}`,
+    `fly ips allocate-v6 --app ${appName}`,
   ];
 
   if (requiredSecrets.length > 0) {
