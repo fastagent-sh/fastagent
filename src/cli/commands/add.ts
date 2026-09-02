@@ -226,13 +226,15 @@ async function resolveIngress(
   }
   const answer = await select<FeishuSubscriptionMode>({
     message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
-    // Webhook leads because the menu's default must match the non-interactive one above, and because
-    // websocket -> webhook is a migration this command refuses (see existsAlready) while the reverse costs nothing.
+    // The default must match the non-interactive branch above. Webhook is the cheaper side to be
+    // wrong on: its credentials are a superset of websocket's (App ID/Secret plus the Verification
+    // Token), and that token has no read API — a websocket app moving to webhook must re-acquire it.
+    initialValue: "webhook",
     options: [
       {
         value: "webhook",
         label: "Webhook endpoint",
-        hint: "works on every deploy target; scales to zero; requires a public HTTPS URL",
+        hint: "works on every deploy target; supports scale-to-zero; requires a public HTTPS URL",
       },
       {
         value: "websocket",
