@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { configureGroupBehavior } from "../src/cli/add-feishu.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
+import {
+  FEISHU_APP_CONFIG_SCOPE,
+  FEISHU_MESSAGE_RECEIVE_EVENT,
+  feishuAppAddons,
+} from "../src/channels/feishu/setup-mode.ts";
 
 function fixture(scopes: FeishuAppScope[] = []): {
   api: Pick<FeishuApi, "listAppScopes" | "addAppScopes">;
@@ -173,5 +178,18 @@ describe("Feishu/Lark group-behavior onboarding", () => {
     expect(result).toEqual({ publishReady: false });
     expect(fx.notes.join("\n")).toMatch(/could not add.*add it manually before publishing/);
     expect(fx.opened).toEqual(["https://open.larksuite.com/app/cli_l/permission"]);
+  });
+});
+
+describe("Feishu app creation addons", () => {
+  it("requests the app-config scope for either ingress — a WebSocket app can still move to webhook", () => {
+    // The scope only webhook USES on day one, requested for both: changing ingress is a migration the
+    // CLI refuses to perform, so an app that was not born with it has to be recreated or repaired by
+    // hand in the console after a PATCH already failed.
+    expect(feishuAppAddons().scopes.tenant).toContain(FEISHU_APP_CONFIG_SCOPE);
+  });
+
+  it("subscribes the inbound message event — an app that cannot hear one serves nothing", () => {
+    expect(feishuAppAddons().events.items.tenant).toContain(FEISHU_MESSAGE_RECEIVE_EVENT);
   });
 });

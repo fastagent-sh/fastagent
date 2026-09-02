@@ -106,4 +106,17 @@ jobs:
           # A bot of the probe's OWN: it sets and then deletes that bot's webhook, which would take
           # down whatever traffic a shared bot was serving.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # Likewise an app of the probe's own: registering rewrites its event Request URL.
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
+          # OPTIONAL, unlike the three above, because the platform's Encrypt Key is: set it only if the
+          # probe's app has one configured, and the channel then decrypts the url_verification
+          # challenge instead of refusing it. An unset secret expands to "", which the channel file's
+          # `|| undefined` reads as absent — the same reason env.ts prefers `||` over `??`.
+          FEISHU_ENCRYPT_KEY: ${{ secrets.FEISHU_ENCRYPT_KEY }}
+          # A LONG-LIVED xoxb- (token rotation off): a runner has no durable volume to catch a
+          # refreshed pair, so a rotating credential would be revoked by its own first refresh.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_TEST_CHANNEL: ${{ secrets.SLACK_TEST_CHANNEL }}
         run: npm run test:live

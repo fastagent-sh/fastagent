@@ -260,11 +260,15 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # the published tarball (registry), a real provider's stream and errors
                              # (model), a real container build + boot + state volume (docker), a real
                              # Quick Tunnel carrying a request home (tunnel), a cron on disk firing a
-                             # real turn into the audit log (schedule), and Telegram VERIFYING a webhook
-                             # URL it was handed (telegram — registration only; delivery needs a human
-                             # to type). Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
-                             # `deploy docker --run`, `npm install`, `startCloudflareTunnel`,
-                             # `startSchedules`, `registerTelegramWebhook`) and observes from OUTSIDE it
+                             # real turn into the audit log (schedule), Telegram VERIFYING a webhook URL
+                             # it was handed and Feishu CALLING one with a challenge (telegram/feishu —
+                             # registration only; delivery needs a human to type), and Slack's Bot API
+                             # answering our pipeline (slack — OUTBOUND only: its inbound half needs a
+                             # 12h App Configuration Token, which no nightly can hold). Each one drives
+                             # a PRODUCT ENTRY (`createPiAgentFromDir`, `deploy docker --run`,
+                             # `npm install`, `startCloudflareTunnel`, `startSchedules`,
+                             # `registerTelegramWebhook`, `registerFeishuWebhook`, `createSlackApi`)
+                             # and observes from OUTSIDE it
                              # — a probe that rebuilds the assembly to get a better observation point
                              # measures the rebuild, and the entry's own steps (installProxyFetch,
                              # credential resolution, pinning pi's agent dir) go missing one at a time.
