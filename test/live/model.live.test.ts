@@ -13,15 +13,15 @@
  * runs the full suite (MUST 1/2/3/6) against the L0 on a faux model. Cancellation in particular gains
  * nothing from a live provider — the assertion is that the engine's abort ran, which is identical in
  * both worlds. What only a real provider can settle is here: a real stream completes, a real HTTP
- * error becomes a `failed` terminal with the right `retryable`, and a real record carries a
- * conversation across two independent instances.
+ * error becomes a `failed` terminal with the right `retryable`, a real record carries a conversation
+ * across two independent instances, and a real model CALLS a tool this repo described to it.
  *
  * `FASTAGENT_LIVE_MODEL` selects the model ("provider/modelId"); credentials resolve as the product
  * resolves them — `FASTAGENT_AUTH_PATH`, else the agent's own `.secrets/auth.json`, else the
  * provider's env key. An OAuth provider (openai-codex) has only the first, so point the variable at a
  * logged-in file.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -97,6 +97,61 @@ describe(`live model: ${MODEL}`, () => {
     const { agent } = await createPiAgentFromDir(await agentDirectory(MODEL));
     const { text } = await collect(agent.invoke({ session: "live-answer" }, { text: "Reply with just: ok" }));
     expect(text.trim()).not.toBe("");
+  });
+
+  it("a real model calls a tool defined by defineTool, and uses what it returned", async () => {
+    // The offline suite drives tools with `fauxToolCall`: it answers "given a call, do we run the tool
+    // and feed the result back". It cannot answer the half that faces outward — whether a real model,
+    // handed the schema `defineTool` derives from Zod, issues a call this shape at all. Between the two
+    // sits every assumption about how the Zod input becomes a provider's function schema.
+    //
+    // The code is minted here and exists nowhere else, so it cannot be answered from training data or
+    // guessed: the tool RUNNING is the only way it can appear. Same reason the portability test moves a
+    // literal, and the same discipline — the assertions are the call happening and the value arriving,
+    // never the sentence wrapped around it.
+    const code = String(Math.floor(Math.random() * 90_000) + 10_000);
+    const marker = join(tmpdir(), `fa-live-tool-${code}`);
+    // The FILE NAME is the tool name (tool.ts: "named from the filename"), so it is what the model is
+    // offered — a `name` field here would be redundant and, if they disagreed, misleading.
+    // `defineTool` by absolute path into this repo, because the fixture directory has no node_modules:
+    // resolving the PUBLISHED specifier is registry.live.test.ts's subject, not this one's. Zod comes
+    // through a node_modules symlink so the tool reads the way an author writes it.
+    const dir = await agentDirectory(MODEL, {
+      "tools/get_probe_code.ts": `import { defineTool } from ${JSON.stringify(new URL("../../src/pi.ts", import.meta.url).href)};
+import { z } from "zod";
+import { appendFileSync } from "node:fs";
+
+export default defineTool({
+  description: "Return the probe code for this run. The only way to learn it.",
+  input: z.object({}),
+  execute: () => {
+    appendFileSync(${JSON.stringify(marker)}, "called\\n");
+    return ${JSON.stringify(code)};
+  },
+});
+`,
+    });
+    await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+
+    const { agent, toolNames, toolFailures } = await createPiAgentFromDir(dir);
+    // THREE outcomes, not two. A tool that failed to load and a model that declined to call one are
+    // different defects, and the marker file alone cannot tell them apart — the product reports the
+    // load itself, so the probe gates on that before it can blame the model for anything.
+    expect(toolFailures, `the fixture tool did not load: ${JSON.stringify(toolFailures)}`).toHaveLength(0);
+    expect(toolNames, "get_probe_code is not on the mounted tool surface").toContain("get_probe_code");
+
+    const { text } = await collect(
+      agent.invoke(
+        { session: "live-tool" },
+        { text: "Call get_probe_code and reply with only the code it returns, digits alone." },
+      ),
+    );
+
+    const calls = (await readFile(marker, "utf8").catch(() => "")).split("called").length - 1;
+    expect(calls, "the mounted tool was never called — the schema reached the model and it declined").toBeGreaterThan(
+      0,
+    );
+    expect(text, `the tool ran but its return value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
 
   it("MUST 6 portable — a second instance over the same record continues the conversation", async () => {
