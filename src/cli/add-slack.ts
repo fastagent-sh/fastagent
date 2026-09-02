@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -18,16 +18,27 @@ const CONFIG_TOKEN_URL = "https://api.slack.com/apps";
  * redirect, so any environment without a reachable public URL — strict egress, no cloudflared, a
  * hostname this machine cannot resolve (#421) — can still finish by hand. Printed on every failure of
  * the automated path, because that path is unavailable rather than broken in those environments.
+ *
+ * The manifest lands in a FILE rather than the terminal: step 1 is a paste into Slack's console, and
+ * scrollback is the worst place to copy forty lines of JSON from. It carries no secret — an app name,
+ * the scopes, the events.
  */
-function printManualRoute(
+async function printManualRoute(
   target: string,
   app: { appName: string; groupBehavior: GroupBehaviorChoice["behavior"] },
-): void {
+): Promise<void> {
+  const manifestPath = join(target, "slack-app-manifest.json");
   const manifest = buildSlackManifest({ name: app.appName, groupBehavior: app.groupBehavior });
+  let step1 = `  1. ${CONFIG_TOKEN_URL} → Create New App → From an app manifest, and paste ${manifestPath}`;
+  try {
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  } catch (error) {
+    // The manual route is what is left when the automatic one failed; losing it silently to a second
+    // failure would leave the operator with nothing. Say so, and keep the rest of the steps.
+    step1 = `  1. ${CONFIG_TOKEN_URL} → Create New App → From an app manifest. FastAgent could not write the\n     manifest to ${manifestPath} (${String(error)}) — re-run \`fastagent add slack\` from a writable dir for it.`;
+  }
   console.error(
-    `[fastagent] slack: no public callback is needed to create the app by hand.\n` +
-      `  1. ${CONFIG_TOKEN_URL} → Create New App → From an app manifest, and paste:\n` +
-      `${JSON.stringify(manifest, null, 2)}\n` +
+    `[fastagent] slack: no public callback is needed to create the app by hand.\n${step1}\n` +
       `  2. Install to Workspace — the console SHOWS the credentials instead of redirecting.\n` +
       `  3. Copy into ${dotEnvPath(target)}: SLACK_BOT_TOKEN, SLACK_BOT_REFRESH_TOKEN and\n` +
       `     SLACK_BOT_TOKEN_EXPIRES_AT (OAuth & Permissions — the manifest enables token rotation),\n` +
@@ -204,7 +215,7 @@ export async function onboardSlackInternalApp(input: {
   const tunnel = await startCloudflareTunnel(server.port);
   if (!tunnel) {
     await server.close();
-    printManualRoute(input.target, app);
+    await printManualRoute(input.target, app);
     throw new Error("Slack onboarding needs a temporary HTTPS tunnel — install cloudflared and re-run");
   }
   const requestUrl = `${tunnel.url}${server.requestPath}`;
@@ -249,7 +260,7 @@ export async function onboardSlackInternalApp(input: {
         "replace the temporary Events API URL automatically",
     );
   } catch (error) {
-    printManualRoute(input.target, app);
+    await printManualRoute(input.target, app);
     throw error;
   } finally {
     tunnel.close();

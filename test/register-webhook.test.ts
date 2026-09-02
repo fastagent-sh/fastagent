@@ -36,7 +36,7 @@ describe("registerTelegramWebhook: setWebhook is its own readiness probe", () =>
     expect(called).toHaveLength(1);
     expect(called[0]).toContain("/setWebhook");
     // The fresh hostname is never dialled from here — only Telegram has to reach it.
-    expect(called.some((url) => url.includes("app.up.railway.app"))).toBe(false);
+    expect(called.some((url) => new URL(url).hostname === "app.up.railway.app")).toBe(false);
   });
 
   it("retries while TELEGRAM cannot reach the URL yet, then succeeds", async () => {
