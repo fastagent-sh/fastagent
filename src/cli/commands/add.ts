@@ -124,12 +124,8 @@ export async function runAddChannel(
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          // In the user's terms, not Slack's: what a "Request URL" is does not matter to them, what
-          // happens to their messages does. True of both install modes — the OAuth one points Slack
-          // at a throwaway setup URL, the console one at nothing — and in both FastAgent fixes it
-          // from this machine when the agent first runs, so there is one sentence, not two.
-          "until the agent runs somewhere Slack can reach, nothing you type in Slack arrives — " +
-            "`fastagent dev --tunnel` (local) or `fastagent deploy` (hosted) starts it, and FastAgent points Slack at it for you",
+          // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and
+          // FastAgent sets that URL itself when the agent first runs (both install modes).
           "invite the app to each channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]
@@ -186,7 +182,7 @@ export async function runAddChannel(
     console.error(`    fastagent dev            # no public URL or tunnel required`);
   } else if (channelKind === "slack") {
     console.error(
-      `    fastagent dev --tunnel   # ${opts.onboard === false ? "serve locally + print the URL to paste into the Slack app's Event Subscriptions" : "serve locally on a public URL — Slack starts delivering messages to the agent"}`,
+      `    fastagent dev --tunnel   # ${opts.onboard === false ? "serve locally + print the URL to paste into the Slack app's Event Subscriptions" : "start the agent — then message it in Slack"}`,
     );
   } else if (channelKind === "github") {
     console.error(`    fastagent dev --tunnel   # serve locally + print the URL for manual GitHub webhook setup`);
