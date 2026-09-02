@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSlackApp, exchangeSlackOAuthCode, SlackConfigApiError } from "../src/channels/slack/config-api.ts";
+import {
+  createSlackApp,
+  exchangeSlackOAuthCode,
+  isSlackRequestUrlUnverified,
+  SlackConfigApiError,
+} from "../src/channels/slack/config-api.ts";
 import { buildSlackManifest, slackBotEvents, slackBotScopes } from "../src/channels/slack/manifest.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../src/channels/slack/onboard.ts";
 import {
@@ -65,6 +70,58 @@ describe("Slack internal-app manifest and control API", () => {
       token_rotation_enabled: true,
       event_subscriptions: { request_url: "https://agent.test/slack" },
     });
+  });
+
+  it("only a rejected request_url is a retryable manifest error — read from the field, not the prose", async () => {
+    // Both are `invalid_manifest`; only one means "cannot reach it YET". The second is the real reply
+    // Slack gave a manifest that subscribed to events without a request_url — a permanent shape error
+    // that must be reported at once, not waited out. Matching the message text could not tell them
+    // apart: it mentions the Request URL either way.
+    const unverifiedUrl = new SlackConfigApiError(
+      "apps.manifest.create",
+      200,
+      {
+        error: "invalid_manifest",
+        errors: [{ pointer: "/settings/event_subscriptions/request_url", message: "failed to verify request url" }],
+      },
+      "unknown_error",
+    );
+    const badShape = new SlackConfigApiError(
+      "apps.manifest.create",
+      200,
+      {
+        error: "invalid_manifest",
+        errors: [
+          { pointer: "/settings/event_subscriptions", message: "Event Subscription requires a Request URL" },
+          {
+            pointer: "/settings/event_subscriptions",
+            message: "Event Subscription requires Socket Mode if no Request URL is provided",
+          },
+        ],
+      },
+      "unknown_error",
+    );
+    // The `/request_url` pointer above is an inference — the captured reply is `badShape`, which
+    // reports on the PARENT pointer. If the unverifiable case reports there too, the pointer arm alone
+    // would retry zero times, so a verification-worded message on the parent pointer counts as well.
+    const unverifiedOnParentPointer = new SlackConfigApiError(
+      "apps.manifest.create",
+      200,
+      {
+        error: "invalid_manifest",
+        errors: [
+          {
+            pointer: "/settings/event_subscriptions",
+            message: "Your Request URL did not respond with the correct challenge value",
+          },
+        ],
+      },
+      "unknown_error",
+    );
+    expect(isSlackRequestUrlUnverified(unverifiedUrl)).toBe(true);
+    expect(isSlackRequestUrlUnverified(unverifiedOnParentPointer)).toBe(true);
+    expect(isSlackRequestUrlUnverified(badShape)).toBe(false);
+    expect(isSlackRequestUrlUnverified(new Error("request_url something"))).toBe(false); // not Slack's
   });
 
   it("sends manifest credentials only in headers/body and parses create + OAuth results", async () => {

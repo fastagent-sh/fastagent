@@ -13,6 +13,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts";
+import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../channels/registration.ts";
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
@@ -86,12 +87,23 @@ export interface DeployOptions {
 }
 
 /** The registrars every host driver gets. One wiring: a channel's credentials are the channel's, not
- *  the host's, so which of them can run end-to-end never varies by deployment target. */
+ *  the host's, so which of them can run end-to-end never varies by deployment target.
+ *
+ *  All three get {@link DEPLOY_REGISTRATION_ATTEMPTS} rather than the default: a host CLI returns
+ *  before the deployment answers, and a registration that gives up first GATES the deploy — reporting
+ *  a working deployment as one to re-run. `dev --tunnel` keeps the shorter default; it is a resident
+ *  process whose URL is live when it is printed, as does `deploy docker --run` — it reuses that same
+ *  announcer, having already health-probed the container and waited for the Quick Tunnel URL.
+ *
+ *  Accepted cost: pointChannelsAt registers serially, so a deployment whose channels are ALL
+ *  unreachable spends the budget once per channel (3 x 180s) before it gates. Registering in parallel
+ *  would not shorten a single failing channel, and the failing case is the one nobody is waiting on. */
 function registrarsFor(agentDir: string): Registrars {
+  const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   return {
-    telegram: (baseUrl) => registerTelegramWebhook(baseUrl),
-    slack: (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir) }),
-    feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
+    telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts }),
+    slack: (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), attempts }),
+    feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts }),
   };
 }
 

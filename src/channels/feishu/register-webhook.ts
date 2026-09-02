@@ -20,16 +20,16 @@
  * platform ships it, registration starts working with no change here) and names the real cause in the
  * fallback instead of blaming the app's scopes.
  */
-import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
-import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
+import { retryWhile, type RegistrationOutcome } from "../registration.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistrationError } from "./feishu-api.ts";
 
 /**
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
- * the manual instruction instead of failing. `opts` exist for tests: the attempt budget + `apiBase` (a
- * fake platform — production derives it from the kind).
+ * the manual instruction instead of failing. `opts` carries the attempt budget — `--tunnel` takes the
+ * default, `deploy --run` passes `DEPLOY_REGISTRATION_ATTEMPTS` (a host starts slower than a tunnel) —
+ * plus `apiBase`, which is a test's fake platform (production derives it from the kind).
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */
@@ -89,53 +89,49 @@ export async function registerFeishuWebhook(
   // with a challenge DURING the call, so its 210042 "request_url validation failed" is the readiness
   // signal and is retried with backoff, alongside transient network errors. Only a permanent config
   // error (missing scope, app under review, the intl 404) is reported once with the manual path.
-  const attempts = opts.attempts ?? REGISTRATION_ATTEMPTS;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? REGISTRATION_RETRY_MS);
-    try {
-      await api.updateEventSubscription(appId, { subscriptionType: "webhook", requestUrl });
-      log.info(`[fastagent] ${kind}: event Request URL registered → ${requestUrl}`);
-      // Field-tested: a URL change applies immediately, but the MODE flip (the template's long
-      // connection → webhook) only takes effect when a version is published — the dispatcher serves
-      // the published snapshot, and version publishing has no open API. One console click, once.
-      log.info(
-        `[fastagent] ${kind}: if messages do not arrive, publish a version (one click, prompted) — the switch to webhook mode takes effect on publish: ${versionUrl}`,
+  try {
+    await retryWhile(
+      () => api.updateEventSubscription(appId, { subscriptionType: "webhook", requestUrl }),
+      isTransientFeishuRegistrationError,
+      {
+        attempts: opts.attempts,
+        retryMs: opts.retryMs,
+        onRetry: ({ attempt, attempts }) =>
+          log.info(
+            `[fastagent] ${kind}: the platform cannot verify ${requestUrl} yet (attempt ${attempt}/${attempts}); retrying…`,
+          ),
+      },
+    );
+    log.info(`[fastagent] ${kind}: event Request URL registered → ${requestUrl}`);
+    // Field-tested: a URL change applies immediately, but the MODE flip (the template's long
+    // connection → webhook) only takes effect when a version is published — the dispatcher serves
+    // the published snapshot, and version publishing has no open API. One console click, once.
+    log.info(
+      `[fastagent] ${kind}: if messages do not arrive, publish a version (one click, prompted) — the switch to webhook mode takes effect on publish: ${versionUrl}`,
+    );
+    return "registered";
+  } catch (e) {
+    // A 404 on the config route is the CLOUD lagging, not this app's configuration: the v7 API is
+    // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
+    // would send the operator hunting for a problem they cannot fix. It stays WARN: on that cloud the
+    // manual path is the known norm, not an exceptional failure.
+    if (isFeishuConfigApiMissing(e)) {
+      log.warn(
+        `[fastagent] ${kind}: this cloud (${apiBase}) returned HTTP 404 for the app-config API — ` +
+          `manual registration is required`,
       );
-      return "registered";
-    } catch (e) {
-      // A 404 on the config route is the CLOUD lagging, not this app's configuration: the v7 API is
-      // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
-      // would send the operator hunting for a problem they cannot fix.
-      if (isFeishuConfigApiMissing(e)) {
-        log.warn(
-          `[fastagent] ${kind}: this cloud (${apiBase}) returned HTTP 404 for the app-config API — ` +
-            `manual registration is required`,
-        );
-        manualRegistration();
-        return "manual"; // that cloud has no config API — the manual path is the norm there
-      }
-      if (!isTransientFeishuRegistrationError(e)) {
-        log.error(
-          `[fastagent] ${kind}: could not register the event URL (${String(e)}). ` +
-            `The app may lack the "application:application:patch" scope (console → Permissions) or be under review; manual registration is available below.`,
-        );
-        manualRegistration();
-        return "failed";
-      }
-      // The wait is otherwise silent for over a minute, which reads as a hang (`dev --tunnel`).
-      if (attempt + 1 < attempts) {
-        log.info(
-          `[fastagent] ${kind}: the platform cannot verify ${requestUrl} yet (attempt ${attempt + 1}/${attempts}); retrying…`,
-        );
-      }
+      manualRegistration();
+      return "manual"; // that cloud has no config API — the manual path is the norm there
     }
+    // Exhausted retries end in the same state as a permanent config error (event URL not registered,
+    // manual action required) — report at the same level.
+    log.error(
+      isTransientFeishuRegistrationError(e)
+        ? `[fastagent] ${kind}: the platform could not verify ${requestUrl} after retries — manual registration is required`
+        : `[fastagent] ${kind}: could not register the event URL (${String(e)}). ` +
+            `The app may lack the "application:application:patch" scope (console → Permissions) or be under review; manual registration is available below.`,
+    );
+    manualRegistration();
+    return "failed";
   }
-  // Exhausted retries end in the same state as a permanent error (event URL not registered, manual
-  // action required) — report at the same level. The cloud-lag 404 above stays warn: on that cloud the
-  // manual path is the known norm, not an exceptional failure.
-  log.error(
-    `[fastagent] ${kind}: the platform could not verify ${requestUrl} after retries — manual registration is required`,
-  );
-  manualRegistration();
-  return "failed";
 }
