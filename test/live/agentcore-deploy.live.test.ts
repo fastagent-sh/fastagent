@@ -21,7 +21,7 @@
  * `fastagent-` prefix: the driver adds one to every resource it names.
  */
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -170,6 +170,9 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
     // public `invoke` kind is served" (agentcore.ts). A checkpoint here answers 403 from the container.
     // It is also the better assertion: `invoke` runs a real turn, the same thing the fly and railway
     // probes POST for.
+    // A real file, NOT /dev/stdout: this CLI writes the response body to the positional argument, and
+    // on a runner whose stdout is a pipe Actions owns, opening it answers "No such device or address".
+    const out = join(workspace, "invoke-reply.json");
     const payload = join(workspace, "invoke.json");
     await writeFile(
       payload,
@@ -186,14 +189,13 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
       `file://${payload}`,
       "--cli-binary-format",
       "raw-in-base64-out",
-      "/dev/stdout",
+      out,
     ]);
     expect(reply.code, `invoke-agent-runtime failed:\n${reply.stderr.slice(-2000)}`).toBe(0);
+    const body = await readFile(out, "utf8");
 
     // The reply is the invoke stream in AgentCore's streaming form — the HTTP channel's SSE, reused
     // wholesale (agentcore.ts). A turn that reached a terminal is what proves the container served.
-    expect(reply.stdout, `the runtime returned no completed terminal:\n${reply.stdout.slice(0, 600)}`).toContain(
-      '"type":"completed"',
-    );
+    expect(body, `the runtime returned no completed terminal:\n${body.slice(0, 600)}`).toContain('"type":"completed"');
   }, 1_800_000);
 });
