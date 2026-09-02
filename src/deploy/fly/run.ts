@@ -41,8 +41,10 @@ export interface FlyRunPlan {
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
 export type FlyRunOutcome = { ok: true } | { ok: false; gate: string };
 
-/** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both). */
-function listHasName(stdout: string, name: string): boolean {
+/** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both).
+ *  Exported for the same reason railway's parsers are: what it encodes is an assumption about another
+ *  tool's output, and the live probe checks that assumption against the real `flyctl`. */
+export function listHasName(stdout: string, name: string): boolean {
   try {
     const arr = JSON.parse(stdout) as unknown;
     return (

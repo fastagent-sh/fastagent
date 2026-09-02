@@ -264,10 +264,13 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # it was handed and Feishu CALLING one with a challenge (telegram/feishu —
                              # registration only; delivery needs a human to type), and Slack's Bot API
                              # answering our pipeline (slack — OUTBOUND only: its inbound half needs a
-                             # 12h App Configuration Token, which no nightly can hold). Each one drives
-                             # a PRODUCT ENTRY (`createPiAgentFromDir`, `deploy docker --run`,
-                             # `npm install`, `startCloudflareTunnel`, `startSchedules`,
-                             # `registerTelegramWebhook`, `registerFeishuWebhook`, `createSlackApi`)
+                             # 12h App Configuration Token, which no nightly can hold), and `flyctl`
+                             # still printing what the Fly driver reads (fly — READ-ONLY: the write
+                             # steps are what cost money, the read steps are where the parsing lives).
+                             # Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
+                             # `deploy docker --run`, `npm install`, `startCloudflareTunnel`,
+                             # `startSchedules`, `registerTelegramWebhook`, `registerFeishuWebhook`,
+                             # `createSlackApi`, `listHasName`)
                              # and observes from OUTSIDE it
                              # — a probe that rebuilds the assembly to get a better observation point
                              # measures the rebuild, and the entry's own steps (installProxyFetch,

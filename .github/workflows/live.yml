@@ -61,6 +61,12 @@ jobs:
           sudo apt-get install -y cloudflared
           cloudflared --version
 
+      # The Fly probe shells out to `flyctl`, the same binary `deploy fly --run` drives. Pinned to a
+      # commit like every other action here; it only installs the CLI, which then reads FLY_API_TOKEN
+      # from the environment below.
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+
       # ONE credential mechanism for both probes: an auth.json, named by the product's own
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
       # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
@@ -119,4 +125,7 @@ jobs:
           # refreshed pair, so a rotating credential would be revoked by its own first refresh.
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_TEST_CHANNEL: ${{ secrets.SLACK_TEST_CHANNEL }}
+          # READ-ONLY use: the fly probe runs `auth whoami` and two `list --json` commands. Nothing it
+          # does creates, deploys or bills.
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: npm run test:live
