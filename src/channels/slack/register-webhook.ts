@@ -1,12 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { RegistrationOutcome } from "../registration.ts";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
 import { isSlackRequestUrlUnverified, updateSlackAppManifest } from "./config-api.ts";
 import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";
-
-/** Manifest-update attempts, and the wait between them: ~80s of warm-up for a fresh tunnel/container. */
-const ATTEMPTS = 8;
-const RETRY_MS = 10_000;
 
 export interface RegisterSlackWebhookOptions {
   stateRoot: string;
@@ -58,10 +54,10 @@ export async function registerSlackWebhook(
   // Slack verifies the new request_url with a challenge DURING apps.manifest.update, from Slack's own
   // network — that verdict IS the readiness signal, so it is retried while a fresh tunnel/container
   // warms up. No local `/health` poll precedes it: this machine's reach is the wrong question (#421).
-  const attempts = options.attempts ?? ATTEMPTS;
+  const attempts = options.attempts ?? REGISTRATION_ATTEMPTS;
   let lastUnverified = "unknown error";
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(options.retryMs ?? RETRY_MS);
+    if (attempt > 0) await sleep(options.retryMs ?? REGISTRATION_RETRY_MS);
     try {
       await updateSlackAppManifest(
         current.token,
@@ -87,6 +83,12 @@ export async function registerSlackWebhook(
         return "failed";
       }
       lastUnverified = String(error);
+      // The wait is otherwise silent for over a minute, which reads as a hang.
+      if (attempt + 1 < attempts) {
+        note(
+          `[fastagent] slack: Slack cannot verify ${publicBaseUrl}/slack yet (attempt ${attempt + 1}/${attempts}); retrying…`,
+        );
+      }
     }
   }
   note(

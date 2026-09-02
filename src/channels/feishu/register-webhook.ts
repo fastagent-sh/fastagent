@@ -22,18 +22,14 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
-import type { RegistrationOutcome } from "../registration.ts";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistrationError } from "./feishu-api.ts";
 
-/** PATCH attempts, and the wait between them: ~80s of warm-up for a fresh tunnel/container. */
-const ATTEMPTS = 8;
-const RETRY_MS = 10_000;
-
 /**
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
- * the manual instruction instead of failing. `opts` exist for tests: timeouts + `apiBase` (a fake
- * platform — production derives it from the kind).
+ * the manual instruction instead of failing. `opts` exist for tests: the attempt budget + `apiBase` (a
+ * fake platform — production derives it from the kind).
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */
@@ -93,9 +89,9 @@ export async function registerFeishuWebhook(
   // with a challenge DURING the call, so its 210042 "request_url validation failed" is the readiness
   // signal and is retried with backoff, alongside transient network errors. Only a permanent config
   // error (missing scope, app under review, the intl 404) is reported once with the manual path.
-  const attempts = opts.attempts ?? ATTEMPTS;
+  const attempts = opts.attempts ?? REGISTRATION_ATTEMPTS;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? RETRY_MS);
+    if (attempt > 0) await sleep(opts.retryMs ?? REGISTRATION_RETRY_MS);
     try {
       await api.updateEventSubscription(appId, { subscriptionType: "webhook", requestUrl });
       log.info(`[fastagent] ${kind}: event Request URL registered → ${requestUrl}`);
@@ -125,6 +121,12 @@ export async function registerFeishuWebhook(
         );
         manualRegistration();
         return "failed";
+      }
+      // The wait is otherwise silent for over a minute, which reads as a hang (`dev --tunnel`).
+      if (attempt + 1 < attempts) {
+        log.info(
+          `[fastagent] ${kind}: the platform cannot verify ${requestUrl} yet (attempt ${attempt + 1}/${attempts}); retrying…`,
+        );
       }
     }
   }

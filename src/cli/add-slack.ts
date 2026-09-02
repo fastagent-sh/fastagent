@@ -1,51 +1,20 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
-import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
+import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
+import type { GroupBehaviorChoice } from "../scaffold/add-channel.ts";
+import { exchangeSlackOAuthCode, slackAuthTest } from "../channels/slack/config-api.ts";
+import type { SlackOnboardIO } from "../channels/slack/onboard.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
 import { readSlackOnboardingState, writeSlackOnboardingState } from "../channels/slack/onboarding-state.ts";
-import { buildSlackManifest } from "../channels/slack/manifest.ts";
 import { startSlackSetupServer } from "../channels/slack/setup-server.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
 const CONFIG_TOKEN_URL = "https://api.slack.com/apps";
-
-/**
- * The route that needs no public callback. Automatic onboarding exists only to catch ONE OAuth
- * redirect, so any environment without a reachable public URL — strict egress, no cloudflared, a
- * hostname this machine cannot resolve (#421) — can still finish by hand. Printed on every failure of
- * the automated path, because that path is unavailable rather than broken in those environments.
- *
- * The manifest lands in a FILE rather than the terminal: step 1 is a paste into Slack's console, and
- * scrollback is the worst place to copy forty lines of JSON from. It carries no secret — an app name,
- * the scopes, the events.
- */
-async function printManualRoute(
-  target: string,
-  app: { appName: string; groupBehavior: GroupBehaviorChoice["behavior"] },
-): Promise<void> {
-  const manifestPath = join(target, "slack-app-manifest.json");
-  const manifest = buildSlackManifest({ name: app.appName, groupBehavior: app.groupBehavior });
-  let step1 = `  1. ${CONFIG_TOKEN_URL} → Create New App → From an app manifest, and paste ${manifestPath}`;
-  try {
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  } catch (error) {
-    // The manual route is what is left when the automatic one failed; losing it silently to a second
-    // failure would leave the operator with nothing. Say so, and keep the rest of the steps.
-    step1 = `  1. ${CONFIG_TOKEN_URL} → Create New App → From an app manifest. FastAgent could not write the\n     manifest to ${manifestPath} (${String(error)}) — re-run \`fastagent add slack\` from a writable dir for it.`;
-  }
-  console.error(
-    `[fastagent] slack: no public callback is needed to create the app by hand.\n${step1}\n` +
-      `  2. Install to Workspace — the console SHOWS the credentials instead of redirecting.\n` +
-      `  3. Copy into ${dotEnvPath(target)}: SLACK_BOT_TOKEN, SLACK_BOT_REFRESH_TOKEN and\n` +
-      `     SLACK_BOT_TOKEN_EXPIRES_AT (OAuth & Permissions — the manifest enables token rotation),\n` +
-      `     SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_SIGNING_SECRET (Basic Information).\n` +
-      `  4. Set Event Subscriptions → Request URL to <public-url>/slack once the agent is serving.`,
-  );
-}
 
 async function promptValue(message: string, hidden = false, initialValue?: string): Promise<string> {
   const result = hidden ? await password({ message }) : await clackText({ message, initialValue });
@@ -53,6 +22,87 @@ async function promptValue(message: string, hidden = false, initialValue?: strin
   const value = String(result).trim();
   if (!value) throw new Error(`${message}: value is required`);
   return value;
+}
+
+/** Stage whatever an install produced into the agent's `.env`. Shared by both install modes: which
+ *  credentials exist differs (a console install issues no rotation pair), what happens to them does not. */
+function writeRuntimeSecrets(target: string): SlackOnboardIO["writeRuntimeSecrets"] {
+  return async ({ botToken, botRefreshToken, botTokenExpiresAt, clientId, clientSecret, signingSecret }) => {
+    const values = {
+      ...(botToken ? { SLACK_BOT_TOKEN: botToken } : {}),
+      ...(botRefreshToken ? { SLACK_BOT_REFRESH_TOKEN: botRefreshToken } : {}),
+      ...(botTokenExpiresAt ? { SLACK_BOT_TOKEN_EXPIRES_AT: String(botTokenExpiresAt) } : {}),
+      ...(clientId ? { SLACK_CLIENT_ID: clientId } : {}),
+      ...(clientSecret ? { SLACK_CLIENT_SECRET: clientSecret } : {}),
+      ...(signingSecret ? { SLACK_SIGNING_SECRET: signingSecret } : {}),
+    };
+    if (Object.keys(values).length > 0) {
+      await appendChannelDotEnv(target, "slack", values, Object.keys(values));
+    }
+  };
+}
+
+/** Install by redirecting a browser through the temporary tunnel and exchanging the code it carries. */
+export function installViaOAuth(
+  redirectUrl: string,
+  waitForOAuth: () => Promise<{ code?: string; state?: string; error?: string }>,
+): SlackOnboardIO["install"] {
+  return async ({ clientId, clientSecret, scopes }) => {
+    // The CSRF nonce is meaningful only for a redirect, so it is minted and checked here rather than in
+    // the shared flow — a console install has no callback to forge.
+    const expectedState = randomBytes(24).toString("hex");
+    const authorize = new URL("https://slack.com/oauth/v2/authorize");
+    authorize.searchParams.set("client_id", clientId);
+    authorize.searchParams.set("scope", scopes.join(","));
+    authorize.searchParams.set("redirect_uri", redirectUrl);
+    authorize.searchParams.set("state", expectedState);
+    const authorizeUrl = authorize.toString();
+    clackLog.info("Approve the internal app installation in Slack:");
+    console.error(`[fastagent] ${authorizeUrl}`);
+    openExternalUrl(authorizeUrl);
+
+    const callback = await waitForOAuth();
+    if (callback.error) throw new Error("Slack OAuth installation was not approved");
+    if (!callback.code) throw new Error("Slack OAuth callback carried no authorization code");
+    if (!callback.state || callback.state !== expectedState) throw new Error("Slack OAuth callback state mismatch");
+    return exchangeSlackOAuthCode({ clientId, clientSecret, code: callback.code, redirectUrl });
+  };
+}
+
+/**
+ * Install from Slack's own console and take the token by hand — the mode for a machine that cannot
+ * receive a public callback at all (strict egress, no cloudflared, a hostname its resolver will not
+ * answer for, #421). Slack shows the bot token instead of redirecting it, so nothing has to reach here.
+ *
+ * The app it installs carries no rotation pair: rotating tokens are issued THROUGH an OAuth redirect,
+ * which is the one thing this mode does not have. The channel reads a static `SLACK_BOT_TOKEN` in that
+ * case (bot-auth.ts), so the cost is re-running this command if the token is ever revoked.
+ */
+export function installFromConsole(): SlackOnboardIO["install"] {
+  return async ({ appId }) => {
+    const installUrl = `${CONFIG_TOKEN_URL}/${appId}/install-on-team`;
+    clackLog.info(
+      "Install the app into your workspace from its console page, then copy the Bot User OAuth Token " +
+        "it shows (OAuth & Permissions).",
+    );
+    console.error(`[fastagent] ${installUrl}`);
+    openExternalUrl(installUrl);
+    const botToken = await promptValue("Slack Bot User OAuth Token (xoxb-…)", true);
+    if (!botToken.startsWith("xoxb-")) throw new Error("a Slack bot token starts with xoxb-");
+    // The one call that separates a real token from a mistyped one, and it names the workspace the
+    // agent just joined. Without it the first wrong character would surface as a runtime 401 later.
+    const identity = await slackAuthTest(botToken);
+    return {
+      botToken,
+      appId: identity.appId ?? appId,
+      teamId: identity.teamId,
+      teamName: identity.teamName,
+      botUserId: identity.botUserId,
+      // A console install reports the token's identity, never its grant. Empty means "not observed",
+      // and the shared flow then skips the scope check instead of asserting one it did not make.
+      scopes: [],
+    };
+  };
 }
 
 /** Interactive single-workspace internal-app creation + installation. Safe to re-run after interruption. */
@@ -64,6 +114,10 @@ export async function onboardSlackInternalApp(input: {
   groupBehavior: GroupBehaviorChoice;
   /** `--replace-config`: go straight to replacing the local App Configuration token pair. */
   replaceConfig?: boolean;
+  /** `--manual`: install from Slack's console instead of catching an OAuth redirect. For a machine
+   *  that cannot receive a public callback — a stable property of the network, which is why this is a
+   *  flag the operator sets and not a guess made after the automatic path fails. */
+  manual?: boolean;
 }): Promise<void> {
   installProxyFetch();
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -210,46 +264,50 @@ export async function onboardSlackInternalApp(input: {
     }
   }
 
-  const app = { appName: state.appName, groupBehavior: state.groupBehavior };
+  // `--manual` needs no tunnel and no setup server: the app is created through the same API call, and
+  // its `request_url` is simply left unset until something knows a public URL. Everything after the
+  // install step is the automatic path's code, not a copy of it.
+  if (input.manual) {
+    await onboardSlackApp(
+      { stateRoot: input.stateRoot, state },
+      {
+        note: (message) => clackLog.info(message),
+        install: installFromConsole(),
+        writeRuntimeSecrets: writeRuntimeSecrets(input.target),
+      },
+    );
+    console.error(
+      `[fastagent] Slack app installed; bot token and Signing Secret written to ${dotEnvPath(input.target)}`,
+    );
+    console.error(
+      "[fastagent] the app has no Events Request URL yet — `fastagent dev --tunnel` or `deploy` sets it " +
+        "automatically from this machine, or set <public-url>/slack under Event Subscriptions by hand",
+    );
+    return;
+  }
+
   const server = await startSlackSetupServer();
   const tunnel = await startCloudflareTunnel(server.port);
   if (!tunnel) {
     await server.close();
-    await printManualRoute(input.target, app);
-    throw new Error("Slack onboarding needs a temporary HTTPS tunnel — install cloudflared and re-run");
+    throw new Error(
+      "Slack onboarding needs a temporary HTTPS tunnel — install cloudflared and re-run, " +
+        "or re-run with --manual to install from Slack's console instead",
+    );
   }
   const requestUrl = `${tunnel.url}${server.requestPath}`;
   const redirectUrl = `${tunnel.url}${server.redirectPath}`;
   console.error(`[fastagent] temporary Slack setup tunnel ready → ${tunnel.url}`);
   try {
     // No local readiness probe: Slack challenges requestUrl from ITS network during app creation, and
-    // that is the reachability that matters. onboardSlackApp retries while Slack cannot verify it.
+    // that is the reachability that matters (#421). A machine that cannot host the callback at all is
+    // what --manual is for.
     await onboardSlackApp(
       { stateRoot: input.stateRoot, state, requestUrl, redirectUrl },
       {
         note: (message) => clackLog.info(message),
-        openUrl: openExternalUrl,
-        waitForOAuth: () => server.waitForOAuth(),
-        writeRuntimeSecrets: async ({
-          botToken,
-          botRefreshToken,
-          botTokenExpiresAt,
-          clientId,
-          clientSecret,
-          signingSecret,
-        }) => {
-          const values = {
-            ...(botToken ? { SLACK_BOT_TOKEN: botToken } : {}),
-            ...(botRefreshToken ? { SLACK_BOT_REFRESH_TOKEN: botRefreshToken } : {}),
-            ...(botTokenExpiresAt ? { SLACK_BOT_TOKEN_EXPIRES_AT: String(botTokenExpiresAt) } : {}),
-            ...(clientId ? { SLACK_CLIENT_ID: clientId } : {}),
-            ...(clientSecret ? { SLACK_CLIENT_SECRET: clientSecret } : {}),
-            ...(signingSecret ? { SLACK_SIGNING_SECRET: signingSecret } : {}),
-          };
-          if (Object.keys(values).length > 0) {
-            await appendChannelDotEnv(input.target, "slack", values, Object.keys(values));
-          }
-        },
+        install: installViaOAuth(redirectUrl, () => server.waitForOAuth()),
+        writeRuntimeSecrets: writeRuntimeSecrets(input.target),
       },
     );
     console.error(
@@ -259,9 +317,6 @@ export async function onboardSlackInternalApp(input: {
       `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
         "replace the temporary Events API URL automatically",
     );
-  } catch (error) {
-    await printManualRoute(input.target, app);
-    throw error;
   } finally {
     tunnel.close();
     await server.close().catch(() => {});

@@ -14,12 +14,8 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
-import type { RegistrationOutcome } from "../registration.ts";
+import { REGISTRATION_ATTEMPTS, REGISTRATION_RETRY_MS, type RegistrationOutcome } from "../registration.ts";
 import { callApi } from "./telegram-api.ts";
-
-/** setWebhook attempts, and the wait between them: ~80s of warm-up for a fresh tunnel/container. */
-const ATTEMPTS = 8;
-const RETRY_MS = 10_000;
 
 /**
  * Whether a setWebhook failure is the URL still warming up rather than a configuration error. Two
@@ -56,9 +52,9 @@ export async function registerTelegramWebhook(
 
   log.info(`[fastagent] telegram: registering the webhook — Telegram verifies ${webhookUrl} as it does…`);
   let lastTransientError = "unknown transport error";
-  const attempts = opts.attempts ?? ATTEMPTS;
+  const attempts = opts.attempts ?? REGISTRATION_ATTEMPTS;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? RETRY_MS);
+    if (attempt > 0) await sleep(opts.retryMs ?? REGISTRATION_RETRY_MS);
     try {
       await callApi("https://api.telegram.org", botToken, "setWebhook", { url: webhookUrl, secret_token: secret });
       log.info(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
@@ -70,6 +66,11 @@ export async function registerTelegramWebhook(
         return "failed";
       }
       lastTransientError = error;
+      if (attempt + 1 < attempts) {
+        log.info(
+          `[fastagent] telegram: Telegram cannot reach ${webhookUrl} yet (attempt ${attempt + 1}/${attempts}); retrying…`,
+        );
+      }
     }
   }
   // Exhausted retries end in the same state as a permanent error (webhook not registered, manual

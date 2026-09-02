@@ -29,7 +29,14 @@ import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
+  opts: {
+    createApp?: boolean;
+    ingress?: string;
+    groupBehavior?: string;
+    onboard?: boolean;
+    replaceConfig?: boolean;
+    manual?: boolean;
+  },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
   // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
@@ -38,6 +45,9 @@ export async function runAddChannel(
   // follow.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
+  }
+  if (opts.manual && opts.onboard === false) {
+    failUsage("--manual selects how onboarding installs the app; it cannot be combined with --no-onboard");
   }
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
@@ -99,6 +109,7 @@ export async function runAddChannel(
       stateRoot: resolveStateRoot(target),
       groupBehavior,
       replaceConfig: opts.replaceConfig,
+      manual: opts.manual,
     })
       .then(() => undefined)
       .catch(failStartup);
@@ -110,8 +121,12 @@ export async function runAddChannel(
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          `Slack internal app created/configured/installed through OAuth; runtime credentials are in ${envLabel}`,
-          "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
+          opts.manual
+            ? `Slack internal app created and installed from its console; runtime credentials are in ${envLabel}`
+            : `Slack internal app created/configured/installed through OAuth; runtime credentials are in ${envLabel}`,
+          opts.manual
+            ? "run fastagent dev --tunnel (or deploy) to set the Events API Request URL — the app has none yet"
+            : "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
           "invite the app to every channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]

@@ -154,15 +154,40 @@ export async function rotateSlackConfigToken(
   };
 }
 
+/**
+ * One installed app's runtime credentials, however they were obtained. The rotation pair is OPTIONAL
+ * because a console install (`--manual`) issues a static bot token instead — the channel accepts both
+ * (bot-auth.ts serves the static token when the rotation fields are absent).
+ */
 export interface SlackOAuthResult {
   botToken: string;
-  botRefreshToken: string;
-  botTokenExpiresAt: number;
+  botRefreshToken?: string;
+  botTokenExpiresAt?: number;
   appId: string;
   teamId: string;
   teamName?: string;
   botUserId?: string;
   scopes: string[];
+}
+
+/**
+ * Who a bot token belongs to. The one call that can tell a real pasted token from a typo, which is why
+ * the manual install path ends with it rather than trusting what came back from the terminal.
+ */
+export async function slackAuthTest(
+  botToken: string,
+  options: { apiBaseUrl?: string; fetch?: typeof fetch } = {},
+): Promise<{ appId?: string; teamId: string; teamName?: string; botUserId?: string }> {
+  const data = await slackJson<{
+    ok: true;
+    app_id?: string;
+    team_id?: string;
+    team?: string;
+    bot_id?: string;
+    user_id?: string;
+  }>("auth.test", {}, { ...options, token: botToken });
+  if (!data.team_id) throw new Error("Slack auth.test accepted the token but returned no workspace identity");
+  return { appId: data.app_id, teamId: data.team_id, teamName: data.team, botUserId: data.user_id };
 }
 
 function slackOAuthFailure(status: number, code: unknown): Error {

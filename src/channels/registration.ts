@@ -13,3 +13,12 @@
  *   (health timeout, a permanent config error, exhausted retries).
  */
 export type RegistrationOutcome = "registered" | "manual" | "failed";
+
+/**
+ * SHARED: how long a registrar waits for the PLATFORM to be able to reach a freshly minted public URL
+ * — 8 attempts 10s apart, so 70s of waiting. One judgement (a new tunnel/container's warm-up), so one
+ * pair of numbers: telegram, feishu, slack registration and `add slack` all spend the same budget, and
+ * it is part of `deploy --run`'s wall clock once per channel.
+ */
+export const REGISTRATION_ATTEMPTS = 8;
+export const REGISTRATION_RETRY_MS = 10_000;

@@ -30,7 +30,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
-| `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
+| `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (`--manual` installs it from Slack's console instead, for a machine that cannot receive a public callback; `--no-onboard` scaffolds only), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [dir]` | Generate `fastagent.compose.yml` + the portable `Dockerfile`/`.dockerignore` for local Docker: one `agent` service, loopback port, `/data` state volume, and exact env-var names. `--tunnel --run` starts app+tunnel, reads the ephemeral URL, and auto-registers Telegram, locally onboarded Slack, and Feishu/Lark webhooks. Existing files stay authoritative unless `--force`; durable ingress/proxy/DNS/TLS remain operator-owned. |
 | `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
@@ -247,7 +247,8 @@ fastagent tool fetch-url '{"url":"https://example.com"}'
 ```bash
 fastagent add github [dir]
 fastagent add telegram [dir]
-fastagent add slack [dir]      # create/install an internal app; --no-onboard scaffolds only
+fastagent add slack [dir]      # create/install an internal app; --manual installs from Slack's
+                               # console (no public callback needed); --no-onboard scaffolds only
 fastagent add feishu [dir]   # 飞书 (open.feishu.cn) — also CREATES the app (scan-to-create; credentials → .secrets/.env)
 fastagent add lark [dir]     # Lark intl — opens console + collects/validates credentials
 ```

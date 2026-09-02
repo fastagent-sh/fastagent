@@ -123,7 +123,8 @@ src/
 │   ├── wait-health.ts       # readiness probe for a server THIS process reaches directly (deploy's
 │   │                     # published local port). NOT for a public URL a platform must reach: the
 │   │                     # registrars let the platform's own URL verification be the probe (#421)
-│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) — same reason
+│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) + the one warm-up
+│   │                     # budget every registrar spends on the platform's own URL check — same reason
 │   ├── kit/                 # WRITING a channel — the parts every chat platform needs and none should
 │   │   │                     # reinvent. The split from the mechanism beside it is a FACT about
 │   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
@@ -154,7 +155,14 @@ src/
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   ├── slack/               # Slack Agent: native streams + inline tool traces, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
+│   ├── slack/               # Slack Agent: native streams + inline tool traces, rotating bot auth, signed
+│   │                     # Events API ingress, durable threads/context, files + onboarding/scaffold.
+│   │                     # onboard.ts owns ONE install flow; how the app gets installed is the single
+│   │                     # injected step (SlackOnboardIO.install) — an OAuth redirect through a temp
+│   │                     # tunnel, or `--manual`'s console install for a machine no callback can reach.
+│   │                     # Everything else (manifest, creation, state, .env) is written once, because a
+│   │                     # second copy of it drifts: the manual path once shipped its own manifest and
+│   │                     # silently dropped the event subscriptions (#421)
 │   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles

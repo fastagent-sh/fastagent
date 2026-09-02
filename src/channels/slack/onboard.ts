@@ -1,20 +1,21 @@
-import { randomBytes } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
-import {
-  createSlackApp,
-  exchangeSlackOAuthCode,
-  isSlackRequestUrlUnverified,
-  SlackConfigApiError,
-  updateSlackAppManifest,
-} from "./config-api.ts";
+import type { SlackOAuthResult } from "./config-api.ts";
+import { createSlackApp, SlackConfigApiError, updateSlackAppManifest } from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
 import { currentSlackConfigToken, type SlackOnboardingState, writeSlackOnboardingState } from "./onboarding-state.ts";
 
 export interface SlackOnboardIO {
   note(message: string): void;
-  openUrl(url: string): void;
-  /** Wait for the one OAuth redirect. Implementations must validate only the path; core validates state. */
-  waitForOAuth(): Promise<{ code?: string; state?: string; error?: string }>;
+  /**
+   * Install the created app into its workspace and return the runtime bot credentials.
+   *
+   * THE ONE STEP that differs between how an app gets installed, and therefore the only thing the two
+   * `add slack` modes implement differently: the automatic one redirects a browser through a temporary
+   * tunnel and exchanges the code, the `--manual` one has the operator install from Slack's console and
+   * paste the token back. Everything around it — the manifest, app creation, what lands in state and in
+   * `.env` — is this function's caller, once. An implementation that cannot report which scopes were
+   * granted returns `scopes: []`, and the caller then does not pretend to have checked them.
+   */
+  install(app: { appId: string; clientId: string; clientSecret: string; scopes: string[] }): Promise<SlackOAuthResult>;
   /** Stage runtime-only credentials into the gitignored .env. */
   writeRuntimeSecrets(values: {
     botToken?: string;
@@ -29,44 +30,21 @@ export interface SlackOnboardIO {
 export interface SlackOnboardInput {
   stateRoot: string;
   state: SlackOnboardingState;
-  requestUrl: string;
-  redirectUrl: string;
+  /** Where events will arrive, when that is already known. `--manual` has no public URL yet: the app is
+   *  created subscribed to its events with no `request_url`, and `dev`/`deploy` fill it in later. */
+  requestUrl?: string;
+  /** The one-shot OAuth callback. Its presence is what makes rotating bot tokens possible at all, so it
+   *  also decides `token_rotation_enabled` — one fact, read in one place. */
+  redirectUrl?: string;
 }
 
-/**
- * Repeat a manifest call while Slack cannot yet VERIFY the request_url it carries. Slack challenges
- * that URL from its own network during the call, which is the only readiness signal that matters here
- * — the machine running `add slack` often cannot reach a freshly minted tunnel hostname at all (#421),
- * so it must not be the one asked. Any other failure propagates on the first attempt.
- */
-async function retryUnverifiedRequestUrl<T>(
-  deps: { attempts?: number; retryMs?: number },
-  io: Pick<SlackOnboardIO, "note">,
-  call: () => Promise<T>,
-): Promise<T> {
-  const attempts = deps.attempts ?? 8;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await call();
-    } catch (error) {
-      if (!isSlackRequestUrlUnverified(error) || attempt >= attempts) throw error;
-      io.note(`Slack cannot reach the temporary setup URL yet (attempt ${attempt}/${attempts}); retrying…`);
-      await sleep(deps.retryMs ?? 10_000);
-    }
-  }
-}
-
-/** Create/resume one internal Slack app and complete its workspace OAuth installation. */
+/** Create/resume one internal Slack app and complete its workspace installation. */
 export async function onboardSlackApp(
   input: SlackOnboardInput,
   io: SlackOnboardIO,
   deps: {
     createApp?: typeof createSlackApp;
     updateManifest?: typeof updateSlackAppManifest;
-    exchangeCode?: typeof exchangeSlackOAuthCode;
-    /** Attempts absorbing the setup tunnel's warm-up before Slack can verify its URL (~80s). */
-    attempts?: number;
-    retryMs?: number;
   } = {},
 ): Promise<SlackOnboardingState> {
   let state = input.state;
@@ -77,6 +55,7 @@ export async function onboardSlackApp(
     groupBehavior: state.groupBehavior,
     requestUrl: input.requestUrl,
     redirectUrl: input.redirectUrl,
+    tokenRotation: input.redirectUrl !== undefined,
   });
 
   if (!state.appId) {
@@ -88,16 +67,13 @@ export async function onboardSlackApp(
     }
     io.note("Creating the internal Slack app from its FastAgent manifest…");
     // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the app;
-    // refusing a blind retry is safer than silently producing duplicates.
+    // refusing a blind retry is safer than silently producing duplicates. The marker spans exactly one
+    // in-flight call — anything that widens that window turns a Ctrl-C into a wedged next run.
     state = { ...state, createAttemptedAt: new Date().toISOString() };
     writeSlackOnboardingState(input.stateRoot, state);
     let created: Awaited<ReturnType<typeof createSlackApp>>;
     try {
-      // The single-attempt rule guards an AMBIGUOUS create; retryUnverifiedRequestUrl repeats only the
-      // unambiguous one, where Slack rejected the manifest before creating anything.
-      created = await retryUnverifiedRequestUrl(deps, io, () =>
-        (deps.createApp ?? createSlackApp)(current.token, manifest),
-      );
+      created = await (deps.createApp ?? createSlackApp)(current.token, manifest);
     } catch (error) {
       const ambiguous =
         !(error instanceof SlackConfigApiError) ||
@@ -128,11 +104,8 @@ export async function onboardSlackApp(
           "the app appears already installed; set SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET in .env or remove the app and onboarding state to start over",
       );
     }
-    const appId = state.appId;
-    io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
-    await retryUnverifiedRequestUrl(deps, io, () =>
-      (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest),
-    );
+    io.note(`Resuming Slack app ${state.appId}; refreshing its temporary setup URLs…`);
+    await (deps.updateManifest ?? updateSlackAppManifest)(current.token, state.appId, manifest);
   }
 
   if (state.signingSecret) {
@@ -144,29 +117,18 @@ export async function onboardSlackApp(
     throw new Error("Slack onboarding state lost app OAuth credentials before installation");
   }
 
-  const oauthState = randomBytes(24).toString("hex");
-  const authorize = new URL("https://slack.com/oauth/v2/authorize");
-  authorize.searchParams.set("client_id", state.clientId);
-  authorize.searchParams.set("scope", slackBotScopes(state.groupBehavior).join(","));
-  authorize.searchParams.set("redirect_uri", input.redirectUrl);
-  authorize.searchParams.set("state", oauthState);
-  io.note(`Approve the internal app installation in Slack: ${authorize}`);
-  io.openUrl(authorize.toString());
-
-  const callback = await io.waitForOAuth();
-  if (callback.error) throw new Error("Slack OAuth installation was not approved");
-  if (!callback.code) throw new Error("Slack OAuth callback carried no authorization code");
-  if (!callback.state || callback.state !== oauthState) throw new Error("Slack OAuth callback state mismatch");
-
-  const oauth = await (deps.exchangeCode ?? exchangeSlackOAuthCode)({
+  const scopes = slackBotScopes(state.groupBehavior);
+  const oauth = await io.install({
+    appId: state.appId,
     clientId: state.clientId,
     clientSecret: state.clientSecret,
-    code: callback.code,
-    redirectUrl: input.redirectUrl,
+    scopes,
   });
-  if (oauth.appId !== state.appId) throw new Error("Slack OAuth installed a different app than the manifest app");
-  if (slackBotScopes(state.groupBehavior).some((scope) => !oauth.scopes.includes(scope))) {
-    throw new Error("Slack OAuth completed without all required bot scopes; re-run fastagent add slack to reinstall");
+  if (oauth.appId !== state.appId) throw new Error("Slack installed a different app than the manifest app");
+  // An install that reports no scopes could not observe them (a console install answers with the
+  // token's identity, not its grant). Saying nothing beats asserting a check that did not happen.
+  if (oauth.scopes.length > 0 && scopes.some((scope) => !oauth.scopes.includes(scope))) {
+    throw new Error("Slack install completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
   await io.writeRuntimeSecrets({
     botToken: oauth.botToken,

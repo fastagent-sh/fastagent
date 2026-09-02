@@ -36,7 +36,8 @@ export interface SlackAppManifest {
     redirect_urls?: string[];
   };
   settings: {
-    event_subscriptions?: { request_url: string; bot_events: string[] };
+    /** `request_url` is absent until a public URL exists; `bot_events` never is — see buildSlackManifest. */
+    event_subscriptions: { request_url?: string; bot_events: string[] };
     org_deploy_enabled: boolean;
     socket_mode_enabled: boolean;
     token_rotation_enabled: boolean;
@@ -66,6 +67,10 @@ export function buildSlackManifest(input: {
   groupBehavior: SlackGroupBehavior;
   requestUrl?: string;
   redirectUrl?: string;
+  /** Rotating bot tokens need an OAuth redirect URL to be issued through. A console install has none,
+   *  so `add slack --manual` builds the app without rotation and the channel reads a static token
+   *  (bot-auth.ts serves one when the rotation fields are absent). Defaults to on. */
+  tokenRotation?: boolean;
 }): SlackAppManifest {
   const name = input.name.trim().slice(0, 35) || "FastAgent";
   return {
@@ -94,17 +99,16 @@ export function buildSlackManifest(input: {
       ...(input.redirectUrl ? { redirect_urls: [input.redirectUrl] } : {}),
     },
     settings: {
-      ...(input.requestUrl
-        ? {
-            event_subscriptions: {
-              request_url: input.requestUrl,
-              bot_events: slackBotEvents(input.groupBehavior),
-            },
-          }
-        : {}),
+      // The events are a property of the AGENT, not of where it is reachable: an app created before a
+      // public URL exists must still subscribe to them, or it installs cleanly and then receives
+      // nothing. Only `request_url` waits for the URL.
+      event_subscriptions: {
+        ...(input.requestUrl ? { request_url: input.requestUrl } : {}),
+        bot_events: slackBotEvents(input.groupBehavior),
+      },
       org_deploy_enabled: false,
       socket_mode_enabled: false,
-      token_rotation_enabled: true,
+      token_rotation_enabled: input.tokenRotation ?? true,
     },
   };
 }
