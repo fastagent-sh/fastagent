@@ -61,6 +61,22 @@ beforeAll(async () => {
   );
 });
 
+/**
+ * A teardown flyctl call, retried once. Fly's API returns a bare
+ * `Post "https://api.fly.io/graphql": EOF` often enough that a single attempt makes the nightly red
+ * for a transient with nothing wrong behind it — the exact way an unattended check trains people to
+ * ignore it. Only the CLEANUP path retries: a flaky answer inside the test body is a result, not an
+ * obstacle, and a second failure here still surfaces.
+ */
+async function flyctlForTeardown(args: string[]): Promise<{ stdout: string }> {
+  try {
+    return await run("flyctl", args);
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    return await run("flyctl", args);
+  }
+}
+
 afterAll(async () => {
   // Ask before destroying: a deploy that failed BEFORE `apps create` has nothing to remove, and an
   // unconditional destroy answers `Could not find App` — a teardown error loud enough to bury the
@@ -68,12 +84,12 @@ afterAll(async () => {
   // so the destroy itself stays mandatory and its failure is reported.
   const errors: unknown[] = [];
   try {
-    const { stdout } = await run("flyctl", ["apps", "list", "--json"]);
+    const { stdout } = await flyctlForTeardown(["apps", "list", "--json"]);
     // `listHasName` THROWS on output it cannot read, which is what makes asking safe here: the answer
     // "not listed" now only ever means the host said so. Were it to answer `false` for an unreadable
     // list, a flyctl that renamed a field would skip the destroy, report nothing, and leak a running
     // app holding the model credential and serving `/invoke` unauthenticated.
-    if (listHasName(stdout, APP)) await run("flyctl", ["apps", "destroy", APP, "--yes"]);
+    if (listHasName(stdout, APP)) await flyctlForTeardown(["apps", "destroy", APP, "--yes"]);
   } catch (error) {
     errors.push(error);
   }
