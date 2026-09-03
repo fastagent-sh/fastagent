@@ -210,7 +210,7 @@ compromise — it is the same social rule:
 - separate conversations are parallel: threads proceed independently.
 
 Two turns in one place must therefore serialize (`channels/kit/turn-queue.ts` FIFO, and the engine's
-single-writer lease in `engines/pi/invoke.ts`). Two turns in different places run concurrently
+single-writer lease in `engines/pi/turn-kit.ts`). Two turns in different places run concurrently
 because they are different sessions.
 
 Finer-grained concurrency (parallel turns *inside* one session, branching the session tree per turn)

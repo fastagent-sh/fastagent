@@ -152,7 +152,7 @@ export async function preflightDeploy(input: {
         `same value to callers: attach --url <public-url> --token …. Unset, the box mints its own per boot — ` +
         `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +
         `url field is container-loopback) and replaced on every restart. Front the endpoint with real auth for ` +
-        `anything wider (design §14)`,
+        `anything wider (docs/design/session-control.md §14)`,
     });
   }
 

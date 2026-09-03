@@ -59,8 +59,8 @@ export function senderId(sender: FeishuSender | undefined): string | undefined {
  *
  * Branded with the channel kind, like Slack's twin, because session ids share ONE namespace across
  * every channel in a deployment: without it a `feishu` and a `lark` chat carrying the same platform id
- * would answer into the same memory. The length bound is the FILENAME the id becomes (sessions.ts
- * percent-encodes it, so each `:` costs three), and the worst case here — brand + a 35-char chat id +
+ * would answer into the same memory. The length bound is the FILENAME the id becomes (session-store.ts
+ * `piSessionId` percent-encodes it, so each `:` costs three), and the worst case here — brand + a 35-char chat id +
  * a 36-char thread id — encodes to well under 100 bytes against the filesystem's 255.
  */
 export function placeKey(kind: string, message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
@@ -84,7 +84,7 @@ export function cloudEnvelope(event: FeishuMessageEvent, tag: FeishuCloudKind): 
     from ? `from ${from}` : undefined,
     // The message's own id is LOAD-BEARING, not decoration: it is the only way this message's id
     // enters the session transcript, and session inheritance locates a thread's branch point by
-    // searching the parent transcript for exactly these ids (scope.branchHints — sessions.ts).
+    // searching the parent transcript for exactly these ids (scope.branchHints — session-inheritance.ts).
     // Remove it and every thread quietly inherits from the room's present instead of the branch
     // point. It also lets the model name what it is answering in a busy chat.
     `msg ${message.message_id}`,

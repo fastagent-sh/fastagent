@@ -1,5 +1,5 @@
 /**
- * The session control plane over HTTP + SSE — the Phase 3 transport (design §13). Engine-neutral:
+ * The session control plane over HTTP + SSE (docs/design/session-control.md §13). Engine-neutral:
  * consumes only the `SessionControl` contract. One transport serves every remote consumer (Web
  * panel, desktop app, `fastagent attach`); the embedded API stays semantic-only and the ENVELOPE
  * lives here: `id` (request correlation — implicit in HTTP), `epoch` (serving-process incarnation

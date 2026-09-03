@@ -300,7 +300,7 @@ export interface SessionState {
   /** Set by `update({ name })`, so a client that opens a session directly gets the same label the list
    *  showed. */
   name?: string;
-  /** `compacting` refers to Phase 2 MANUAL compaction at a session boundary. Automatic overflow
+  /** `compacting` refers to MANUAL compaction (`compact`) at a session boundary. Automatic overflow
    *  compaction happens inside a run's activity window and reports as `running`. */
   status: "idle" | "running" | "compacting";
   activeRunId?: string;

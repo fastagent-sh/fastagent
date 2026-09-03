@@ -95,9 +95,9 @@ export interface TurnContext {
   cwd?: string;
   /** Current conversation manager. Absent outside a FastAgent-managed agent turn. */
   sessionManager?: ReadonlySessionManager;
-  /** Tool activation for the current turn. Two producers, one consumer surface: invoke.ts bridges the
-   *  served session; chat.ts bridges the resident one (chat emulates deferral — same loader, same
-   *  semantics). Absent only outside any turn (a bare `fastagent tool` run). */
+  /** Tool activation for the current turn. Two producers, one consumer surface: agent-session-factory.ts
+   *  bridges the served session; session-builder.ts bridges the resident one (chat emulates deferral —
+   *  same loader, same semantics). Absent only outside any turn (a bare `fastagent tool` run). */
   tools?: ToolActivation;
 }
 

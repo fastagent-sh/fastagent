@@ -220,14 +220,14 @@ export function mountSessionControl(
         log.warn(
           `[fastagent] the port binds ${bind === "wildcard" ? "all interfaces" : `${options.host} (off this machine)`}: ` +
             "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
-            "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs: design §14)",
+            "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs/design/session-control.md §14)",
         );
       }
       if (options.tunnel) {
         // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
         log.warn(
           "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
-            "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
+            "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs/design/session-control.md §14)",
         );
       }
       // Removed on shutdown so a stale file cannot point a client at a dead port: `attach` then
