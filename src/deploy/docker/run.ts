@@ -4,7 +4,7 @@
  * carry through the child environment (never argv), and a readiness check on the published loopback port.
  */
 import { waitForHealth } from "../../channels/wait-health.ts";
-import { parseTunnelUrl } from "../../tunnel.ts";
+import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
 import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
@@ -59,7 +59,13 @@ export function localUrlFromComposePort(stdout: string): string | undefined {
 const defaultHealthProbe: DockerHealthProbe = (healthUrl) => waitForHealth(healthUrl, 30_000, 500);
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Poll the detached cloudflared service's logs until its assigned Quick Tunnel URL appears. */
+/**
+ * Poll the detached cloudflared service's logs until its Quick Tunnel URL is assigned AND the tunnel
+ * reports an edge connection. Waiting for the second is the same requirement `startCloudflareTunnel`
+ * has and for the same reason — the hostname does not exist until then (#435), and this driver hands
+ * the URL straight to `announce`. Returns a URL that never connected rather than nothing: the
+ * registrars downstream report their own outcome, and a gate saying "no URL" would misname it.
+ */
 export async function waitForComposeTunnelUrl(
   docker: CliRunner,
   composeFile: string,
@@ -68,13 +74,19 @@ export async function waitForComposeTunnelUrl(
 ): Promise<string | undefined> {
   const compose = ["compose", "-f", composeFile];
   const attempts = options.attempts ?? 60;
+  let assigned: string | undefined;
   for (let attempt = 0; attempt < attempts; attempt++) {
     const logs = await docker([...compose, "logs", "--no-color", "tunnel"], { capture: true, env });
-    const url = logs.code === 0 ? parseTunnelUrl(logs.stdout) : undefined;
-    if (url) return url;
+    if (logs.code === 0) {
+      assigned ??= parseTunnelUrl(logs.stdout);
+      if (assigned && hasTunnelConnection(logs.stdout)) {
+        await (options.sleep ?? sleep)(TUNNEL_DNS_LAG_MS);
+        return assigned;
+      }
+    }
     if (attempt + 1 < attempts) await (options.sleep ?? sleep)(options.intervalMs ?? 500);
   }
-  return undefined;
+  return assigned;
 }
 
 const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile, env) =>

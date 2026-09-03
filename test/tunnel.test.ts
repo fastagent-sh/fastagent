@@ -8,7 +8,13 @@ import { newSlackOnboardingState } from "../src/channels/slack/onboard.ts";
 import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { REGISTRATION_RETRY_MS } from "../src/channels/registration.ts";
-import { announceWebhooks, parseTunnelUrl, startCloudflareTunnel } from "../src/tunnel.ts";
+import {
+  TUNNEL_DNS_LAG_MS,
+  announceWebhooks,
+  hasTunnelConnection,
+  parseTunnelUrl,
+  startCloudflareTunnel,
+} from "../src/tunnel.ts";
 
 // Mirrors TUNNEL_RETRY_MS in tunnel.ts (the constant is not exported).
 const TUNNEL_RETRY_MS = 2000;
@@ -62,13 +68,41 @@ async function workspace(channels: string[]): Promise<string> {
 }
 
 describe("tunnel: startCloudflareTunnel", () => {
-  it("resolves a tunnel on the first URL cloudflared prints", async () => {
+  // #435: the URL is printed while the hostname is still NXDOMAIN, and a platform told about it in
+  // that window keeps answering "cannot resolve" long past any registrar's retry budget. The record
+  // follows the edge connection, so that line — not the URL — is when the tunnel can be handed over.
+  it("resolves a tunnel once the URL is assigned AND the edge connection is up", async () => {
+    vi.useFakeTimers();
     const child = fakeCloudflared();
-    const p = startCloudflareTunnel(8800, () => child);
+    let handedOut: string | undefined;
+    const p = startCloudflareTunnel(8800, () => child).then((t) => {
+      handedOut = t?.url;
+      return t;
+    });
     await Promise.resolve(); // let the listeners attach
     child.stderr?.emit("data", Buffer.from("INF +-+ https://blue-cat-42.trycloudflare.com +-+\n"));
-    const t = await p;
-    expect(t?.url).toBe("https://blue-cat-42.trycloudflare.com");
+
+    await vi.advanceTimersByTimeAsync(TUNNEL_DNS_LAG_MS * 2);
+    expect(handedOut, "a URL whose tunnel has not connected must not reach a registrar").toBeUndefined();
+
+    child.stderr?.emit("data", Buffer.from("INF Registered tunnel connection connIndex=0 ip=198.41.200.63\n"));
+    await vi.advanceTimersByTimeAsync(TUNNEL_DNS_LAG_MS);
+    expect((await p)?.url).toBe("https://blue-cat-42.trycloudflare.com");
+  });
+
+  // Retrying would meet the same network with a new hostname, so the URL is served and the cause
+  // named. Silence here would send the author to debug the platform for a local tunnel failure.
+  it("serves a URL whose tunnel never connected, naming that as the fault", async () => {
+    vi.useFakeTimers();
+    const errs = captureErrors();
+    const child = fakeCloudflared();
+    const p = startCloudflareTunnel(8800, () => child, 100);
+    await Promise.resolve();
+    child.stderr?.emit("data", Buffer.from("INF |  https://blue-cat-42.trycloudflare.com  |\n"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await p)?.url).toBe("https://blue-cat-42.trycloudflare.com");
+    expect(errs.some((e) => /never reported an edge connection/.test(e))).toBe(true);
+    expect(child.kill, "the tunnel is served, not killed").not.toHaveBeenCalled();
   });
 
   it("does not retry a missing cloudflared (ENOENT); logs the install hint", async () => {
@@ -124,6 +158,23 @@ describe("tunnel: startCloudflareTunnel", () => {
     expect(spawns).toBe(3); // retried, not a single silent attempt
     expect(errs.some((e) => /exited before a public URL/.test(e) && /retrying/.test(e))).toBe(true);
     expect(errs.some((e) => /Serving without a tunnel/.test(e))).toBe(true);
+  });
+});
+
+describe("tunnel: hasTunnelConnection", () => {
+  it("recognises cloudflared's edge-connection line", () => {
+    expect(hasTunnelConnection("2026 INF Registered tunnel connection connIndex=0 ip=198.41.200.63")).toBe(true);
+  });
+
+  it("never reads the URL banner or a failed dial as a connection", () => {
+    expect(hasTunnelConnection("INF |  https://blue-cat-42.trycloudflare.com  |")).toBe(false);
+    // Seen live on a network that blocks cloudflared's QUIC: it retries this forever, never connects,
+    // and the hostname is never published — the case the timeout branch exists to name.
+    expect(
+      hasTunnelConnection(
+        '2026 ERR Failed to dial a quic connection error="failed to dial to edge with quic: timeout" connIndex=0',
+      ),
+    ).toBe(false);
   });
 });
 

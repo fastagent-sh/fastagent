@@ -33,6 +33,31 @@ export function parseTunnelUrl(chunk: string): string | undefined {
   return chunk.match(TUNNEL_URL_RE)?.[0];
 }
 
+/**
+ * cloudflared's line for an established edge connection. THIS, not the URL, is when the hostname
+ * begins to exist: `*.trycloudflare.com` is no wildcard, and a quick tunnel's record is published
+ * once the tunnel registers a connection — so the URL is printed while the name is still NXDOMAIN.
+ * A platform told about it inside that window answers "Failed to resolve host" and goes on answering
+ * it far longer than any registrar's retry budget (#435); the record going live seconds later does
+ * not undo the answer it already gave, which is why more retries were never the fix.
+ *
+ * Measured over 7 quick tunnels: the URL at +0s, this line at +1.1-1.9s, the record 0.5-3.9s later.
+ */
+const TUNNEL_CONNECTED_RE = /Registered tunnel connection/i;
+
+/** Whether cloudflared's output so far reports an edge connection — see {@link TUNNEL_CONNECTED_RE}. */
+export function hasTunnelConnection(output: string): boolean {
+  return TUNNEL_CONNECTED_RE.test(output);
+}
+
+/**
+ * How long after that connection to hand the URL over. The one number here that is not observed: 5s
+ * covers the widest of the 7 measured gaps (3.9s), all taken over cloudflared's http2 transport
+ * because this network blocks its QUIC. Costs a beat of `dev --tunnel` start-up; buys the first
+ * registration attempt landing on a name that resolves.
+ */
+export const TUNNEL_DNS_LAG_MS = 5000;
+
 /** Global timer (rather than timers/promises) so timeout/retry behavior is deterministic under fake timers. */
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -52,12 +77,13 @@ type TunnelSpawn =
   | { tunnel?: undefined; fatal: false; detail?: string };
 
 /**
- * Start a Cloudflare quick tunnel to localhost:`port`, resolving once its public URL appears.
- * cloudflared sometimes exits before printing a URL (a transient trycloudflare API error), so retry a
- * few times. ALWAYS resolves to undefined WITH an operator log saying why — missing binary, the exit
- * reason, or "gave up after retries" — never silently; serving continues without a tunnel either way.
- * (Edge warmup AFTER the URL appears is handled downstream: each registrar retries while the platform
- * reports it cannot yet verify the URL, so a not-yet-routable tunnel delays registration, not fails it.)
+ * Start a Cloudflare quick tunnel to localhost:`port`, resolving once its public URL is assigned AND
+ * the tunnel has an edge connection — the URL is printed first and is not usable yet
+ * ({@link hasTunnelConnection}). cloudflared sometimes exits before printing a URL (a transient
+ * trycloudflare API error), so retry a few times. ALWAYS resolves to undefined WITH an operator log
+ * saying why — missing binary, the exit reason, or "gave up after retries" — never silently; serving
+ * continues without a tunnel either way. What remains after this is the PLATFORM's own warm-up, which
+ * each registrar absorbs by retrying while the platform reports it cannot yet verify the URL.
  */
 export async function startCloudflareTunnel(
   port: number,
@@ -81,23 +107,31 @@ export async function startCloudflareTunnel(
   return undefined;
 }
 
-/** One cloudflared launch: a Tunnel on the first URL, or a failure (missing binary / exit before a URL). */
+/** One cloudflared launch: a Tunnel once its URL is assigned AND the edge connection is up, or a
+ *  failure (missing binary / exit before a URL). */
 function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared, timeoutMs: number): Promise<TunnelSpawn> {
   return new Promise((resolve) => {
     const child = spawnFn(port);
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let handOver: NodeJS.Timeout | undefined;
     let tail = ""; // recent output, surfaced as the failure reason
+    let assigned: string | undefined; // printed well before the tunnel can carry anything
     const finish = (result: TunnelSpawn): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (handOver) clearTimeout(handOver);
       resolve(result);
     };
+    const handOverNow = (url: string): void => finish({ tunnel: { url, close: () => child.kill("SIGTERM") } });
     const onChunk = (buf: Buffer): void => {
       tail = (tail + String(buf)).slice(-600);
-      const url = parseTunnelUrl(String(buf));
-      if (url) finish({ tunnel: { url, close: () => child.kill("SIGTERM") } });
+      assigned ??= parseTunnelUrl(String(buf));
+      if (!assigned || handOver || !hasTunnelConnection(tail)) return;
+      const url = assigned;
+      handOver = setTimeout(() => handOverNow(url), TUNNEL_DNS_LAG_MS);
+      handOver.unref();
     };
     child.stdout?.on("data", onChunk);
     child.stderr?.on("data", onChunk); // cloudflared prints the URL (and its errors) on stderr
@@ -114,6 +148,17 @@ function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared, timeoutMs: num
     });
     child.on("exit", () => finish({ fatal: false, detail: lastErrorLine(tail) }));
     timer = setTimeout(() => {
+      // A URL whose tunnel never connected is not worth a fresh one — the next attempt meets the same
+      // network. Serve it and name what is wrong, rather than retrying into the same wall.
+      if (assigned) {
+        log.warn(
+          `[fastagent] --tunnel: cloudflared never reported an edge connection for ${assigned} within ` +
+            `${Math.round(timeoutMs / 1000)}s — serving it anyway. Nothing reaches a tunnel that has not ` +
+            "connected, so a webhook registration that cannot resolve the host is this, not the platform.",
+        );
+        handOverNow(assigned);
+        return;
+      }
       child.kill("SIGTERM");
       finish({ fatal: false, detail: `timed out after ${Math.round(timeoutMs / 1000)}s waiting for a public URL` });
     }, timeoutMs);

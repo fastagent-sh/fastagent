@@ -9,13 +9,13 @@
  * Drives `startCloudflareTunnel`, the same function `dev --tunnel` and `deploy docker --tunnel` use.
  * Needs the `cloudflared` binary on PATH and no credentials: a Quick Tunnel is anonymous.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
-import { startCloudflareTunnel } from "../../src/tunnel.ts";
+import { hasTunnelConnection, startCloudflareTunnel } from "../../src/tunnel.ts";
 
 // Node's fetch ignores HTTPS_PROXY; reaching the tunnel's public URL from a proxied machine needs the
 // same call every CLI entry makes. See model.live.test.ts for why the library opener does not make it.
@@ -66,4 +66,32 @@ describe("cloudflare quick tunnel", () => {
     expect(await waitForHealth(tunnel.url, 60_000, 1000), `${tunnel.url} never became reachable`).toBe(true);
     expect(await fetch(tunnel.url).then((r) => r.text())).toBe(token);
   });
+
+  /**
+   * The one assumption behind #435 that lives in another project's source: cloudflared announces its
+   * first edge connection in words {@link hasTunnelConnection} knows, and the DNS record follows THAT,
+   * not the URL. Asserted here because a change to it degrades the product INVISIBLY — nothing fails,
+   * every tunnel is just handed over a connect-timeout late with a warning about a tunnel that is
+   * fine. Same shape as the fly/railway CLI probes: a real tool's output against this repo's reading
+   * of it, which is the belief a faked child process cannot test.
+   */
+  it("cloudflared still announces its edge connection in the words the hand-over waits for", async () => {
+    const child = spawn("cloudflared", ["tunnel", "--url", "http://localhost:9"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    cleanups.push(() => child.kill("SIGTERM"));
+    const connected = await new Promise<boolean>((resolve) => {
+      let output = "";
+      const timer = setTimeout(() => resolve(false), 90_000);
+      const onChunk = (buf: Buffer): void => {
+        output += String(buf);
+        if (!hasTunnelConnection(output)) return;
+        clearTimeout(timer);
+        resolve(true);
+      };
+      child.stdout?.on("data", onChunk);
+      child.stderr?.on("data", onChunk); // cloudflared logs to stderr
+    });
+    expect(connected, "cloudflared printed no line hasTunnelConnection recognises").toBe(true);
+  }, 120_000);
 });
