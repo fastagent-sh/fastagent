@@ -72,7 +72,7 @@ describe("deploy/docker/run: local Compose journey", () => {
       docker,
       () => {},
       healthy,
-      async () => "https://blue-cat.trycloudflare.com",
+      async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
     );
     expect(out).toEqual({
       ok: true,
@@ -109,7 +109,7 @@ describe("deploy/docker/run: local Compose journey", () => {
       docker,
       () => {},
       healthy,
-      async () => "https://blue-cat.trycloudflare.com",
+      async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
     );
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
@@ -131,9 +131,52 @@ describe("deploy/docker/run: local Compose journey", () => {
       docker,
       () => {},
       healthy,
-      async () => "https://blue-cat.trycloudflare.com",
+      async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
     );
     expect(out.ok).toBe(true);
+  });
+
+  // The sibling of the warning `startCloudflareTunnel` prints, and load-bearing for a sharper reason:
+  // this cloudflared runs in a CONTAINER, so its logs are not in front of the author. Without this
+  // line the deploy announces a URL nothing can reach and the only visible symptom is a platform
+  // refusing to register — which sends the author to debug the platform.
+  it("names a tunnel that never connected, rather than announcing it silently", async () => {
+    const { docker } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const lines: string[] = [];
+    const out = await deployDockerRun(
+      plan({ requireTunnel: true, announce: async () => [{ kind: "github", outcome: "manual" }] }),
+      docker,
+      (message) => lines.push(message),
+      healthy,
+      async () => ({ url: "https://blue-cat.trycloudflare.com", connected: false }),
+    );
+    expect(out.ok).toBe(true);
+    const warned = lines.find((line) => line.startsWith("warn:"));
+    expect(warned, `no warning among: ${lines.join(" | ")}`).toBeDefined();
+    // The URL and the remedy, because the author cannot reach these container logs on their own.
+    expect(warned).toContain("https://blue-cat.trycloudflare.com");
+    expect(warned).toContain("logs tunnel");
+  });
+
+  it("a connected tunnel says nothing — the warning must not fire on the normal path", async () => {
+    const { docker } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const lines: string[] = [];
+    await deployDockerRun(
+      plan({ requireTunnel: true, announce: async () => [{ kind: "github", outcome: "manual" }] }),
+      docker,
+      (message) => lines.push(message),
+      healthy,
+      async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
+    );
+    expect(lines.filter((line) => line.startsWith("warn:"))).toEqual([]);
   });
 
   it("passes secret values through the child environment, never argv", async () => {
@@ -256,9 +299,10 @@ describe("deploy/docker/run: parsers", () => {
         },
       },
     );
-    // Neither poll carries a connection line, so the budget runs out — and the URL is still returned.
-    // The registrars downstream report their own outcome; a "no URL" gate would misname this one.
-    expect(url).toBe("https://blue-cat.trycloudflare.com");
+    // Neither poll carries a connection line, so the budget runs out — and the URL is still returned,
+    // marked as never having connected. The registrars downstream report their own outcome; a "no URL"
+    // gate would misname this one, and an unmarked URL would leave the driver unable to say which it is.
+    expect(url).toEqual({ url: "https://blue-cat.trycloudflare.com", connected: false });
     expect(sleeps).toEqual([7]);
   });
 
@@ -286,7 +330,7 @@ describe("deploy/docker/run: parsers", () => {
         },
       },
     );
-    expect(url).toBe("https://blue-cat.trycloudflare.com");
+    expect(url).toEqual({ url: "https://blue-cat.trycloudflare.com", connected: true });
     expect(calls, "the URL was there on poll 1; it kept polling for the connection").toBe(2);
     expect(sleeps).toEqual([7, TUNNEL_DNS_LAG_MS]);
   });

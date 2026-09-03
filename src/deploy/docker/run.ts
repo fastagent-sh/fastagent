@@ -40,11 +40,18 @@ export type DockerRunOutcome =
 type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
 
 export type DockerHealthProbe = (healthUrl: string) => Promise<boolean>;
+/** A published Quick Tunnel URL, and whether its tunnel ever reported an edge connection. Both, because
+ *  a URL that never connected still gets served (retrying meets the same network) and the operator has
+ *  to be told which of the two they are looking at. */
+export interface ComposeTunnel {
+  url: string;
+  connected: boolean;
+}
 export type DockerTunnelUrlProbe = (
   docker: CliRunner,
   composeFile: string,
   env: NodeJS.ProcessEnv,
-) => Promise<string | undefined>;
+) => Promise<ComposeTunnel | undefined>;
 
 /** Resolve Docker Compose's `host:port` output to a loopback URL (safe for 0.0.0.0/[::] bindings too). */
 export function localUrlFromComposePort(stdout: string): string | undefined {
@@ -64,14 +71,15 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * reports an edge connection. Waiting for the second is the same requirement `startCloudflareTunnel`
  * has and for the same reason — the hostname does not exist until then (#435), and this driver hands
  * the URL straight to `announce`. Returns a URL that never connected rather than nothing: the
- * registrars downstream report their own outcome, and a gate saying "no URL" would misname it.
+ * registrars downstream report their own outcome, and a gate saying "no URL" would misname it — but it
+ * says WHICH it is returning, because the caller owes the operator that sentence.
  */
 export async function waitForComposeTunnelUrl(
   docker: CliRunner,
   composeFile: string,
   env: NodeJS.ProcessEnv,
   options: { attempts?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<string | undefined> {
+): Promise<ComposeTunnel | undefined> {
   const compose = ["compose", "-f", composeFile];
   const attempts = options.attempts ?? 60;
   let assigned: string | undefined;
@@ -81,12 +89,12 @@ export async function waitForComposeTunnelUrl(
       assigned ??= parseTunnelUrl(logs.stdout);
       if (assigned && hasTunnelConnection(logs.stdout)) {
         await (options.sleep ?? sleep)(TUNNEL_DNS_LAG_MS);
-        return assigned;
+        return { url: assigned, connected: true };
       }
     }
     if (attempt + 1 < attempts) await (options.sleep ?? sleep)(options.intervalMs ?? 500);
   }
-  return assigned;
+  return assigned ? { url: assigned, connected: false } : undefined;
 }
 
 const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile, env) =>
@@ -203,12 +211,24 @@ export async function deployDockerRun(
 
   if (!hasTunnel) return { ok: true, url };
   log("waiting for the Compose tunnel service to publish its Quick Tunnel URL…");
-  const tunnelUrl = await tunnelUrlProbe(docker, plan.composeFile, env);
-  if (!tunnelUrl) {
+  const tunnel = await tunnelUrlProbe(docker, plan.composeFile, env);
+  if (!tunnel) {
     return gate(
       `tunnel did not publish a Quick Tunnel URL — inspect \`docker compose -f ${plan.composeFile} logs tunnel\``,
     );
   }
+  // The same sentence `startCloudflareTunnel` prints for the same state, and needed MORE here: this
+  // cloudflared runs in a container, so the author cannot see the logs that would explain the
+  // registration failures about to follow. Silence sends them to debug the platform for what is a
+  // local tunnel that never came up.
+  if (!tunnel.connected) {
+    log(
+      `warn: the tunnel service never reported an edge connection for ${tunnel.url} — announcing it anyway. ` +
+        `Nothing reaches a tunnel that has not connected, so a webhook registration that cannot resolve the ` +
+        `host is this, not the platform. Inspect \`docker compose -f ${plan.composeFile} logs tunnel\`.`,
+    );
+  }
+  const tunnelUrl = tunnel.url;
   // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer
   // that owns the outcome, so it is the layer that can gate on one. While it sat above, docker was
   // the one target whose `--run` could exit 0 with a webhook that never registered.
