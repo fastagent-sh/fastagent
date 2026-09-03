@@ -27,7 +27,7 @@
  * workspace.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -44,8 +44,8 @@ import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
-import { createPiModelRuntime, probeAuthSource } from "./models.ts";
-import { log, reportModuleLoadFailures } from "../../log.ts";
+import { createPiModelRuntime } from "./models.ts";
+import { reportModuleLoadFailures } from "../../log.ts";
 import {
   type ReadonlySessionManager,
   type ToolActivation,
@@ -138,7 +138,6 @@ export async function buildAgentSessionRuntime(
     return {
       modelRuntime,
       modelSpec,
-      authPath,
       // Serving honors config.thinkingLevel (config → L2); the resident session must too (fidelity).
       thinkingLevel: config.thinkingLevel,
       definition,
@@ -179,15 +178,10 @@ export async function buildAgentSessionRuntime(
     return assembly;
   };
 
-  // The credential hint belongs to the RUNTIME, not to each session it builds: model resolution
-  // moved into createRuntime (extensions must load first), and repeating this on every /new,
-  // /resume and fork would nag about a setting that did not change.
-  let credentialHintShown = false;
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
     const {
       modelRuntime,
       modelSpec,
-      authPath,
       thinkingLevel,
       definition,
       extensionPaths,
@@ -221,23 +215,6 @@ export async function buildAgentSessionRuntime(
     // services are built — resolving first fails a definition whose configured model comes from its
     // own extension with a bare "unknown model", after warning about credentials for a provider
     // that does not exist yet.
-    //
-    // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth; it
-    // now reads the agent's credential file like every other command. Probe the RESOLVED model's
-    // provider through the normal resolution path (stored credential OR env var — an env-authed
-    // user is fine and must not be warned): only when that provider has no usable auth AND pi's old
-    // file exists does the bare provider error get its cause named.
-    if (
-      !credentialHintShown &&
-      (await probeAuthSource(modelRuntime, modelSpec)) === undefined &&
-      existsSync(join(getAgentDir(), "auth.json"))
-    ) {
-      credentialHintShown = true;
-      log.warn(
-        `[fastagent] no credentials for ${modelSpec} in ${authPath} — this runtime no longer reads ` +
-          `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this agent`,
-      );
-    }
     const model = resolveModel(modelRuntime, modelSpec);
 
     const result = await createAgentSessionFromServices({
