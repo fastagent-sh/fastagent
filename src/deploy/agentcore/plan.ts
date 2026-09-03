@@ -30,6 +30,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
+import type { ScheduleFireEvent } from "../../channels/agentcore-protocol.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
@@ -651,7 +652,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
         `        RoleArn: !GetAtt SchedulerRole.Arn`,
         `        # <aws.scheduler.scheduled-time> = the slot instant — the container's idempotency key`,
         `        # (EventBridge delivery is at-least-once; a duplicate slot must not double-fire).`,
-        `        Input: ${yamlSingleQuote(JSON.stringify({ scheduleFire: { name: fact.name, slot: "<aws.scheduler.scheduled-time>" } }))}`,
+        `        Input: ${yamlSingleQuote(JSON.stringify({ scheduleFire: { name: fact.name, slot: "<aws.scheduler.scheduled-time>" } } satisfies ScheduleFireEvent))}`,
       );
     }
   }

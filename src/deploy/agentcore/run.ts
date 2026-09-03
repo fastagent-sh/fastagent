@@ -14,6 +14,7 @@
  * a caller-provided temp parameters file (`file://…`, mode 0600, deleted by the caller) — the write
  * is injected to keep this module pure and the security-sensitive wiring testable.
  */
+import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
@@ -63,7 +64,7 @@ const PROBE_TIMEOUT_MS = 120_000;
 const PROBE_INTERVAL_MS = 3_000;
 
 /**
- * Drive the forwarder's reserved `/__fastagent/probe` path until it answers, and read the runtime's
+ * Drive the forwarder's reserved probe path until it answers, and read the runtime's
  * STRUCTURED verdict. The path answers on every forwarder topology (a schedule-only URL refuses
  * ordinary public traffic, so a plain `GET /health` would 404 there), and the verdict rides a
  * transport-200 JSON body `{ ok, error? }` — the ordinary webhook relay folds a non-200 transport
@@ -553,7 +554,7 @@ export async function deployAgentcoreRun(
   if (url) {
     log("probing the deployed runtime (state restore + channel construction)…");
     const verdict = await probeRuntime(
-      `${url}/__fastagent/probe`,
+      `${url}${RESERVED_PATHS.probe}`,
       plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
       probe.fetchImpl ?? fetch,
       probe.timeoutMs,

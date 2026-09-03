@@ -8,6 +8,7 @@ import { Buffer } from "node:buffer";
 import * as nodeCrypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
+import { ENVELOPE_KINDS, RESERVED_PATHS } from "../src/channels/agentcore-protocol.ts";
 import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
 
 type Envelope = Record<string, unknown> & { kind?: string; wake?: { url: string } };
@@ -552,5 +553,29 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
     );
     expect(res.statusCode).toBe(500);
     expect(f.scheduleCalls).toHaveLength(1);
+  });
+});
+
+describe("the forwarder speaks the protocol module's spelling", () => {
+  // The forwarder is JavaScript and cannot import agentcore-protocol.ts, so its literals are pinned
+  // to it here: a rename on one side fails this test, not a live deployment.
+  const src = forwarderSource();
+
+  it("names every reserved path", () => {
+    for (const path of Object.values(RESERVED_PATHS)) expect(src).toContain(`"${path}"`);
+  });
+
+  it("emits every envelope kind the adapter dispatches on, except the two nobody forwards", () => {
+    // `invoke` is the public data plane (a caller's own InvokeAgentRuntime) and `checkpoint` is the
+    // deploy driver's — neither passes through the forwarder.
+    for (const kind of ENVELOPE_KINDS) {
+      if (kind === "invoke" || kind === "checkpoint") continue;
+      expect(src).toContain(`kind: "${kind}"`);
+    }
+  });
+
+  it("reads the two EventBridge shapes by the protocol's field names", () => {
+    expect(src).toContain("event?.wakePoke");
+    expect(src).toContain("event?.scheduleFire");
   });
 });

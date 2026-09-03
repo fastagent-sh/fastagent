@@ -27,7 +27,8 @@
  */
 import { Buffer } from "node:buffer";
 import type { Agent } from "../agent.ts";
-import type { StateSync, StateUrls } from "./agentcore-state.ts";
+import type { StateSync } from "./agentcore-state.ts";
+import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork, onIdle } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { type PrefixMount, router } from "../channels/serve.ts";
@@ -39,61 +40,6 @@ import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
 import { secretEquals } from "./secret.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
-
-/** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
- *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
- *  ALARM sink (schedule/wake-alarm.ts) can call back without the URL being baked anywhere. */
-export type AgentcoreEnvelope = {
-  /** Shared secret proving this envelope came from the forwarder (FASTAGENT_INGRESS_SECRET). The
-   *  public `invoke` data plane neither has nor needs it — and may not carry the fields below. */
-  auth?: string;
-  wake?: { url: string };
-  state?: StateUrls;
-} & (
-  | {
-      kind: "webhook";
-      /** Original webhook request line, verbatim. `path` must be absolute ("/telegram"). */
-      method: string;
-      path: string;
-      /** Original raw query string (no leading `?`) — "verbatim" includes it; a channel reading
-       *  `request.url.searchParams` must see what the webhook sender sent. */
-      query?: string;
-      /** Original headers — signature material (secret tokens, Feishu signatures) rides here. */
-      headers?: Record<string, string>;
-      /** Original body, base64 (webhook bodies are JSON but the tunnel must be byte-exact). */
-      bodyB64?: string;
-    }
-  | {
-      kind: "schedule-fire";
-      name: string;
-      /** The cron instant this fire is FOR (ISO) — the slot-idempotency key. */
-      slot: string;
-    }
-  | { kind: "invoke"; session: string; text: string }
-  /** An EventBridge wake-up poke: the invocation ITSELF is the payload — it wakes the container,
-   *  whose boot drain / 30s wake pump then fires whatever is due. The handler only acks. */
-  | { kind: "wake-poke" }
-  /** Pre-stop checkpoint (`--run`, right before stop-runtime-session): push the state snapshot NOW.
-   *  A stop cuts an in-flight turn, and its durable turn intent — written pre-ACK by every replaying
-   *  channel — lives on a mount the version update is about to erase. Flushing first is what makes
-   *  "channels with replay re-run it" true rather than aspirational. */
-  | { kind: "checkpoint" }
-  /** The deploy driver's post-deploy verification (relayed by the forwarder's reserved
-   *  `/__fastagent/probe` path, which answers on EVERY forwarder topology — schedule-only URLs
-   *  refuse ordinary public traffic). Runs restore + channel construction end to end and answers a
-   *  TRANSPORT-200 structured verdict `{ ok, error? }`: the ordinary webhook path folds a non-200
-   *  transport into an opaque 502 at the forwarder, which would strip exactly the diagnostics this
-   *  probe exists to carry. */
-  | { kind: "probe" }
-);
-
-/** The webhook envelope's reply: the channel's real HTTP response, ridden inside a transport-200
- *  body so the forwarder can re-emit it verbatim (see the module header on AgentCore's 424 folding). */
-export interface WebhookReply {
-  status: number;
-  headers: Record<string, string>;
-  bodyB64: string;
-}
 
 /** What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control
  *  plane), so the adapter's INNER dispatch is assembled exactly like a direct host's. */
@@ -191,10 +137,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       return text("invalid json\n", 400);
     }
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
-      return text(
-        'need { "kind": "webhook" | "schedule-fire" | "invoke" | "wake-poke" | "checkpoint" | "probe", ... }\n',
-        400,
-      );
+      return text(`need { "kind": ${ENVELOPE_KINDS.map((k) => `"${k}"`).join(" | ")}, ... }\n`, 400);
     }
     // AUTHENTICATION BOUNDARY. `InvokeAgentRuntime` is an ordinary IAM action, so "reached this
     // handler" proves nothing about the sender. Only an envelope carrying the shared secret is the

@@ -24,6 +24,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { log } from "../log.ts";
+import type { StateUrls } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
 
 /** Snapshot envelope version — an unknown version fails the restore loudly (never a silent skip). */
@@ -60,14 +61,6 @@ const EXCLUDED = new Set(["control.json"]);
 interface StateSnapshot {
   v: number;
   files: Record<string, string>;
-}
-
-/** Presigned S3 URLs for the one snapshot object, minted per envelope by the forwarder. */
-export interface StateUrls {
-  getUrl: string;
-  putUrl: string;
-  /** Authenticated forwarder callback that re-mints URLs with current Lambda credentials. */
-  refresh?: { url: string; auth: string };
 }
 
 /** Every regular file under `root`, as root-relative POSIX paths (stable across platforms). */
