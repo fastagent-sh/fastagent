@@ -90,9 +90,11 @@ src/
 │   │                     # semantics every collision check would then have to PREDICT. Prefix
 │   │                     # owners are a separate mount argument, not a key spelling. Plus the
 │   │                     # totality boundary and the node:http binding. Shared ground, NOT a
-│   │                     # deployment target: every host in deploy/ runs this same process. Hono
-│   │                     # lives INSIDE this file (overrideGlobalObjects: false keeps it there — an
-│   │                     # embedder's globals are not ours to swap); the types stay pure Fetch.
+│   │                     # deployment target: every host in deploy/ runs this same process. What is
+│   │                     # imported here is Hono's node ADAPTER (serve/getRequestListener), never the
+│   │                     # framework — the dispatch above is ours; overrideGlobalObjects: false keeps
+│   │                     # even the adapter inside the file, since an embedder's globals are not ours
+│   │                     # to swap. The types stay pure Fetch.
 │   ├── agentcore-service.ts # the AgentCore SERVING assembly — same product as service.ts, built
 │   │                     # differently because the host is: the adapter is the surface, channels are
 │   │                     # discovered LAZILY (the state mount at boot is pre-restore, so eager
