@@ -13,6 +13,7 @@ import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
+import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
@@ -28,7 +29,7 @@ import {
   feishuBufferPlaceKey,
   feishuBufferText,
 } from "./context-buffer.ts";
-import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
+import { decryptEvent, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
@@ -835,7 +836,7 @@ function createFeishuWebhookRoutes(
       (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
         ? ((envelope.header as Record<string, unknown>).token as string)
         : undefined);
-    if (!token || !timingSafeEqualStr(token, verificationToken)) {
+    if (!secretEquals(token, verificationToken)) {
       log.warn(
         `${label} rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
       );

@@ -29,13 +29,13 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
   UPDATE_FIELDS,
 } from "../session.ts";
-import { timingSafeEqual } from "node:crypto";
 import type { ChannelHandler } from "../channel.ts";
 import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
 import { text } from "./respond.ts";
+import { secretEquals } from "./secret.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
 const CONTROL_PREFIX = "/control";
@@ -330,13 +330,10 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
   if (!token) throw new Error("createControlPlane: a bearer token is required (empty tokens are not a mode)");
   const epoch = crypto.randomUUID();
 
-  // Timing-safe: the bearer token is this surface's ONLY auth (and the --tunnel warning names it
-  // as the sole protection on a public URL) — a plain === would leak byte-by-byte via timing.
-  const expected = Buffer.from(`Bearer ${token}`);
-  const authed = (req: Request): boolean => {
-    const header = Buffer.from(req.headers.get("authorization") ?? "");
-    return header.length === expected.length && timingSafeEqual(header, expected);
-  };
+  // The bearer token is this surface's ONLY auth (and the --tunnel warning names it as the sole
+  // protection on a public URL).
+  const expected = `Bearer ${token}`;
+  const authed = (req: Request): boolean => secretEquals(req.headers.get("authorization"), expected);
   const invokeHandler = options.agent ? createInvokeHandler(options.agent) : undefined;
   /** Authenticate, then hand the handler the pieces every route wants: the request, the URL (for
    *  query parameters), and the session the PATH named — `""` on the routes that have no id in
