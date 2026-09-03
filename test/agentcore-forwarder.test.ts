@@ -30,6 +30,7 @@ function loadForwarder(options: HarnessOptions = {}) {
     INGRESS_SESSION_ID: "fastagent-ingress-x-0000000000000000",
     INGRESS_SECRET: "ingress-s3cret",
     WEBHOOKS_ENABLED: "1",
+    MAX_WEBHOOK_BODY_BYTES: String(MAX_WEBHOOK_BODY_BYTES),
     ...options.env,
   };
   const envelopes: Envelope[] = [];
