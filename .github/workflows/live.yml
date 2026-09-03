@@ -279,6 +279,16 @@ jobs:
           while read -r name; do
             [ -n "$name" ] || continue
             bucket="fa-$name-$account"
+            # BEFORE the stack, because these are not stack resources: the forwarder creates wake alarms
+            # at runtime, into the `default` Scheduler group, and `ActionAfterCompletion: DELETE` only
+            # runs once a schedule FIRES. A probe killed between the wake call and the fire leaves one
+            # pending; after `delete-stack` its target is gone and it retries into nothing for weeks.
+            aws scheduler list-schedules --name-prefix "fa-$name-wk-" \
+              --query 'Schedules[].Name' --output text 2>/dev/null | tr '\t' '\n' | while read -r alarm; do
+              [ -n "$alarm" ] || continue
+              echo "deleting wake alarm $alarm" >&2
+              aws scheduler delete-schedule --name "$alarm" || echo "::error::could not delete wake alarm $alarm"
+            done
             attempt "delete-stack $name" aws cloudformation delete-stack --stack-name "fastagent-$name"
             attempt "wait stack-delete $name" aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name"
             # `s3 rm` does not empty a versioned bucket — it writes a delete marker per object, and a

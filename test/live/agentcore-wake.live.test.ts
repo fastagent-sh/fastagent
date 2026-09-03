@@ -86,9 +86,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Same three places as agentcore-deploy, and here the bucket is REAL: `selfSchedule` turns the
-  // forwarder on, which is what makes the driver create a state bucket. The alarms need no cleanup —
-  // one-shots self-delete after firing, and the stack's Scheduler group goes with the stack.
+  // FOUR places, not the three agentcore-deploy has. The alarms are the extra one, and they are the
+  // easiest to get wrong: the forwarder creates them at RUNTIME with the SDK, into the `default`
+  // Scheduler group, so they are not stack resources and `delete-stack` does not take them. Nor do
+  // they reliably remove themselves — `ActionAfterCompletion: DELETE` runs after a schedule FIRES, and
+  // any failure between the wake call and the fire (a failed assertion, a killed job) leaves one
+  // pending, aimed at a forwarder this teardown is about to delete. That is precisely the orphan shape
+  // found in this account: a schedule outliving its target, retrying into nothing, for weeks.
+  //
+  // They go FIRST, while the stack still stands: after `delete-stack` the forwarder is gone and the
+  // alarm is a leak nothing is left to explain.
   const errors: unknown[] = [];
   const attempt = async (label: string, args: string[]) => {
     const { code, stderr } = await aws(args);
@@ -96,6 +103,17 @@ afterAll(async () => {
       errors.push(new Error(`${label} failed: ${stderr.slice(0, 500)}`));
     }
   };
+
+  const pending = await aws(["scheduler", "list-schedules", "--name-prefix", ALARM_PREFIX, "--output", "json"]);
+  if (pending.code === 0) {
+    for (const alarm of (JSON.parse(pending.stdout) as { Schedules?: { Name: string }[] }).Schedules ?? []) {
+      await attempt(`scheduler delete-schedule ${alarm.Name}`, ["scheduler", "delete-schedule", "--name", alarm.Name]);
+    }
+  } else {
+    // Not fatal to the rest of teardown, but never silent: an unreadable list is indistinguishable
+    // from an empty one, and the difference is whether something is still out there firing.
+    errors.push(new Error(`could not list wake alarms under ${ALARM_PREFIX}: ${pending.stderr.slice(0, 300)}`));
+  }
 
   await attempt("delete-stack", ["cloudformation", "delete-stack", "--stack-name", STACK]);
   await attempt("wait stack-delete-complete", [
