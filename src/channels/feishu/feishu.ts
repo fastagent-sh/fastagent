@@ -201,21 +201,6 @@ interface FeishuRuntime {
   turnsIdle(): Promise<void>;
 }
 
-/** The participant model removed the session modes (docs/design/participant-model.md §12). An upgraded
- *  workspace still passing one would otherwise start fine and silently get different placement AND a
- *  different memory boundary — the one breaking change most likely to be hit, and invisible. */
-function rejectRemovedSessionOptions(opts: FeishuChannelBaseOptions, factoryName: string): void {
-  const removed = ["directMessageSession", "groupMessageSession"].filter(
-    (name) => (opts as unknown as Record<string, unknown>)[name] !== undefined,
-  );
-  if (removed.length > 0) {
-    throw new Error(
-      `${factoryName} no longer accepts ${removed.join(" / ")}: a chat is one session and a thread is another, ` +
-        "and the summon rule no longer depends on the mode — remove the option (see docs/design/participant-model.md)",
-    );
-  }
-}
-
 function createFeishuRuntimeFactory(
   profile: FeishuCloudProfile,
   opts: FeishuChannelBaseOptions,
@@ -878,7 +863,6 @@ export function buildFeishuChannel(
   opts: FeishuChannelOptions,
   factoryName: string,
 ): ChannelModule {
-  rejectRemovedSessionOptions(opts, factoryName);
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return (ctx) => {
     if (!opts.verificationToken) {
@@ -894,7 +878,6 @@ export function buildFeishuWebSocketChannel(
   factoryName: string,
   deps: FeishuWebSocketChannelDeps = {},
 ): LongConnectionChannelModule {
-  rejectRemovedSessionOptions(opts, factoryName);
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return {
     name: `${profile.kind} websocket`,

@@ -279,17 +279,6 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("refuses a removed session option instead of silently changing placement and memory under it", () => {
-    // The migration guarantee: an upgraded workspace still passing a mode fails loudly at construction
-    // rather than starting fine with a different place, a different session, and a different renderer.
-    expect(() =>
-      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, groupMessageSession: "continuous" } as never),
-    ).toThrow(/groupMessageSession/);
-    expect(() =>
-      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, directMessageSession: "threaded" } as never),
-    ).toThrow(/directMessageSession/);
-  });
-
   it("rejects invalid rendering, task-display, and reaction policies at construction", () => {
     expect(() =>
       slackChannel({

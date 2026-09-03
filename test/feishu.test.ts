@@ -487,16 +487,6 @@ describe("ingress verification", () => {
 });
 
 describe("upgrade from the session-mode model", () => {
-  it("refuses a removed session option instead of silently changing behaviour under it", () => {
-    const opts = { appId: "app", appSecret: "secret", verificationToken: TOKEN } as FeishuChannelOptions;
-    expect(() => buildFeishuChannel({ ...opts, groupMessageSession: "continuous" } as never)).toThrow(
-      /groupMessageSession/,
-    );
-    expect(() => buildFeishuChannel({ ...opts, directMessageSession: "threaded" } as never)).toThrow(
-      /directMessageSession/,
-    );
-  });
-
   it("drops only the retired context buckets", async () => {
     feishuFetch();
     const root = mkdtempSync(join(tmpdir(), "feishu-upgrade-"));

@@ -182,19 +182,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     apiBaseUrl = "https://slack.com/api",
   } = options;
 
-  // The participant model derives placement instead of selecting it: Slack has no quote primitive, so
-  // answering in place means answering in a thread on the ask, whichever renderer draws it. An
-  // upgraded workspace still passing one of the removed modes would otherwise start fine and silently
-  // get a different placement AND a different memory boundary.
-  const removedModes = ["directMessageSession", "groupMessageSession"].filter(
-    (name) => (options as unknown as Record<string, unknown>)[name] !== undefined,
-  );
-  if (removedModes.length > 0) {
-    throw new Error(
-      `slackChannel no longer accepts ${removedModes.join(" / ")}: an answer goes in a thread on the ask, and ` +
-        "that thread is the session — see docs/design/participant-model.md",
-    );
-  }
   if (!(["context", "mentions"] as const).includes(groupBehavior)) {
     throw new Error('slackChannel groupBehavior must be "context" or "mentions"');
   }
