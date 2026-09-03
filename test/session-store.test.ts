@@ -1,8 +1,8 @@
 /**
  * The AgentSession L0's session store: pi accepts the ids channels actually mint, two rooms never
- * share a record, and a conversation started by the harness path is continued rather than restarted.
+ * share a record.
  */
-import { symlinkSync, writeFileSync } from "node:fs";
+import { symlinkSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,66 +86,6 @@ describe("piSessionRecordStore", () => {
     expect(after.getBranch().some((e) => JSON.stringify(e).includes("what did I ask?"))).toBe(true);
     // One conversation, one record - this engine keeps its own under a subdirectory of the store.
     expect((await SessionManager.list(cwd, join(dir, "agent-session"))).length).toBe(1);
-  });
-
-  it("does not hand a conversation the record another engine's spelling of its name produced", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-collide-"));
-    const cwd = process.cwd();
-    const store = piSessionRecordStore({ dir, cwd });
-
-    // The harness path stores raw ids, so a room literally called "s42" lands on disk as "s42" -
-    // which is also what this store's encoding produces for the DIFFERENT room "42".
-    writeFileSync(
-      join(dir, "2026-01-01T00-00-00-000Z_s42.jsonl"),
-      `${[
-        { type: "session", version: 3, id: "s42", timestamp: "2026-01-01T00:00:00.000Z", cwd },
-        {
-          type: "message",
-          id: "e1",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: { role: "user", content: "belongs to room s42" },
-        },
-      ]
-        .map((e) => JSON.stringify(e))
-        .join("\n")}\n`,
-    );
-
-    const other = await store.openOrCreate("42");
-
-    expect(other.getBranch().some((e) => JSON.stringify(e).includes("belongs to room s42"))).toBe(false);
-    // And the room that DOES own it still gets it.
-    expect(
-      (await store.openOrCreate("s42")).getBranch().some((e) => JSON.stringify(e).includes("belongs to room s42")),
-    ).toBe(true);
-  });
-
-  it("continues a record the harness path wrote, instead of restarting the conversation", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-legacy-"));
-    const cwd = process.cwd();
-    // Written the way the harness path writes it: sessions.ts keeps `[A-Za-z0-9._-]` verbatim, so a
-    // telegram group id lands on disk AS the id - a spelling pi itself refuses to mint, which is why
-    // this record has to be laid down by hand rather than through SessionManager.
-    const id = "-1001234567890";
-    writeFileSync(
-      join(dir, `2026-01-01T00-00-00-000Z_${id}.jsonl`),
-      `${[
-        { type: "session", version: 3, id, timestamp: "2026-01-01T00:00:00.000Z", cwd },
-        {
-          type: "message",
-          id: "e1",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: { role: "user", content: "written by the harness path" },
-        },
-      ]
-        .map((e) => JSON.stringify(e))
-        .join("\n")}\n`,
-    );
-
-    const reopened = await piSessionRecordStore({ dir, cwd }).openOrCreate(id);
-
-    expect(reopened.getBranch().some((e) => JSON.stringify(e).includes("written by the harness path"))).toBe(true);
   });
 });
 

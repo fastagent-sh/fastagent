@@ -1,10 +1,6 @@
 /**
  * Session persistence for the `AgentSession` L0 — open-or-create a durable record by the Caller's
  * opaque session id, on pi-coding-agent's `SessionManager` (the v3 jsonl every pi surface reads).
- *
- * Records written before this store existed (by the pi-agent-core `Session` the serving path used
- * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
- * READ path for existing conversations, not a second engine.
  */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -254,14 +250,11 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   /** The unreadable records the last listing reported, so a polled endpoint states the condition
    *  once rather than once a second. */
   let lastUnreadable = "";
-  /** WHERE a session's record is, under either spelling — the one lookup every caller shares, so a
-   *  fix to it (this store's own directory rather than pi's cwd-filtered listing) cannot reach three
-   *  of the four. */
+  /** WHERE a session's record is — the one lookup every caller shares, so a fix to it (this store's
+   *  own directory rather than pi's cwd-filtered listing) cannot reach three of the four. */
   const locate = (sessionId: string): { path: string; dir: string } | undefined => {
     const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
-    if (mine) return { path: mine.path, dir: own };
-    const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
-    return legacy ? { path: legacy.path, dir: root } : undefined;
+    return mine ? { path: mine.path, dir: own } : undefined;
   };
   /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
    *  broken by a caller that spreads this object into another one. */
@@ -617,7 +610,7 @@ function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
   return record;
 }
 
-/** Where this engine's own records live, under the sessions directory both engines are pointed at. */
+/** Where the records live, under the sessions directory the store is pointed at. */
 const OWN_RECORDS_DIR = "agent-session";
 
 /**
@@ -724,14 +717,4 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       return live.delete(sessionId);
     },
   };
-}
-
-/** The spelling used before this store existed — read-only, so older records still resolve. */
-function legacySessionId(sessionId: string): string {
-  return sessionId.replace(/[^A-Za-z0-9._-]/g, (c) => {
-    const code = c.charCodeAt(0);
-    return code < 0x100
-      ? `%${code.toString(16).toUpperCase().padStart(2, "0")}`
-      : `%u${code.toString(16).toUpperCase().padStart(4, "0")}`;
-  });
 }
