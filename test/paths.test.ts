@@ -23,7 +23,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
-import { displayPath, ensureSecretsDir, resolvePlacement, workspaceHint } from "../src/paths.ts";
+import { displayPath, ensureSecretsDir, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
 
 describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
   const config = async (dir: string): Promise<void> => {
@@ -199,5 +199,17 @@ describe("paths: the secrets directory carries a mode", () => {
     } finally {
       denyChmod.armed = false;
     }
+  });
+});
+
+describe("paths: readTextIfExists", () => {
+  it("reads absence as undefined and anything else as the error it is", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-read-"));
+    await writeFile(join(dir, "present"), "hello");
+    expect(await readTextIfExists(join(dir, "present"))).toBe("hello");
+    expect(await readTextIfExists(join(dir, "absent"))).toBeUndefined();
+    // A directory where the file should be is not "no file": a decision taken on absence (regenerate
+    // it, skip its gate) would be wrong for something that is there.
+    await expect(readTextIfExists(dir)).rejects.toThrow(/EISDIR/);
   });
 });

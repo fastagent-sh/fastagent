@@ -56,7 +56,7 @@ import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
-import { type ResolvedPlacement, resolveStateRoot, exists } from "../../paths.ts";
+import { type ResolvedPlacement, resolveStateRoot, exists, readTextIfExists } from "../../paths.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
@@ -279,7 +279,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     let keptWithoutRequestedTunnel = false;
     // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must
     // describe the topology that will actually be there.
-    const composeText = await readFile(composeFile, "utf8").catch(() => undefined);
+    const composeText = await readTextIfExists(composeFile).catch(failStartup);
     if (composeText !== undefined && (!opts.force || !isGeneratedCompose(composeText))) {
       const existingHasTunnel = composeHasTunnelService(composeText);
       plan = dockerPlan(existingHasTunnel);
@@ -477,7 +477,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // fly.toml lives in the agent dir (fastagent/fly.toml) — the workspace's own
   // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
   const flyTomlPath = join(agentDir, "fly.toml");
-  const flyToml = await readFile(flyTomlPath, "utf8").catch(() => undefined);
+  const flyToml = await readTextIfExists(flyTomlPath).catch(failStartup);
   // Every decision below turns on ONE question — will `writeArtifacts` keep this file? — and the answer is
   // OWNERSHIP, not the flag: `--force` resets a fly.toml we generated and leaves a hand-written one alone.
   // Keying these on `--force` alone meant a forced deploy of a hand-owned fly.toml took the app name from
