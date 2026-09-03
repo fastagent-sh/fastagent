@@ -142,7 +142,11 @@ src/
 │   │   │                     # discover have none there. Neither side may reach for the other.
 │   │   ├── preview-kit.ts   # turn-view reducer (event → view state + line renderers) + preview policies
 │   │   ├── invoke-turn-kit.ts # busy-retry stream loop around agent.invoke (onCompleted commit point)
-│   │   ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; telegram + slack + feishu)
+│   │   ├── turn-runner.ts   # THE durable-turn lifecycle (accept → dequeue → execute → end) over the
+│   │   │                     # queue + store + buffer; a channel supplies only what names a platform
+│   │   │                     # object (notice, prompt, attachments, the dropped-turn line). Three
+│   │   │                     # channels wrote it out and drifted in ways that were not decisions
+│   │   ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; the runner's)
 │   │   ├── turn-store.ts    # generic durable turn intent (L1) — record shape/validator/order injected
 │   │   ├── context-buffer.ts# generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)

@@ -381,7 +381,7 @@ Telegram is the stateful channel reference. Its modules separate:
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
 | `invoke-turn.ts` | attachment resolution and one Agent invocation (busy-retry loop + manifest wording shared via `../kit/invoke-turn-kit.ts`) |
-| `../kit/turn-queue.ts` | per-session FIFO, different sessions concurrent (shared with Slack and Feishu) |
+| `../kit/turn-runner.ts` | the durable-turn lifecycle over the queue + store + buffer (shared with Slack and Feishu); `../kit/turn-queue.ts` is its per-session FIFO |
 | `turn-store.ts` | telegram's record + ordering over the shared generic `../kit/turn-store.ts` (pre-ACK persisted turn intent, crash replay) |
 | `context-buffer.ts` | telegram's entry shape + attachment selection over the shared generic `../kit/context-buffer.ts` (durable un-summoned group context, peek→completed→commit) |
 | `preview.ts` | live preview and terminal write policy |
