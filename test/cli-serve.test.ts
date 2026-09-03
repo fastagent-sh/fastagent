@@ -1,13 +1,14 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { reportServing } from "../src/cli/serve.ts";
+import { announceControl, reportServing } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
 import { agentcoreRoutes } from "../src/channels/agentcore.ts";
 import { beginWork } from "../src/channels/busy.ts";
-import { mountSessionControl, routesFor } from "../src/service.ts";
+import { type AgentService, mountSessionControl, routesFor } from "../src/service.ts";
+import { log } from "../src/log.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
 import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
@@ -187,14 +188,56 @@ describe("cli: the assembled serving surface", () => {
     // only the routes gets a server where every /control/* request 404s — while control.json is
     // still written, handing a client an address that answers nothing. Every other test builds the
     // router directly; this one assembles it the way `serve` does, from the CLI's own output.
-    const stateRoot = await mkdtemp(join(tmpdir(), "fa-cli-control-"));
     const control = { capabilities: () => ({ commands: [], models: [] }) } as never;
-    const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control, stateRoot);
+    const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control);
     const surface = { ...withControl }; // exactly what dev/start spread into ServingSurface
     const handle = router(surface.routes, surface.mounts);
     // Unauthenticated is enough to prove REACHABILITY: 401 comes from the plane, 404 from its absence.
     expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(401);
     expect((await handle(new Request("http://h/health"))).status).toBe(200);
+  });
+
+  it("announceControl writes the 0600 discovery file under a fresh state root and removes it on cleanup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fa-cli-announce-"));
+    const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
+    const service = { control: { token: "tok-1", prefix: "/control" } } as AgentService;
+    const cleanup = announceControl(service, stateRoot, { host: "127.0.0.1", tunnel: false }, 12345);
+    const path = join(stateRoot, "control.json");
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ url: "http://127.0.0.1:12345", token: "tok-1" });
+    // The file IS the credential: anything readable by other users on the box is a handover of the
+    // plane. `writeFileSync`'s mode is umask-masked, so this is what proves the explicit chmod ran.
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    cleanup();
+    await expect(readFile(path, "utf8")).rejects.toThrow(/ENOENT/);
+    // No plane: nothing written, nothing to remove.
+    announceControl({} as AgentService, stateRoot, { tunnel: false }, 1)();
+    await expect(readFile(path, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("a bind address lands in the discovery url and a loopback bind drops the LAN warning", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const root = await mkdtemp(join(tmpdir(), "fa-cli-bind-"));
+    const service = { control: { token: "t", prefix: "/control" } } as AgentService;
+    const url = async (host: string | undefined, stateRoot: string) => {
+      announceControl(service, stateRoot, { host, tunnel: false }, 9000);
+      return (JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as { url: string }).url;
+    };
+    try {
+      expect(await url("127.0.0.1", join(root, "a"))).toBe("http://127.0.0.1:9000");
+      expect(warn).not.toHaveBeenCalled(); // loopback is not LAN-reachable — nothing to warn about
+      // A specific non-wildcard bind is only reachable as itself: the client must dial that address.
+      expect(await url("192.168.1.5", join(root, "b"))).toBe("http://192.168.1.5:9000");
+      // …and the warning NAMES that bind. Counting alone would stay green if the address rendered as
+      // `undefined`, which is the whole content of the claim "names the actual bind".
+      expect(warn.mock.calls.flat().join(" ")).toContain("192.168.1.5 (off this machine)");
+      expect(await url(undefined, join(root, "c"))).toBe("http://127.0.0.1:9000"); // wildcard accepts loopback
+      expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
+      expect(warn).toHaveBeenCalledTimes(2);
+      announceControl(service, join(root, "d"), { host: "127.0.0.1", tunnel: true }, 9000);
+      expect(warn.mock.calls.flat().join(" ")).toContain("--tunnel exposes /control/*");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

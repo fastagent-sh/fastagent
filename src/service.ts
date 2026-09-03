@@ -14,11 +14,7 @@
  * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
  * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
  */
-import { mkdirSync, rmSync } from "node:fs";
-import { writeFileAtomic } from "./atomic-write.ts";
-import { join } from "node:path";
 import type { Agent } from "./agent.ts";
-import { classifyBind, clientHost } from "./bind.ts";
 import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
@@ -159,17 +155,15 @@ export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: Pref
 export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
-  stateRoot: string,
-  options: { tunnel?: boolean; agent?: Agent; host?: string } = {},
+  options: { agent?: Agent } = {},
 ): {
   routes: Routes;
   mounts: PrefixMount[];
-  /** The plane's bearer token and prefix — how an embedder distributes access without a discovery file. */
+  /** The plane's bearer token and prefix — how a caller distributes access (the CLI writes it to
+   *  `<stateRoot>/control.json` for local discovery; an embedder hands it out itself). */
   control?: { token: string; prefix: string };
-  /** Write the local discovery file; returns its removal. Installs no signal handlers. */
-  announce: (boundPort: number) => () => void;
 } {
-  if (!control) return { routes, mounts: [], announce: () => () => {} };
+  if (!control) return { routes, mounts: [] };
   // WHO OWNS the secret. Per-boot mint is right locally: discovery is `control.json` and its file
   // permissions, which works because both holders share a filesystem. A deployment removes that
   // premise — a token minted in the container is replaced every restart and reachable only by shelling
@@ -199,48 +193,7 @@ export function mountSessionControl(
   const token = injected || crypto.randomUUID();
   const plane = createControlPlane(control, { token, agent: options.agent });
   assertNoControlPlaneCollision(routes, plane);
-  return {
-    routes,
-    mounts: [plane],
-    control: { token, prefix: plane.prefix },
-    // Writes the discovery file and hands back its removal. It installs NO signal handlers: a
-    // library mounted inside someone's app must not change how that app exits — the CLI wires the
-    // returned cleanup into its own shutdown, an embedder into `close()`.
-    announce: (boundPort) => {
-      mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
-      const path = join(stateRoot, "control.json");
-      const url = `http://${clientHost(options.host)}:${boundPort}`;
-      writeFileAtomic(path, `${JSON.stringify({ url, token })}\n`, 0o600);
-      log.info(`[fastagent] session control on /control/* (token in ${path})`);
-      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths
-      // warn loudly, and the LAN path must not be the silent third way past the local trust story.
-      // A loopback bind closes exactly that reach, so it earns silence.
-      const bind = classifyBind(options.host);
-      if (bind !== "loopback") {
-        log.warn(
-          `[fastagent] the port binds ${bind === "wildcard" ? "all interfaces" : `${options.host} (off this machine)`}: ` +
-            "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
-            "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs/design/session-control.md §14)",
-        );
-      }
-      if (options.tunnel) {
-        // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
-        log.warn(
-          "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
-            "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs/design/session-control.md §14)",
-        );
-      }
-      // Removed on shutdown so a stale file cannot point a client at a dead port: `attach` then
-      // fails with "cannot read" (accurate) instead of a stale token's misleading 401/ECONNREFUSED.
-      return () => {
-        try {
-          rmSync(path, { force: true });
-        } catch {
-          /* the file is advisory — shutdown must not fail on it */
-        }
-      };
-    },
-  };
+  return { routes, mounts: [plane], control: { token, prefix: plane.prefix } };
 }
 
 /**
@@ -297,17 +250,11 @@ export interface AgentService {
    *  fails to come up, after closing the service: a host must not report itself serving while a
    *  declared channel is dead, and health answers 503 until this resolves. */
   ready: Promise<void>;
-  /** The control plane's bearer token and prefix, when `sessionControl` is on — how an embedder
-   *  hands access to a client without a discovery file. */
+  /** The control plane's bearer token and prefix, when `sessionControl` is on — how a caller hands
+   *  access to a client. The CLI writes it to `<stateRoot>/control.json` for `fastagent attach`; an
+   *  embedder mounted inside a larger app has no port of its own to describe and distributes it
+   *  itself. */
   control?: { token: string; prefix: string };
-  /** Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the plane,
-   *  once the port is known. Optional: an embedder mounted inside a larger app has no port of its
-   *  own to describe and uses {@link AgentService.control} instead.
-   *
-   *  Removed by `close()`. Not by an `exit` handler: installing one is a decision about the whole
-   *  process, which a mounted library does not get to make. A hard exit therefore leaves the file
-   *  behind — advisory, overwritten by the next boot, and the client's own error stays honest. */
-  announce(boundPort: number): void;
   /** Stop long connections and schedules. Idempotent; also runs when `options.signal` aborts. */
   close(): Promise<void>;
 }
@@ -318,9 +265,6 @@ export interface MountAgentServiceOptions {
    *  must get the SAME one, which is why this is a hook rather than the caller's own call. `dev`
    *  passes `logAgentLoop`. */
   wrapAgent?: (agent: Agent) => Agent;
-  /** Passed through to the control plane mount: `--tunnel` widens its warning, `host` names the
-   *  bind address in the discovery file. */
-  control?: { tunnel?: boolean; host?: string };
   /** Aborting this closes the service, exactly like calling {@link AgentService.close}. */
   signal?: AbortSignal;
   /** Called when a long connection ends on its own — a dropped socket-mode channel, say. The CLI
@@ -371,11 +315,7 @@ export async function mountAgentService(
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
-  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
-    agent,
-    ...(options.control?.tunnel !== undefined ? { tunnel: options.control.tunnel } : {}),
-    ...(options.control?.host !== undefined ? { host: options.control.host } : {}),
-  });
+  const withControl = mountSessionControl(routed.routes, sessionControl, { agent });
   // Composed BEFORE anything starts. `router` re-validates what `loadChannels` and the control
   // mount already checked, so on THIS path it should not fail — but "should not" is not an ordering
   // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
@@ -384,7 +324,6 @@ export async function mountAgentService(
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule);
 
   const abort = new AbortController();
-  let unannounce: (() => void) | undefined;
   // A connection that drops while others are still dialling must not be undone by their later
   // readiness: the service is missing a declared channel from that moment on, whatever else arrives.
   let dropped = false;
@@ -414,7 +353,6 @@ export async function mountAgentService(
       abort.abort();
       scheduled.stop();
       options.signal?.removeEventListener("abort", onAbort);
-      unannounce?.(); // a stale discovery file would point a client at a dead port
       // A failure to stop is the caller's to know about — swallowing it would let `close()` report
       // success over a channel still holding on. Bounded, because a channel that ignores its abort
       // signal must not hang the teardown either.
@@ -535,9 +473,6 @@ export async function mountAgentService(
     schedules: scheduled.schedules,
     ready,
     ...(withControl.control ? { control: withControl.control } : {}),
-    announce: (boundPort) => {
-      unannounce = withControl.announce(boundPort);
-    },
     close,
   };
 }

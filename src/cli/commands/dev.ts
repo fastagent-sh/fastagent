@@ -14,7 +14,14 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
+import {
+  SHUTDOWN_GRACE_MS,
+  announceControl,
+  assertTunnelBindable,
+  maybeTunnel,
+  reportServing,
+  serve,
+} from "../serve.ts";
 import { parseBind, parsePort, reportAssembly, resolveFirstRunModel } from "../shared.ts";
 
 export interface DevOptions {
@@ -81,10 +88,11 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
     // gated out in start (level info), keeping end-user content out of production logs.
     wrapAgent: logAgentLoop,
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
-    control: { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) },
     onChannelClosed: (name, error) =>
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
   }).catch(failStartup);
+  const tunnel = opts.tunnel ?? false;
+  let unannounce = (): void => {};
   serve(
     service.handler,
     { port: portFlag ?? a.config.http?.port ?? 8787, host },
@@ -92,10 +100,13 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
       ready: service.ready,
       onListening: (p) => {
         reportServing(service, host, p);
-        service.announce(p);
-        maybeTunnel(a.agentDir, service.channels.routes, p, opts.tunnel ?? false, a.stateRoot);
+        unannounce = announceControl(service, a.stateRoot, { host, tunnel }, p);
+        maybeTunnel(a.agentDir, service.channels.routes, p, tunnel, a.stateRoot);
       },
-      onShutdown: () => service.close(),
+      onShutdown: () => {
+        unannounce();
+        return service.close();
+      },
     },
   );
 }
