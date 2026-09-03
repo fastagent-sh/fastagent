@@ -33,7 +33,7 @@
  *   scheduler:GetSchedule     the expression and completion action, which the list summary omits.
  *   scheduler:DeleteSchedule  teardown, here and in the workflow sweep.
  *
- * And this is the first fixture with `selfSchedule: true`, i.e. the first `needsForwarder` deployment:
+ * And this is the first fixture with `selfSchedule: true`, i.e. the first `topology.forwarder` deployment:
  * the forwarder Lambda, its Function URL, the wake role (iam:CreateRole / PassRole / AttachRolePolicy)
  * and a VERSIONED state bucket (s3:PutBucketVersioning, PutLifecycleConfiguration) are all created
  * here and nowhere else in the suite.

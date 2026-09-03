@@ -67,6 +67,39 @@ export interface AgentcorePlan {
   runbook: string[];
   /** Cron expressions EventBridge cannot express — surfaced as runbook warnings, not silent drops. */
   untranslatableSchedules: { name: string; reason: string }[];
+  /** What the stack contains — the ONE reading the template, the runbook and the `--run` driver share. */
+  topology: AgentcoreTopology;
+}
+
+/**
+ * Which resources the definition puts in the stack. Read in one place because it was computed in
+ * three — the template, the plan and the CLI — and the third disagreed with the first about a
+ * schedule EventBridge cannot express (counted by the CLI, not by the template), which is a
+ * `cloudformation deploy` rejecting parameters the template never declared.
+ */
+export interface AgentcoreTopology {
+  /** A webhook channel: the forwarder relays public Function URL traffic to it. */
+  webhooks: boolean;
+  /** The forwarder Lambda exists — for webhooks, for EventBridge cron rules, or for wake alarms —
+   *  with its Function URL: every forwarder needs it as the authenticated refresh channel for the
+   *  state snapshot's presigned URLs, since a turn can outlive the Lambda credentials that signed
+   *  them. A schedule-only URL rejects every non-reserved path before invoking AgentCore. */
+  forwarder: boolean;
+  /** The forwarder mirrors the agent's wake-ups into one-shot EventBridge schedules. */
+  wakeAlarms: boolean;
+}
+
+function agentcoreTopology(
+  input: Pick<AgentcorePlanInput, "channels" | "selfSchedule">,
+  /** Schedules EventBridge CAN express — the ones that become rules. */
+  translatedSchedules: number,
+): AgentcoreTopology {
+  const webhooks = input.channels.some((channel) => channel.ingress === "webhook");
+  return {
+    webhooks,
+    forwarder: webhooks || translatedSchedules > 0 || input.selfSchedule,
+    wakeAlarms: input.selfSchedule,
+  };
 }
 
 /** SessionStorage mount = FASTAGENT_STATE_DIR (AgentCore requires exactly `/mnt/<one-level>`). It is
@@ -306,16 +339,13 @@ export function scheduleResourceName(agent: string, schedule: string): string {
 }
 
 /** The CloudFormation template — the whole topology in one stack. */
-function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; expression: string }[]): string {
+function template(
+  input: AgentcorePlanInput,
+  translated: { fact: ScheduleFact; expression: string }[],
+  topology: AgentcoreTopology,
+): string {
   const runtimeName = toRuntimeName(input.name);
-  // selfSchedule needs the forwarder too: it is both the wake-alarm registrar and the poke target.
-  // Every forwarder also gets a Function URL as the authenticated state-capability refresh channel:
-  // a schedule turn can outlive both its original presigned URL and the Lambda credentials that signed
-  // it. Schedule-only URLs reject every non-reserved HTTP path before invoking AgentCore, so they do
-  // not expose a webhook/data plane (and start never mounts the builtin /invoke under AgentCore).
-  const needsForwarder =
-    input.channels.some((channel) => channel.ingress === "webhook") || translated.length > 0 || input.selfSchedule;
-  const needsFunctionUrl = needsForwarder;
+  const needsForwarder = topology.forwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
@@ -508,7 +538,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
             `                Resource: !GetAtt WakeSchedulerRole.Arn`,
           ]
         : []),
-      ...(needsFunctionUrl
+      ...(needsForwarder
         ? [
             `              - Effect: Allow # self-resolve callback URL for state-URL refresh / wake alarms`,
             `                Action: lambda:GetFunctionUrlConfig`,
@@ -532,8 +562,8 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `        Variables:`,
       `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
       `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
-      ...(needsFunctionUrl ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
-      ...(input.channels.some((channel) => channel.ingress === "webhook") ? [`          WEBHOOKS_ENABLED: "1"`] : []),
+      ...(needsForwarder ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
+      ...(topology.webhooks ? [`          WEBHOOKS_ENABLED: "1"`] : []),
       ...(input.selfSchedule
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,
@@ -553,7 +583,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
       `        S3Key: !Ref ForwarderS3Key`,
     );
   }
-  if (needsFunctionUrl) {
+  if (needsForwarder) {
     lines.push(
       ``,
       `  ForwarderUrl:`,
@@ -658,7 +688,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
   }
 
   lines.push(``, `Outputs:`, `  RuntimeArn:`, `    Value: !GetAtt Runtime.AgentRuntimeArn`);
-  if (needsFunctionUrl) {
+  if (needsForwarder) {
     lines.push(`  ForwarderUrl:`, `    Value: !GetAtt ForwarderUrl.FunctionUrl`);
   }
   return `${lines.join("\n")}\n`;
@@ -708,13 +738,10 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     paramNames.set(p, s.name);
   }
 
-  // Every forwarder needs its authenticated Function URL to refresh S3 snapshot capabilities during
-  // a long turn. Without route channels, ordinary HTTP paths are rejected before AgentCore is invoked.
-  const needsForwarder =
-    input.channels.some((channel) => channel.ingress === "webhook") || translated.length > 0 || input.selfSchedule;
-  const needsFunctionUrl = needsForwarder;
+  const topology = agentcoreTopology(input, translated.length);
+  const needsForwarder = topology.forwarder;
   const artifacts: Artifact[] = [
-    { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated) },
+    { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated, topology) },
     ...(needsForwarder ? [{ path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() }] : []),
     ...containerArtifacts(input),
   ];
@@ -781,10 +808,10 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       needsForwarder ? ` StateBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
     }${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
     ``,
-    needsFunctionUrl
+    needsForwarder
       ? `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`
       : `# 4. Read the outputs (the runtime ARN — this topology has NO public URL: nothing outside AWS`,
-    ...(needsFunctionUrl
+    ...(needsForwarder
       ? []
       : [`#    sends to it, so no Function URL is created and the agent is reachable only via SigV4).`]),
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
@@ -888,5 +915,5 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# versioning on, and deleting it costs model access until the next deploy re-seeds.`,
   );
 
-  return { artifacts, runbook, untranslatableSchedules: untranslatable };
+  return { artifacts, runbook, untranslatableSchedules: untranslatable, topology };
 }

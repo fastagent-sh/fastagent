@@ -4,7 +4,7 @@
  * execution role.
  *
  * THE FIXTURE DECLARES NO CHANNEL AND NO SCHEDULE, and that is what the topology follows from: with
- * `needsForwarder` false (deploy.ts) there is no forwarder Lambda, no Function URL, no EventBridge
+ * `topology.forwarder` false (plan.ts agentcoreTopology) there is no forwarder Lambda, no Function URL, no EventBridge
  * rule and no state bucket — the driver skips creating one. The template's forwarder half is proven
  * to PARSE by agentcore.live.test.ts, whose fixture turns it on; what this probe adds is that the
  * minimal stack really converges and really serves. Teardown still sweeps the bucket, because the
