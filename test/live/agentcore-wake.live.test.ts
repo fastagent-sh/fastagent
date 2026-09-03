@@ -25,19 +25,28 @@
  * half is AWS delivering a schedule it accepted, where the half above is our code and our IAM.
  *
  * COSTS REAL RESOURCES (a full AgentCore stack) and is the slowest probe in the suite: a deploy plus
- * MIN_WAKE_MS plus a teardown. Needs the same AWS credentials as agentcore-deploy, plus
- * `scheduler:ListSchedules` / `scheduler:GetSchedule` — ListSchedules is resource-less, so it must be
- * granted on `*`.
+ * the wake delay plus a teardown. It also needs MORE IAM than agentcore-deploy, in two ways that both
+ * fail late — after the image is built and pushed — so they are listed where a policy author will see
+ * them (.github/workflows/live.yml carries the same list):
+ *
+ *   scheduler:ListSchedules   reading the alarm back, and the teardown. RESOURCE-LESS: `*` or nothing.
+ *   scheduler:GetSchedule     the expression and completion action, which the list summary omits.
+ *   scheduler:DeleteSchedule  teardown, here and in the workflow sweep.
+ *
+ * And this is the first fixture with `selfSchedule: true`, i.e. the first `needsForwarder` deployment:
+ * the forwarder Lambda, its Function URL, the wake role (iam:CreateRole / PassRole / AttachRolePolicy)
+ * and a VERSIONED state bucket (s3:PutBucketVersioning, PutLifecycleConfiguration) are all created
+ * here and nowhere else in the suite.
  */
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agentcoreName, ingressSessionId, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
+import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { MIN_WAKE_MS } from "../../src/schedule/wakeups.ts";
-import { CLI, aws, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, aws, destroyAgentcoreDeployment, invokeAgentcore, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("AWS_ACCESS_KEY_ID", "an AWS key scoped to fastagent-live-probe-* (this probe creates real resources)");
@@ -46,10 +55,17 @@ requireEnv("AWS_REGION", "a region where Bedrock AgentCore is available, e.g. us
 
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
-const REPO = `fastagent/${NAME}`;
 /** The forwarder names every alarm `WAKE_PREFIX + sha256(wakeId)[:16]` (plan.ts). The prefix is all
  *  this probe can predict — the id is minted inside the container. */
 const ALARM_PREFIX = `fa-${NAME}-wk-`;
+
+/** ABOVE the floor, never ON it. `wake` reads the clock TWICE — `new Date(now() + ms)`, then
+ *  `addWakeup(…, now())` — and the guardrail compares them strictly (`fireAt < now + MIN_WAKE_MS`), so
+ *  asking for exactly MIN_WAKE_MS is a coin flip on a millisecond boundary. Losing it is worse than it
+ *  sounds: the turn still completes, and the rejection surfaces on the alarm assertion below, which
+ *  blames the wake secret and the forwarder's IAM. Half a minute of clearance costs the probe nothing
+ *  against a 240s poll budget. */
+const WAKE_MS = MIN_WAKE_MS + 30_000;
 
 let workspace = "";
 let account = "";
@@ -86,98 +102,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // FOUR places, not the three agentcore-deploy has. The alarms are the extra one, and they are the
-  // easiest to get wrong: the forwarder creates them at RUNTIME with the SDK, into the `default`
-  // Scheduler group, so they are not stack resources and `delete-stack` does not take them. Nor do
-  // they reliably remove themselves — `ActionAfterCompletion: DELETE` runs after a schedule FIRES, and
-  // any failure between the wake call and the fire (a failed assertion, a killed job) leaves one
-  // pending, aimed at a forwarder this teardown is about to delete. That is precisely the orphan shape
-  // found in this account: a schedule outliving its target, retrying into nothing, for weeks.
-  //
-  // They go FIRST, while the stack still stands: after `delete-stack` the forwarder is gone and the
-  // alarm is a leak nothing is left to explain.
-  const errors: unknown[] = [];
-  const attempt = async (label: string, args: string[]) => {
-    const { code, stderr } = await aws(args);
-    if (code !== 0 && !/does not exist|NotFound|NoSuchBucket/i.test(stderr)) {
-      errors.push(new Error(`${label} failed: ${stderr.slice(0, 500)}`));
-    }
-  };
-
-  const pending = await aws(["scheduler", "list-schedules", "--name-prefix", ALARM_PREFIX, "--output", "json"]);
-  if (pending.code === 0) {
-    for (const alarm of (JSON.parse(pending.stdout) as { Schedules?: { Name: string }[] }).Schedules ?? []) {
-      await attempt(`scheduler delete-schedule ${alarm.Name}`, ["scheduler", "delete-schedule", "--name", alarm.Name]);
-    }
-  } else {
-    // Not fatal to the rest of teardown, but never silent: an unreadable list is indistinguishable
-    // from an empty one, and the difference is whether something is still out there firing.
-    errors.push(new Error(`could not list wake alarms under ${ALARM_PREFIX}: ${pending.stderr.slice(0, 300)}`));
-  }
-
-  await attempt("delete-stack", ["cloudformation", "delete-stack", "--stack-name", STACK]);
-  await attempt("wait stack-delete-complete", [
-    "cloudformation",
-    "wait",
-    "stack-delete-complete",
-    "--stack-name",
-    STACK,
-  ]);
-  if (account) {
-    const bucket = stateBucketName(NAME, account);
-    await attempt("s3 rm", ["s3", "rm", `s3://${bucket}`, "--recursive"]);
-    const listed = await aws(["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"]);
-    if (listed.code === 0) {
-      const payload = JSON.parse(listed.stdout) as {
-        Versions?: { Key: string; VersionId: string }[];
-        DeleteMarkers?: { Key: string; VersionId: string }[];
-      };
-      const objects = [...(payload.Versions ?? []), ...(payload.DeleteMarkers ?? [])].map(({ Key, VersionId }) => ({
-        Key,
-        VersionId,
-      }));
-      if (objects.length > 0) {
-        await attempt("s3api delete-objects", [
-          "s3api",
-          "delete-objects",
-          "--bucket",
-          bucket,
-          "--delete",
-          JSON.stringify({ Objects: objects }),
-        ]);
-      }
-    }
-    await attempt("s3 rb", ["s3api", "delete-bucket", "--bucket", bucket]);
-  }
-  await attempt("ecr delete-repository", ["ecr", "delete-repository", "--repository-name", REPO, "--force"]);
-
-  if (workspace) await rm(workspace, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
-  if (errors.length > 0) {
-    throw new AggregateError(errors, `teardown failed — check stack ${STACK}, bucket fa-${NAME}-*, repo ${REPO}`);
+  // FOUR places, not the three this fixture's resources suggest — the wake alarms are the extra one,
+  // and {@link destroyAgentcoreDeployment} takes all four (it sweeps alarms for every fixture, which
+  // is why this probe adds no teardown of its own). `finally`, not a catch: the AWS failure still
+  // throws, and the temp directory still goes.
+  try {
+    await destroyAgentcoreDeployment(NAME, account);
+  } finally {
+    if (workspace) await rm(workspace, { recursive: true, force: true });
   }
 }, 900_000);
-
-/** One `invoke` envelope through the runtime, returning the stream body. */
-async function invokeRuntime(runtimeArn: string, text: string, label: string): Promise<string> {
-  const payload = join(workspace, `${label}.json`);
-  const out = join(workspace, `${label}-reply.json`);
-  await writeFile(payload, `${JSON.stringify({ kind: "invoke", session: "live-wake", text })}\n`);
-  const reply = await aws([
-    "bedrock-agentcore",
-    "invoke-agent-runtime",
-    "--agent-runtime-arn",
-    runtimeArn,
-    "--runtime-session-id",
-    ingressSessionId(NAME),
-    "--payload",
-    `file://${payload}`,
-    "--cli-binary-format",
-    "raw-in-base64-out",
-    out,
-  ]);
-  expect(reply.code, `invoke-agent-runtime (${label}) failed:\n${reply.stderr.slice(-2000)}`).toBe(0);
-  return await readFile(out, "utf8");
-}
 
 /** What ListSchedules actually returns per entry: a SUMMARY. Measured against the API, not assumed —
  *  there is no `ScheduleExpression` on it, which is why that assertion goes through {@link getAlarm}. */
@@ -227,22 +161,40 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
     // not a leftover the name prefix happened to match.
     expect(await listAlarms(), "an alarm existed before any wake-up was requested").toHaveLength(0);
 
-    // The delay is the product's floor (MIN_WAKE_MS): shorter is rejected by the guardrail, and
-    // longer only makes the probe wait. The tool is NAMED because self-selection is not what this
-    // probe is about — see the deferred-tool probe for that distinction.
-    const seconds = Math.round(MIN_WAKE_MS / 1000);
-    const body = await invokeRuntime(
-      runtimeArn as string,
-      `Call the wake tool to wake yourself in ${seconds} seconds, then reply with just: scheduled`,
-      "wake",
-    );
+    // The wake tool is NAMED because self-selection is not what this probe is about — see the
+    // deferred-tool probe for that distinction. The woken turn's `prompt` is DICTATED for a sharper
+    // reason: it is free text the model chooses, and a model that echoes this instruction into it
+    // arms a SECOND wake-up when the first fires. That one is created after teardown has listed the
+    // alarms, so it outlives the forwarder it points at — the orphan this suite already grew once.
+    const seconds = Math.round(WAKE_MS / 1000);
+    const body = await invokeAgentcore({
+      runtimeArn: runtimeArn as string,
+      name: NAME,
+      session: "live-wake",
+      text:
+        `Call the wake tool exactly once, with in: ${seconds} and prompt: "Reply with just: awake". ` +
+        "Then reply with just: scheduled",
+      dir: workspace,
+      label: "wake",
+    });
     expect(body, `the wake turn did not complete:\n${body.slice(0, 600)}`).toContain('"type":"completed"');
 
     // THE assertion. Everything between the tool call and this line is the chain that has no other
     // test: the store write, the sink, the authenticated POST to the forwarder's reserved path, and
     // the forwarder's own IAM creating a schedule. A pending wake-up with no alarm is exactly the
     // silent failure the mechanism exists to prevent.
-    const alarms = await listAlarms();
+    //
+    // POLLED, not read once. The alarm trails the reply: the sink is fire-and-forget (`void
+    // reconcile(…)` in wake-alarm.ts, retrying at 2s/4s/6s) and the SSE stream this invoke consumes
+    // does not wait for in-flight work, so `invoke-agent-runtime` can return before a cold forwarder
+    // Lambda has created anything. A single read would report that race in the words below — sending
+    // whoever reads it after the IAM and the wake secret, neither of which was wrong.
+    const appearBy = Date.now() + 60_000;
+    let alarms = await listAlarms();
+    while (alarms.length === 0 && Date.now() < appearBy) {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      alarms = await listAlarms();
+    }
     expect(
       alarms,
       "the wake-up never became an EventBridge alarm — the container's POST to the forwarder, its wake " +
@@ -265,7 +217,8 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
     // schedule removes itself, so disappearance is evidence it ran — evidence this probe cannot
     // separate from other causes. Worth the wait anyway: an alarm that is still there well past its
     // instant means EventBridge never delivered, and nothing else in the suite would say so.
-    const deadline = Date.now() + MIN_WAKE_MS + 240_000;
+    const waitStarted = Date.now();
+    const deadline = waitStarted + WAKE_MS + 240_000;
     let remaining = await listAlarms();
     while (remaining.length > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 15_000));
@@ -273,7 +226,7 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
     }
     expect(
       remaining,
-      `the alarm was still registered ${Math.round((Date.now() - (deadline - MIN_WAKE_MS - 240_000)) / 1000)}s later — ` +
+      `the alarm was still registered ${Math.round((Date.now() - waitStarted) / 1000)}s later — ` +
         "EventBridge did not deliver it, or the forwarder rejected the poke",
     ).toHaveLength(0);
   }, 1_800_000);
