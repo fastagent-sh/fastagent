@@ -29,7 +29,7 @@ import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
+  opts: { ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
   // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
@@ -49,21 +49,6 @@ export async function runAddChannel(
   const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
   const envPath = dotEnvPath(target);
   const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
-  // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
-  // and only path there). The retired --create-app spelling gets a pointer, not silence.
-  if (opts.createApp) {
-    if (channelKind === "feishu") {
-      console.error(`[fastagent] note: --create-app is retired — \`add feishu\` creates the app by default`);
-    } else if (channelKind === "lark") {
-      failStartup(
-        new Error(
-          "--create-app is retired — `add lark` now opens the developer console and guides credential setup by default",
-        ),
-      );
-    } else {
-      failStartup(new Error("--create-app is retired — app creation is the default behavior of `add feishu`"));
-    }
-  }
   // Preconditions before the write, so a refusal is side-effect-free. slack/feishu/lark are exceptions:
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
   // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
