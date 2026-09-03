@@ -33,11 +33,11 @@ function fakeStore(decisions: Record<string, "run" | "exceeded" | "defer"> = {})
 function fakeBuffer(calls: string[]): ContextBuffer<string> {
   return {
     push: () => {},
-    peek: (key) => {
+    peek: (key: string) => {
       calls.push(`peek ${key}`);
       return { text: "earlier", consumed: ["e1"] };
     },
-    commit: (key, consumed) => {
+    commit: (key: string, consumed: string[]) => {
       calls.push(`commit ${key} ${consumed.join(",")}`);
     },
   } as unknown as ContextBuffer<string>;
