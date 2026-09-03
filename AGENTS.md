@@ -314,6 +314,19 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # opts in, and a missing credential FAILS rather than skips — you asked
                              # for them. Credentials arrive the PRODUCT's way (FASTAGENT_AUTH_PATH → an
                              # auth.json), which is what lets an OAuth-only provider be the model.
+                             #
+                             # A PROBE'S FIXTURE IS ITS SPECIFICATION, not boilerplate to copy from the
+                             # file next door. Fly and Railway have one topology whatever the definition
+                             # says; AgentCore's is a FUNCTION of it (`needsForwarder` — a webhook
+                             # channel, a schedule, or selfSchedule — decides whether a forwarder, a
+                             # Function URL, EventBridge rules and the state bucket exist at all). The
+                             # three copied lines of persona+config landed on the small side, so both
+                             # agentcore probes spent a release describing a deployment neither
+                             # performed: 98 lines of template validated while the comment claimed 900,
+                             # and a teardown deleting three things where two were created. Reading what
+                             # the product CAN do is not reading what YOUR INPUT makes it do. The cheap
+                             # check is countable without deploying anything: what teardown removes must
+                             # match what the fixture's branch actually creates.
 docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 
