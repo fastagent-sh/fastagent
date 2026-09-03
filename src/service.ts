@@ -100,9 +100,7 @@ export async function routesFor(
     control,
   });
   for (const c of collisions) {
-    console.error(
-      `[fastagent] warn: channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`,
-    );
+    log.warn(`[fastagent] channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`);
   }
   reportModuleLoadFailures(failures);
   if (failures.length > 0 || collisions.length > 0) {
