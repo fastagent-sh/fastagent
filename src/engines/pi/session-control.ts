@@ -191,15 +191,12 @@ export interface PiBoundaryWiring {
 export interface CreatePiSessionControlOptions {
   /** Read-only access to the durable session records (the same root the agent writes). */
   sessions: PiSessionRecordStore;
-  /** Boundary-mutation wiring, as a LAZY thunk: the hub's observer must exist before the agent
-   *  assembly that produces these parts, so the hub asks for them at dispatch time instead
-   *  (assembly completes before any dispatch can arrive). Absent / undefined → boundary commands
-   *  are gated off in `capabilities()` and rejected `unsupported_capability`. */
-  boundary?: () => PiBoundaryWiring | undefined;
-  /** The definition's names, as a LAZY thunk for the same reason {@link boundary} is one (the hub
-   *  exists before the assembly that can read a definition) — and async because the definition is
-   *  live: this must re-read it, not close over a boot snapshot, or `commands()` would advertise a
-   *  list the next turn no longer runs.
+  /** Boundary-mutation wiring — the assembly's own parts. Absent → boundary commands are gated off
+   *  in `capabilities()` and rejected `unsupported_capability`. */
+  boundary?: PiBoundaryWiring;
+  /** The definition's names, as an async thunk because the definition is live: this must re-read it,
+   *  not close over a boot snapshot, or `commands()` would advertise a list the next turn no longer
+   *  runs.
    *
    *  OPTIONAL because absence is a TRUE answer for the assembly that omits it: a hub over an L1
    *  agent (`createPiAgent({ model, instructions, tools })`) has no definition and therefore no
@@ -277,7 +274,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     capabilities: (): SessionCapabilities => {
-      const b = boundary?.();
+      const b = boundary;
       return {
         steering: true,
         followUp: true,
@@ -310,7 +307,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // channel to explain itself. The fault is not swallowed — it surfaces where codes exist: the
       // next invoke fails (binding a session walks the same chain) and a boundary dispatch answers
       // `boundary_command_failed`. Here it is a server-side warn.
-      const b = boundary?.();
+      const b = boundary;
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
       if (opened && b) {
         try {
@@ -533,7 +530,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     }
     const fields = named.filter((f) => patch[f] !== undefined);
     if (fields.length === 0) return { ok: true }; // an empty patch asks for nothing, and gets it
-    const b = boundary?.();
+    const b = boundary;
     if (!b) return unsupported(`update(${fields.join(", ")})`);
 
     // PAYLOAD validation first — before the session is even opened, and long before the lease: an
@@ -679,7 +676,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    * finished{error} dressed as a failure — pi reports it as a throw from compact(), too late.
    */
   const compactOf = async (session: string, instructions?: string): Promise<SessionResult> => {
-    const b = boundary?.();
+    const b = boundary;
     if (!b) return unsupported("compact()");
     const existing = await sessions.openIfExists(session);
     if (!existing) return noSuchSession(session);
@@ -819,7 +816,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     /** WHICH fork this is: source + branch point. Two forks of one session at different entries are
      *  different requests, so a retry of one must not be answered by the other. */
     const provenance = `${from}@${at}`;
-    const b = boundary?.();
+    const b = boundary;
     if (!b) return unsupported("fork()");
     // An id no client could then open: the empty string, `.` and `..` are not URL path segments
     // (isAddressableSession), so minting one would put a row in list() that nothing can address —
@@ -879,7 +876,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   };
 
   const deleteOf = async (session: string): Promise<SessionResult> => {
-    const b = boundary?.();
+    const b = boundary;
     if (!b) return unsupported("delete()");
     const existing = await sessions.openIfExists(session);
     if (!existing) return noSuchSession(session);

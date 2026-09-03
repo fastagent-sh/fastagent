@@ -20,9 +20,9 @@ import {
 } from "./config.ts";
 import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
-import { type PiAssemblyParts, createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
+import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
-import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
+import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
@@ -201,42 +201,59 @@ export async function createPiAgentFromDir(
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
-  // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
-  // needs the store; the agent needs the hub's observer). Boundary parts (factory/lease/registry)
-  // only exist after the assembly below — the hub takes them as a lazy thunk, filled by the
-  // assembly's onAssembly callback (assembly completes before this function returns, so every
-  // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
-  let boundaryParts: PiBoundaryWiring | undefined;
-  let assembled: PiAssemblyParts | undefined;
+  const { assembly, definition } = await assemblePiFromDefinition(agentDir, {
+    model: modelSpec,
+    thinkingLevel: config.thinkingLevel,
+    cwd: workspace,
+    tools: mountedTools,
+    authPath,
+    // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
+    sessions,
+  });
+  // The hub is wired HERE because the store is created here (an external `createPiSessionControl`
+  // cannot exist before the store does). Its writes contend on the assembly's own lease and validate
+  // against its own registry — the value above is what makes "same" true. An extra caller observer
+  // composes after the hub's (TRUSTED seam).
   const caller = options.observer;
   const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
-  const hub = wantControl
-    ? createPiSessionControl({
-        sessions,
-        boundary: () => boundaryParts,
-        // Skills ARE the names a client offers — the resolved set, after collisions were decided
-        // first-wins, which a client cannot reconstruct from the directory. Read LIVE (the directory
-        // is the agent: a skill added while serving is in play on the next turn, so it must be
-        // listable now) and SKILLS-ONLY: this is called when a composer opens its completion list,
-        // and the full load's ② context walk buys nothing here.
-        commands: async () => {
-          const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
-          // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the
-          // author's composer with no signal anywhere. The memo is SHARED with the turn path (keyed
-          // by dir), so a finding is warned when it appears, not once per reader that notices it.
-          reportFindingsIfChanged(loaded.dir, loaded);
-          return loaded.skills.map((skill) => ({
-            name: skill.name,
-            description: skill.description,
-            source: "skill",
-          }));
-        },
-        // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
-        // and never cross the data plane's observer seam — without this, an audit tap wired here
-        // would miss exactly the mutations it most needs to see (`update({ model })`).
-        tap: caller ? (session, event) => caller(session, event) : undefined,
-      })
-    : undefined;
+  let hub: ReturnType<typeof createPiSessionControl> | undefined;
+  if (wantControl) {
+    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building
+    // the registry reads credentials and is not. Resolve it ONCE here — the opener is async anyway,
+    // and the first turn would have paid the same read — so every boundary mutation validates
+    // against the same registry the runs use.
+    const { modelRuntime, model } = await assembly.engine();
+    hub = createPiSessionControl({
+      sessions,
+      boundary: {
+        lease: assembly.lease,
+        models: modelRuntime,
+        sessionFactory: assembly.sessionFactory,
+        defaults: { model, thinkingLevel: assembly.thinkingLevel },
+      },
+      // Skills ARE the names a client offers — the resolved set, after collisions were decided
+      // first-wins, which a client cannot reconstruct from the directory. Read LIVE (the directory
+      // is the agent: a skill added while serving is in play on the next turn, so it must be
+      // listable now) and SKILLS-ONLY: this is called when a composer opens its completion list,
+      // and the full load's ② context walk buys nothing here.
+      commands: async () => {
+        const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
+        // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the
+        // author's composer with no signal anywhere. The memo is SHARED with the turn path (keyed
+        // by dir), so a finding is warned when it appears, not once per reader that notices it.
+        reportFindingsIfChanged(loaded.dir, loaded);
+        return loaded.skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          source: "skill",
+        }));
+      },
+      // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
+      // and never cross the data plane's observer seam — without this, an audit tap wired here
+      // would miss exactly the mutations it most needs to see (`update({ model })`).
+      tap: caller ? (session, event) => caller(session, event) : undefined,
+    });
+  }
   const observer: SessionObserver | undefined = hub
     ? caller
       ? (session, event, run) => {
@@ -245,34 +262,7 @@ export async function createPiAgentFromDir(
         }
       : hub.observer
     : caller;
-  const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
-    model: modelSpec,
-    thinkingLevel: config.thinkingLevel,
-    cwd: workspace,
-    tools: mountedTools,
-    authPath,
-    // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
-    sessions,
-    observer,
-    onAssembly: hub
-      ? (parts) => {
-          assembled = parts;
-        }
-      : undefined,
-  });
-  if (hub && assembled) {
-    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building
-    // the registry reads credentials and is not. Resolve it ONCE here — the opener is async anyway,
-    // and the first turn would have paid the same read — so every boundary mutation validates
-    // against the same registry the runs use.
-    const { modelRuntime, model } = await assembled.engine();
-    boundaryParts = {
-      lease: assembled.lease,
-      models: modelRuntime,
-      sessionFactory: assembled.sessionFactory,
-      defaults: { model, thinkingLevel: assembled.thinkingLevel },
-    };
-  }
+  const agent = agentOf(assembly, observer);
   return {
     agent,
     definition,

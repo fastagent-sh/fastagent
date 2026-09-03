@@ -18,8 +18,8 @@ import {
 } from "../src/index.ts";
 import {
   CODING_TOOL_NAMES,
+  assemblePiFromDefinition,
   assembleSystemPrompt,
-  type PiAssemblyParts,
   piAllCodingTools,
   piBasePrompt,
 } from "../src/engines/pi/create.ts";
@@ -605,14 +605,10 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
     const { faux } = makeFaux();
-    let assembly!: PiAssemblyParts;
-    await createPiAgentFromDefinition(dir, {
+    const { assembly } = await assemblePiFromDefinition(dir, {
       model: "faux/faux-1",
       providers: [faux.provider],
       tools: piAllCodingTools(dir).filter((tool) => tool.name === "read"),
-      onAssembly: (parts) => {
-        assembly = parts;
-      },
     });
 
     const session = await assembly.sessionFactory("s");
