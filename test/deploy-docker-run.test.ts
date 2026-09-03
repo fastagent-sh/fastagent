@@ -6,6 +6,7 @@ import {
   waitForComposeTunnelUrl,
 } from "../src/deploy/docker/run.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
+import { TUNNEL_DNS_LAG_MS } from "../src/tunnel.ts";
 
 function fakeDocker(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
   const calls: { args: string[]; env?: NodeJS.ProcessEnv }[] = [];
@@ -255,8 +256,39 @@ describe("deploy/docker/run: parsers", () => {
         },
       },
     );
+    // Neither poll carries a connection line, so the budget runs out — and the URL is still returned.
+    // The registrars downstream report their own outcome; a "no URL" gate would misname this one.
     expect(url).toBe("https://blue-cat.trycloudflare.com");
     expect(sleeps).toEqual([7]);
+  });
+
+  // #435, the same requirement startCloudflareTunnel has: a quick tunnel's hostname is published when
+  // the tunnel registers an edge connection, so the URL alone is a name that does not resolve yet —
+  // and this driver hands it straight to `announce`.
+  it("waits for the edge connection, not just the URL, before handing the tunnel over", async () => {
+    let calls = 0;
+    const { docker } = fakeDocker(() => {
+      calls++;
+      return calls === 1
+        ? { stdout: "INF https://blue-cat.trycloudflare.com ready\n" }
+        : { stdout: "INF https://blue-cat.trycloudflare.com ready\nINF Registered tunnel connection connIndex=0\n" };
+    });
+    const sleeps: number[] = [];
+    const url = await waitForComposeTunnelUrl(
+      docker,
+      "fastagent.compose.yml",
+      {},
+      {
+        attempts: 5,
+        intervalMs: 7,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+    );
+    expect(url).toBe("https://blue-cat.trycloudflare.com");
+    expect(calls, "the URL was there on poll 1; it kept polling for the connection").toBe(2);
+    expect(sleeps).toEqual([7, TUNNEL_DNS_LAG_MS]);
   });
 
   it("normalizes Compose port output to a loopback URL", () => {

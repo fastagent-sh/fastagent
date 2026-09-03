@@ -19,14 +19,21 @@ export type RegistrationOutcome = "registered" | "manual" | "failed";
  * One judgement (a new tunnel's warm-up), so one pair of numbers — telegram, feishu, slack registration
  * and `add slack` all spend it.
  *
- * Sized for a tunnel, which is live before its URL is printed, and applied by {@link retryWhile} as its
- * default. A DEPLOY is slower and its callers pass {@link DEPLOY_REGISTRATION_ATTEMPTS} instead.
+ * Sized for a tunnel, which is live before its URL is HANDED OVER — not before it is printed, which is
+ * what this budget once had to absorb: a quick tunnel's hostname is published when the tunnel registers
+ * an edge connection, seconds after cloudflared prints it, and no budget covers a platform that already
+ * answered "cannot resolve" (#435). `startCloudflareTunnel` waits for that connection, so what is left
+ * here is the platform's own warm-up. Applied by {@link retryWhile} as its default; a DEPLOY is slower
+ * and its callers pass {@link DEPLOY_REGISTRATION_ATTEMPTS} instead.
  */
 const REGISTRATION_ATTEMPTS = 8;
 export const REGISTRATION_RETRY_MS = 10_000;
 
 /**
- * What `deploy --run` spends instead: 180s, because a host CLI returns before the deployment serves.
+ * What `deploy --run` spends instead: 180s, because a host CLI returns before the deployment serves —
+ * the same gap a tunnel has, on a scale no local signal reports (`docker compose --tunnel` is the one
+ * host whose ingress does report it, and its driver waits on it the way the tunnel does).
+ *
  * `railway up --ci` returns when the BUILD ends — container start, healthcheck and a freshly minted
  * domain's DNS all happen after that, and railway-deploy.live.test.ts allows 180s for exactly this.
  * Registration failure GATES the deploy (registration-gate.ts), so a budget shorter than the host's
