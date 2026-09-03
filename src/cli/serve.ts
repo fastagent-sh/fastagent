@@ -8,10 +8,11 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
-import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
+import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import { writeFileAtomic } from "../atomic-write.ts";
+import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
-import type { AgentService } from "../service.ts";
+import type { AgentService, MountAgentServiceOptions } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -39,6 +40,57 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
   const message = `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — ${fix}`;
   if (source === "flag") failUsage(message);
   failStartup(new Error(message));
+}
+
+/**
+ * The bind address a serve uses: the flag, else `http.host` from the config — through `bindAddress`,
+ * so a configured `localhost` is an ADDRESS by the time anything binds, renders or dials it — checked
+ * against `--tunnel` with the exit code the SOURCE of the value earns (serve.ts assertTunnelBindable).
+ */
+export function resolveBindHost(
+  bindFlag: string | undefined,
+  configured: string | undefined,
+  tunnel: boolean,
+): string | undefined {
+  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
+  assertTunnelBindable(host, tunnel, bindFlag ? "flag" : "config");
+  return host;
+}
+
+/** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
+export function cliMountOptions(wrapAgent: (agent: Agent) => Agent): MountAgentServiceOptions {
+  return {
+    wrapAgent,
+    closeTimeoutMs: SHUTDOWN_GRACE_MS,
+    onChannelClosed: (name, error) =>
+      failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
+  };
+}
+
+/**
+ * Bind, report, announce the control plane, open the tunnel, and close in order on a signal — the
+ * tail dev's worker and start share once the service is assembled.
+ */
+export function serveService(
+  service: AgentService,
+  bind: { port: number; host?: string },
+  posture: { tunnel: boolean; agentDir: string; stateRoot: string },
+): void {
+  const { host } = bind;
+  const { tunnel, agentDir, stateRoot } = posture;
+  let unannounce = (): void => {};
+  serve(service.handler, bind, {
+    ready: service.ready,
+    onListening: (p) => {
+      reportServing(service, host, p);
+      unannounce = announceControl(service, stateRoot, { host, tunnel }, p);
+      maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
+    },
+    onShutdown: () => {
+      unannounce();
+      return service.close();
+    },
+  });
 }
 
 /**
@@ -128,7 +180,7 @@ export function announceControl(
 
 /** What the CLI gives a service to stop in, and the hard exit that follows it. The order matters:
  *  a forced exit before the service answers would report a clean shutdown over a stuck channel. */
-export const SHUTDOWN_GRACE_MS = 800;
+const SHUTDOWN_GRACE_MS = 800;
 const FORCED_EXIT_MS = 1_500;
 
 /**
@@ -137,7 +189,7 @@ const FORCED_EXIT_MS = 1_500;
  * awaits `hooks.ready` (mountAgentService owns the connections themselves) before announcing
  * anything. Signals are the sole clean-shutdown command; `host` unset binds all interfaces.
  */
-export function serve(
+function serve(
   handler: ChannelHandler,
   bind: { port: number; host?: string },
   hooks: {
@@ -214,7 +266,7 @@ export function serve(
 }
 
 /** Start a Cloudflare tunnel for route channels only. */
-export function maybeTunnel(
+function maybeTunnel(
   agentDir: string,
   routeChannels: string[],
   boundPort: number,

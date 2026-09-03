@@ -2,32 +2,21 @@
  * `fastagent start [dir]`: run the agent in production posture — the SAME assembly as dev (your
  * directory is the agent), just no file-watching. No build step: start reads the definition directly.
  */
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
-import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { SECRET_FILE_MODE, ensureSecretsDir, resolveSecretsDir, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
-import { installProxyFetch } from "../../proxy.ts";
-import { bindAddress } from "../../bind.ts";
-
 import { isAgentcoreRuntime, mountAgentcoreService } from "../../channels/agentcore-service.ts";
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
-import { failStartup, placementOrExit } from "../fail.ts";
-import {
-  SHUTDOWN_GRACE_MS,
-  announceControl,
-  assertTunnelBindable,
-  maybeTunnel,
-  reportServing,
-  serve,
-} from "../serve.ts";
-import { parseBind, parsePort, reportAssembly, resolveFirstRunModel } from "../shared.ts";
+import { failStartup } from "../fail.ts";
+import { cliMountOptions, resolveBindHost, serveService } from "../serve.ts";
+import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -41,16 +30,13 @@ export interface StartOptions {
 }
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
-  const dir = resolve(dirArg);
   // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
   // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
   const bindFlag = parseBind(opts.bind);
-  const placement = placementOrExit(dir);
+  const tunnel = opts.tunnel ?? false;
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
-  loadDotEnv(placement.agentDir);
-  installProxyFetch();
-  await resolveFirstRunModel(placement.agentDir, opts);
+  const placement = await enterAgentCommand(dirArg, opts);
 
   // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
   // materialize it into the writable secrets dir BEFORE the opener resolves auth (once, absent-only).
@@ -58,8 +44,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
 
   // The same opener dev uses (single assembly source), just no watch.
-  const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);
-  const opened = await openStartDir(dir, opts, sessionsDirOverride);
+  const opened = await createPiAgentFromDir(placement.workspace, {
+    model: opts.model,
+    sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
+    authPath: opts.authPath,
+    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
+  }).catch(failStartup);
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
 
   // The same report `dev` prints; `state:`/`sessions:` are start's own extras, and the persistence
@@ -93,14 +83,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     );
   }
 
-  // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
+  // Same debug turn trace as dev; gated out here by the info level.
   const traced = logAgentLoop(agent);
-  // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
-  // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
-  const configured = config.http?.host;
-  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
-  const tunnel = opts.tunnel ?? false;
-  assertTunnelBindable(host, tunnel, bindFlag ? "flag" : "config");
+  const host = resolveBindHost(bindFlag, config.http?.host, tunnel);
   // ONE branch for the whole posture. AgentCore assembles differently — lazy channels over a
   // pre-restore state mount, an external clock, no resident connections — but it yields the same
   // AgentService, so everything below this point is common.
@@ -110,44 +95,20 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
   const service = await (isAgentcoreRuntime()
     ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
-    : mountAgentService(opened, {
-        wrapAgent: () => traced,
-        closeTimeoutMs: SHUTDOWN_GRACE_MS,
-        onChannelClosed: (name, error) =>
-          failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
-      })
+    : mountAgentService(
+        opened,
+        cliMountOptions(() => traced),
+      )
   ).catch(failStartup);
-  let unannounce = (): void => {};
-  serve(
-    service.handler,
+  serveService(
+    service,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
-    {
-      ready: service.ready,
-      onListening: (p) => {
-        reportServing(service, host, p);
-        unannounce = announceControl(service, stateRoot, { host, tunnel }, p);
-        maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
-      },
-      onShutdown: () => {
-        unannounce();
-        return service.close();
-      },
-    },
+    { tunnel, agentDir, stateRoot },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
   // in-flight turn is LOST depends on the channel: the Telegram channel persists turn intent pre-ACK
   // and replays it next start (turn-store.ts, L1 durable execution, at-least-once); HTTP and other
   // channels have no such layer, so their in-flight turns are still lost (the asker re-invokes).
-}
-
-/** The opener, kept as its own call so `opened` can also feed the shared assembly below. */
-function openStartDir(dir: string, opts: StartOptions, sessionsDir: string | undefined) {
-  return createPiAgentFromDir(dir, {
-    model: opts.model,
-    sessionsDir,
-    authPath: opts.authPath,
-    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
-  }).catch(failStartup);
 }
 
 /**

@@ -4,17 +4,15 @@
  * the schedule's stable session (faithful to the served behavior). Does NOT advance the schedule's fire
  * state — a test run must never make the scheduler skip the real next run.
  */
-import { join, resolve } from "node:path";
-import { loadDotEnv } from "../../env.ts";
+import { join } from "node:path";
 import { displayPath } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
-import { installProxyFetch } from "../../proxy.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { scheduleSession } from "../../schedule/scheduler.ts";
-import { failStartup, placementOrExit } from "../fail.ts";
-import { reportAuth, resolveFirstRunModel } from "../shared.ts";
+import { failStartup } from "../fail.ts";
+import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface FireOptions {
   model?: string;
@@ -24,11 +22,7 @@ export interface FireOptions {
 }
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
-  const fireDir = resolve(dirArg);
-  const placement = placementOrExit(fireDir);
-  loadDotEnv(placement.agentDir);
-  installProxyFetch();
-  await resolveFirstRunModel(placement.agentDir, opts);
+  const placement = await enterAgentCommand(dirArg, opts);
   // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent
   // dir), so `fire` sees the same set the scheduler serves.
   const { schedules, failures } = await loadSchedules(placement.agentDir).catch(failStartup);
@@ -44,7 +38,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
       ),
     );
   }
-  const { agent, modelSpec, authPath } = await createPiAgentFromDir(fireDir, {
+  const { agent, modelSpec, authPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);

@@ -4,7 +4,7 @@
  * module-scoped flag access (`values.*`) became parameters.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
@@ -33,11 +33,30 @@ import type { LoadedDefinition } from "../engines/pi/definition.ts";
 import type { ModuleLoadFailure } from "../loader.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
-import { workspaceHint } from "../paths.ts";
+import { type ResolvedPlacement, workspaceHint } from "../paths.ts";
 import { log, reportModuleLoadFailures } from "../log.ts";
+import { loadDotEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { installProxyFetch } from "../proxy.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
-import { failStartup, failUsage } from "./fail.ts";
+import { failStartup, failUsage, placementOrExit } from "./fail.ts";
+
+/**
+ * How every command that runs the model enters its agent directory, in the one order that works:
+ * placement decides whose `.env` to read; `.env` may carry the proxy and the provider keys the
+ * picker's auth probe needs; the picker runs last. Six commands wrote these steps out by hand, and
+ * one carried the order as a comment. The result is the placement every later step reads.
+ */
+export async function enterAgentCommand(
+  dirArg: string,
+  opts: { model?: string; authPath?: string; input?: boolean },
+): Promise<ResolvedPlacement> {
+  const placement = placementOrExit(resolve(dirArg));
+  loadDotEnv(placement.agentDir);
+  installProxyFetch();
+  await resolveFirstRunModel(placement.agentDir, opts);
+  return placement;
+}
 
 /**
  * The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). Hand-spaced
@@ -188,7 +207,7 @@ export async function reportAuth(agentDir: string, modelSpec: string, authPath: 
  * and best-effort written back to the config so the next run is quiet. `agentDir` is the resolved
  * AGENT DIR (resolvePlacement().agentDir) — config and auth both live there.
  */
-export async function resolveFirstRunModel(
+async function resolveFirstRunModel(
   agentDir: string,
   options: { model?: string; authPath?: string; input?: boolean } = {},
 ): Promise<void> {

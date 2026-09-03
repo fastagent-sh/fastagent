@@ -3,26 +3,15 @@
  * assemble + serve, restarting it on agent edits. A fresh process per reload means what is served
  * is always the latest code, including modules a tool/config imports.
  */
-import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
-import { loadDotEnv } from "../../env.ts";
-
 import { setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
-import { installProxyFetch } from "../../proxy.ts";
-import { bindAddress } from "../../bind.ts";
-import { failStartup, placementOrExit } from "../fail.ts";
-import {
-  SHUTDOWN_GRACE_MS,
-  announceControl,
-  assertTunnelBindable,
-  maybeTunnel,
-  reportServing,
-  serve,
-} from "../serve.ts";
-import { parseBind, parsePort, reportAssembly, resolveFirstRunModel } from "../shared.ts";
+import type { ResolvedPlacement } from "../../paths.ts";
+import { failStartup } from "../fail.ts";
+import { assertTunnelBindable, cliMountOptions, resolveBindHost, serveService } from "../serve.ts";
+import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface DevOptions {
   port?: string;
@@ -37,21 +26,13 @@ export interface DevOptions {
 }
 
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
-  const dir = resolve(dirArg);
-  const placement = placementOrExit(dir);
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
-  // Pick a model interactively once, in the parent (both watch and --no-watch have a TTY); a spawned
-  // watch worker inherits the choice via FASTAGENT_MODEL, so it must not prompt again. Load .env and
-  // the proxy FIRST (as invoke/start do): the picker reads FASTAGENT_MODEL and provider keys from
-  // .env, and getAuth's OAuth refresh must go through HTTPS_PROXY. The worker re-loads both in serveOnce.
-  if (!isWorker) {
-    loadDotEnv(placement.agentDir);
-    installProxyFetch();
-    await resolveFirstRunModel(placement.agentDir, opts);
-  }
+  // The model is picked ONCE, in the supervisor (a TTY, before any worker exists); the worker inherits
+  // the choice through FASTAGENT_MODEL and must not prompt even when the pick was cancelled.
+  const placement = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
-    await serveOnce(dir, opts);
+    await serveOnce(placement, opts);
     return;
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
@@ -62,51 +43,27 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
-async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
+async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const bindFlag = parseBind(opts.bind);
-  loadDotEnv(placementOrExit(dir).agentDir);
-  installProxyFetch();
-
-  const a = await createPiAgentFromDir(dir, {
+  const tunnel = opts.tunnel ?? false;
+  const a = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
   await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
-  // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
-  // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
-  const configured = a.config.http?.host;
-  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
-  assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
+  const host = resolveBindHost(bindFlag, a.config.http?.host, tunnel);
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane,
   // schedules, long connections. `dev` opens the directory itself only because its startup report
-  // prints the opened values before anything mounts.
-  const service = await mountAgentService(a, {
-    // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev,
-    // gated out in start (level info), keeping end-user content out of production logs.
-    wrapAgent: logAgentLoop,
-    closeTimeoutMs: SHUTDOWN_GRACE_MS,
-    onChannelClosed: (name, error) =>
-      failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
-  }).catch(failStartup);
-  const tunnel = opts.tunnel ?? false;
-  let unannounce = (): void => {};
-  serve(
-    service.handler,
+  // prints the opened values before anything mounts. The turn trace (tool calls + reply) logs at
+  // debug level: shown here, gated out in start (level info), keeping end-user content out of
+  // production logs.
+  const service = await mountAgentService(a, cliMountOptions(logAgentLoop)).catch(failStartup);
+  serveService(
+    service,
     { port: portFlag ?? a.config.http?.port ?? 8787, host },
-    {
-      ready: service.ready,
-      onListening: (p) => {
-        reportServing(service, host, p);
-        unannounce = announceControl(service, a.stateRoot, { host, tunnel }, p);
-        maybeTunnel(a.agentDir, service.channels.routes, p, tunnel, a.stateRoot);
-      },
-      onShutdown: () => {
-        unannounce();
-        return service.close();
-      },
-    },
+    { tunnel, agentDir: a.agentDir, stateRoot: a.stateRoot },
   );
 }

@@ -11,7 +11,7 @@ import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../channels/registration.ts";
 import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
@@ -54,15 +54,13 @@ import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import type { DeployHost } from "../../deploy/hosts.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
-import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveStateRoot, exists, readTextIfExists } from "../../paths.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { announceWebhooks } from "../../tunnel.ts";
-import { failStartup, failUsage, placementOrExit } from "../fail.ts";
-import { resolveFirstRunModel } from "../shared.ts";
+import { failStartup, failUsage } from "../fail.ts";
+import { enterAgentCommand } from "../shared.ts";
 
 export interface DeployOptions {
   run?: boolean;
@@ -219,19 +217,16 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
   // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
   // from the workspace, which is the build context.
-  const placement = placementOrExit(resolve(dirArg));
-  const { agentDir, workspace } = placement;
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
-  loadDotEnv(agentDir); // a custom provider/tool may read a key at config load
-  installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
-  // First-run funnel, FULL picker: the write-back lands the model in fastagent.config.* — exactly what
-  // the model-travel gate below requires (--model/env don't reach the deployed box) — and an inline
-  // login stores the credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the
-  // rewritten file because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
-  await resolveFirstRunModel(agentDir, { model: opts.model, authPath: opts.authPath, input: opts.input });
+  // The picker's write-back lands the model in fastagent.config.* — exactly what the model-travel
+  // gate below requires (--model/env don't reach the deployed box) — and an inline login stores the
+  // credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the rewritten file
+  // because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
+  const placement = await enterAgentCommand(dirArg, opts);
+  const { agentDir, workspace } = placement;
   const { config } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
   // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts +
