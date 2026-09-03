@@ -186,8 +186,9 @@ src/
 │       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy docker|fly|railway|agentcore`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical). A new host is
-│   │                        # a new dir (copy fly/) PLUS its branch in cli/commands/deploy.ts (kept-artifact semantics,
-│   │                        # gates, the `runDeployX` glue), a row in `isOurArtifact`, and the `<host>` choice in program.ts.
+│   │                        # a new dir here (copy fly/: PLAN pure, `--run` driver behind the runner seam), its
+│   │                        # `HostDeploy` in cli/commands/deploy/<host>.ts (kept-file semantics, gates, the drive
+│   │                        # glue — the process-exiting half), and its name in deploy/hosts.ts.
 │   │                        # BEFORE writing one: READ that host's docs for what it does NOT do implicitly
 │   │                        # — above all, whether a created resource is REACHABLE without a further
 │   │                        # step. Fly taught this eight rounds in a row: `[http_service]` declares a
