@@ -51,6 +51,7 @@ import {
   toRailwayName,
 } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
+import type { DeployHost } from "../../deploy/hosts.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
@@ -62,15 +63,6 @@ import { openExternalUrl } from "../../open-url.ts";
 import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
-
-/** The deploy targets, as a value: {@link HOST_ONLY_FLAGS} is checked against this list by a test, and
- *  a type alone cannot be enumerated at runtime. NOT the only copy — `cli/program.ts` repeats it as the
- *  `<host>` argument's `choices`, because that file may not import a command module at load time (its
- *  per-command imports are lazy). Adding a host means editing both; the type there rides in on a
- *  `import type`, which costs nothing at runtime. */
-export const DEPLOY_HOSTS = ["docker", "fly", "railway", "agentcore"] as const;
-
-export type DeployHost = (typeof DEPLOY_HOSTS)[number];
 
 export interface DeployOptions {
   run?: boolean;

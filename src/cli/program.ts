@@ -6,9 +6,7 @@
  */
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
-// TYPE-only, so the lazy-import rule above still holds: `verbatimModuleSyntax` erases the whole
-// statement, and the built program.js carries no import of the command module.
-import type { DeployHost } from "./commands/deploy.ts";
+import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 
@@ -429,7 +427,7 @@ const deploy: CommandSpec = {
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
     "EventBridge rules for schedules; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",
-  args: [{ name: "<host>", description: "deploy target", choices: ["docker", "fly", "railway", "agentcore"] }, DIR_ARG],
+  args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, DIR_ARG],
   flags: [
     {
       flags: "--run",
