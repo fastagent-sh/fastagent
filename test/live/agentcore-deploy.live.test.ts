@@ -15,11 +15,10 @@
  * check that the deployment WORKS goes through that API — an `invoke` envelope, not the driver's
  * `checkpoint`; the reason it cannot be a checkpoint is on the assertion itself.
  *
- * TEARDOWN IS THREE PLACES, and the product offers none of them: `delete-stack` is used only to clear
- * a ROLLBACK_COMPLETE husk. The state bucket and the ECR repository are created OUTSIDE the stack on
- * purpose — `plan.ts` says why: so a `delete-stack` "cannot take the agent's memory with it". Correct
- * for an operator, which makes cleanup this probe's own job: stack, then bucket, then repository (with
- * its images).
+ * TEARDOWN, which the product offers none of, is {@link destroyAgentcoreDeployment} — shared with the
+ * wake probe, and shared deliberately: it is cleanup code, so a second copy drifts unnoticed until it
+ * has been leaking. It sweeps more than this fixture creates (wake alarms, a versioned bucket), which
+ * is the point: one line here (a channel, a schedule, `selfSchedule`) turns those on.
  *
  * COSTS REAL RESOURCES and is the slowest probe here — a stack create plus delete is minutes.
  *
@@ -36,13 +35,13 @@
  * The directory name carries no `fastagent-` prefix of its own: the driver adds one.
  */
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agentcoreName, ingressSessionId, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
+import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { CLI, aws, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, aws, destroyAgentcoreDeployment, invokeAgentcore, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("AWS_ACCESS_KEY_ID", "an AWS key scoped to fastagent-live-probe-* (this probe creates real resources)");
@@ -53,7 +52,6 @@ requireEnv("AWS_REGION", "a region where Bedrock AgentCore is available, e.g. us
  *  all of them inside the IAM policy's namespace once the driver prefixes `fastagent-`. */
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
-const REPO = `fastagent/${NAME}`;
 
 let workspace = "";
 let account = "";
@@ -83,67 +81,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Three deletions, each attempted even if an earlier one failed, and every failure reported: what
-  // survives a silent teardown here is a Bedrock runtime, a Lambda with a public Function URL, an
-  // image in ECR and a bucket holding the model credential seed — all of them billing.
-  const errors: unknown[] = [];
-  const attempt = async (label: string, args: string[]) => {
-    const { code, stderr } = await aws(args);
-    // "already gone" is the goal state, not a failure: a probe whose deploy never got that far, or a
-    // re-run after a partial teardown, both land here.
-    if (code !== 0 && !/does not exist|NotFound|NoSuchBucket/i.test(stderr)) {
-      errors.push(new Error(`${label} failed: ${stderr.slice(0, 500)}`));
-    }
-  };
-
-  await attempt("delete-stack", ["cloudformation", "delete-stack", "--stack-name", STACK]);
-  await attempt("wait stack-delete-complete", [
-    "cloudformation",
-    "wait",
-    "stack-delete-complete",
-    "--stack-name",
-    STACK,
-  ]);
-  if (account) {
-    // UNREACHED BY THIS FIXTURE: with `needsForwarder` false the driver creates no bucket, so every
-    // call below answers NoSuchBucket and the emptying path never runs. It is kept because the name is
-    // deterministic and one line in the fixture (a channel, a schedule, `selfSchedule`) turns the
-    // bucket on — at which point a teardown that had not been written would leak it silently.
-    //
-    // What it must do then: the bucket has versioning ON (run.ts enables it), so `s3 rm` does not empty
-    // it — it writes a DELETE MARKER per object. Markers are not Versions (they come back under their
-    // own key), and a bucket still holding either refuses to go with BucketNotEmpty, which is not one
-    // of the tolerated patterns above. Both lists, or the bucket leaks holding the model credential seed.
-    const bucket = stateBucketName(NAME, account);
-    await attempt("s3 rm", ["s3", "rm", `s3://${bucket}`, "--recursive"]);
-    const listed = await aws(["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"]);
-    if (listed.code === 0) {
-      const payload = JSON.parse(listed.stdout) as {
-        Versions?: { Key: string; VersionId: string }[];
-        DeleteMarkers?: { Key: string; VersionId: string }[];
-      };
-      const objects = [...(payload.Versions ?? []), ...(payload.DeleteMarkers ?? [])].map(({ Key, VersionId }) => ({
-        Key,
-        VersionId,
-      }));
-      if (objects.length > 0) {
-        await attempt("s3api delete-objects", [
-          "s3api",
-          "delete-objects",
-          "--bucket",
-          bucket,
-          "--delete",
-          JSON.stringify({ Objects: objects }),
-        ]);
-      }
-    }
-    await attempt("s3 rb", ["s3api", "delete-bucket", "--bucket", bucket]);
-  }
-  await attempt("ecr delete-repository", ["ecr", "delete-repository", "--repository-name", REPO, "--force"]);
-
-  if (workspace) await rm(workspace, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
-  if (errors.length > 0) {
-    throw new AggregateError(errors, `teardown failed — check stack ${STACK}, bucket fa-${NAME}-*, repo ${REPO}`);
+  // `finally`, not a catch: the AWS failure still throws, and the temp directory still goes.
+  try {
+    await destroyAgentcoreDeployment(NAME, account);
+  } finally {
+    if (workspace) await rm(workspace, { recursive: true, force: true });
   }
 }, 900_000);
 
@@ -180,29 +122,14 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
     // public `invoke` kind is served" (agentcore.ts). A checkpoint here answers 403 from the container.
     // It is also the better assertion: `invoke` runs a real turn, the same thing the fly and railway
     // probes POST for.
-    // A real file, NOT /dev/stdout: this CLI writes the response body to the positional argument, and
-    // on a runner whose stdout is a pipe Actions owns, opening it answers "No such device or address".
-    const out = join(workspace, "invoke-reply.json");
-    const payload = join(workspace, "invoke.json");
-    await writeFile(
-      payload,
-      `${JSON.stringify({ kind: "invoke", session: "live-agentcore", text: "Reply with just: ok" })}\n`,
-    );
-    const reply = await aws([
-      "bedrock-agentcore",
-      "invoke-agent-runtime",
-      "--agent-runtime-arn",
-      runtimeArn as string,
-      "--runtime-session-id",
-      ingressSessionId(NAME),
-      "--payload",
-      `file://${payload}`,
-      "--cli-binary-format",
-      "raw-in-base64-out",
-      out,
-    ]);
-    expect(reply.code, `invoke-agent-runtime failed:\n${reply.stderr.slice(-2000)}`).toBe(0);
-    const body = await readFile(out, "utf8");
+    const body = await invokeAgentcore({
+      runtimeArn: runtimeArn as string,
+      name: NAME,
+      session: "live-agentcore",
+      text: "Reply with just: ok",
+      dir: workspace,
+      label: "invoke",
+    });
 
     // The reply is the invoke stream in AgentCore's streaming form — the HTTP channel's SSE, reused
     // wholesale (agentcore.ts). A turn that reached a terminal is what proves the container served.

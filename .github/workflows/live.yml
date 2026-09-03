@@ -29,10 +29,12 @@ jobs:
     # cancel in progress).
     #
     # 120, not 60: the probes run SERIALLY (`fileParallelism: false`) and their own budgets already add
-    # up past an hour — the AgentCore deploy alone declares 30 minutes for the stack plus 15 for its
-    # teardown, on top of the fly and railway deploys and a container build. At 60 this job would hit
-    # the ceiling on a normal-but-slow night, and it would hit it DURING the most expensive probe, in
-    # the one place where the sweeps below are all that stand between a kill and a billing leak.
+    # up past an hour — the TWO AgentCore deploys (agentcore-deploy and agentcore-wake) each declare 30
+    # minutes for the stack plus 15 for teardown, and the wake probe additionally waits out a 90s wake
+    # delay plus up to 5 more for the fire, on top of the fly and railway deploys and a container build.
+    # At 60 this job would hit the ceiling on a normal-but-slow night, and it would hit it DURING the
+    # most expensive probe, in the one place where the sweeps below are all that stand between a kill
+    # and a billing leak. Observed run time is ~20 minutes; the gap is worst-case ceilings, not slack.
     timeout-minutes: 120
     environment: live # holds FASTAGENT_LIVE_MODEL and the provider key
     steps:
@@ -179,7 +181,7 @@ jobs:
           # an operator who ran `railway login` and only names the variable in its gate message, so
           # here the token stands in for the session CI has no way to hold.
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          # Scoped by an inline IAM policy to the resources the deploy probe creates and destroys: a
+          # Scoped by an inline IAM policy to the resources the AgentCore probes create and destroy: a
           # CloudFormation stack, an ECR repository, an S3 bucket and an AgentCore runtime. The policy
           # needs FOUR patterns, not one — the driver derives each name differently from the same
           # `live-probe-<uuid8>` directory, and only the stack wears the `fastagent-` prefix:
@@ -187,6 +189,17 @@ jobs:
           #   repository `fastagent/live-probe-*` (slash) / runtime `live_probe_*` (underscores).
           # A policy written for the stack pattern alone denies the other three, and does it only after
           # the image is built and pushed. test/live/agentcore-deploy.live.test.ts carries the same map.
+          #
+          # agentcore-wake needs MORE, and its failures land the same way — after the push:
+          #   scheduler:ListSchedules   RESOURCE-LESS, so it can only be granted on `*` (the probe reads
+          #                             the alarm back; teardown and the sweep below both list too)
+          #   scheduler:GetSchedule     the expression + completion action, which the summary omits
+          #   scheduler:DeleteSchedule  teardown here and the sweep step below
+          # It is also the first `selfSchedule: true` fixture, i.e. the first deployment with
+          # `needsForwarder` true: the forwarder Lambda + its Function URL, the wake role
+          # (iam:CreateRole / PassRole / AttachRolePolicy / DetachRolePolicy) and a VERSIONED state
+          # bucket (s3:PutBucketVersioning, s3:PutLifecycleConfiguration) exist in no other probe.
+          # The policy itself lives in AWS and cannot be verified from this repo.
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -279,6 +292,26 @@ jobs:
           while read -r name; do
             [ -n "$name" ] || continue
             bucket="fa-$name-$account"
+            # BEFORE the stack, because these are not stack resources: the forwarder creates wake alarms
+            # at runtime, into the `default` Scheduler group, and `ActionAfterCompletion: DELETE` only
+            # runs once a schedule FIRES. A probe killed between the wake call and the fire leaves one
+            # pending; after `delete-stack` its target is gone and it retries into nothing for weeks.
+            #
+            # Command substitution, NOT a pipe into `while`, for both reasons this step already knows:
+            # a piped loop is a subshell that discards `failed=1`, and an un-`if`-guarded pipeline under
+            # `bash -e` + `pipefail` would abort the WHOLE sweep at the first list failure (missing IAM,
+            # expired credentials, throttling) — skipping this name's stack, bucket and repository and
+            # every name after it, with the reason discarded down /dev/null.
+            if ! alarms=$(aws scheduler list-schedules --name-prefix "fa-$name-wk-" \
+              --query 'Schedules[].Name' --output text 2>&1); then
+              echo "::error::list-schedules fa-$name-wk- failed: $alarms"
+              failed=1
+              alarms=""
+            fi
+            for alarm in $alarms; do
+              echo "deleting wake alarm $alarm" >&2
+              attempt "delete-schedule $alarm" aws scheduler delete-schedule --name "$alarm"
+            done
             attempt "delete-stack $name" aws cloudformation delete-stack --stack-name "fastagent-$name"
             attempt "wait stack-delete $name" aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name"
             # `s3 rm` does not empty a versioned bucket — it writes a delete marker per object, and a

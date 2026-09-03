@@ -293,8 +293,15 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # check that the template parses)
                              # plus a REAL stack + ECR repo + S3 bucket provisioned and destroyed
                              # (agentcore-deploy — no public URL exists, so it proves the deployment
-                             # works through InvokeAgentRuntime; teardown is THREE places because the
-                             # bucket and repo live outside the stack on purpose),
+                             # works through InvokeAgentRuntime; teardown is FOUR places because the
+                             # bucket, repo and runtime-created wake alarms all live outside the stack
+                             # on purpose, and it is ONE shared function in test/live/env.ts because a
+                             # second copy of cleanup code drifts where nobody looks), and an agent
+                             # SCHEDULING ITSELF on a host with no resident process (agentcore-wake —
+                             # the wake tool's write becomes a POST to the forwarder becomes an
+                             # EventBridge one-shot, three systems that must be simultaneously right
+                             # and all silent from inside the agent when they are not; the FIRE is
+                             # only weakly checked, via a self-deleting alarm's disappearance),
                              # `flyctl` still printing what the Fly driver reads (fly — read-only), and
                              # a REAL Fly app provisioned then destroyed (fly-deploy — which is how
                              # #425 was found: a deploy whose every step succeeded, serving on a URL
