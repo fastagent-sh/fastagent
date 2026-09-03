@@ -82,7 +82,10 @@ async function walk(root: string, dir = root, out: string[] = []): Promise<strin
   return out;
 }
 
-/** Pack the whole state root into one gzipped snapshot object. */
+/** Pack the whole state root into one gzipped snapshot object.
+ *  ponytail: the WHOLE root, every idle edge — O(state size) per settled turn, and session jsonl
+ *  grows without bound. Upgrade path when the 16 MiB warning is real for someone: a per-file
+ *  manifest with content hashes, uploading only what changed. */
 export async function packStateRoot(stateRoot: string, maxBytes = MAX_SNAPSHOT_BYTES): Promise<Buffer> {
   const files: Record<string, string> = {};
   let raw = 0;
