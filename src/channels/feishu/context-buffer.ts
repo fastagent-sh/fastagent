@@ -4,14 +4,12 @@
  * buffered-resource selection. Entries are bucketed by conversation place (main chat, or one
  * concrete thread root) and folded into the next answered turn in that place.
  */
-import { log } from "../../log.ts";
 import {
   BUFFER_ATTACH_MAX,
   BUFFER_LINE_MAX_CHARS,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
 } from "../kit/context-buffer.ts";
-import { loadStateFile, saveStateFile } from "../kit/state.ts";
 import { truncateCodePointPrefix } from "../kit/text.ts";
 import type { NormalizedFeishuMessage } from "./model.ts";
 
@@ -128,41 +126,7 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
   );
 }
 
-/**
- * Buckets from the pre-participant-model keying (`<chat>:root:<root_id>`) can never be produced again —
- * a place is `<chat>` or `<chat>:thread:<thread_id>` — so nothing could ever fold or clear them, and
- * they would hold chat content on disk forever. Dropped here, before the buffer loads, so the shared
- * kernel never learns about a key shape one channel retired.
- *
- * TWO one-time losses, both accepted and both logged by count. (1) The retired shape covered every
- * thread bucket and every main-chat quoted-reply bucket, so buffered discussion in threads does not
- * survive the upgrade — it becomes unreachable BECAUSE of the re-keying, not before it. (2)
- * `turns.json` persists each in-flight turn's `bufferKey` verbatim and this runs before turn recovery,
- * so a turn spanning the upgrade finds its bucket already gone. Sparing referenced keys would couple
- * the buffer to the turn store to protect a single upgrade, and would not help (1) at all.
- *
- * PERMANENT, unlike the `owned-threads.json` cleanup it otherwise resembles. That one leaves an inert
- * orphan file, so deleting it a release later is free; this one is what stops user chat content
- * lingering, and a deployment that skips from before the model to well after it would never run an
- * expired version of this code. The standing cost is one key scan at load, and nothing when no retired
- * key is present.
- */
-function dropRetiredBuckets(path: string, label: string): void {
-  const raw = loadStateFile(path);
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
-  const live = Object.entries(raw).filter(([placeKey]) => !placeKey.includes(":root:"));
-  const dropped = Object.keys(raw).length - live.length;
-  if (dropped === 0) return;
-  log.info(`${label} dropped ${dropped} context bucket(s) with a retired key shape`);
-  try {
-    saveStateFile(path, Object.fromEntries(live));
-  } catch (error) {
-    log.warn(`${label} could not rewrite ${path} after dropping retired buckets: ${String(error)}`);
-  }
-}
-
 export function createFeishuContextBuffer(path: string, label: string): FeishuContextBuffer {
-  dropRetiredBuckets(path, label);
   return createGenericContextBuffer({
     path,
     label,
