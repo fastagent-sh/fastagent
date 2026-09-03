@@ -9,8 +9,10 @@ import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-stat
 import { declaredChannels } from "../src/channels/discover.ts";
 import { announceWebhooks, parseTunnelUrl, startCloudflareTunnel } from "../src/tunnel.ts";
 
-// Mirrors TUNNEL_RETRY_MS in tunnel.ts (the constant is not exported).
+// Mirror tunnel.ts's constants (they are not exported).
 const TUNNEL_RETRY_MS = 2000;
+const TUNNEL_DNS_INTERVAL_MS = 500;
+const TUNNEL_DNS_TIMEOUT_MS = 30_000;
 
 /** A fake cloudflared child: EventEmitter with stdout/stderr emitters, drivable from a test. */
 function fakeCloudflared(): ChildProcess {
@@ -63,11 +65,68 @@ async function workspace(channels: string[]): Promise<string> {
 describe("tunnel: startCloudflareTunnel", () => {
   it("resolves a tunnel on the first URL cloudflared prints", async () => {
     const child = fakeCloudflared();
-    const p = startCloudflareTunnel(8800, () => child);
+    const p = startCloudflareTunnel(
+      8800,
+      () => child,
+      undefined,
+      async () => ["104.16.0.1"],
+    );
     await Promise.resolve(); // let the listeners attach
     child.stderr?.emit("data", Buffer.from("INF +-+ https://blue-cat-42.trycloudflare.com +-+\n"));
     const t = await p;
     expect(t?.url).toBe("https://blue-cat-42.trycloudflare.com");
+  });
+
+  // #435: cloudflared prints the URL before the hostname's DNS record is published, and a platform
+  // told about it in that window answers NXDOMAIN for far longer than any registrar's retry budget.
+  it("holds the URL back until its hostname resolves", async () => {
+    vi.useFakeTimers();
+    const child = fakeCloudflared();
+    let published = false;
+    let handedOut: string | undefined;
+    const p = startCloudflareTunnel(
+      8800,
+      () => child,
+      undefined,
+      async (host: string) => {
+        if (!published) throw new Error(`queryA ENOTFOUND ${host}`);
+        return ["104.16.0.1"];
+      },
+    ).then((t) => {
+      handedOut = t?.url;
+      return t;
+    });
+    await Promise.resolve();
+    child.stderr?.emit("data", Buffer.from("https://blue-cat-42.trycloudflare.com\n"));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(handedOut, "a URL no resolver knows yet must not reach a registrar").toBeUndefined();
+
+    published = true;
+    await vi.advanceTimersByTimeAsync(TUNNEL_DNS_INTERVAL_MS);
+    expect((await p)?.url).toBe("https://blue-cat-42.trycloudflare.com");
+  });
+
+  // The record is published once the tunnel's first connection registers, so a hostname that never
+  // appears means the tunnel never connected (a network dropping cloudflared's QUIC, say). Serving
+  // continues either way, but silence there would leave the author debugging the wrong end.
+  it("says so, and still serves, when the hostname never appears in DNS", async () => {
+    vi.useFakeTimers();
+    const errs = captureErrors();
+    const child = fakeCloudflared();
+    const p = startCloudflareTunnel(
+      8800,
+      () => child,
+      undefined,
+      async () => {
+        throw new Error("queryA ENOTFOUND");
+      },
+    );
+    await Promise.resolve();
+    child.stderr?.emit("data", Buffer.from("https://blue-cat-42.trycloudflare.com\n"));
+    await vi.advanceTimersByTimeAsync(TUNNEL_DNS_TIMEOUT_MS + TUNNEL_DNS_INTERVAL_MS);
+    expect((await p)?.url).toBe("https://blue-cat-42.trycloudflare.com");
+    expect(errs.some((e) => /still not in DNS/.test(e) && /never connected/.test(e))).toBe(true);
   });
 
   it("does not retry a missing cloudflared (ENOENT); logs the install hint", async () => {

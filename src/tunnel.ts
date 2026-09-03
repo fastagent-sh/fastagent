@@ -7,6 +7,7 @@
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
 import { type ChildProcess, spawn } from "node:child_process";
+import { resolve4 } from "node:dns/promises";
 import type { RegistrationOutcome } from "./channels/registration.ts";
 import type { DeclaredChannel } from "./channels/discover.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
@@ -40,6 +41,52 @@ const TUNNEL_ATTEMPTS = 3;
 const TUNNEL_RETRY_MS = 2000;
 /** cloudflared can stay alive without ever receiving/printing an assigned quick-tunnel URL. */
 const TUNNEL_START_TIMEOUT_MS = 30_000;
+/** Budget for the assigned hostname to appear in DNS — see {@link waitForTunnelDns} for what it buys. */
+const TUNNEL_DNS_TIMEOUT_MS = 30_000;
+const TUNNEL_DNS_INTERVAL_MS = 500;
+
+/** A host's A records; injectable so tests need no real DNS. */
+type ResolveHost = (host: string) => Promise<unknown>;
+
+/**
+ * Hold the URL back until its hostname RESOLVES. `*.trycloudflare.com` is not a wildcard — each quick
+ * tunnel gets its own record, published only once the tunnel's first connection registers with the
+ * edge, which is AFTER cloudflared prints the URL (measured: connection at +1.5s, record at +3-6s). A
+ * platform handed the URL inside that window answers NXDOMAIN and then keeps answering it for far
+ * longer than any registrar's budget, so all 8 retries fail against a hostname that went live seconds
+ * in (#435). Every registrar is downstream of this function, so waiting once here covers them all.
+ *
+ * That ordering also makes an unresolvable hostname a real diagnosis and not just a slow one: the
+ * record is missing because the tunnel never connected (a network that drops cloudflared's QUIC, say),
+ * so nothing will reach this URL until that is fixed.
+ *
+ * NOT the local-reachability gate #421 removed: this asks whether a GLOBAL record exists (`resolve4`
+ * queries the configured nameservers through c-ares, so each poll really re-queries instead of reading
+ * a cache), never whether this machine can reach the origin — and it is bounded and never fatal, so a
+ * resolver that cannot see the record delays the URL rather than withholding it.
+ */
+async function waitForTunnelDns(host: string, resolveHost: ResolveHost): Promise<void> {
+  const deadline = Date.now() + TUNNEL_DNS_TIMEOUT_MS;
+  for (;;) {
+    // The rejection IS the signal (NXDOMAIN while the record is unpublished), not an error to report.
+    // Exhausting the budget is, and it warns below.
+    try {
+      await resolveHost(host);
+      return;
+    } catch {
+      /* not published yet */
+    }
+    if (Date.now() >= deadline) {
+      log.warn(
+        `[fastagent] --tunnel: ${host} is still not in DNS after ${Math.round(TUNNEL_DNS_TIMEOUT_MS / 1000)}s — ` +
+          "the tunnel likely never connected to Cloudflare's edge. Nothing will reach this URL, " +
+          "webhook registration included.",
+      );
+      return;
+    }
+    await sleep(TUNNEL_DNS_INTERVAL_MS);
+  }
+}
 
 /** How cloudflared is launched; injectable so tests can drive the child without a real process. */
 type SpawnCloudflared = (port: number) => ChildProcess;
@@ -56,17 +103,22 @@ type TunnelSpawn =
  * cloudflared sometimes exits before printing a URL (a transient trycloudflare API error), so retry a
  * few times. ALWAYS resolves to undefined WITH an operator log saying why — missing binary, the exit
  * reason, or "gave up after retries" — never silently; serving continues without a tunnel either way.
- * (Edge warmup AFTER the URL appears is handled downstream: each registrar retries while the platform
- * reports it cannot yet verify the URL, so a not-yet-routable tunnel delays registration, not fails it.)
+ * The URL is held back until its hostname resolves ({@link waitForTunnelDns}); the edge warm-up AFTER
+ * that is handled downstream — each registrar retries while the platform reports it cannot yet verify
+ * the URL, so a not-yet-routable tunnel delays registration, not fails it.
  */
 export async function startCloudflareTunnel(
   port: number,
   spawnFn: SpawnCloudflared = spawnCloudflared,
   attemptTimeoutMs: number = TUNNEL_START_TIMEOUT_MS,
+  resolveHost: ResolveHost = resolve4,
 ): Promise<Tunnel | undefined> {
   for (let attempt = 1; attempt <= TUNNEL_ATTEMPTS; attempt++) {
     const r = await spawnTunnelOnce(port, spawnFn, attemptTimeoutMs);
-    if (r.tunnel) return r.tunnel;
+    if (r.tunnel) {
+      await waitForTunnelDns(new URL(r.tunnel.url).hostname, resolveHost);
+      return r.tunnel;
+    }
     if (r.fatal) {
       log.error(r.message); // missing binary — retrying cannot help
       return undefined;

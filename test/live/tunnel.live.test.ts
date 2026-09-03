@@ -10,6 +10,7 @@
  * Needs the `cloudflared` binary on PATH and no credentials: a Quick Tunnel is anonymous.
  */
 import { spawnSync } from "node:child_process";
+import { resolve4 } from "node:dns/promises";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
@@ -58,6 +59,12 @@ describe("cloudflare quick tunnel", () => {
     if (!tunnel) return;
     cleanups.push(() => tunnel.close());
     expect(tunnel.url).toMatch(/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i);
+
+    // A URL is only handed out once its hostname EXISTS in DNS (#435) — cloudflared prints it before
+    // the record is published, and a platform asked to verify it inside that window answers NXDOMAIN
+    // for longer than any registrar's budget. Not a tautology despite the product polling the same
+    // call: the wait is bounded, and this is what catches the URL escaping through its timeout.
+    await expect(resolve4(new URL(tunnel.url).hostname)).resolves.not.toHaveLength(0);
 
     // A fresh hostname can take a minute to become resolvable FROM HERE — and on a machine whose
     // resolver or proxy is slow about it, longer than this budget (#421). That is why the webhook
