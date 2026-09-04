@@ -1,9 +1,10 @@
 /**
  * What `dev` (its worker) and `start` need beyond the service itself: binding a port, the shutdown
- * order, the startup report, and the optional Cloudflare quick tunnel.
+ * order, the startup report, the optional Cloudflare quick tunnel, and the options the CLI hands the
+ * assembly (`cliMountOptions`, `resolveBindHost` — policy ABOUT the assembly, decided per command).
  *
- * The ASSEMBLY is not here — it lives in `src/service.ts`, which a public entry may import and this
- * directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
+ * The ASSEMBLY itself is not here — it lives in `src/service.ts`, which a public entry may import and
+ * this directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
  */
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";

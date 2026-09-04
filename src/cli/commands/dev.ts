@@ -28,8 +28,9 @@ export interface DevOptions {
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
-  // The model is picked ONCE, in the supervisor (a TTY, before any worker exists); the worker inherits
-  // the choice through FASTAGENT_MODEL and must not prompt even when the pick was cancelled.
+  // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both); a spawned
+  // worker inherits the choice through FASTAGENT_MODEL and must not prompt even when the pick was
+  // cancelled.
   const placement = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
     await serveOnce(placement, opts);

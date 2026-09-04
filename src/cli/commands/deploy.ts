@@ -214,9 +214,6 @@ function gateOnModelCredential(needsModelCredential: boolean): void {
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
-  // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
-  // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
-  // from the workspace, which is the build context.
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
@@ -226,6 +223,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the rewritten file
   // because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
   const placement = await enterAgentCommand(dirArg, opts);
+  // ONE deploy semantic: bake the WORKSPACE (WYSIWYG). Artifacts land under the agent dir
+  // (`fastagent/`) plus the one workspace-root `.dockerignore` the packers require; host CLIs run
+  // from the workspace, which is the build context.
   const { agentDir, workspace } = placement;
   const { config } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
