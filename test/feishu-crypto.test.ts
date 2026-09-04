@@ -1,6 +1,6 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decryptEvent, eventSignature, timingSafeEqualStr, verifySignature } from "../src/channels/feishu/crypto.ts";
+import { decryptEvent, eventSignature, verifySignature } from "../src/channels/feishu/crypto.ts";
 
 /** The INVERSE of the channel's decryption, built independently here from the platform's documented
  *  construction (key = sha256(encryptKey), payload = base64(IV ‖ AES-256-CBC ciphertext)) — so the test
@@ -39,14 +39,5 @@ describe("eventSignature / verifySignature", () => {
     expect(verifySignature("K", headers, "body")).toBe(true);
     expect(verifySignature("K", headers, "tampered")).toBe(false);
     expect(verifySignature("K", { ...headers, nonce: "n2" }, "body")).toBe(false);
-  });
-});
-
-describe("timingSafeEqualStr", () => {
-  it("compares equal/unequal strings, including length mismatches (no throw)", () => {
-    expect(timingSafeEqualStr("secret", "secret")).toBe(true);
-    expect(timingSafeEqualStr("secret", "secreT")).toBe(false);
-    expect(timingSafeEqualStr("secret", "secret-longer")).toBe(false);
-    expect(timingSafeEqualStr("", "")).toBe(true);
   });
 });

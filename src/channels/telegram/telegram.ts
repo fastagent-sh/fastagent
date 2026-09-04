@@ -22,12 +22,12 @@
  * Authored against the public `@fastagent-sh/fastagent` surface only (the contract + the channel-authoring
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
-import { timingSafeEqual } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
+import { secretEquals } from "../secret.ts";
 import { invokeTurn } from "./invoke-turn.ts";
 import { collectAttachments, createContextBuffer } from "./context-buffer.ts";
 import {
@@ -89,13 +89,6 @@ export interface TelegramChannelOptions {
   botUsername?: string;
   /** Bot API base, for tests. Defaults to the public Telegram endpoint. */
   apiBaseUrl?: string;
-}
-
-/** Constant-time compare so the secret-token check leaks no timing signal. */
-function tokenMatches(header: string, secret: string): boolean {
-  const a = Buffer.from(header);
-  const b = Buffer.from(secret);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /**
@@ -345,7 +338,7 @@ export function telegramChannel({
     const handler = async (req: Request): Promise<Response> => {
       if (req.method !== "POST") return text("POST only\n", 405);
       // Fail closed: a missing/wrong secret token is 401, never routed.
-      if (!tokenMatches(req.headers.get("x-telegram-bot-api-secret-token") ?? "", secretToken)) {
+      if (!secretEquals(req.headers.get("x-telegram-bot-api-secret-token"), secretToken)) {
         return text("invalid secret token\n", 401);
       }
       const body = await readBodyCapped(req, MAX_UPDATE_BYTES);

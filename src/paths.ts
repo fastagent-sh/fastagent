@@ -16,7 +16,7 @@
  * modules depend on it for something the engine has no say in.
  */
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
-import { access, chmod, mkdir, realpath } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -302,6 +302,18 @@ export async function exists(p: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+/** The file's text, or undefined when there is no file. ONLY absence reads as absence: a file that
+ *  exists but cannot be read (EACCES, a directory in its place) throws, because a decision made on
+ *  "not there" — regenerate it, skip its gate — is the wrong one for a file that is there. */
+export async function readTextIfExists(p: string): Promise<string | undefined> {
+  try {
+    return await readFile(p, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 /**

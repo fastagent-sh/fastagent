@@ -14,14 +14,8 @@
  * Comparisons are constant-time (timingSafeEqual) so neither the signature check nor the verification-
  * token check leaks a timing signal.
  */
-import { createDecipheriv, createHash, timingSafeEqual } from "node:crypto";
-
-/** Constant-time string equality (padded to equal length first — timingSafeEqual demands it). */
-export function timingSafeEqualStr(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual(ab, bb);
-}
+import { createDecipheriv, createHash } from "node:crypto";
+import { secretEquals } from "../secret.ts";
 
 /** Decrypt an `{"encrypt": …}` event payload to its plaintext JSON string. Throws on malformed
  * input or invalid padding. AES-CBC is not authenticated, so a wrong key is not mathematically
@@ -46,5 +40,5 @@ export function verifySignature(
   headers: { timestamp: string; nonce: string; signature: string },
   rawBody: string,
 ): boolean {
-  return timingSafeEqualStr(eventSignature(encryptKey, headers.timestamp, headers.nonce, rawBody), headers.signature);
+  return secretEquals(headers.signature, eventSignature(encryptKey, headers.timestamp, headers.nonce, rawBody));
 }

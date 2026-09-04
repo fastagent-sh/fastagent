@@ -12,7 +12,8 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import { DEPLOY_HOSTS, HOST_ONLY_FLAGS, warnHostOnlyFlags, writeArtifacts } from "../src/cli/commands/deploy.ts";
+import { HOST_ONLY_FLAGS, warnHostOnlyFlags, writeArtifacts } from "../src/cli/commands/deploy.ts";
+import { DEPLOY_HOSTS } from "../src/deploy/hosts.ts";
 
 /** The opening bytes that make each artifact kind OURS — one per kind the ownership table knows. */
 const MARKERS = {

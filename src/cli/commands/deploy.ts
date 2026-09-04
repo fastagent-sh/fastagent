@@ -51,26 +51,18 @@ import {
   toRailwayName,
 } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
+import type { DeployHost } from "../../deploy/hosts.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
-import { type ResolvedPlacement, resolveStateRoot, exists } from "../../paths.ts";
+import { type ResolvedPlacement, resolveStateRoot, exists, readTextIfExists } from "../../paths.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
-
-/** The deploy targets, as a value: {@link HOST_ONLY_FLAGS} is checked against this list by a test, and
- *  a type alone cannot be enumerated at runtime. NOT the only copy — `cli/program.ts` repeats it as the
- *  `<host>` argument's `choices`, because that file may not import a command module at load time (its
- *  per-command imports are lazy). Adding a host means editing both; the type there rides in on a
- *  `import type`, which costs nothing at runtime. */
-export const DEPLOY_HOSTS = ["docker", "fly", "railway", "agentcore"] as const;
-
-export type DeployHost = (typeof DEPLOY_HOSTS)[number];
 
 export interface DeployOptions {
   run?: boolean;
@@ -287,7 +279,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     let keptWithoutRequestedTunnel = false;
     // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must
     // describe the topology that will actually be there.
-    const composeText = await readFile(composeFile, "utf8").catch(() => undefined);
+    const composeText = await readTextIfExists(composeFile).catch(failStartup);
     if (composeText !== undefined && (!opts.force || !isGeneratedCompose(composeText))) {
       const existingHasTunnel = composeHasTunnelService(composeText);
       plan = dockerPlan(existingHasTunnel);
@@ -485,7 +477,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // fly.toml lives in the agent dir (fastagent/fly.toml) — the workspace's own
   // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
   const flyTomlPath = join(agentDir, "fly.toml");
-  const flyToml = await readFile(flyTomlPath, "utf8").catch(() => undefined);
+  const flyToml = await readTextIfExists(flyTomlPath).catch(failStartup);
   // Every decision below turns on ONE question — will `writeArtifacts` keep this file? — and the answer is
   // OWNERSHIP, not the flag: `--force` resets a fly.toml we generated and leaves a hand-written one alone.
   // Keying these on `--force` alone meant a forced deploy of a hand-owned fly.toml took the app name from

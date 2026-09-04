@@ -794,17 +794,12 @@ describe("session control over HTTP", () => {
     expect(seen).toEqual(["run_started"]);
   });
 
-  it("mountSessionControl merges routes and announce writes the 0600 discovery file", async () => {
-    const { mkdtemp, rm, readFile, stat } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
+  it("mountSessionControl merges routes and refuses a channel route under the plane's prefix", async () => {
     const { assertNoControlPlaneCollision, mountSessionControl } = await import("../src/service.ts");
-    const root = await mkdtemp(join(tmpdir(), "fa-ctl-mount-"));
-    const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
-    try {
+    {
       const { control } = await fauxControlledAgent([]);
       const base = { "GET /health": () => new Response("ok") };
-      const mounted = mountSessionControl(base, control, stateRoot);
+      const mounted = mountSessionControl(base, control);
       // The plane is a MOUNT, not a route entry: routes stay the channel's literal paths, and the
       // plane arrives beside them owning a prefix. That separation is what keeps every collision
       // check a comparison instead of a prediction about the matcher.
@@ -812,12 +807,12 @@ describe("session control over HTTP", () => {
       expect(mounted.mounts.map((m) => m.prefix)).toEqual(["/control"]);
       // Collision is PREFIX-level: the plane owns everything under it, so a channel route landing
       // anywhere beneath is shadowed — including a path the plane does not itself serve.
-      expect(() => mountSessionControl({ "/control/sessions": () => new Response("x") }, control, stateRoot)).toThrow(
+      expect(() => mountSessionControl({ "/control/sessions": () => new Response("x") }, control)).toThrow(
         /collide with the session control plane/,
       );
       // A path the plane does NOT serve is the sharper case: string equality misses it, and the
       // channel then goes dark against the plane's own 404 with nothing reported.
-      expect(() => mountSessionControl({ "GET /control/mine": () => new Response("x") }, control, stateRoot)).toThrow(
+      expect(() => mountSessionControl({ "GET /control/mine": () => new Response("x") }, control)).toThrow(
         /collide with the session control plane/,
       );
       // BOTH mount points enforce it through one function — agentcore's lazy path loads its channels
@@ -828,49 +823,11 @@ describe("session control over HTTP", () => {
       expect(() =>
         assertNoControlPlaneCollision({ "POST /telegram": () => new Response("x") }, mounted.mounts[0]!),
       ).not.toThrow();
-      mounted.announce(12345);
-      const file = JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as {
-        url: string;
-        token: string;
-      };
-      expect(file.url).toBe("http://127.0.0.1:12345");
-      expect(file.token).toBeTruthy();
-      expect((await stat(join(stateRoot, "control.json"))).mode & 0o777).toBe(0o600);
-      // Without a hub: passthrough, no file side effects.
-      const off = mountSessionControl(base, undefined, stateRoot);
+      expect(mounted.control?.token).toBeTruthy();
+      // Without a hub: passthrough, no token.
+      const off = mountSessionControl(base, undefined);
       expect(off.routes).toBe(base);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("a bind address lands in the discovery url and a loopback bind drops the LAN warning", async () => {
-    const { mkdtemp, rm, readFile } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { mountSessionControl } = await import("../src/service.ts");
-    const { log } = await import("../src/log.ts");
-    const root = await mkdtemp(join(tmpdir(), "fa-ctl-bind-"));
-    try {
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      const { control } = await fauxControlledAgent([]);
-      const url = (host: string | undefined, stateRoot: string) => {
-        mountSessionControl({}, control, stateRoot, { host }).announce(9000);
-        return readFile(join(stateRoot, "control.json"), "utf8").then((s) => (JSON.parse(s) as { url: string }).url);
-      };
-      expect(await url("127.0.0.1", join(root, "a"))).toBe("http://127.0.0.1:9000");
-      expect(warn).not.toHaveBeenCalled(); // loopback is not LAN-reachable — nothing to warn about
-      // A specific non-wildcard bind is only reachable as itself: the client must dial that address.
-      expect(await url("192.168.1.5", join(root, "b"))).toBe("http://192.168.1.5:9000");
-      // …and the warning NAMES that bind. Counting alone would stay green if the address rendered as
-      // `undefined`, which is the whole content of the claim "names the actual bind".
-      expect(warn.mock.calls.flat().join(" ")).toContain("192.168.1.5 (off this machine)");
-      expect(await url(undefined, join(root, "c"))).toBe("http://127.0.0.1:9000"); // wildcard accepts loopback
-      expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
-      expect(warn).toHaveBeenCalledTimes(2);
-      warn.mockRestore();
-    } finally {
-      await rm(root, { recursive: true, force: true });
+      expect(off.control).toBeUndefined();
     }
   });
 

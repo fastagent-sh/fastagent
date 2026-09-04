@@ -19,7 +19,14 @@ import { isAgentcoreRuntime, mountAgentcoreService } from "../../channels/agentc
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { SHUTDOWN_GRACE_MS, assertTunnelBindable, maybeTunnel, reportServing, serve } from "../serve.ts";
+import {
+  SHUTDOWN_GRACE_MS,
+  announceControl,
+  assertTunnelBindable,
+  maybeTunnel,
+  reportServing,
+  serve,
+} from "../serve.ts";
 import { parseBind, parsePort, reportAssembly, resolveFirstRunModel } from "../shared.ts";
 
 export interface StartOptions {
@@ -92,8 +99,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
   const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
-  assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
-  const control = { tunnel: opts.tunnel ?? false, ...(host !== undefined ? { host } : {}) };
+  const tunnel = opts.tunnel ?? false;
+  assertTunnelBindable(host, tunnel, bindFlag ? "flag" : "config");
   // ONE branch for the whole posture. AgentCore assembles differently — lazy channels over a
   // pre-restore state mount, an external clock, no resident connections — but it yields the same
   // AgentService, so everything below this point is common.
@@ -102,15 +109,15 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // handed to something that can, without inventing an ownership the singleton does not have.
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(opened, { wrapAgent: () => traced, control, onStateReady })
+    ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
     : mountAgentService(opened, {
         wrapAgent: () => traced,
         closeTimeoutMs: SHUTDOWN_GRACE_MS,
-        control,
         onChannelClosed: (name, error) =>
           failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
       })
   ).catch(failStartup);
+  let unannounce = (): void => {};
   serve(
     service.handler,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
@@ -118,10 +125,13 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       ready: service.ready,
       onListening: (p) => {
         reportServing(service, host, p);
-        service.announce(p);
-        maybeTunnel(agentDir, service.channels.routes, p, opts.tunnel ?? false, stateRoot);
+        unannounce = announceControl(service, stateRoot, { host, tunnel }, p);
+        maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
       },
-      onShutdown: () => service.close(),
+      onShutdown: () => {
+        unannounce();
+        return service.close();
+      },
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an

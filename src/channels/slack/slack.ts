@@ -1,10 +1,11 @@
 /** First-party Slack HTTP Events API channel: signed ingress, durable turns/context, files, and edited previews. */
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
+import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { createThreadParticipants } from "../kit/thread-participants.ts";
@@ -152,9 +153,7 @@ export function verifySlackSignature(
   if (!/^v0=[a-f0-9]{64}$/i.test(signature)) return false;
   if (!signatureIsFresh(timestamp, MAX_SIGNATURE_AGE_S, nowMs)) return false;
   const expected = `v0=${createHmac("sha256", signingSecret).update(`v0:${timestamp}:${rawBody}`).digest("hex")}`;
-  const actualBytes = Buffer.from(signature);
-  const expectedBytes = Buffer.from(expected);
-  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+  return secretEquals(signature, expected);
 }
 
 /** The (channel, ts) of the user's triggering message, encoded in the logical turn id `team:channel:ts`

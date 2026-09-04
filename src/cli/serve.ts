@@ -5,8 +5,11 @@
  * The ASSEMBLY is not here — it lives in `src/service.ts`, which a public entry may import and this
  * directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
  */
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
+import { writeFileAtomic } from "../atomic-write.ts";
 import type { ChannelHandler } from "../channel.ts";
 import type { AgentService } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
@@ -72,6 +75,55 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
     );
   }
   return lines;
+}
+
+/**
+ * Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the control plane
+ * once the port is known, and say what reaches it. Returns the file's removal — wired into the
+ * shutdown so a stale file cannot point a client at a dead port (`attach` then fails with "cannot
+ * read", accurate, instead of a stale token's misleading 401/ECONNREFUSED). A hard exit leaves the
+ * file behind: advisory, overwritten by the next boot.
+ *
+ * Here and not in the assembly: the file, its permissions and the warnings are how THIS process's
+ * operator finds and protects the plane. An embedder distributes `service.control` itself.
+ */
+export function announceControl(
+  service: AgentService,
+  stateRoot: string,
+  bind: { host?: string; tunnel: boolean },
+  boundPort: number,
+): () => void {
+  if (!service.control) return () => {};
+  mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  const path = join(stateRoot, "control.json");
+  const url = `http://${clientHost(bind.host)}:${boundPort}`;
+  writeFileAtomic(path, `${JSON.stringify({ url, token: service.control.token })}\n`, 0o600);
+  log.info(`[fastagent] session control on ${service.control.prefix}/* (token in ${path})`);
+  // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
+  // loudly, and the LAN path must not be the silent third way past the local trust story. A
+  // loopback bind closes exactly that reach, so it earns silence.
+  const reach = classifyBind(bind.host);
+  if (reach !== "loopback") {
+    log.warn(
+      `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
+        "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
+        "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs/design/session-control.md §14)",
+    );
+  }
+  if (bind.tunnel) {
+    // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
+    log.warn(
+      "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
+        "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs/design/session-control.md §14)",
+    );
+  }
+  return () => {
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      /* the file is advisory — shutdown must not fail on it */
+    }
+  };
 }
 
 /** What the CLI gives a service to stop in, and the hard exit that follows it. The order matters:

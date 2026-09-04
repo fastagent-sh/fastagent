@@ -38,7 +38,6 @@ export interface MountAgentcoreServiceOptions {
   /** Runs once the state snapshot is restored. The wake-alarm reconcile passes through here because
    *  its sink is a PROCESS-global: the process entry owns that, not a service that can be closed. */
   onStateReady?: () => void;
-  control?: { tunnel?: boolean; host?: string };
 }
 
 /** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */
@@ -55,7 +54,7 @@ export async function mountAgentcoreService(
 
   // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the
   // collision rule runs again then (below) against what they actually brought.
-  const withControl = mountSessionControl({}, sessionControl, stateRoot, { ...options.control, agent });
+  const withControl = mountSessionControl({}, sessionControl, { agent });
 
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
     externalClock: true,
@@ -88,7 +87,6 @@ export async function mountAgentcoreService(
   const handler = router(adapterRoutes, withControl.mounts);
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
-  let unannounce: (() => void) | undefined;
   return {
     handler,
     agent,
@@ -102,16 +100,12 @@ export async function mountAgentcoreService(
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     ...(withControl.control ? { control: withControl.control } : {}),
-    announce(boundPort) {
-      unannounce = withControl.announce(boundPort);
-    },
     async close() {
       // UNTESTED, deliberately noted: no test observes these timers being cleared. Installing fake
       // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
       // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
       closed.abort();
-      unannounce?.(); // a stale discovery file would point `attach` at a stopped service
     },
   };
 }

@@ -4,7 +4,7 @@
  * These are the properties an embedder gets for free by calling one function instead of composing
  * the parts. Each was, at some point, composed wrong — inside this repo's own CLI.
  */
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
@@ -77,10 +77,9 @@ describe("createAgentService", () => {
     }
   });
 
-  it("hands the embedder the plane's token, and cleans the discovery file up on close", async () => {
+  it("hands the embedder the plane's token", async () => {
     // An embedded surface has no port of its own to advertise, so `control` is how a client gets
-    // access at all. `announce` stays available for a host that does have one — and its file must
-    // not outlive the surface, or `attach` reads a stale token and gets a misleading 401.
+    // access at all (the CLI's discovery file is `announceControl`'s, in cli/serve.ts).
     const dir = await mkdtemp(join(tmpdir(), "fa-surface-token-"));
     await writeFile(
       join(dir, "fastagent.config.mjs"),
@@ -95,15 +94,7 @@ describe("createAgentService", () => {
       new Request("http://h/control/capabilities", { headers: { authorization: `Bearer ${service.control?.token}` } }),
     );
     expect(res.status).toBe(200);
-
-    service.announce(8787);
-    const discovery = join(service.agentDir, ".state", "control.json");
-    expect(JSON.parse(await readFile(discovery, "utf8"))).toMatchObject({ token: service.control?.token });
-    // The file IS the credential: anything readable by other users on the box is a handover of the
-    // plane. `writeFileSync`'s mode is umask-masked, so this is what proves the explicit chmod ran.
-    expect((await stat(discovery)).mode & 0o777).toBe(0o600);
     await service.close();
-    await expect(readFile(discovery, "utf8")).rejects.toThrow(/ENOENT/);
   });
 
   it("honours an injected control token — the deployed case, where a minted one is unreadable", async () => {
