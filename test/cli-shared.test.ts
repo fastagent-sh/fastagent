@@ -7,6 +7,10 @@ import { setLogLevel } from "../src/log.ts";
 import { LoginCancelled, type LoginMethod } from "../src/engines/pi/login.ts";
 import * as models from "../src/engines/pi/models.ts";
 
+// enterAgentCommand installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
+// Headers/FormData/WebSocket with no way back. Keep the side effect out of the test process.
+vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
+
 /** Record every flow call's (provider, method) and pop canned results/verdicts in order. */
 function fakes(
   results: Array<{ provider: string; method: LoginMethod }>,
@@ -144,6 +148,7 @@ describe("enterAgentCommand: --no-input never reaches the picker", () => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
     process.stdin.isTTY = undefined as unknown as boolean;
     process.stdout.isTTY = undefined as unknown as boolean;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -159,6 +164,9 @@ describe("enterAgentCommand: --no-input never reaches the picker", () => {
   // The guard is resolveFirstRunModel returning BEFORE isInteractive(), so a worker that inherits a
   // terminal still stays silent — which is exactly the case a TTY-less test would pass either way.
   it("returns without building a model runtime, even when stdin and stdout are terminals", async () => {
+    // A model from the environment satisfies resolveFirstRunModel before it reads `input`, so leaving
+    // FASTAGENT_MODEL set would pass this test without ever running the guard.
+    vi.stubEnv("FASTAGENT_MODEL", undefined);
     const runtime = vi.spyOn(models, "createPiModelRuntime");
     process.stdin.isTTY = true;
     process.stdout.isTTY = true;
