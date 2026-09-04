@@ -295,8 +295,6 @@ const start: CommandSpec = {
     }),
 };
 
-/** The retired app-creation flag — parsed so it can explain itself, hidden from help. */
-const CREATE_APP: FlagSpec = { flags: "--create-app", description: "(retired)", hidden: true };
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
   description: "Feishu/Lark ingress: websocket or webhook (interactive when omitted)",
@@ -326,19 +324,16 @@ const channelSub = (
   summary,
   description,
   args: [DIR_ARG],
-  flags: [
-    CREATE_APP,
-    ...(kind === "feishu" || kind === "lark"
+  flags:
+    kind === "feishu" || kind === "lark"
       ? [INGRESS, GROUP_BEHAVIOR]
       : kind === "slack"
         ? [GROUP_BEHAVIOR, NO_ONBOARD, REPLACE_CONFIG]
-        : []),
-  ],
+        : [],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
     (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
-      createApp: f.createApp === true,
       ingress: f.ingress as string | undefined,
       groupBehavior: f.groupBehavior as string | undefined,
       onboard: f.onboard !== false,

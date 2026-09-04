@@ -486,44 +486,6 @@ describe("ingress verification", () => {
   });
 });
 
-describe("upgrade from the session-mode model", () => {
-  it("refuses a removed session option instead of silently changing behaviour under it", () => {
-    const opts = { appId: "app", appSecret: "secret", verificationToken: TOKEN } as FeishuChannelOptions;
-    expect(() => buildFeishuChannel({ ...opts, groupMessageSession: "continuous" } as never)).toThrow(
-      /groupMessageSession/,
-    );
-    expect(() => buildFeishuChannel({ ...opts, directMessageSession: "threaded" } as never)).toThrow(
-      /directMessageSession/,
-    );
-  });
-
-  it("drops only the retired context buckets", async () => {
-    feishuFetch();
-    const root = mkdtempSync(join(tmpdir(), "feishu-upgrade-"));
-    tempRoots.push(root);
-    const home = join(root, "channels", "feishu");
-    mkdirSync(home, { recursive: true });
-    const entry = (body: string) => [{ sender: "user ou_alice", body, messageId: `om_${body}` }];
-    writeFileSync(
-      join(home, "buffers.json"),
-      JSON.stringify({
-        "oc_1:root:om_old": entry("retired"), // no place key can produce this shape any more
-        "oc_1:thread:omt_live": entry("live-thread"),
-        oc_1: entry("live-chat"),
-      }),
-    );
-
-    const { agent } = replyingAgent();
-    buildFeishuChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, apiBaseUrl: BASE })({
-      agent,
-      stateRoot: root,
-    });
-
-    const buffers = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
-    expect(Object.keys(buffers).sort()).toEqual(["oc_1", "oc_1:thread:omt_live"]);
-  });
-});
-
 describe("turn flow", () => {
   it("a direct message is one continuous conversation, answered in place", async () => {
     const fx = feishuFetch();

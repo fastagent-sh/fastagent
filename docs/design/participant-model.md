@@ -424,20 +424,20 @@ coupled three independent axes — session identity, reply placement, and the su
 who wanted room-level sessions was forced to also give up mention-free thread continuations. The
 model above sets each axis on its own principle, which leaves nothing for the modes to select.
 
-For Feishu/Lark, `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at load — the re-keying
-means no place key can produce that shape again, so nothing could ever fold or clear them. That drop
-is permanent code: those buckets hold chat content, and an upgrade that skips several releases would
-never run an expired copy of the cleanup.
+For Feishu/Lark, `buffers.json` buckets keyed `<chat>:root:<id>` are never read again — the re-keying
+means no place key can produce that shape again, so nothing can fold or clear them. Nothing deletes
+them either: they hold chat content and stay on disk, bounded and never growing, until an operator
+removes them.
 
 `owned-threads.json` was deleted on the next start by 0.16 and 0.17 only — a pure index, so its
 removal was tidiness, not migration, and the code expired with 0.18 (test/migration-deadline.test.ts,
 now retired with it). Upgrading straight from 0.15 or earlier leaves the file behind, unread by
 anything; delete it if you want the state directory clean.
 
-That discards real content, once: the retired shape covered EVERY thread bucket and every main-chat
+That strands real content, once: the retired shape covered EVERY thread bucket and every main-chat
 quoted-reply bucket, so buffered discussion in threads does not survive the upgrade (a chat's own
 `<chat>` bucket does). A turn that was in flight across the upgrade loses its buffered context too —
-its `bufferKey` was persisted under the old shape. Both are one-time, and the dropped count is logged.
+its `bufferKey` was persisted under the old shape. Both are one-time.
 
 Breaking changes for existing Feishu/Lark deployments:
 
@@ -461,8 +461,8 @@ there, which restores the mention requirement. `owned-threads.json` is left behi
 
 Breaking changes for existing Slack deployments:
 
-- `directMessageSession` and `groupMessageSession` are removed. Passing either now fails at startup
-  rather than being ignored — placement and session identity follow from Slack's own primitives (§5),
-  which leaves nothing for the options to select;
+- `directMessageSession` and `groupMessageSession` are removed — placement and session identity follow
+  from Slack's own primitives (§5), which leaves nothing for the options to select. TypeScript refuses
+  them; a JavaScript channel file that still passes either has it silently ignored;
 - a deployment that set either to `continuous` therefore changes both where answers land and how
   sessions are keyed. Existing history is not migrated, for the same reason as Feishu's re-keying above.

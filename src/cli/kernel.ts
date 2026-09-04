@@ -27,8 +27,6 @@ interface ArgSpec {
 export interface FlagSpec {
   flags: string;
   description: string;
-  /** Parses but does not appear in help — for retired flags that should still explain themselves. */
-  hidden?: boolean;
   /** Mutually exclusive with these {@link optionKey} values — validated at build time. */
   conflicts?: string[];
 }
@@ -183,7 +181,6 @@ function register(parent: Command, spec: CommandSpec): void {
   }
   for (const f of spec.flags ?? []) {
     const opt = new Option(f.flags, f.description);
-    if (f.hidden) opt.hideHelp();
     if (f.conflicts) opt.conflicts(f.conflicts);
     cmd.addOption(opt);
   }

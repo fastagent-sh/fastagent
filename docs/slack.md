@@ -324,10 +324,10 @@ manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one
 
 ## Upgrading from the session-mode releases
 
-`directMessageSession` and `groupMessageSession` are **removed**, and passing either now fails at
-startup rather than being ignored — placement and session identity follow from Slack's own primitives
-(an answer goes in a thread on the ask, and that thread is the session), which leaves nothing for the
-options to select. Delete them from `channels/slack.ts`.
+`directMessageSession` and `groupMessageSession` are **removed** — placement and session identity
+follow from Slack's own primitives (an answer goes in a thread on the ask, and that thread is the
+session), which leaves nothing for the options to select. Delete them from `channels/slack.ts`:
+TypeScript refuses them, but a JavaScript channel file that still passes either is silently ignored.
 
 If either was set to `continuous`, both where answers land and how sessions are keyed change with the
 removal, and **existing conversation history is not migrated** — every thread starts fresh. The obsolete

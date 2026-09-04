@@ -1,10 +1,6 @@
 /**
  * Session persistence for the `AgentSession` L0 — open-or-create a durable record by the Caller's
  * opaque session id, on pi-coding-agent's `SessionManager` (the v3 jsonl every pi surface reads).
- *
- * Records written before this store existed (by the pi-agent-core `Session` the serving path used
- * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
- * READ path for existing conversations, not a second engine.
  */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -104,10 +100,10 @@ interface AppliedProperties {
  * produce one output. `_` escapes itself for the same reason. A trailing `.` or `-` is legal
  * mid-name but not at the end, so it escapes too.
  *
- * Injective within this encoding — which is only sufficient because new records live in their own
- * directory. The older spelling draws names from the same character set (it stored a room literally
- * called `s42` as `s42`, which is also this encoding of `42`), so one directory would make some
- * names ambiguous no matter how either side spells them.
+ * Injective within this encoding — which is only sufficient because this store's records live in
+ * their own directory. A name this store did not write draws from the same character set and can
+ * still decode: a file called `s42` is also this encoding of `42`, so one directory would make some
+ * names ambiguous no matter how this side spells them.
  *
  * Readability is deliberate: `-1001234567890` becomes `s-1001234567890`, so an operator can still
  * tell which room a file belongs to.
@@ -158,15 +154,11 @@ export function callerSessionId(recordId: string): string | undefined {
  * each header and would make a renamed agent directory look like an empty store (see
  * {@link recordFiles}).
  *
- * NEW records live in a subdirectory of their own, because the two engines cannot share a namespace:
- * both spell ids into `[A-Za-z0-9._-]`, so neither can claim a prefix the other cannot produce, and
- * a directory holding both would have names that belong to two conversations at once — in whichever
- * direction it is read. Separate directories make each side's own injectivity sufficient.
- *
- * A PRE-EXISTING record is continued in place: looked up by the older spelling, which is injective
- * on its own terms, and appended to where it lies. Both spellings are the same v3 jsonl, so a
- * conversation started before this store keeps going rather than restarting empty. Nothing on disk
- * is rewritten.
+ * Records live in a subdirectory of their own, because a name this store did not write can still
+ * decode to a Caller id: a file called `s42` beside them is also this encoding of `42`, so a shared
+ * directory would answer `42` with a record it does not own. Only this directory is scanned, which
+ * makes this encoding's own injectivity sufficient — a record written before this store existed
+ * lies outside it and is never read.
  *
  * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
  * the serving path provides — the single-writer lease is taken before any store call, so no two
@@ -254,14 +246,11 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   /** The unreadable records the last listing reported, so a polled endpoint states the condition
    *  once rather than once a second. */
   let lastUnreadable = "";
-  /** WHERE a session's record is, under either spelling — the one lookup every caller shares, so a
-   *  fix to it (this store's own directory rather than pi's cwd-filtered listing) cannot reach three
-   *  of the four. */
+  /** WHERE a session's record is — the one lookup every caller shares, so a fix to it (this store's
+   *  own directory rather than pi's cwd-filtered listing) cannot reach three of the four. */
   const locate = (sessionId: string): { path: string; dir: string } | undefined => {
     const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
-    if (mine) return { path: mine.path, dir: own };
-    const legacy = recordFiles(root).find((f) => f.id === legacySessionId(sessionId));
-    return legacy ? { path: legacy.path, dir: root } : undefined;
+    return mine ? { path: mine.path, dir: own } : undefined;
   };
   /** Open an existing record, or undefined. A closure rather than a method call, so `fork` cannot be
    *  broken by a caller that spreads this object into another one. */
@@ -290,8 +279,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const rows: SessionSummary[] = [];
       const unreadable: string[] = [];
       for (const file of files) {
-        // A record this store did not write (the older spelling) cannot be decoded back to a Caller
-        // id, and a row nobody can dial is worse than a row that is missing. It stays openable BY id.
+        // A name this store did not write cannot be decoded back to a Caller id, and a row nobody
+        // can dial is worse than a row that is missing.
         const session = callerSessionId(file.id);
         if (!session) continue;
         try {
@@ -617,7 +606,7 @@ function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
   return record;
 }
 
-/** Where this engine's own records live, under the sessions directory both engines are pointed at. */
+/** Where the records live, under the sessions directory the store is pointed at. */
 const OWN_RECORDS_DIR = "agent-session";
 
 /**
@@ -724,14 +713,4 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       return live.delete(sessionId);
     },
   };
-}
-
-/** The spelling used before this store existed — read-only, so older records still resolve. */
-function legacySessionId(sessionId: string): string {
-  return sessionId.replace(/[^A-Za-z0-9._-]/g, (c) => {
-    const code = c.charCodeAt(0);
-    return code < 0x100
-      ? `%${code.toString(16).toUpperCase().padStart(2, "0")}`
-      : `%u${code.toString(16).toUpperCase().padStart(4, "0")}`;
-  });
 }
