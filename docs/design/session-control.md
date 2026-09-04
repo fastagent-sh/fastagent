@@ -8,9 +8,9 @@ updated: 2026-07-20
 
 # Session control plane
 
-This document is the serving-extension design for FastAgent. Everything it describes is implemented
-(a subprocess transport adapter stays demand-driven). It is a companion to, not a replacement for,
-the locked [Agent Handler SPEC v0.1](../SPEC.md).
+This document is the serving-extension design for FastAgent. Everything below is implemented except
+the demand-driven follow-ons named in §15 (a subprocess transport adapter among them). It is a
+companion to, not a replacement for, the locked [Agent Handler SPEC v0.1](../SPEC.md).
 
 The whole design reduces to one sentence: **`invoke` is the only data plane; the session control
 plane observes and modulates the runs that `invoke` drives.** A client uses `invoke` to make the
@@ -718,8 +718,8 @@ What each part of the plane settled on, where the reason is not obvious from the
   landed; a session with no compactable history rejects `nothing_to_compact` (a no-op, like
   `no_active_run`). An in-flight compaction is abortable — run/compaction symmetry: both are model
   calls a client must be able to stop — and converges as `compaction_finished{aborted}`.
-- **The leaf is movable.** `navigate` moves it through pi's `SessionManager.branch()` (a pointer move,
-  no record written) under the same lease; an unknown `targetId` rejects `invalid_command`; the move
+- **The leaf is movable.** `update({ leafEntryId })` moves it through pi's `SessionManager.branch()` (a
+  pointer move, no record written) under the same lease; an unknown target rejects `invalid_command`; the move
   rides out as `state_changed{leafEntryId, model, thinkingLevel}`. Every last-wins read — the
   activation/override walk, `state()`, the update gate — therefore reads the ACTIVE PATH, not the
   flat journal. An unreadable chain never resolves silently to assembly defaults: `state()` stays
@@ -743,11 +743,12 @@ What each part of the plane settled on, where the reason is not obvious from the
   `GET /control/sessions` is the first read that MAY reject — a store that cannot be enumerated
   answers `sessions_unavailable` + 503.
 
-Demand-driven follow-ons, explicitly not prerequisites: blocking interactions (typed
-confirm/select/input gates that suspend a run), definition reload, export, and channel upgrades — a
-chat channel becoming an events consumer for message-boundary delivery (enabling an opt-in
-follow_up/steer policy for mid-run messages) or, once interactions exist, an interaction responder
-(e.g. Telegram inline keyboards). The extension unlocks those options; it does not mandate them.
+Demand-driven follow-ons, explicitly not prerequisites: a subprocess transport adapter beside the
+HTTP+SSE one, blocking interactions (typed confirm/select/input gates that suspend a run), definition
+reload, export, and channel upgrades — a chat channel becoming an events consumer for
+message-boundary delivery (enabling an opt-in follow_up/steer policy for mid-run messages) or, once
+interactions exist, an interaction responder (e.g. Telegram inline keyboards). The extension unlocks
+those options; it does not mandate them.
 
 Considered and rejected — **replacing the chat channels' queued-turn path with `steer`/`follow_up`**:
 the stateful channels persist each accepted turn intent BEFORE the transport ACK (L1, at-least-once,

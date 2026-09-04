@@ -446,8 +446,8 @@ implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` p
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
 `invoke-turn-kit` / `state`) live in `channels/kit/`, whose defining property is that its consumers
-are only platform directories like this one (`wait-health` and `registration` sit one level up because
-deploy/ and cli/ use them too).
+are only platform directories like this one — `wait-health` (deploy/) and `registration` (deploy/ and
+cli/ as well as platform dirs) sit one level up because theirs are not.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
@@ -484,7 +484,7 @@ a stable hand-authored surface. What is platform-different:
 - **Session partitioning follows the place, not the ask.** A chat is one session
   (`<kind>:<chat_id>`) and a thread is another (`<kind>:<chat_id>:<thread_id>`) — branded with the
   channel kind because session ids share ONE namespace across every channel in a deployment. The id
-  becomes a percent-encoded jsonl filename, so its real bound is the filesystem's 255 bytes, which
+  becomes an escaped jsonl filename (`piSessionId`), so its real bound is the filesystem's 255 bytes, which
   platform ids do not come close to. A room keeps one memory that everyone in it shares and a
   side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the platform's `root_id`
   tracks the reply chain and can differ between messages of one thread, which would split a side

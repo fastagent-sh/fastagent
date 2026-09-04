@@ -8,8 +8,8 @@ status: current
 
 ## 1. Decision
 
-**Where a session's state lives is an explicit deployment choice, and the engine class that serves it
-is a separate one.** Neither is a property of "fastagent"; both are properties of a deployment.
+**Where a session's state lives is an explicit deployment choice** — a property of a deployment, not
+of "fastagent". Which engine class serves it is a separate question, and it is settled.
 
 The protocol says so already. [SPEC](../SPEC.md) §6, under *Portable conformance (optional; required
 for Agents claiming serverless portability)*:
@@ -22,9 +22,10 @@ for Agents claiming serverless portability)*:
 A resident Agent is permitted, the cost is named, and the level is optional. `test/spec-conformance.ts`
 encodes the same shape: `pair?()` is an OPTIONAL subject capability, because MUST 6 is optional.
 
-The engine question is separate from the level: `invoke` runs on pi's `AgentSession`
-(pi-coding-agent), the class pi itself consumes (its TUI, RPC and SDK all run on it) — being the
-sole consumer of a surface nobody dogfoods is a position, not an architecture. That choice is §2.
+`invoke` runs on pi's `AgentSession` (pi-coding-agent), the class pi itself consumes (its TUI, RPC
+and SDK all run on it); the serving path moved there off the former `AgentHarness` (pi-agent-core),
+because being the sole consumer of a surface nobody dogfoods is a position, not an architecture.
+That leaves one axis: §2.
 
 ## 2. The axis
 

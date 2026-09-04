@@ -9,6 +9,7 @@ import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "
 import { larkChannel } from "../src/lark.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
 import { cardSummary } from "../src/channels/feishu/card.ts";
+import { piSessionId } from "../src/engines/pi/session-store.ts";
 import { log } from "../src/log.ts";
 
 const TOKEN = "verif-token";
@@ -535,10 +536,10 @@ describe("turn flow", () => {
 
     // Rule 3 (memory follows the place): both messages share the chat session — no per-ask session.
     expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1", "feishu:oc_1"]);
-    // The id becomes a percent-encoded jsonl filename, so the bound that matters is the filesystem's,
+    // The id becomes an escaped jsonl filename, so the bound that matters is the filesystem's,
     // not a round number: worst-case platform ids stay far under it.
     const worstCase = `feishu:oc_${"a".repeat(32)}:omt_${"b".repeat(32)}`;
-    expect(encodeURIComponent(worstCase).length).toBeLessThan(255);
+    expect(piSessionId(worstCase).length).toBeLessThan(255);
     expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice, msg om_dm1]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     // The reply contract rides every chat prompt: the channel owns delivery — no send-tool answering.
