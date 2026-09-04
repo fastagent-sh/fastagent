@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ContextBuffer } from "../src/channels/kit/context-buffer.ts";
 import { createTurnRunner } from "../src/channels/kit/turn-runner.ts";
 import type { TurnRecordBase, TurnStore } from "../src/channels/kit/turn-store.ts";
+import { log } from "../src/log.ts";
 
 interface Stored extends TurnRecordBase {
   text: string;
@@ -40,7 +41,7 @@ function fakeBuffer(calls: string[]): ContextBuffer<string> {
     commit: (key: string, consumed: string[]) => {
       calls.push(`commit ${key} ${consumed.join(",")}`);
     },
-  } as unknown as ContextBuffer<string>;
+  };
 }
 
 function runner(
@@ -117,6 +118,28 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     r.submit({ id: "a", session: "s", text: "" }, false);
     await r.idle();
     expect(calls).toEqual([]);
+  });
+
+  it("a rejected queue notice does not abort the turn, so the intent is still counted, run and dropped", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const { store, calls } = fakeStore();
+      const r = runner(store, calls, { onQueuedBehind: () => ({ done: Promise.reject(new Error("post failed")) }) });
+      r.submit({ id: "a", session: "s", text: "one" }, false);
+      r.submit({ id: "b", session: "s", text: "two" }, false); // queued behind a → gets the failing notice
+      await r.idle();
+      expect(calls.filter((c) => c.endsWith(" b") || c.startsWith("execute b"))).toEqual([
+        "attempt b",
+        "execute b notice=- text=earlier",
+        "remove b",
+        "remove b",
+      ]);
+      // Swallowing it is the point, so the swallow owes a signal: without this the catch could go
+      // silent and every assertion above would still pass.
+      expect(warn.mock.calls.flat().join(" ")).toContain("turn=b");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a failed execute still drops the intent, and a recovered turn is re-enqueued without re-persisting", async () => {

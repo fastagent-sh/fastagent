@@ -203,6 +203,9 @@ src/
 │   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per host-only flag
 │   │                        # that only WARNS elsewhere. `--tunnel` is host-only too and stays a usage GATE
 │   │                        # in runDeploy (exit 2): a refusal is not a row, and tabling it would make it advice.
+│   ├── hosts.ts             # DEPLOY_HOSTS, the deploy targets as a value: the CLI's `<host>` choices and
+│   │                        # HOST_ONLY_FLAGS's exhaustiveness check read this one copy. Dependency-free,
+│   │                        # so cli/program.ts imports it without pulling a command module
 │   ├── channel-ingress.ts   # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL
 │   │                     # end-to-end, the words when nobody can. The ONE answer to "which channels
 │   │                     # have a webhook" — it was written per host (3 runbooks, 3 --run drivers, a

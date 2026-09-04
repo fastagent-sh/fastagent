@@ -34,7 +34,8 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   where(rec: R): string;
   /** Queue feedback when a turn is scheduled BEHIND an active one. Returns what the runner awaits at
    *  dequeue (so the turn reliably takes the notice over instead of racing it) and, optionally, how
-   *  to cancel a notice that has not fired yet. */
+   *  to cancel a notice that has not fired yet. `done` may reject — posting the notice is a platform
+   *  call — and the runner logs that and runs the turn anyway. */
   onQueuedBehind?(rec: R): { done: Promise<void>; cancel?: () => void };
   /** Runs before the attempt is counted. Answer false to leave the intent untouched for a later run
    *  (Slack: its transport is known to be down, so an Agent turn now would have nowhere to answer). */
@@ -77,7 +78,12 @@ export function createTurnRunner<
       // instant. BEFORE the ceiling check so a dropped or deferred turn can take the notice over too.
       const notice = notices.get(rec.id);
       notice?.cancel?.();
-      await notice?.done;
+      // The notice is the PLATFORM's feedback, not the turn: a failed post must not throw out of the
+      // run, which would leak the persisted intent (removed only below) into a replay that burns an
+      // attempt against the ceiling. Logged, then the turn proceeds without its handle.
+      await notice?.done.catch((error) =>
+        log.warn(`${label} queue notice failed: turn=${rec.id} session=${rec.session}: ${String(error)}`),
+      );
       notices.delete(rec.id);
       if (options.beforeRun && !(await options.beforeRun(rec))) return;
       const decision = store.startAttempt(rec.id);
