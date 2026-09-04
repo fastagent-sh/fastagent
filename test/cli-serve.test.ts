@@ -7,7 +7,7 @@ import { announceControl, reportServing } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
 import { agentcoreRoutes } from "../src/channels/agentcore.ts";
 import { beginWork } from "../src/channels/busy.ts";
-import { type AgentService, mountSessionControl, routesFor } from "../src/service.ts";
+import { mountSessionControl, routesFor } from "../src/service.ts";
 import { log } from "../src/log.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
@@ -200,8 +200,12 @@ describe("cli: the assembled serving surface", () => {
   it("announceControl writes the 0600 discovery file under a fresh state root and removes it on cleanup", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-cli-announce-"));
     const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
-    const service = { control: { token: "tok-1", prefix: "/control" } } as AgentService;
-    const cleanup = announceControl(service, stateRoot, { host: "127.0.0.1", tunnel: false }, 12345);
+    const cleanup = announceControl(
+      { token: "tok-1", prefix: "/control" },
+      stateRoot,
+      { host: "127.0.0.1", tunnel: false },
+      12345,
+    );
     const path = join(stateRoot, "control.json");
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ url: "http://127.0.0.1:12345", token: "tok-1" });
     // The file IS the credential: anything readable by other users on the box is a handover of the
@@ -210,16 +214,16 @@ describe("cli: the assembled serving surface", () => {
     cleanup();
     await expect(readFile(path, "utf8")).rejects.toThrow(/ENOENT/);
     // No plane: nothing written, nothing to remove.
-    announceControl({} as AgentService, stateRoot, { tunnel: false }, 1)();
+    announceControl(undefined, stateRoot, { tunnel: false }, 1)();
     await expect(readFile(path, "utf8")).rejects.toThrow(/ENOENT/);
   });
 
   it("a bind address lands in the discovery url and a loopback bind drops the LAN warning", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const root = await mkdtemp(join(tmpdir(), "fa-cli-bind-"));
-    const service = { control: { token: "t", prefix: "/control" } } as AgentService;
+    const control = { token: "t", prefix: "/control" };
     const url = async (host: string | undefined, stateRoot: string) => {
-      announceControl(service, stateRoot, { host, tunnel: false }, 9000);
+      announceControl(control, stateRoot, { host, tunnel: false }, 9000);
       return (JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as { url: string }).url;
     };
     try {
@@ -233,7 +237,7 @@ describe("cli: the assembled serving surface", () => {
       expect(await url(undefined, join(root, "c"))).toBe("http://127.0.0.1:9000"); // wildcard accepts loopback
       expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
       expect(warn).toHaveBeenCalledTimes(2);
-      announceControl(service, join(root, "d"), { host: "127.0.0.1", tunnel: true }, 9000);
+      announceControl(control, join(root, "d"), { host: "127.0.0.1", tunnel: true }, 9000);
       expect(warn.mock.calls.flat().join(" ")).toContain("--tunnel exposes /control/*");
     } finally {
       warn.mockRestore();

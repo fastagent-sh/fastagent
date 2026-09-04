@@ -340,11 +340,12 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/c-<chat>/` — downloaded inbound files, one directory per chat.
 
-An upgrade from the earlier session-mode model leaves its state behind, unread: `owned-threads.json`
-and the `buffers.json` buckets keyed `<chat>:root:<id>`, which the re-keying means nothing can ever
-fold or clear again. That old shape covered every thread bucket, so **buffered discussion in threads
-does not survive the upgrade** — a chat's own bucket does. Nothing deletes either one; they are
-bounded and never grow, so removing them is optional cleanup.
+An upgrade from the earlier session-mode model leaves two dead things behind, and nothing removes them:
+the obsolete `owned-threads.json`, and `buffers.json` buckets keyed `<chat>:root:<id>`. The re-keying
+means no place key can produce that shape again, so those buckets can never be folded or cleared —
+**buffered discussion in threads does not survive the upgrade** (a chat's own bucket does), and it stays
+on disk holding that chat content until you delete it. Remove the file and those keys by hand, with the
+process stopped.
 
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
 after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
@@ -378,9 +379,10 @@ Three behaviour changes, none of them opt-in:
   Scaffolded files are copies, so an existing workspace keeps the old text — see the send-tool section
   above for the one-line fix.
 
-State from the earlier model stays on disk, unread: `owned-threads.json` and the `buffers.json`
-buckets under the retired key shape — which means **buffered discussion in threads does not survive
-the upgrade** (a chat's own bucket does). Delete them if you want the state directory clean.
+State does not clean itself up: `owned-threads.json` and the `buffers.json` buckets under the retired
+key shape are both left in place, unread and unreachable — which means **buffered discussion in threads
+does not survive the upgrade** (a chat's own bucket does), while its content stays on disk. Delete both
+by hand with the process stopped (see State & restarts above).
 
 Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
 

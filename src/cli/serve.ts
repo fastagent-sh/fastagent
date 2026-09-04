@@ -84,7 +84,7 @@ export function serveService(
     ready: service.ready,
     onListening: (p) => {
       reportServing(service, host, p);
-      unannounce = announceControl(service, stateRoot, { host, tunnel }, p);
+      unannounce = announceControl(service.control, stateRoot, { host, tunnel }, p);
       maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
     },
     onShutdown: () => {
@@ -141,17 +141,17 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
  * operator finds and protects the plane. An embedder distributes `service.control` itself.
  */
 export function announceControl(
-  service: AgentService,
+  control: { token: string; prefix: string } | undefined,
   stateRoot: string,
   bind: { host?: string; tunnel: boolean },
   boundPort: number,
 ): () => void {
-  if (!service.control) return () => {};
+  if (!control) return () => {};
   mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
   const path = join(stateRoot, "control.json");
   const url = `http://${clientHost(bind.host)}:${boundPort}`;
-  writeFileAtomic(path, `${JSON.stringify({ url, token: service.control.token })}\n`, 0o600);
-  log.info(`[fastagent] session control on ${service.control.prefix}/* (token in ${path})`);
+  writeFileAtomic(path, `${JSON.stringify({ url, token: control.token })}\n`, 0o600);
+  log.info(`[fastagent] session control on ${control.prefix}/* (token in ${path})`);
   // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
   // loudly, and the LAN path must not be the silent third way past the local trust story. A
   // loopback bind closes exactly that reach, so it earns silence.
