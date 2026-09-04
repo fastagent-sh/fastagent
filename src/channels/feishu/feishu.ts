@@ -19,11 +19,12 @@ import { createTaskTracker } from "../kit/tasks.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
-import { createTurnQueue } from "../kit/turn-queue.ts";
-import { commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
+import { createTurnRunner } from "../kit/turn-runner.ts";
+import { createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
+  type FeishuBufferEntry,
   collectFeishuBufferedAttachments,
   createFeishuContextBuffer,
   feishuBufferPlaceKey,
@@ -363,11 +364,6 @@ function createFeishuRuntimeFactory(
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker(label);
-    const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
-      const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
-      return { ...intent, attempts: 0 };
-    };
-
     const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
       chatId: r.chatId,
       replyTo: r.replyTo,
@@ -379,18 +375,31 @@ function createFeishuRuntimeFactory(
       replyInThread: r.replyInThread,
     });
 
-    // In-memory: the pending queue-preview mount per turn. Immediate by default; with an explicit delay,
-    // it mounts only if the turn is still waiting when the timer fires and is cancelled unsent otherwise.
-    // `done` settles either way, awaited at dequeue so the runner reliably receives the mounted preview
-    // instead of racing it and double-posting.
-    const notices = new Map<string, { cancel: () => void; done: Promise<void> }>();
-    const queue = createTurnQueue<PendingFeishuTurn>({
+    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal,
+    // not just an operator log line. Take over its queue preview in place if present (else send fresh) —
+    // leaving it pinned at "Queued" while sending a separate failure would double-post.
+    const notifyDropped = (r: PendingFeishuTurn): void => {
+      const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
+      void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
+        log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
+      );
+    };
+
+    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, FeishuBufferEntry>({
       label,
-      // Queue feedback: when this session already has a turn running/queued, a silent wait reads as
-      // "the bot ignored me" once the current turn runs long — mount that turn's preview early with a
-      // queue status. It reply-quotes the exact source message (including p2p), then the runner mutates
-      // the SAME card/text into Thinking → final answer. Best-effort and post-ACK: a failed mount is a
-      // log line, never a failed event delivery; the turn later mounts its normal preview.
+      store,
+      buffer,
+      seen,
+      toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
+      fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
+      bufferKey: (rec) => rec.bufferKey,
+      where: (rec) => `chat=${rec.chatId}`,
+      // Queue feedback: mount that turn's preview early with a queue status. It reply-quotes the exact
+      // source message (including p2p), then the runner mutates the SAME card/text into Thinking →
+      // final answer. Immediate by default; with an explicit delay it mounts only if the turn is still
+      // waiting when the timer fires and is cancelled unsent otherwise. Best-effort and post-ACK: a
+      // failed mount is a log line, never a failed event delivery; the turn later mounts its normal
+      // preview.
       onQueuedBehind: (rec) => {
         let fired = false;
         let settle: () => void = () => {};
@@ -410,130 +419,71 @@ function createFeishuRuntimeFactory(
         };
         const timer = queueNoticeDelayMs > 0 ? setTimeout(mount, queueNoticeDelayMs) : undefined;
         if (timer === undefined) mount();
-        notices.set(rec.id, {
-          // Cancel is a no-op once mounting started — the send is in flight and `done` settles with it.
+        return {
+          done,
+          // A no-op once mounting started — the send is in flight and `done` settles with it.
           cancel: () => {
             if (!fired) {
               if (timer !== undefined) clearTimeout(timer);
               settle();
             }
           },
-          done,
-        });
+        };
       },
-      run: async (rec) => {
-        // Runs at DEQUEUE time (serialized). The turn's queue wait is over: cancel a not-yet-mounted
-        // preview (fast turnover skips the Queued frame), then settle so rec.preview is final — in the
-        // common path this await is instant. BEFORE the ceiling check so drop/defer can take it over too.
-        const notice = notices.get(rec.id);
-        notice?.cancel();
-        await notice?.done;
-        notices.delete(rec.id);
-        // Count this execution against the durable record (poison-turn ceiling) before running it again.
-        const decision = store.startAttempt(rec.id);
-        if (decision === "exceeded") {
-          notifyDropped(rec);
-          return;
+      // Do not recall an existing queue preview (the client exposes a confusing tombstone): settle it in
+      // place to an honest delayed status. The eventual replay mounts a fresh preview.
+      onDeferred: (rec) => {
+        if (rec.preview !== undefined) {
+          void settleFeishuPreview(api, targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch((e) =>
+            log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
+          );
         }
-        if (decision === "defer") {
-          // Couldn't record the attempt (disk failure): skip this cycle; a restart replays it. Do not
-          // recall an existing queue preview (the client exposes a confusing tombstone): settle it in
-          // place to an honest delayed status. The eventual replay mounts a fresh preview.
-          if (rec.preview !== undefined) {
-            void settleFeishuPreview(api, targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch((e) =>
-              log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
-            );
-          }
-          return;
-        }
-        const startedAt = Date.now();
-        log.info(`${label} turn start: turn=${rec.id} session=${rec.session} chat=${rec.chatId}`);
-        // Snapshot background discussion at dequeue. Commit only this snapshot on `completed`, so a
-        // message arriving while the turn runs remains buffered for the next answered turn.
-        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold
-        // this snapshot before either commits it. That fan-out loses nothing; claiming by buffer key
-        // would instead couple otherwise-independent root sessions and require failure rollback.
-        const { text: recent, consumed } = buffer.peek(rec.bufferKey);
+      },
+      notifyDropped,
+      execute: (rec, discussion, onCompleted) => {
         // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
+        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold
+        // the thread's snapshot before either commits it. That fan-out loses nothing; claiming by buffer
+        // key would instead couple otherwise-independent root sessions and require failure rollback.
         const room = rec.roomBufferKey !== undefined ? buffer.peek(rec.roomBufferKey) : undefined;
         const roomBlock = room?.text
           ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
           : "";
-        const prompt = `${roomBlock}${discussionBlock(recent)}${rec.baseText}`;
+        const prompt = `${roomBlock}${discussionBlock(discussion.text)}${rec.baseText}`;
         // Room entries FIRST: the collector keeps the TAIL under its cap, so the thread's own
         // attachments win the slots.
-        const buffered = collectFeishuBufferedAttachments([...(room?.consumed ?? []), ...consumed], {
+        const buffered = collectFeishuBufferedAttachments([...(room?.consumed ?? []), ...discussion.consumed], {
           images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
           files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
         });
         // Recorded at ingress (see submit) — never re-derived from the session key, which may be a
         // routed OPAQUE id that only looks like a place key.
         const parentSession = rec.parentSession;
-        try {
-          await streamFeishuReply(
-            invokeFeishuTurn(
-              agent,
-              rec.session,
-              prompt,
-              {
-                api,
-                chatId: rec.chatId,
-                filesDir: join(stateHome, "files"),
-                label,
-                appId,
-                ...(parentSession !== undefined ? { parentSession } : {}),
-              },
-              { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
-              () => commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey: rec.bufferKey, consumed }),
-            ),
-            api,
-            targetOf(rec),
-            formatError,
-            rec.preview,
-            label,
-          );
-          log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
-        } catch (error) {
-          log.error(
-            `${label} turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error)}`,
-          );
-        } finally {
-          // Fallback removal for the caught-error paths (a `failed` event or a transport throw): those
-          // never reach the completed hook above. Idempotent — a second remove is a no-op. Only an
-          // INTERRUPTED run (this finally never runs — a crash or SIGTERM deploy) leaves the record for
-          // replay; a transport throw is dropped, not retried (safe retry needs an L2 delivery key).
-          store.remove(rec.id);
-        }
+        return streamFeishuReply(
+          invokeFeishuTurn(
+            agent,
+            rec.session,
+            prompt,
+            {
+              api,
+              chatId: rec.chatId,
+              filesDir: join(stateHome, "files"),
+              label,
+              appId,
+              ...(parentSession !== undefined ? { parentSession } : {}),
+            },
+            { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
+            onCompleted,
+          ),
+          api,
+          targetOf(rec),
+          formatError,
+          rec.preview,
+          label,
+        );
       },
     });
-
-    // Accept a turn: persist its intent before the ACK, then record the platform delivery id and enqueue
-    // it. The ordering is deliberate: recording first could turn a failed intent write into silent loss
-    // when the platform redelivers. Recovery re-enqueues a crash survivor without re-persisting it.
-    const submit = (rec: PendingFeishuTurn, persist: boolean): void => {
-      if (persist) {
-        store.add(toStored(rec)); // failed write → HTTP/WS 500 → platform re-push
-        seen.add(rec.id); // post-persist, best-effort protection from documented duplicate pushes
-      }
-      queue.accept(rec);
-    };
-
-    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal,
-    // not just an operator log line. Take over its queue preview in place if present (else send fresh) —
-    // leaving it pinned at "Queued" while sending a separate failure would double-post.
-    const notifyDropped = (r: PendingFeishuTurn): void => {
-      const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
-        log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
-      );
-    };
-
-    // Re-enqueue turns a prior crash left mid-flight (ACKed but unfinished). Synchronous at construction:
-    // the queue runs them on the next tick. The execution ceiling is enforced per turn at dequeue.
-    const recovered = store.recover();
-    if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
-    let seqCounter = recovered.reduce((max, r) => Math.max(max, r.seq), 0);
-    for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, preview: undefined }, false);
+    let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
     // Who the agent has heard in a thread decides whether a bare message addresses it (participant
     // model §3), and it comes from what this channel observed — see thread-participants.ts.
@@ -692,7 +642,7 @@ function createFeishuRuntimeFactory(
       const baseText = r.text ?? cloudEnvelope(event, kind);
       if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
 
-      submit(
+      runner.submit(
         {
           id: m.message_id,
           seq: ++seqCounter, // arrival order; the turn store replays by it
@@ -750,7 +700,7 @@ function createFeishuRuntimeFactory(
       }
     };
 
-    return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined) };
+    return { acceptEvent, turnsIdle: () => Promise.all([runner.idle(), sideTasks.drain()]).then(() => undefined) };
   };
 }
 

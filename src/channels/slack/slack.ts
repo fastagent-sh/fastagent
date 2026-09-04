@@ -13,11 +13,11 @@ import { createTaskTracker } from "../kit/tasks.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
-import { createTurnQueue } from "../kit/turn-queue.ts";
-import { commitAnsweredTurn, createTurnStore } from "../kit/turn-store.ts";
+import { createTurnRunner } from "../kit/turn-runner.ts";
+import { createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { createSlackBotTokenProvider } from "./bot-auth.ts";
-import { collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
+import { type SlackBufferEntry, collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { invokeSlackTurn } from "./invoke-turn.ts";
 import {
   type SlackEventEnvelope,
@@ -271,10 +271,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       order: (a, b) => a.seq - b.seq,
     });
     const decide = route ?? defaultSlackRoute;
-    const toStored = (turn: PendingSlackTurn): StoredSlackTurn => {
-      const { previewTs: _preview, nativeQueueStatus: _status, ...intent } = turn;
-      return { ...intent, attempts: 0 };
-    };
     const targetOf = (turn: PendingSlackTurn): SlackTarget => ({
       channelId: turn.channelId,
       threadTs: turn.threadTs,
@@ -282,15 +278,31 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       recipientTeamId: turn.teamId,
     });
 
-    const notices = new Map<string, Promise<void>>();
-    const queue = createTurnQueue<PendingSlackTurn>({
+    const notifyDropped = (turn: PendingSlackTurn): void => {
+      const target = targetOf(turn);
+      if (turn.nativeQueueStatus) void api.setThreadStatus(target, "").catch(() => {});
+      void settleSlackPreview(
+        api,
+        target,
+        turn.previewTs,
+        "⚠️ I couldn’t complete an earlier request — please ask again.",
+      ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
+    };
+
+    const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, SlackBufferEntry>({
       label,
+      store,
+      buffer,
+      seen,
+      toStored: ({ previewTs: _preview, nativeQueueStatus: _status, ...intent }) => ({ ...intent, attempts: 0 }),
+      fromStored: ({ attempts: _attempts, ...intent }) => ({ ...intent }),
+      bufferKey: (turn) => turn.bufferKey,
+      where: (turn) => `channel=${turn.channelId}`,
       onQueuedBehind(turn) {
         const nativeDmStatus = rendering === "native" && turn.threadTs && turn.channelId.startsWith("D");
         if (nativeDmStatus) turn.nativeQueueStatus = true;
-        notices.set(
-          turn.id,
-          authentication
+        return {
+          done: authentication
             .then(() =>
               nativeDmStatus
                 ? api.setThreadStatus(targetOf(turn), "is queued behind an earlier request…")
@@ -299,42 +311,33 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                   }),
             )
             .catch((error) => log.warn(`${label} queue preview failed (the turn stays durable): ${String(error)}`)),
-        );
+        };
       },
-      run: async (turn) => {
-        await notices.get(turn.id);
-        notices.delete(turn.id);
+      // Leave the intent untouched when Slack auth failed. A fixed token + restart replays it;
+      // running now would execute an Agent turn whose only customer-facing transport is known to be
+      // unavailable.
+      beforeRun: async (turn) => {
         try {
           await authentication;
+          return true;
         } catch (error) {
-          // Leave the intent untouched. A fixed token + restart replays it; running now would execute an
-          // Agent turn whose only customer-facing transport is known to be unavailable.
           log.error(`${label} deferring durable turn ${turn.id} because Slack authentication failed: ${String(error)}`);
-          return;
+          return false;
         }
-        const attempt = store.startAttempt(turn.id);
-        if (attempt === "exceeded") {
-          notifyDropped(turn);
-          return;
+      },
+      onDeferred: (turn) => {
+        if (turn.nativeQueueStatus) {
+          void api
+            .setThreadStatus(targetOf(turn), "is delayed by a temporary system issue and will retry after restart…")
+            .catch((error) => log.warn(`${label} could not update a deferred Agent status: ${String(error)}`));
+        } else if (turn.previewTs) {
+          void settleSlackPreview(api, targetOf(turn), turn.previewTs, DEFERRED_PLACEHOLDER).catch((error) =>
+            log.warn(`${label} could not update a deferred queue preview: ${String(error)}`),
+          );
         }
-        if (attempt === "defer") {
-          if (turn.nativeQueueStatus) {
-            void api
-              .setThreadStatus(targetOf(turn), "is delayed by a temporary system issue and will retry after restart…")
-              .catch((error) => log.warn(`${label} could not update a deferred Agent status: ${String(error)}`));
-          } else if (turn.previewTs) {
-            void settleSlackPreview(api, targetOf(turn), turn.previewTs, DEFERRED_PLACEHOLDER).catch((error) =>
-              log.warn(`${label} could not update a deferred queue preview: ${String(error)}`),
-            );
-          }
-          return;
-        }
-
-        const startedAt = Date.now();
-        log.info(`${label} turn start: turn=${turn.id} session=${turn.session} channel=${turn.channelId}`);
-        const { text: recent, consumed } = buffer.peek(turn.bufferKey);
-        const prompt = `${discussionBlock(recent)}${turn.baseText}`;
-        const buffered = collectSlackBufferedFiles(consumed, new Set(turn.fileIds));
+      },
+      notifyDropped,
+      execute: async (turn, discussion, onCompleted) => {
         const messageRef = messageRefOf(turn.id);
         const reaction =
           reactionEmojis && messageRef
@@ -351,10 +354,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
             invokeSlackTurn(
               agent,
               turn.session,
-              prompt,
+              `${discussionBlock(discussion.text)}${turn.baseText}`,
               { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label },
-              { primaryFileIds: turn.fileIds, buffered },
-              () => commitAnsweredTurn(store, buffer, { id: turn.id, bufferKey: turn.bufferKey, consumed }),
+              {
+                primaryFileIds: turn.fileIds,
+                buffered: collectSlackBufferedFiles(discussion.consumed, new Set(turn.fileIds)),
+              },
+              onCompleted,
             ),
             api,
             targetOf(turn),
@@ -367,40 +373,14 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               label,
             },
           );
-          log.info(`${label} turn done: turn=${turn.id} session=${turn.session} (${Date.now() - startedAt}ms)`);
-          await reaction?.complete();
         } catch (error) {
-          log.error(`${label} turn failed: turn=${turn.id} session=${turn.session}: ${String(error)}`);
           await reaction?.remove();
-        } finally {
-          store.remove(turn.id);
+          throw error;
         }
+        await reaction?.complete();
       },
     });
-
-    const notifyDropped = (turn: PendingSlackTurn): void => {
-      const target = targetOf(turn);
-      if (turn.nativeQueueStatus) void api.setThreadStatus(target, "").catch(() => {});
-      void settleSlackPreview(
-        api,
-        target,
-        turn.previewTs,
-        "⚠️ I couldn’t complete an earlier request — please ask again.",
-      ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
-    };
-
-    const submit = (turn: PendingSlackTurn, persist: boolean): void => {
-      if (persist) {
-        store.add(toStored(turn));
-        seen.add(turn.id);
-      }
-      queue.accept(turn);
-    };
-
-    const recovered = store.recover();
-    if (recovered.length) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
-    let seq = recovered.reduce((maximum, turn) => Math.max(maximum, turn.seq), 0);
-    for (const { attempts: _attempts, ...intent } of recovered) submit({ ...intent }, false);
+    let seq = runner.recover().reduce((maximum, turn) => Math.max(maximum, turn.seq), 0);
 
     // Acceptance touches no network, so it stays synchronous inside Slack's ACK window and the
     // delivery dedup ring alone is enough — there is no await for a duplicate delivery to race
@@ -513,7 +493,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           ? codePointPrefix(stripSlackMentions(slackMessageText(event), "").replace(/\s+/g, " ").trim(), 80)
           : undefined;
 
-      submit(
+      runner.submit(
         {
           id: logicalId,
           seq: ++seq,
@@ -633,7 +613,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       return new Response(null, { status: 200 });
     };
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () =>
-      Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined);
+      Promise.all([runner.idle(), sideTasks.drain()]).then(() => undefined);
     return { "POST /slack": handler };
   };
 }
