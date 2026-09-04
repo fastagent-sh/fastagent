@@ -8,6 +8,7 @@
 [![node](https://img.shields.io/node/v/@fastagent-sh/fastagent.svg)](https://nodejs.org)
 [![built with pi](https://img.shields.io/badge/built%20with-pi-0b7285.svg)](https://pi.dev)
 [![GitHub stars](https://img.shields.io/github/stars/fastagent-sh/fastagent?style=social)](https://github.com/fastagent-sh/fastagent/stargazers)
+[![follow @kid7st](https://img.shields.io/badge/follow-%40kid7st-000?logo=x)](https://x.com/kid7st)
 
 <p align="center">
   <sub>Built on</sub>
