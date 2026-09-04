@@ -122,6 +122,10 @@ src/
 │   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
 │   │                     # so it lives here and not under engines/ (#365)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   ├── secret.ts            # the ONE constant-time comparison every shared-secret gate reads through
+│   │                     # (control bearer token, telegram secret token, slack signature, feishu
+│   │                     # verification token/signature, agentcore envelope secret). An EMPTY expected
+│   │                     # value never matches: an unconfigured gate must not be passable by sending none
 │   ├── wait-health.ts       # readiness probe for a server THIS process reaches directly (deploy's
 │   │                     # published local port). NOT for a public URL a platform must reach: the
 │   │                     # registrars let the platform's own URL verification be the probe (#421)
@@ -211,6 +215,9 @@ src/
 │   │                     # the container reads them back with. The read side lived in fly/run.ts, which
 │   │                     # `start` had to reach into to deploy nothing on Fly.
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── hosts.ts             # the deploy targets as a value (DEPLOY_HOSTS): the CLI's `<host>` choices and
+│   │                     # HOST_ONLY_FLAGS's exhaustiveness both read it. Dependency-free, so
+│   │                     # `cli/program.ts` imports it at load time without pulling a command module
 │   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
 │   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
 │   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)

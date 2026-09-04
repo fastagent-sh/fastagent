@@ -10,8 +10,8 @@
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
  *
- * Every rung assembles the same VALUE first — a {@link PiAssembly}: the lease, the store, the session
- * factory and the engine thunk — and the agent is that value under the L0. The opener needs the value
+ * Every rung assembles the same VALUE first — a {@link PiAssembly}: the lease, the session factory
+ * and the engine thunk — and the agent is that value under the L0. The opener needs the value
  * itself (the control plane contends on the same lease and validates against the same registry), so
  * `assemblePiFromDefinition` hands it out and `createPiAgentFromDefinition` is it plus the L0.
  */
@@ -264,7 +264,6 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
  */
 export interface PiAssembly {
   lease: Lease;
-  sessions: PiSessionRecordStore;
   sessionFactory: PiAgentSessionFactory;
   /** The registry and configured model, resolved on first use (a credential read is async). */
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
@@ -347,7 +346,6 @@ function assemblePi(opts: {
   });
   return {
     lease,
-    sessions,
     sessionFactory,
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,

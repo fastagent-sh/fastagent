@@ -168,7 +168,9 @@ export async function buildAgentSessionRuntime(
       thinkingLevel,
       tools,
       env,
-      cwd,
+      // rootCwd, not the raw `cwd` pi hands the factory: `env` above is rooted at the canonical
+      // path, and a tool must not see two spellings of one directory under a symlinked workspace.
+      cwd: rootCwd,
       recordActivations: false,
     });
     return { ...result, services, diagnostics: services.diagnostics };

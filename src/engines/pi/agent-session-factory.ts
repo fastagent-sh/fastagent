@@ -401,9 +401,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       model,
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
-    // An extension handler that throws is otherwise dropped: pi fans errors out to registered
-    // listeners and has none by default, which on a server means a broken extension looks like an
-    // extension that simply did nothing.
     const { session } = await bindPiSession({
       services: await services,
       sessionManager,
