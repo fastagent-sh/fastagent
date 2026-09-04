@@ -1,5 +1,5 @@
 /**
- * Phase 3 transport conformance — docs/design/session-control.md §13: the HTTP+SSE wire protocol
+ * Transport conformance — docs/design/session-control.md §13: the HTTP+SSE wire protocol
  * (`createControlPlane`) and the remote client (`connectSessionControl`) are exercised TOGETHER over a
  * real node:http server against a real hub + faux agent: local and remote `SessionControl` must be
  * isomorphic (same interface, same answers), the envelope must be consumed internally (epoch/seq
@@ -80,7 +80,7 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   return out;
 }
 
-describe("session control over HTTP (Phase 3)", () => {
+describe("session control over HTTP", () => {
   it("fails closed: no/wrong token is 401 on every route, and connect() rejects", async () => {
     const served = await serveControl();
     try {

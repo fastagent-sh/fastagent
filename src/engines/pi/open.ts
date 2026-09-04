@@ -60,8 +60,8 @@ export interface CreatePiAgentFromDirOptions {
   sessionControl?: boolean;
   /** Additional raw tap with the FULL vocabulary: run events composed after the
    *  {@link sessionControl} hub's observer, plus the hub's own boundary-mutation events
-   *  (`state_changed`/`compaction_*`) via the hub's tap. TRUSTED seam: since Phase 2a an observer
-   *  receives each run's live modulation handles (see `SessionObserver`) — for read-only consumers
+   *  (`state_changed`/`compaction_*`) via the hub's tap. TRUSTED seam: an observer receives each
+   *  run's live modulation handles (see `SessionObserver`) — for read-only consumers
    *  use the hub's `events()` stream instead. */
   observer?: SessionObserver;
 }

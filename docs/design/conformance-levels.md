@@ -1,6 +1,6 @@
 ---
 title: Conformance levels
-description: "Where a session's state lives is a deployment choice the SPEC already defines — not an implementation detail. Two axes (state locality × engine class), the postures that pin them, and what each owes."
+description: "Where a session's state lives is a deployment choice the SPEC already defines — not an implementation detail. The axis, the postures that pin it, and what each owes."
 status: current
 ---
 
@@ -8,8 +8,8 @@ status: current
 
 ## 1. Decision
 
-**Where a session's state lives is an explicit deployment choice, and the engine class that serves it
-is a separate one.** Neither is a property of "fastagent"; both are properties of a deployment.
+**Where a session's state lives is an explicit deployment choice** — a property of a deployment, not
+of "fastagent". Which engine class serves it is a separate question, and it is settled.
 
 The protocol says so already. [SPEC](../SPEC.md) §6, under *Portable conformance (optional; required
 for Agents claiming serverless portability)*:
@@ -22,24 +22,20 @@ for Agents claiming serverless portability)*:
 A resident Agent is permitted, the cost is named, and the level is optional. `test/spec-conformance.ts`
 encodes the same shape: `pair?()` is an OPTIONAL subject capability, because MUST 6 is optional.
 
-The recurring question — "should `invoke` be built on pi's `AgentSession` instead of its
-`AgentHarness`?" — used to be malformed, because it conflated the level with the engine. It has since
-been answered by the engine itself: §2.
+`invoke` runs on pi's `AgentSession` (pi-coding-agent), the class pi itself consumes (its TUI, RPC
+and SDK all run on it); the serving path moved there off the former `AgentHarness` (pi-agent-core),
+because being the sole consumer of a surface nobody dogfoods is a position, not an architecture.
+That leaves one axis: §2.
 
-## 2. One axis now
+## 2. The axis
 
 | Axis | Values | What it decides |
 |---|---|---|
 | **State locality** | `per-invoke` \| `resident` | SPEC MUST 6. Whether a turn may require the previous turn's process. |
 
-There used to be a second axis — which pi class ran the turn, `AgentHarness` (pi-agent-core) or
-`AgentSession` (pi-coding-agent) — and the interesting cell was `per-invoke × session`: portable AND
-extension-hosting. That cell is now the only one, for a reason outside this repo: pi 0.84 replaced
-`AgentHarness` with an unimplemented lane-based skeleton, and pi does not consume that class itself
-(its TUI, RPC and SDK all run on `AgentSession`). Being the sole consumer of a surface nobody
-dogfoods is a position, not an architecture, so the serving path moved.
+The serving cell is `per-invoke` on `AgentSession`: portable AND extension-hosting.
 
-What made the move affordable, measured on the way through:
+What makes per-invoke binding affordable on that class, measured:
 
 - **The expensive half is shareable.** Services (the `ResourceLoader`, settings, model runtime) build
   once at ~23 ms; binding a session to a record costs ~0.6 ms per turn.
@@ -116,8 +112,7 @@ gates them is wiring, not class:
   exposes an injectable `bindExtensions({ uiContext, mode })` seam for exactly that, the same door its
   RPC mode uses.
 - **`commands()` stays a listing**, not a dispatch surface: the data plane takes prompts as text, so
-  what typing `/name` means belongs to the client. That was a `harness`-era constraint that has become
-  a deliberate contract line.
+  what typing `/name` means belongs to the client — a deliberate contract line.
 
 What has NOT changed is the level: `per-invoke` remains the serving posture, and residency remains a
 deployment choice with the bill in §5. The engine swap moved which class runs a turn, not where the

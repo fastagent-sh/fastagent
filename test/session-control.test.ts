@@ -1,5 +1,5 @@
 /**
- * Session control plane, Phase 1 (observation plane) conformance — docs/design/session-control.md:
+ * Session control plane, observation-plane conformance — docs/design/session-control.md:
  * projection fidelity (AgentEvent is a projection of the rich stream), ordering, run boundaries
  * (exactly one run_settled per run_started, incl. caller cancellation), reconnect (entries cursor +
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
@@ -71,7 +71,7 @@ async function watchUntilSettled(control: SessionControl, session: string) {
   return seen;
 }
 
-describe("session control (Phase 1): observation plane", () => {
+describe("session control: observation plane", () => {
   it("run boundaries + projection fidelity: the invoke stream is a projection of the rich stream", async () => {
     const { agent, control } = await makeObserved([
       fauxAssistantMessage([fauxThinking("hmm"), { type: "text", text: "answer" }]),
@@ -503,7 +503,7 @@ async function waitForToolStarted(control: SessionControl, session: string) {
   }
 }
 
-describe("session control (Phase 2a): run modulation", () => {
+describe("session control: run modulation", () => {
   it("steer joins the active run: accepted with its runId, delivered before the next model call, settle window spans it", async () => {
     const { agent, control, gate } = await makeGated([
       fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
@@ -789,7 +789,7 @@ async function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = 
   return { ...built, spec: `${model.provider}/${model.id}` };
 }
 
-describe("session control (Phase 2b): boundary mutations", () => {
+describe("session control: boundary mutations", () => {
   it("capabilities carry only what is SESSIONLESS: the registry has a list, thinking levels do not", async () => {
     const { control, sessions, spec } = await makeBoundary([]);
     const caps = control.capabilities();
@@ -1850,7 +1850,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 });
 
-describe("session control (Phase 4): session lifecycle", () => {
+describe("session control: session lifecycle", () => {
   it("sessions.list() reports the deployment's conversations, with the name update({ name }) gave them", async () => {
     const { control, sessions } = await makeBoundary([]);
     await sessions.openOrCreate("room-a");

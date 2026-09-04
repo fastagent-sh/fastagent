@@ -1,9 +1,9 @@
 /**
- * The remote `SessionControl` — the client half of the Phase 3 transport (design §13). Engine- and
- * server-neutral: speaks only the wire protocol `createControlPlane` serves (HTTP JSON + SSE with the
- * {sessionId, epoch, seq, event} envelope) and re-exposes the SAME `SessionControl` interface, so
- * local and remote consumers are isomorphic — client code does not change when the agent moves out
- * of process.
+ * The remote `SessionControl` — the client half of the HTTP + SSE transport
+ * (docs/design/session-control.md §13). Engine- and server-neutral: speaks only the wire protocol
+ * `createControlPlane` serves (HTTP JSON + SSE with the {sessionId, epoch, seq, event} envelope) and
+ * re-exposes the SAME `SessionControl` interface, so local and remote consumers are isomorphic —
+ * client code does not change when the agent moves out of process.
  *
  * Envelope consumption is internal: a seq gap (loss in transit on this connection) — and any
  * mid-stream transport failure, a server restart included (its connections drop) — THROWS from

@@ -191,7 +191,7 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
-  // (core.md §11), keeping the tools list + guidelines below. Preserve pi's coding identity only for
+  // (core.md §2), keeping the tools list + guidelines below. Preserve pi's coding identity only for
   // the full coding surface; a partial/empty surface must not claim machine capabilities it lacks.
   // The four this sentence NAMES — reading, executing, editing, writing. Searching is not part of the
   // claim, so requiring it would demote an agent that can do everything the identity says it can.

@@ -48,7 +48,7 @@ export interface FastagentConfig {
    * per-boot bearer token and write `<stateRoot>/control.json` for local discovery. The serve
    * binds all interfaces by default, so the routes are LAN-reachable with the token as the only
    * protection — bind loopback (`--bind 127.0.0.1`; not `http.host`, which travels into a deployed
-   * image), firewall the port, or wrap it for real exposure (design §14).
+   * image), firewall the port, or wrap it for real exposure (docs/design/session-control.md §14).
    */
   sessionControl?: boolean;
   /** Deploy-time declarations for what the agent needs on the box, so real agents don't hand-write a
