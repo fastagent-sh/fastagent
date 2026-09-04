@@ -111,12 +111,12 @@ export async function fauxControlledAgent(
     boundary:
       options.boundary === false
         ? undefined
-        : () => ({
+        : {
             lease,
             models: modelRuntime,
             sessionFactory,
             defaults: { model, thinkingLevel: options.thinkingLevel ?? "medium" },
-          }),
+          },
     ...(options.commands ? { commands: options.commands } : {}),
     ...(options.tap ? { tap: options.tap } : {}),
   });

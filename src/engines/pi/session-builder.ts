@@ -30,29 +30,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
-  type AgentSession,
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   SessionManager,
-  type ToolDefinition,
-  createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
+import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime } from "./models.ts";
 import { reportModuleLoadFailures } from "../../log.ts";
-import {
-  type ReadonlySessionManager,
-  type ToolActivation,
-  agentSessionManager,
-  sessionToolActivation,
-  turnContext,
-} from "./tool-context.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
@@ -80,12 +70,9 @@ export async function buildAgentSessionRuntime(
     // opener uses (open.ts); those inputs cannot drift between the two consumption shapes.
     // (Definition→prompt assembly is NOT shared: serving re-reads live per invoke, this runtime is a
     // startup snapshot and pi appends skills/env itself — see the header.) `tools` arrives with
-    // search_tools applied; deferral is EMULATED below like serving
-    // (what you iterate is what you serve): the initial active set excludes deferred tools (applied
-    // on the session in createRuntime — pi's session starts all-active), and the activation bridge
-    // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
-    // instead of the served one.
-    const { config, modelSpec, agentDir, authPath, stateRoot, tools, deferredToolNames, toolCollisions, toolFailures } =
+    // search_tools applied; the bind below applies deferral like serving does (what you iterate is
+    // what you serve).
+    const { config, modelSpec, agentDir, authPath, stateRoot, tools, toolCollisions, toolFailures } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
@@ -99,34 +86,6 @@ export async function buildAgentSessionRuntime(
     // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
     // happen once per runtime rather than per session rebuild (/new, /resume, fork).
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
-    // fastagent mounts pi's complete coding set itself; `noTools: "builtin"` below keeps the runtime
-    // from adding duplicate copies.
-    // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
-    // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
-    // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
-    // resolves through sessionRef at call time, exactly like the serving path resolves its session.
-    const customToolDefs = tools.map((t) => ({
-      name: t.name,
-      label: t.name,
-      description: t.description ?? "",
-      parameters: t.parameters,
-      // Propagate the execution mode — an activating tool (the builtin loader) declares "sequential"
-      // so pi serializes its batch; without this, pi's outer active-set diff double-stamps parallels.
-      executionMode: t.executionMode,
-      execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
-        const bound = sessionRef.current;
-        // Unreachable by construction (createRuntime sets sessionRef before any turn can run a tool).
-        // Throw rather than silently run outside the turn context — that would disguise a broken
-        // session-lifecycle invariant as a normal out-of-turn call (fail visibly).
-        if (!bound) throw new Error("tool executed before its session was built (lifecycle invariant broken)");
-        return turnContext.run(
-          { cwd, sessionManager: bound.sessionManager, tools: bound.activation },
-          // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
-          // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
-          () => t.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
-        );
-      },
-    })) as unknown as ToolDefinition[];
 
     // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including
     // them here would duplicate them).
@@ -142,9 +101,8 @@ export async function buildAgentSessionRuntime(
       thinkingLevel: config.thinkingLevel,
       definition,
       extensionPaths,
-      customTools: tools,
-      customToolDefs,
-      deferredToolNames,
+      tools,
+      env,
       systemPrompt,
     };
   }
@@ -155,17 +113,6 @@ export async function buildAgentSessionRuntime(
   // load edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd
   // would leak env or require mutating global env at runtime.
   const rootCwd = canonicalPath(dir);
-  // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
-  // while the memoized assembly (and its tool execute closures) stays. The bridge shares the
-  // session's lifetime because a tool call has to see what the previous one activated. Note on
-  // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
-  // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
-  // the whole batch serially and the outer diff sees correct snapshots.
-  // NO activation record here: pi's chat session has nowhere to put one (see sessionToolActivation's
-  // `onActivated`), which is the documented divergence from serving — a resumed chat re-discovers.
-  const sessionRef: {
-    current?: { session: AgentSession; sessionManager: ReadonlySessionManager; activation: ToolActivation };
-  } = {};
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
     // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
@@ -179,16 +126,8 @@ export async function buildAgentSessionRuntime(
   };
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const {
-      modelRuntime,
-      modelSpec,
-      thinkingLevel,
-      definition,
-      extensionPaths,
-      customToolDefs,
-      deferredToolNames,
-      systemPrompt,
-    } = await assemblyFor(cwd);
+    const { modelRuntime, modelSpec, thinkingLevel, definition, extensionPaths, tools, env, systemPrompt } =
+      await assemblyFor(cwd);
 
     // Per session, NOT memoized with the assembly: pi replaces the session on /new, /resume and
     // fork, and its extension contract is that the replacement gets freshly loaded extensions
@@ -213,50 +152,27 @@ export async function buildAgentSessionRuntime(
     // AFTER the services, because an extension may be what defines the model. `registerProvider()`
     // is pi's documented way for one to add providers, and extensions do not execute until the
     // services are built — resolving first fails a definition whose configured model comes from its
-    // own extension with a bare "unknown model", after warning about credentials for a provider
-    // that does not exist yet.
+    // own extension with a bare "unknown model".
     const model = resolveModel(modelRuntime, modelSpec);
-
-    const result = await createAgentSessionFromServices({
+    // The same bind serving performs, minus the activation record: pi's chat session has nowhere to
+    // put one, which is the documented divergence — a resumed chat re-discovers via search_tools.
+    // NOT bound to the host here: InteractiveMode.bindCurrentSessionExtensions() calls
+    // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
+    // here too would emit session_start twice per chat, so an extension opening a resource on start
+    // would open two.
+    const { context: _context, ...result } = await bindPiSession({
       services,
       sessionManager,
       sessionStartEvent,
       model,
       thinkingLevel,
-      // NO `tools` allowlist. It would freeze the tool set at build time, and pi lets an extension
-      // register from `session_start`, a command, or any handler — those names would not be in a
-      // startup snapshot, so `refreshTools()` would filter them straight back out and the extension
-      // would look like it did nothing. `noTools: "builtin"` gets the same guarantee the allowlist
-      // was really there for (the machine's `defaultTools` setting cannot add pi's own copies on top
-      // of ours) without freezing anything.
-      noTools: "builtin",
-      customTools: customToolDefs,
+      tools,
+      env,
+      // rootCwd, not the raw `cwd` pi hands the factory: `env` above is rooted at the canonical
+      // path, and a tool must not see two spellings of one directory under a symlinked workspace.
+      cwd: rootCwd,
+      recordActivations: false,
     });
-    sessionRef.current = {
-      session: result.session,
-      sessionManager: agentSessionManager(result.session, result.session.sessionManager.getSessionId()),
-      activation: sessionToolActivation(result.session),
-    };
-    // NOT bound here: the HOST does it. InteractiveMode.bindCurrentSessionExtensions() calls
-    // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
-    // here too would emit session_start twice per chat, so an extension opening a resource on start
-    // would open two.
-    // Deferral emulation: pi starts THIS agent's tools active — every coding tool it mounted, plus
-    // every custom and extension tool. So narrow by SUBTRACTING the deferred names from whatever is
-    // active, rather than stating a set: an exact-set-equality gate would silently stop narrowing the
-    // day pi activates one more.
-    //
-    // Applied on EVERY build including /resume: pi's chat session does not record activations (its
-    // SessionContext has no activeToolNames), so "restore prior activations" is not implementable
-    // here — deferral stays consistently ON and a resumed conversation re-discovers via search_tools
-    // (a documented divergence from serving, where activations persist in the session). The deferred
-    // SET comes from the shared assembly (one definition of "deferred"), never recomputed here.
-    if (deferredToolNames.length > 0) {
-      const active = result.session.getActiveToolNames();
-      if (deferredToolNames.some((n) => active.includes(n))) {
-        result.session.setActiveToolsByName(active.filter((n) => !deferredToolNames.includes(n)));
-      }
-    }
     return { ...result, services, diagnostics: services.diagnostics };
   };
 

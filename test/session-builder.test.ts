@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -403,6 +403,64 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         await expect(rt.fork("m1", { position: "at" })).resolves.toMatchObject({ cancelled: false });
         expect(rt.cwd).toBe(realDir);
       } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      process.chdir(originalCwd);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session builder: a tool sees one spelling of the workspace", () => {
+  it("binds the turn context to the canonical workspace when a resumed session records a symlinked one", async () => {
+    // pi hands the factory the session header's cwd, which is whatever spelling was recorded; the
+    // scope guard only canonicalizes to COMPARE. Passing that through put the tool's ctx.cwd and the
+    // ExecutionEnv (rooted at the canonical path) on two spellings of one directory.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), "fa-chat-symlink-")));
+    const dir = join(root, "agent", "fastagent");
+    const observedKey = "__fastagent_chat_tool_cwd_test__";
+    const piUrl = new URL("../src/pi.ts", import.meta.url).href;
+    const originalCwd = process.cwd();
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "persona.md"), "You are terse.\n");
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `import { defineTool, z } from ${JSON.stringify(piUrl)};
+         export default {
+           model: "openai-codex/gpt-5.5",
+           tools: [defineTool({
+             name: "inspect_cwd",
+             description: "Report the workspace this turn runs in.",
+             input: z.object({}),
+             execute: async (_input, ctx) => {
+               globalThis[${JSON.stringify(observedKey)}] = ctx.cwd;
+               return "ok";
+             },
+           })],
+         };\n`,
+      );
+      // The same directory under a second name. A session recorded through it canonicalizes to the
+      // workspace, so the scope guard admits it — and the raw spelling reaches the bind.
+      symlinkSync(join(root, "agent"), join(root, "link"));
+      const linked = join(root, "link", "fastagent");
+      const recorded = join(root, "linked-session.jsonl");
+      await writeFile(
+        recorded,
+        `${JSON.stringify({ type: "session", version: 3, id: "linked", timestamp: new Date().toISOString(), cwd: linked })}\n`,
+      );
+
+      process.chdir(dir);
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, join(root, "sessions")));
+      try {
+        await expect(rt.importFromJsonl(recorded, linked)).resolves.toMatchObject({ cancelled: false });
+        const tool = rt.session.agent.state.tools.find((candidate) => candidate.name === "inspect_cwd");
+        expect(tool).toBeDefined();
+        await tool!.execute("inspect-cwd-1", {});
+        expect((globalThis as Record<string, unknown>)[observedKey]).toBe(dir);
+      } finally {
+        delete (globalThis as Record<string, unknown>)[observedKey];
         rt.session.dispose?.();
       }
     } finally {

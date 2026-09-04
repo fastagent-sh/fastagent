@@ -9,6 +9,11 @@
  * Above L2 sits the agent opener createPiAgentFromDir (open.ts), which both `dev` and
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
+ *
+ * Every rung assembles the same VALUE first — a {@link PiAssembly}: the lease, the session factory
+ * and the engine thunk — and the agent is that value under the L0. The opener needs the value
+ * itself (the control plane contends on the same lease and validates against the same registry), so
+ * `assemblePiFromDefinition` hands it out and `createPiAgentFromDefinition` is it plus the L0.
  */
 import {
   formatSkillsForSystemPrompt,
@@ -253,11 +258,25 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 // ── §3 the reusable assembly ladder: L1 / L2 ────────────────────────────────
 
 /**
+ * The assembly, as a value: what every rung builds and what the agent runs on. The opener hands it to
+ * the control plane too — boundary mutations contend on the SAME lease and validate against the SAME
+ * registry the runs use, which is only true if there is one of each to hand over.
+ */
+export interface PiAssembly {
+  lease: Lease;
+  sessionFactory: PiAgentSessionFactory;
+  /** The registry and configured model, resolved on first use (a credential read is async). */
+  engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
+  /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
+  thinkingLevel: ThinkingLevel;
+}
+
+/**
  * Shared low-level wiring: resolve the model spec against the collection, default the K ports, build
- * the agent. Internal — the public rungs decide the systemPrompt (L1 from instructions, L2 from the
+ * the parts. Internal — the public rungs decide the systemPrompt (L1 from instructions, L2 from the
  * directory) and route through here.
  */
-function buildPiAgent(opts: {
+function assemblePi(opts: {
   model: string;
   thinkingLevel?: ThinkingLevel;
   providers?: Provider[];
@@ -285,19 +304,17 @@ function buildPiAgent(opts: {
    *  every one of those three must follow the workspace, not the loader. */
   cwd?: string;
   lease?: Lease;
-  observer?: SessionObserver;
-  onAssembly?: OnAssembly;
-}): Agent {
+}): PiAssembly {
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
   const cwd = opts.cwd ?? env.cwd;
-  // Materialized here (not defaulted inside the L0) so the exposed parts carry the SAME lease
-  // instance the agent runs under — boundary mutations must contend on it.
+  // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the
+  // agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   // The model and its runtime resolve on FIRST USE: building a ModelRuntime is async while
   // assembling an agent is not, so the credential read belongs on the first turn rather than in the
-  // caller's constructor. Memoized by the factory, and shared with the control plane below so a
-  // boundary mutation validates against the registry the runs actually use.
+  // caller's constructor. Memoized, and shared with the control plane so a boundary mutation
+  // validates against the registry the runs actually use.
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
   const resolveEngine = () => {
     engine ??= (async () => {
@@ -327,34 +344,18 @@ function buildPiAgent(opts: {
     excludedToolNames: omittedBuiltinNames(opts.tools ?? [], cwd),
     env,
   });
-  opts.onAssembly?.({
+  return {
     lease,
     sessionFactory,
-    // The control plane needs the registry and the configured pair as VALUES, and both only exist
-    // after the first credential read. Asking for them lazily keeps assembly synchronous without
-    // making the hub wait on a runtime it may never need (a control-less deployment never calls it).
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-  });
-  return createPiAgentFromSession({ lease, observer: opts.observer, sessionFactory });
+  };
 }
 
-/**
- * INTERNAL seam (workspace ↔ assembly): hands the hub-wiring consumer the assembly's live parts —
- * the SAME session factory and lease the agent runs with, plus the model registry behind a thunk —
- * so boundary mutations (session-control.ts) contend on the real lease and validate against the real
- * registry. Called synchronously, exactly once, before the agent is returned. Not public surface.
- */
-export type PiAssemblyParts = {
-  lease: Lease;
-  sessionFactory: PiAgentSessionFactory;
-  /** The registry and configured model, resolved on first use (a credential read is async). */
-  engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
-  /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
-  thinkingLevel: ThinkingLevel;
-};
-
-type OnAssembly = (parts: PiAssemblyParts) => void;
+/** The agent an assembly runs as: the L0 over its lease and session factory. */
+export function agentOf(assembly: PiAssembly, observer?: SessionObserver): Agent {
+  return createPiAgentFromSession({ lease: assembly.lease, observer, sessionFactory: assembly.sessionFactory });
+}
 
 /**
  * L1 system prompt: `instructions` ARE the prompt (no engine base, no wrapping); the skills listing
@@ -427,20 +428,22 @@ export interface CreatePiAgentOptions {
 
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
-  return buildPiAgent({
-    model: options.model,
-    thinkingLevel: options.thinkingLevel,
-    providers: options.providers,
-    authPath: options.authPath,
-    systemPrompt: instructionsPrompt(options.instructions, options.skills),
-    // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
-    tools: options.tools ? withSearchTool(options.tools) : options.tools,
-    skills: options.skills,
-    sessions: options.sessions,
-    env: options.env,
-    lease: options.lease,
-    observer: options.observer,
-  });
+  return agentOf(
+    assemblePi({
+      model: options.model,
+      thinkingLevel: options.thinkingLevel,
+      providers: options.providers,
+      authPath: options.authPath,
+      systemPrompt: instructionsPrompt(options.instructions, options.skills),
+      // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
+      tools: options.tools ? withSearchTool(options.tools) : options.tools,
+      skills: options.skills,
+      sessions: options.sessions,
+      env: options.env,
+      lease: options.lease,
+    }),
+    options.observer,
+  );
 }
 
 /**
@@ -482,18 +485,17 @@ export interface CreatePiAgentFromDefinitionOptions {
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
   observer?: SessionObserver;
-  /** INTERNAL seam for hub wiring; see {@link OnAssembly}. */
-  onAssembly?: OnAssembly;
 }
 
 /**
- * L2: "point at a directory → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
- * call. Returns the definition so callers can surface diagnostics/collisions.
+ * L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. Returns the
+ * definition so callers can surface diagnostics/collisions. The opener consumes this form because
+ * the control plane needs the parts; {@link createPiAgentFromDefinition} is it plus the L0.
  */
-export async function createPiAgentFromDefinition(
+export async function assemblePiFromDefinition(
   dir: string,
-  options: CreatePiAgentFromDefinitionOptions,
-): Promise<{ agent: Agent; definition: LoadedDefinition }> {
+  options: Omit<CreatePiAgentFromDefinitionOptions, "observer">,
+): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where
   // tools operate and whose ancestors are walked for ② context.
   const cwd = options.cwd ?? dir;
@@ -518,7 +520,7 @@ export async function createPiAgentFromDefinition(
   // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener
   // passes an explicit authPath, so this only affects direct L2 callers).
   const authPath = options.authPath ?? defaultAuthPath(resolveSecretsDir(dir));
-  const agent = buildPiAgent({
+  const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
     // THE directory rung's model surface: built-ins + the agent's own models.json (custom endpoints,
@@ -563,8 +565,15 @@ export async function createPiAgentFromDefinition(
     cwd,
     env,
     lease: options.lease,
-    observer: options.observer,
-    onAssembly: options.onAssembly,
   });
-  return { agent, definition };
+  return { assembly, definition };
+}
+
+/** L2: "point at a directory → agent": {@link assemblePiFromDefinition} under the L0. */
+export async function createPiAgentFromDefinition(
+  dir: string,
+  options: CreatePiAgentFromDefinitionOptions,
+): Promise<{ agent: Agent; definition: LoadedDefinition }> {
+  const { assembly, definition } = await assemblePiFromDefinition(dir, options);
+  return { agent: agentOf(assembly, options.observer), definition };
 }

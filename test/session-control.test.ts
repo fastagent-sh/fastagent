@@ -1344,14 +1344,14 @@ describe("session control: boundary mutations", () => {
           throw new Error("validation rejects before any write is asked for");
         },
       },
-      boundary: () => ({
+      boundary: {
         lease: inProcessLease(),
         models,
         sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
         defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
-      }),
+      },
     });
     const state = await control.sessions.get("sBroken").state();
     expect(state.status).toBe("idle");
@@ -1405,14 +1405,14 @@ describe("session control: boundary mutations", () => {
           return { landed: ["leafEntryId" as const], leafEntryId: leafId };
         },
       },
-      boundary: () => ({
+      boundary: {
         lease: inProcessLease(),
         models,
         sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
         defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
-      }),
+      },
       tap: (_session, event) => seen.push(event),
     });
     expect(await control.sessions.get("sBrokenMove").update({ leafEntryId: "a" })).toEqual({ ok: true });
@@ -1732,7 +1732,7 @@ describe("session control: boundary mutations", () => {
         throw new Error("no session for you");
       },
     };
-    const { control: broken } = createPiSessionControl({ sessions, boundary: () => boundary });
+    const { control: broken } = createPiSessionControl({ sessions, boundary });
     const pre = await broken.sessions.get("sPre").compact();
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);

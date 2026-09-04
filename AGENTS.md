@@ -122,6 +122,10 @@ src/
 │   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
 │   │                     # so it lives here and not under engines/ (#365)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   ├── secret.ts            # the ONE constant-time comparison every shared-secret gate reads through
+│   │                     # (control bearer token, telegram secret token, slack signature, feishu
+│   │                     # verification token/signature, agentcore envelope secret). An EMPTY expected
+│   │                     # value never matches: an unconfigured gate must not be passable by sending none
 │   ├── wait-health.ts       # readiness probe for a server THIS process reaches directly (deploy's
 │   │                     # published local port). NOT for a public URL a platform must reach: the
 │   │                     # registrars let the platform's own URL verification be the probe (#421)
@@ -211,6 +215,9 @@ src/
 │   │                     # the container reads them back with. The read side lived in fly/run.ts, which
 │   │                     # `start` had to reach into to deploy nothing on Fly.
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── hosts.ts             # the deploy targets as a value (DEPLOY_HOSTS): the CLI's `<host>` choices and
+│   │                     # HOST_ONLY_FLAGS's exhaustiveness both read it. Dependency-free, so
+│   │                     # `cli/program.ts` imports it at load time without pulling a command module
 │   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
 │   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
 │   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
@@ -232,7 +239,10 @@ src/
     ├── service.ts           # createAgentService: the public one-call shortcut = this engine's opener +
     │                         # the neutral mountAgentService. Here, not in src/service.ts, because
     │                         # opening a DIRECTORY is the only pi-specific part of it
-    ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
+    ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt. Every rung builds a
+    │                         # PiAssembly VALUE (lease, store, session factory, engine thunk) and puts the
+    │                         # L0 over it; the opener takes the value itself, since the control plane
+    │                         # must contend on the same lease and validate against the same registry
     ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half: lease (single-writer
     │                         # floor), terminals (settled message/thrown error → SPEC terminal +
     │                         # retryable), EventQueue (push→pull), prompt image prep, the SPEC
@@ -243,7 +253,9 @@ src/
     │                         # controls, and exactly one settlement
     ├── agent-session-factory.ts # the engine binding: the assembly (model/prompt/skills/tools) bound
     │                         # to one record per invoke. services shared, session per turn. Carries
-    │                         # the adaptations pi's TUI origins require — see its header
+    │                         # the adaptations pi's TUI origins require — see its header. bindPiSession
+    │                         # is the ONE binding of tools + turn context + deferral to a pi session;
+    │                         # chat's session-builder binds through it too (recordActivations: false)
     ├── session-store.ts     # session records on pi's SessionManager: Caller ids encoded into names
     │                         # pi accepts, a record published on create (pi buffers until the first
     │                         # assistant message), crash reconciliation for interrupted tool calls

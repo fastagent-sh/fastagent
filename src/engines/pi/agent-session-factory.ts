@@ -157,6 +157,100 @@ function toolDefinitions(tools: MountedTool[], env: ExecutionEnv, bound: { conte
   })) as unknown as ToolDefinition[];
 }
 
+export interface BindPiSessionOptions {
+  services: AgentSessionServices;
+  sessionManager: SessionManager;
+  /** Chat only: pi's runtime hands the resumed/new session its start event. */
+  sessionStartEvent?: Parameters<typeof createAgentSessionFromServices>[0]["sessionStartEvent"];
+  model: AnyModel;
+  thinkingLevel: ThinkingLevel | undefined;
+  tools: MountedTool[];
+  env: ExecutionEnv;
+  /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
+  cwd: string;
+  /** Built-ins omitted by an explicit lower-level tool list. */
+  excludedToolNames?: readonly string[];
+  /** The CALLER's session id — what a tool asking which conversation it is in hears. Defaults to
+   *  pi's own id, which is right where the caller has none (chat). */
+  sessionId?: string;
+  /** Record each discovered activation on the session, so the next bind restores it. Off for chat:
+   *  pi's own session has nowhere to put one, so a resumed chat re-discovers. */
+  recordActivations: boolean;
+}
+
+/**
+ * Bind ONE pi session to a record: the definition's tools as pi definitions over one turn context,
+ * pi's own tool copies kept off, and deferral applied. The per-invoke factory and the resident chat
+ * runtime both bind here — they differ in what they hand in (a shared vs a per-session `services`,
+ * record-resolved vs configured settings) and in whether a discovered activation has a record to
+ * land in, and in nothing else. Two copies of this drifted once (the tool adapter and the deferral
+ * narrowing each existed twice, identical but for those parameters).
+ */
+export async function bindPiSession(
+  options: BindPiSessionOptions,
+): Promise<Awaited<ReturnType<typeof createAgentSessionFromServices>> & { context: TurnContext }> {
+  const { services, sessionManager, model, thinkingLevel, tools, env, cwd, recordActivations } = options;
+  const excludedToolNames = options.excludedToolNames ?? [];
+  const deferred = tools.filter(isDeferredTool).map((t) => t.name);
+  const bound: { context?: TurnContext } = {};
+  const result = await createAgentSessionFromServices({
+    services,
+    sessionManager,
+    ...(options.sessionStartEvent ? { sessionStartEvent: options.sessionStartEvent } : {}),
+    model,
+    thinkingLevel,
+    // pi would otherwise mount its built-ins on top of fastagent's copies, offering duplicate names.
+    // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted. And
+    // NO `tools` allowlist: it would freeze the set at bind time, while pi lets an extension register
+    // from `session_start` — `noTools: "builtin"` gives the guarantee the allowlist was there for.
+    noTools: "builtin",
+    ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
+    customTools: toolDefinitions(tools, env, bound),
+  });
+  const { session } = result;
+  const sessionId = options.sessionId ?? session.sessionManager.getSessionId();
+  // One context for the whole session: it describes the SESSION, not the call. The activation
+  // bridge above all — a tool call has to see what the previous one activated.
+  const context: TurnContext = {
+    cwd,
+    sessionManager: agentSessionManager(session, sessionId),
+    // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
+    // the tool still callable next turn (see {@link TOOL_ACTIVATION_ENTRY}).
+    tools: sessionToolActivation(
+      session,
+      recordActivations
+        ? (added) => session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added })
+        : undefined,
+    ),
+  };
+  bound.context = context;
+  // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
+  // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
+  // add back what THIS session has already discovered.
+  if (deferred.length > 0) {
+    const active = session.getActiveToolNames();
+    const mounted = new Set(session.getAllTools().map((tool) => tool.name));
+    const recorded = recordActivations ? recordedActivations(session) : [];
+    // A recorded name that is no longer mounted is dropped rather than replayed: pi's setter
+    // THROWS on an unknown name, so replaying one would brick every future turn of this session.
+    const restored = recorded.filter((name) => mounted.has(name));
+    const dropped = recorded.filter((name) => !mounted.has(name));
+    if (dropped.length > 0) {
+      const key = `${sessionId}\u0000${[...new Set(dropped)].sort().join(",")}`;
+      const emit = warnedDroppedActivations.has(key) ? log.debug : log.warn;
+      warnedDroppedActivations.add(key);
+      emit(
+        `[fastagent] session ${sessionId}: dropping recorded activation(s) no longer mounted: ${[...new Set(dropped)].join(", ")}`,
+      );
+    }
+    const next = [...new Set([...active.filter((name) => !deferred.includes(name)), ...restored])];
+    if (next.length !== active.length || next.some((name) => !active.includes(name))) {
+      session.setActiveToolsByName(next);
+    }
+  }
+  return { ...result, context };
+}
+
 /**
  * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and
  * carries on with the rest — sound for a TUI that shows them, silent for a server that never looks.
@@ -230,7 +324,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     );
   }
   const tools = options.tools ?? [];
-  const deferred = tools.filter(isDeferredTool).map((t) => t.name);
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
   let prompt = typeof options.systemPrompt === "function" ? options.systemPrompt() : options.systemPrompt;
   let skills = options.skills ?? [];
@@ -308,57 +401,18 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       model,
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
-    const bound: { context?: TurnContext } = {};
-    const { session } = await createAgentSessionFromServices({
+    const { session } = await bindPiSession({
       services: await services,
       sessionManager,
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
-      // pi would otherwise mount its built-ins on top of fastagent's copies, offering duplicate names.
-      // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted.
-      noTools: "builtin",
-      ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
-      customTools: toolDefinitions(tools, env, bound),
-    });
-    // One context for the whole session: it describes the SESSION, not the call. The activation
-    // bridge above all — a tool call has to see what the previous one activated.
-    bound.context = {
+      tools,
+      env,
       cwd,
-      sessionManager: agentSessionManager(session, sessionId),
-      // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
-      // the tool still callable next turn (see {@link TOOL_ACTIVATION_ENTRY}).
-      tools: sessionToolActivation(session, (added) =>
-        session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added }),
-      ),
-    };
-    // An extension handler that throws is otherwise dropped: pi fans errors out to registered
-    // listeners and has none by default, which on a server means a broken extension looks like an
-    // extension that simply did nothing.
-    //
-    // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
-    // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
-    // add back what THIS session has already discovered.
-    if (deferred.length > 0) {
-      const active = session.getActiveToolNames();
-      const mounted = new Set(session.getAllTools().map((tool) => tool.name));
-      const recorded = recordedActivations(session);
-      // A recorded name that is no longer mounted is dropped rather than replayed: pi's setter
-      // THROWS on an unknown name, so replaying one would brick every future turn of this session.
-      const restored = recorded.filter((name) => mounted.has(name));
-      const dropped = recorded.filter((name) => !mounted.has(name));
-      if (dropped.length > 0) {
-        const key = `${sessionId}\u0000${[...new Set(dropped)].sort().join(",")}`;
-        const emit = warnedDroppedActivations.has(key) ? log.debug : log.warn;
-        warnedDroppedActivations.add(key);
-        emit(
-          `[fastagent] session ${sessionId}: dropping recorded activation(s) no longer mounted: ${[...new Set(dropped)].join(", ")}`,
-        );
-      }
-      const next = [...new Set([...active.filter((name) => !deferred.includes(name)), ...restored])];
-      if (next.length !== active.length || next.some((name) => !active.includes(name))) {
-        session.setActiveToolsByName(next);
-      }
-    }
+      excludedToolNames,
+      sessionId,
+      recordActivations: true,
+    });
     return session;
   };
 }
