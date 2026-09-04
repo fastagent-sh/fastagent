@@ -100,10 +100,10 @@ interface AppliedProperties {
  * produce one output. `_` escapes itself for the same reason. A trailing `.` or `-` is legal
  * mid-name but not at the end, so it escapes too.
  *
- * Injective within this encoding — which is only sufficient because new records live in their own
- * directory. The older spelling draws names from the same character set (it stored a room literally
- * called `s42` as `s42`, which is also this encoding of `42`), so one directory would make some
- * names ambiguous no matter how either side spells them.
+ * Injective within this encoding — which is only sufficient because this store's records live in
+ * their own directory. A name this store did not write draws from the same character set and can
+ * still decode: a file called `s42` is also this encoding of `42`, so one directory would make some
+ * names ambiguous no matter how this side spells them.
  *
  * Readability is deliberate: `-1001234567890` becomes `s-1001234567890`, so an operator can still
  * tell which room a file belongs to.
@@ -154,15 +154,11 @@ export function callerSessionId(recordId: string): string | undefined {
  * each header and would make a renamed agent directory look like an empty store (see
  * {@link recordFiles}).
  *
- * NEW records live in a subdirectory of their own, because the two engines cannot share a namespace:
- * both spell ids into `[A-Za-z0-9._-]`, so neither can claim a prefix the other cannot produce, and
- * a directory holding both would have names that belong to two conversations at once — in whichever
- * direction it is read. Separate directories make each side's own injectivity sufficient.
- *
- * A PRE-EXISTING record is continued in place: looked up by the older spelling, which is injective
- * on its own terms, and appended to where it lies. Both spellings are the same v3 jsonl, so a
- * conversation started before this store keeps going rather than restarting empty. Nothing on disk
- * is rewritten.
+ * Records live in a subdirectory of their own, because a name this store did not write can still
+ * decode to a Caller id: a file called `s42` beside them is also this encoding of `42`, so a shared
+ * directory would answer `42` with a record it does not own. Only this directory is scanned, which
+ * makes this encoding's own injectivity sufficient — a record written before this store existed
+ * lies outside it and is never read.
  *
  * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
  * the serving path provides — the single-writer lease is taken before any store call, so no two
@@ -283,8 +279,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const rows: SessionSummary[] = [];
       const unreadable: string[] = [];
       for (const file of files) {
-        // A record this store did not write (the older spelling) cannot be decoded back to a Caller
-        // id, and a row nobody can dial is worse than a row that is missing. It stays openable BY id.
+        // A name this store did not write cannot be decoded back to a Caller id, and a row nobody
+        // can dial is worse than a row that is missing.
         const session = callerSessionId(file.id);
         if (!session) continue;
         try {

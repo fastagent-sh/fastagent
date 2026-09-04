@@ -489,9 +489,9 @@ carries.
 
 `list` answers in CALLER ids, never storage names. The pi implementation encodes a Caller's id into a
 name pi accepts (`-1001234567890` → `s-1001234567890`), and that encoding is storage detail: a listing
-that leaked it would hand a client strings it cannot dial back. Records written before this store
-existed use an older spelling that cannot be decoded, so they are OMITTED from a listing rather than
-reported under a name nobody can use — they are still opened and continued by id.
+that leaked it would hand a client strings it cannot dial back. A name this store did not write
+cannot be decoded, so it is OMITTED from a listing rather than reported under a name nobody can use.
+Records written before this store existed lie outside its directory and are not read at all.
 
 The pi implementation may use pi's richer session repository internally for stable entry ids
 and session reconstruction; both views point at the same durable root, and all writers share the

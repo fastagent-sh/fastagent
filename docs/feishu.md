@@ -340,11 +340,11 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/c-<chat>/` — downloaded inbound files, one directory per chat.
 
-An upgrade from the earlier session-mode model cleans itself up on the next start: the obsolete
-`owned-threads.json` is removed, and `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at
-load, since the re-keying means nothing can ever fold or clear them again. That old shape covered every
-thread bucket, so **buffered discussion in threads does not survive the upgrade** — a chat's own bucket
-does. The dropped count is logged.
+An upgrade from the earlier session-mode model leaves its state behind, unread: `owned-threads.json`
+and the `buffers.json` buckets keyed `<chat>:root:<id>`, which the re-keying means nothing can ever
+fold or clear again. That old shape covered every thread bucket, so **buffered discussion in threads
+does not survive the upgrade** — a chat's own bucket does. Nothing deletes either one; they are
+bounded and never grow, so removing them is optional cleanup.
 
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
 after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
@@ -378,9 +378,9 @@ Three behaviour changes, none of them opt-in:
   Scaffolded files are copies, so an existing workspace keeps the old text — see the send-tool section
   above for the one-line fix.
 
-State cleans itself up on the first start: `owned-threads.json` is removed, and `buffers.json` buckets
-under the retired key shape are dropped — which means **buffered discussion in threads does not survive
-the upgrade** (a chat's own bucket does). The dropped count is logged.
+State from the earlier model stays on disk, unread: `owned-threads.json` and the `buffers.json`
+buckets under the retired key shape — which means **buffered discussion in threads does not survive
+the upgrade** (a chat's own bucket does). Delete them if you want the state directory clean.
 
 Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
 

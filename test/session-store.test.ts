@@ -139,7 +139,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     for (const id of ["42", "-1001234567890", "oc_9:thread/1", "a b", "emoji-🌤", "trailing-", "_", "s42"]) {
       expect(callerSessionId(piSessionId(id))).toBe(id);
     }
-    // Not ours to decode: the older spelling and anything else are left out of a listing rather
+    // Not ours to decode: a name this store did not write is left out of a listing rather
     // than reported under a name no client could dial.
     expect(callerSessionId("%2Dweird")).toBeUndefined();
     expect(callerSessionId("s_ZZ")).toBeUndefined();
