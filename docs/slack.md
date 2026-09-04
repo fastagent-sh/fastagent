@@ -326,12 +326,13 @@ manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one
 
 `directMessageSession` and `groupMessageSession` are **removed** — placement and session identity
 follow from Slack's own primitives (an answer goes in a thread on the ask, and that thread is the
-session), which leaves nothing for the options to select. Delete them from `channels/slack.ts`:
-TypeScript refuses them, but a JavaScript channel file that still passes either is silently ignored.
+session), which leaves nothing for the options to select. Delete them from `channels/slack.ts`
+yourself: nothing rejects them at startup, and the file is loaded as ESM rather than type-checked, so a
+leftover option is ignored in silence while placement and the memory boundary change underneath it.
 
 If either was set to `continuous`, both where answers land and how sessions are keyed change with the
 removal, and **existing conversation history is not migrated** — every thread starts fresh. The obsolete
-`owned-threads.json` is deleted on the first start; nothing else needs cleaning up.
+`owned-threads.json` is left behind, unread by anything; delete it if you want the state directory clean.
 
 Slack's scaffolded `slack-send` already carried the "do not use this to answer the current turn"
 boundary its Feishu and Telegram siblings gained this release, so nothing to paste here.

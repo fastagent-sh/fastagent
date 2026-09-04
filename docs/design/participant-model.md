@@ -424,20 +424,16 @@ coupled three independent axes — session identity, reply placement, and the su
 who wanted room-level sessions was forced to also give up mention-free thread continuations. The
 model above sets each axis on its own principle, which leaves nothing for the modes to select.
 
-For Feishu/Lark, `buffers.json` buckets keyed `<chat>:root:<id>` are never read again — the re-keying
+For Feishu/Lark, `buffers.json` buckets keyed `<chat>:root:<id>` become unreachable — the re-keying
 means no place key can produce that shape again, so nothing can fold or clear them. Nothing deletes
-them either: they hold chat content and stay on disk, bounded and never growing, until an operator
-removes them.
+them either, and nothing deletes the obsolete `owned-threads.json`: both cleanups were migration code,
+which this repo does not carry. They are the operator's to remove, with the process stopped.
 
-`owned-threads.json` was deleted on the next start by 0.16 and 0.17 only — a pure index, so its
-removal was tidiness, not migration, and the code expired with 0.18 (test/migration-deadline.test.ts,
-now retired with it). Upgrading straight from 0.15 or earlier leaves the file behind, unread by
-anything; delete it if you want the state directory clean.
-
-That strands real content, once: the retired shape covered EVERY thread bucket and every main-chat
-quoted-reply bucket, so buffered discussion in threads does not survive the upgrade (a chat's own
-`<chat>` bucket does). A turn that was in flight across the upgrade loses its buffered context too —
-its `bufferKey` was persisted under the old shape. Both are one-time.
+The buffered content is lost to the agent either way: the retired shape covered EVERY thread bucket and
+every main-chat quoted-reply bucket, so buffered discussion in threads does not survive the upgrade (a
+chat's own `<chat>` bucket does), and a turn in flight across the upgrade loses its buffered context too
+— `turns.json` persisted its `bufferKey` under the old shape. What differs from a drop is only where it
+rests: those buckets sit in `buffers.json` holding chat content until someone removes them.
 
 Breaking changes for existing Feishu/Lark deployments:
 
@@ -456,13 +452,15 @@ Breaking changes for existing Feishu/Lark deployments:
 
 For Slack, placement and sessions are unchanged **under the default configuration**; what changes is
 the summon rule: a thread the agent has answered in admits bare replies until a second human is heard
-there, which restores the mention requirement. `owned-threads.json` is left behind by an upgrade from
-0.15 or earlier (see above); nothing reads it.
+there, which restores the mention requirement. `owned-threads.json` is left behind by the upgrade (see
+above); nothing reads it.
 
 Breaking changes for existing Slack deployments:
 
 - `directMessageSession` and `groupMessageSession` are removed — placement and session identity follow
-  from Slack's own primitives (§5), which leaves nothing for the options to select. TypeScript refuses
-  them; a JavaScript channel file that still passes either has it silently ignored;
+  from Slack's own primitives (§5), which leaves nothing for the options to select. Delete them by
+  hand: a workspace's `channels/slack.ts` is loaded as ESM, not type-checked, so a leftover option is
+  ignored in silence while placement and the memory boundary change underneath it. Feishu/Lark options
+  are the same;
 - a deployment that set either to `continuous` therefore changes both where answers land and how
   sessions are keyed. Existing history is not migrated, for the same reason as Feishu's re-keying above.
