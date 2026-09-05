@@ -154,7 +154,7 @@ Common options:
 | Option | Meaning |
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
-| `instructions` | String or function returning the system prompt. |
+| `instructions` | String or function returning the system prompt. The function is evaluated once per invoke, never during construction; a thrown error becomes that turn's `failed` event. |
 | `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
 | `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |

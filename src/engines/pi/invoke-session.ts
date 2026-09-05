@@ -29,7 +29,8 @@ import {
   type Prompt,
   type Scope,
 } from "../../agent.ts";
-import type { RetryScheduledEvent, RunSettledEvent, SessionEvent } from "../../session.ts";
+import type { RunSettledEvent, SessionEvent } from "../../session.ts";
+import { toRetryScheduledEvent } from "./retry-event.ts";
 import { type CancelHooks, cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
 import {
@@ -118,36 +119,9 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
         runId,
         data: { steering: event.steering.length, followUp: event.followUp.length },
       };
-    case "auto_retry_start": {
-      const retry: RetryScheduledEvent = {
-        type: "retry_scheduled",
-        timestamp: at,
-        runId,
-        data: {
-          operation: "assistant",
-          attempt: event.attempt,
-          maxAttempts: event.maxAttempts,
-          delayMs: event.delayMs,
-          error: event.errorMessage,
-        },
-      };
-      return retry;
-    }
-    case "summarization_retry_scheduled": {
-      const retry: RetryScheduledEvent = {
-        type: "retry_scheduled",
-        timestamp: at,
-        runId,
-        data: {
-          operation: "compaction",
-          attempt: event.attempt,
-          maxAttempts: event.maxAttempts,
-          delayMs: event.delayMs,
-          error: event.errorMessage,
-        },
-      };
-      return retry;
-    }
+    case "auto_retry_start":
+    case "summarization_retry_scheduled":
+      return toRetryScheduledEvent(event, runId);
     default:
       return null;
   }

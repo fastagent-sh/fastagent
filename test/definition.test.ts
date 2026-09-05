@@ -14,6 +14,7 @@ import {
   createPiAgentFromDefinition,
   defineTool,
   type CreatePiAgentFromDefinitionOptions,
+  type AgentEvent,
   z,
 } from "../src/index.ts";
 import {
@@ -267,6 +268,43 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
 });
 
 describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
+  it("reads dynamic instructions once per invoke, never during construction", async () => {
+    const { faux } = makeFaux();
+    const seen: string[] = [];
+    const instructions = vi.fn((): string => `Instruction ${instructions.mock.calls.length}`);
+    faux.setResponses(
+      [1, 2].map(() => (context) => {
+        seen.push(context.systemPrompt ?? "");
+        return fauxAssistantMessage("ok");
+      }),
+    );
+    const agent = createPiAgent({ model: "faux/faux-1", providers: [faux.provider], instructions });
+    expect(instructions).not.toHaveBeenCalled();
+
+    await collect(agent.invoke({ session: "dynamic" }, { text: "first" }));
+    expect(instructions).toHaveBeenCalledTimes(1);
+    await collect(agent.invoke({ session: "dynamic" }, { text: "second" }));
+    expect(instructions).toHaveBeenCalledTimes(2);
+    expect(seen[0]).toContain("Instruction 1");
+    expect(seen[1]).toContain("Instruction 2");
+  });
+
+  it("reports an instruction read failure as a turn failure and recovers on the next invoke", async () => {
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("recovered")]);
+    const instructions = vi
+      .fn(() => "Ready")
+      .mockImplementationOnce(() => {
+        throw new Error("instructions unavailable");
+      });
+    const agent = createPiAgent({ model: "faux/faux-1", providers: [faux.provider], instructions });
+    const failed: AgentEvent[] = [];
+    for await (const event of agent.invoke({ session: "dynamic-failure" }, { text: "first" })) failed.push(event);
+    expect(failed).toMatchObject([{ type: "failed", details: "instructions unavailable" }]);
+    expect((await collect(agent.invoke({ session: "dynamic-failure" }, { text: "second" }))).text).toBe("recovered");
+    expect(instructions).toHaveBeenCalledTimes(2);
+  });
+
   it("resolves a model spec string and sends instructions verbatim — no engine base prepended", async () => {
     let seen: string | undefined;
     const { faux } = makeFaux();
@@ -420,9 +458,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
   });
 
   it("a persona.md edit between two invokes reaches the next turn's segment ① — no restart", async () => {
-    // Guards the PR's wiring point: persona must come from the per-turn live() re-read, NOT a boot-time
-    // closure value (the exact regression this PR fixes for `base`). If persona is hoisted out of live(),
-    // seen[1] stays DRAFT-BOT and the last assertion fails.
+    // Persona must come from the per-turn definition read rather than a boot-time snapshot.
     const dir = await mkdtemp(join(tmpdir(), "fa-live-persona-"));
     await writeFile(join(dir, "persona.md"), "You are DRAFT-BOT.\n");
     const seen: (string | undefined)[] = [];

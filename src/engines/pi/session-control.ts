@@ -32,7 +32,6 @@ import {
   PARTIAL_UPDATE_CODE,
   UPDATE_FIELDS,
   RUN_COMMAND_FAILED_CODE,
-  type RetryScheduledEvent,
   type SessionCapabilities,
   type SessionControl,
   type SessionEntries,
@@ -51,6 +50,7 @@ import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
+import { toRetryScheduledEvent } from "./retry-event.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
@@ -764,17 +764,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         log.warn(
           `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
         );
-        emitOwn(session, {
-          type: "retry_scheduled",
-          timestamp: Date.now(),
-          data: {
-            operation: "compaction",
-            attempt: event.attempt,
-            maxAttempts: event.maxAttempts,
-            delayMs: event.delayMs,
-            error: event.errorMessage,
-          },
-        } satisfies RetryScheduledEvent);
+        emitOwn(session, toRetryScheduledEvent(event));
       });
       try {
         const done = await bound.compact(instructions);

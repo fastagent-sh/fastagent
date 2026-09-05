@@ -164,6 +164,40 @@ describe("AgentSession L0: cancelling before the model call", () => {
 });
 
 describe("AgentSession L0: the observation plane", () => {
+  it.each([
+    ["auto_retry_start", "assistant"],
+    ["summarization_retry_scheduled", "compaction"],
+  ] as const)("projects %s with its operation and run identity", async (type, operation) => {
+    let emit!: (event: AgentSessionEvent) => void;
+    const session = {
+      ...promptRecordingSession().session,
+      subscribe: (listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      },
+      prompt: async () => {
+        emit({ type, attempt: 2, maxAttempts: 3, delayMs: 125, errorMessage: "temporarily unavailable" });
+        emit({ type: "message_end", message: fauxAssistantMessage("done") });
+      },
+    } as unknown as AgentSession;
+    const seen: SessionEvent[] = [];
+    const agent = createPiAgentFromSession({
+      sessionFactory: async () => session,
+      observer: (_id, event) => seen.push(event),
+    });
+    const events = await drain(agent.invoke({ session: "retry" }, { text: "hi" }));
+    expect(seen.find((event) => event.type === "retry_scheduled")).toEqual({
+      type: "retry_scheduled",
+      timestamp: expect.any(Number),
+      runId: seen[0]?.runId,
+      data: { operation, attempt: 2, maxAttempts: 3, delayMs: 125, error: "temporarily unavailable" },
+    });
+    expect(events).toEqual([
+      { type: "retrying", attempt: 2, maxAttempts: 3, delayMs: 125, reason: "temporarily unavailable" },
+      { type: "completed" },
+    ]);
+  });
+
   it.each(["threshold", "overflow"] as const)("logs %s recovery without changing the turn outcome", async (reason) => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const debug = vi.spyOn(log, "debug").mockImplementation(() => {});

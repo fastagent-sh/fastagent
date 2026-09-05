@@ -5,7 +5,7 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
@@ -1535,6 +1535,61 @@ describe("session control: boundary mutations", () => {
     const kinds = (await control.sessions.get("sB4").entries()).entries.map((e) => e.kind);
     expect(kinds).toContain("compaction");
     expect((await control.sessions.get("sB4").state()).status).toBe("idle");
+  });
+
+  it("publishes manual compaction retries without a run identity", async () => {
+    const { faux, models } = makeFaux();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const record = await sessions.openOrCreate("retry");
+    record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+    record.appendMessage({ role: "user", content: "recent", timestamp: 2 });
+    let emit!: (event: AgentSessionEvent) => void;
+    const session = {
+      sessionManager: record,
+      settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
+      subscribe: (listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      },
+      compact: async () => {
+        emit({
+          type: "summarization_retry_scheduled",
+          attempt: 2,
+          maxAttempts: 3,
+          delayMs: 125,
+          errorMessage: "temporarily unavailable",
+        });
+        return { summary: "summary" };
+      },
+      dispose: () => {},
+    } as unknown as AgentSession;
+    const { control } = createPiSessionControl({
+      sessions,
+      boundary: {
+        lease: inProcessLease(),
+        models,
+        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        sessionFactory: async () => session,
+      },
+    });
+    const seen: SessionEvent[] = [];
+    const handle = control.sessions.get("retry");
+    const watching = (async () => {
+      for await (const event of handle.events()) {
+        seen.push(event);
+        if (event.type === "compaction_finished") break;
+      }
+    })();
+    expect(await handle.compact()).toEqual({ ok: true });
+    await watching;
+    expect(seen.map((event) => event.type)).toEqual(["compaction_started", "retry_scheduled", "compaction_finished"]);
+    expect(seen[1]).toEqual({
+      type: "retry_scheduled",
+      timestamp: expect.any(Number),
+      data: { operation: "compaction", attempt: 2, maxAttempts: 3, delayMs: 125, error: "temporarily unavailable" },
+    });
+    expect(seen[1]).not.toHaveProperty("runId");
   });
 
   it("while a compaction is in flight the lease is held: state() compacting, dispatch session_busy", async () => {

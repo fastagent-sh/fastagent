@@ -40,6 +40,7 @@ async function agentWith(
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd }),
       engine: async () => ({ modelRuntime, model: faux.getModel() }),
+      readDefinition: () => ({ skills: [] }),
       cwd,
       ...options,
     }),
@@ -153,7 +154,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
           return fauxAssistantMessage("ok");
         },
       ],
-      { systemPrompt: "You are terse. Answer in one word." },
+      { readDefinition: () => ({ systemPrompt: "You are terse. Answer in one word.", skills: [] }) },
     );
 
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
@@ -326,7 +327,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
           return fauxAssistantMessage("ok");
         },
       ],
-      { live: async () => ({ systemPrompt: personaOnDisk }) },
+      { readDefinition: async () => ({ systemPrompt: personaOnDisk, skills: [] }) },
     );
 
     await collect(agent.invoke({ session: "s" }, { text: "turn one" }));
@@ -346,7 +347,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     };
     const agent = await agentWith([respond, respond], {
       tools: piAllCodingTools(process.cwd()),
-      live: async () => ({
+      readDefinition: async () => ({
         systemPrompt: "test",
         skills: [
           {
@@ -398,7 +399,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
 
     const agent = await agentWith([record, record, record], {
       sessions,
-      live: async () => ({ systemPrompt: persona }),
+      readDefinition: async () => ({ systemPrompt: persona, skills: [] }),
     });
 
     // Turn zero settles the shared services with "first".
@@ -424,7 +425,8 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
   it("skills declared by the definition are offered to the model", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-skills-"));
     const skillFile = join(dir, "release.md");
-    await (await import("node:fs/promises")).writeFile(skillFile, "# release\nCut a release.\n");
+    const content = "# release\nCut a release.\n";
+    await writeFile(skillFile, content);
     let systemPrompt = "";
     const agent = await agentWith(
       [
@@ -434,13 +436,13 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         },
       ],
       {
-        systemPrompt: "base",
         // pi lists skills only when `read` is mounted — a skill is a file the model has to open, so
         // advertising one it cannot read would be an empty offer. Serving always has it.
         tools: piAllCodingTools(process.cwd()),
-        skills: [{ name: "release", description: "Cut a release", filePath: skillFile }] as Parameters<
-          typeof piAgentSessionFactory
-        >[0]["skills"],
+        readDefinition: () => ({
+          systemPrompt: "base",
+          skills: [{ name: "release", description: "Cut a release", filePath: skillFile, content }],
+        }),
       },
     );
 

@@ -32,6 +32,11 @@ import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
+interface PiSessionDefinition {
+  systemPrompt?: string;
+  skills: Skill[];
+}
+
 export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. Continuity = same store + same session id. */
   sessions: PiSessionRecordStore;
@@ -46,13 +51,8 @@ export interface PiAgentSessionFactoryOptions {
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
-  /** Final assembled prompt, or a factory re-evaluated per turn. */
-  systemPrompt?: string | (() => string);
-  skills?: Skill[];
-  /** Per-turn source for the prompt+skills PAIR; supersedes the two above. This is what keeps
-   *  "the directory is the agent, LIVE" true on a shared `services`: the ResourceLoader is built
-   *  once, but what it serves is re-read here. */
-  live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
+  /** Read once per binding; prompt and skills come from the same definition read. */
+  readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
   /**
@@ -313,8 +313,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   }
   const tools = options.tools ?? [];
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
-  let prompt = typeof options.systemPrompt === "function" ? options.systemPrompt() : options.systemPrompt;
-  let skills = options.skills ?? [];
+  let definition: PiSessionDefinition;
   let services: Promise<AgentSessionServices> | undefined;
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
@@ -328,24 +327,17 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // CURRENT prompt/skills — serving refreshes both per turn, so a snapshot taken here would
       // serve a stale definition after the first edit.
       resourceLoaderOptions: definitionResourceLoaderOptions({
-        systemPrompt: () => prompt,
-        skills: () => skills,
+        systemPrompt: () => definition.systemPrompt,
+        skills: () => definition.skills,
       }),
     });
 
   return async (sessionId, inherit) => {
-    const fresh = options.live ? await options.live() : undefined;
-    const nextPrompt = fresh
-      ? fresh.systemPrompt
-      : typeof options.systemPrompt === "function"
-        ? options.systemPrompt()
-        : prompt;
-    const nextSkills = fresh ? (fresh.skills ?? []) : skills;
+    const next = await options.readDefinition();
     engine ??= options.engine();
     const { modelRuntime, model } = await engine;
     if (services === undefined) {
-      prompt = nextPrompt;
-      skills = nextSkills;
+      definition = next;
       services = buildServices(modelRuntime); // assigned before any await: concurrent turns share it
     } else {
       // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only
@@ -370,11 +362,10 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // front of every bind, to buy a guarantee nothing asks for.
       const loader = (await services).resourceLoader;
       const definitionChanged =
-        loader.getSystemPrompt() !== (nextPrompt || " ") ||
-        skillSet(loader.getSkills().skills) !== skillSet(nextSkills);
+        loader.getSystemPrompt() !== (next.systemPrompt || " ") ||
+        skillSet(loader.getSkills().skills) !== skillSet(next.skills);
       if (definitionChanged) {
-        prompt = nextPrompt;
-        skills = nextSkills;
+        definition = next;
         await loader.reload();
       }
     }

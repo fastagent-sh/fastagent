@@ -33,7 +33,7 @@ import type { ModuleLoadFailure } from "../../loader.ts";
 import { type ToolCollision, isDeferredTool, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
-import { piAgentSessionFactory } from "./agent-session-factory.ts";
+import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
@@ -254,12 +254,8 @@ function assemblePi(opts: {
    *  models.json is in scope (see createPiModelRuntime); building it is async, which is why it
    *  happens in the caller — L1 has no directory, so it keeps the synchronous built-ins path. */
   models?: ModelRuntime;
-  systemPrompt?: string | (() => string);
+  readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
   tools?: MountedTool[];
-  skills?: Skill[];
-  /** Per-invoke prompt+skills source (see {@link PiAgentSessionFactoryOptions.live}); supersedes the
-   *  two above. */
-  live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
   /** Where conversations live. Defaults to in-memory; the directory opener passes a durable store. */
   sessions?: PiSessionRecordStore;
   /** Where pi reads its own settings; see {@link PiAgentSessionFactoryOptions.agentDir}. */
@@ -301,9 +297,7 @@ function assemblePi(opts: {
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
-    systemPrompt: opts.systemPrompt,
-    skills: opts.skills,
-    live: opts.live,
+    readDefinition: opts.readDefinition,
     cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
@@ -333,7 +327,8 @@ export interface CreatePiAgentOptions {
   /**
    * The system prompt itself — no engine base and no wrapping (unlike the directory path, which
    * assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string or
-   * a factory re-evaluated per invoke. Pi appends the skills listing when read is active.
+   * a factory evaluated once per invoke, never during construction. Pi appends the skills listing
+   * when read is active.
    *
    * Not byte-for-byte verbatim: pi appends its own `Current working directory:` line to whatever
    * prompt it is given. What this rung guarantees is that no engine IDENTITY is imposed — a
@@ -372,16 +367,19 @@ export interface CreatePiAgentOptions {
 
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
+  const { instructions, skills = [] } = options;
   return agentOf(
     assemblePi({
       model: options.model,
       thinkingLevel: options.thinkingLevel,
       providers: options.providers,
       authPath: options.authPath,
-      systemPrompt: options.instructions,
+      readDefinition: () => ({
+        systemPrompt: typeof instructions === "function" ? instructions() : instructions,
+        skills,
+      }),
       // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
       tools: options.tools ? withSearchTool(options.tools) : options.tools,
-      skills: options.skills,
       sessions: options.sessions,
       env: options.env,
       lease: options.lease,
@@ -445,7 +443,7 @@ export async function assemblePiFromDefinition(
   const cwd = options.cwd ?? dir;
   const env = options.env ?? new NodeExecutionEnv({ cwd });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
-  // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
+  // report (skills/diagnostics/collisions). Serving re-reads it through readDefinition below.
   // `cwd`, not `env.cwd`, for the same reason as the tools below: `cwd` is the run root whose
   // ancestors carry ② project context. Reading it off the env pointed the AGENTS.md walk at the
   // loader's directory whenever a caller supplied both.
@@ -482,7 +480,7 @@ export async function assemblePiFromDefinition(
     // the finding set changes (boot findings are the baseline) — a runtime-written bad skill must
     // not silently vanish from the agent, and a static one must not spam every turn's log. The
     // next good edit heals both.
-    live: async () => {
+    readDefinition: async () => {
       const def = await loadAgentDefinition(dir, { cwd, env });
       reportFindingsIfChanged(def.dir, def);
       return {
@@ -500,7 +498,7 @@ export async function assemblePiFromDefinition(
     sessions: options.sessions,
     // Discovered so the serving assembly can WARN that it does not run them (and so the refusals
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
-    // change without a restart, which is why this sits outside `live` above.
+    // change without a restart, which is why this sits outside readDefinition above.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     cwd,
     env,
