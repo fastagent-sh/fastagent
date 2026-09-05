@@ -298,15 +298,18 @@ files.getUploadURLExternal
 at-least-once: if Slack commits completion but the network response is lost, an explicit retry may post a
 duplicate. The tool does not hide that uncertainty with an automatic final-step retry.
 
-## Access: `allowUsers`
+## Restricting who the agent answers
 
-`allowUsers: ["U0123456789"]` restricts the channel to the listed Slack user ids. An event from any
-other sender is ACKed and dropped before it can become a turn, be buffered as group context, act as a
-stop command, or trigger the DM-open welcome — the one boundary for an agent that answers to its owner
-alone. It composes with `groupBehavior` and a custom `route`, which only see events that passed it. An
-empty list is rejected at construction; omit the option to allow everyone the app can hear. Outbound
-destinations are not restricted by it: they are whatever the turn's instruction names, and an agent
-that must never write elsewhere wraps `slackTransport` in a tool of its own that checks the target.
+The Slack app installation is the access boundary: an internal app answers to one workspace, and only
+its members can reach it. To narrow that further, decide in `route` — an event routed to `null` never
+becomes a turn, buffered context, or a stop command:
+
+```ts
+route: (envelope) => (envelope.event?.user === "U0123456789" ? defaultSlackRoute(envelope) : null),
+```
+
+A custom `route` replaces the default thread-participation admission (bare replies in a thread the
+agent takes part in), which a DM-only agent does not use.
 
 ## Stopping a running turn
 

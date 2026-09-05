@@ -135,10 +135,6 @@ export interface SlackChannelOptions {
    * disables it; an object overrides either emoji name. Requires the `reactions:write` scope; a missing
    * scope degrades to no ack. */
   reactionAck?: false | { processing?: string; completed?: string };
-  /** Only these Slack user ids reach the agent — as a turn, as buffered context, as a stop command or
-   * as a DM-open welcome; every other sender's event is ACKed and dropped before any of those run. The
-   * access boundary for a one-owner agent. Default: everyone the app can hear. */
-  allowUsers?: string[];
   /** Custom route policy. Providing it disables the default participant-model thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
   /** Customer-facing failure formatter; full details always remain in operator logs. */
@@ -181,7 +177,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     aiDisclaimer,
     welcome = DEFAULT_WELCOME,
     reactionAck = {},
-    allowUsers,
     route,
     onError,
     apiBaseUrl = "https://slack.com/api",
@@ -196,10 +191,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   if (welcome !== false && typeof welcome !== "string") {
     throw new Error("slackChannel welcome must be a string or false");
   }
-  if (allowUsers !== undefined && (allowUsers.length === 0 || allowUsers.some((id) => typeof id !== "string" || !id))) {
-    throw new Error("slackChannel allowUsers must be a non-empty list of Slack user ids (omit it to allow everyone)");
-  }
-  const allowed = allowUsers && new Set(allowUsers);
   const reactionEmojis = resolveReactionEmojis(reactionAck);
 
   return ({ agent, stateRoot, control }) => {
@@ -613,12 +604,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         return Response.json({ challenge: envelope.challenge });
       }
       if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
-      // The access boundary: nothing below runs for a sender outside the allowlist (user-less
-      // events — bot posts, edits — reach nothing either way).
-      if (allowed && !(envelope.event?.user && allowed.has(envelope.event.user))) {
-        log.debug(`${label} dropped an event from ${envelope.event?.user ?? "(no user)"}: not in allowUsers`);
-        return new Response(null, { status: 200 });
-      }
       try {
         await waitForAuthentication();
       } catch (error) {

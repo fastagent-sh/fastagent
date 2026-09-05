@@ -814,44 +814,6 @@ describe("Slack sessions, context, and thread participation", () => {
   });
 });
 
-describe("Slack allowUsers", () => {
-  const appHome = (user: string): SlackEventEnvelope => ({
-    type: "event_callback",
-    team_id: "T1",
-    event_id: `Ev-home-${user}`,
-    event: { type: "app_home_opened", user, channel: "D1", tab: "messages" },
-  });
-
-  it("drops every event from a sender outside the list before a turn, a welcome, a stop or a buffer", async () => {
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { agent, calls } = replyingAgent();
-    const { handler, stateRoot, turnsIdle } = mount(agent, { allowUsers: ["U1"] });
-
-    for (const envelope of [
-      appHome("U2"),
-      message("1.0", { user: "U2", channel: "D1", channel_type: "im" }),
-      message("2.0", { user: "U2", channel: "D1", channel_type: "im", text: "stop" }),
-      message("3.0", { user: "U2", text: "<@UBOT> hello", type: "app_mention" }),
-      message("4.0", { user: "U2", thread_ts: "1.0", text: "group discussion" }),
-    ]) {
-      expect((await handler(signedRequest(envelope))).status).toBe(200);
-    }
-    await turnsIdle();
-    expect(calls).toHaveLength(0);
-    expect(fetchMock.mock.calls.map(([url]) => String(url)).filter((u) => !u.endsWith("/auth.test"))).toEqual([]);
-    expect(existsSync(join(stateRoot, "channels", "slack", "buffers.json"))).toBe(false);
-
-    await handler(signedRequest(message("5.0", { user: "U1", channel: "D1", channel_type: "im" })));
-    await turnsIdle();
-    expect(calls).toHaveLength(1);
-  });
-
-  it("rejects an empty list at construction", () => {
-    expect(() => slackChannel({ botToken: "x", signingSecret: SECRET, allowUsers: [] })).toThrow(/allowUsers/);
-  });
-});
-
 describe("Slack stop command", () => {
   const fakeControl = (result: { ok: true } | { code: string }) => {
     const aborted: string[] = [];
