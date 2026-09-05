@@ -36,7 +36,7 @@ export function createLogger(opts: { level: LogLevel; sink?: (line: string) => v
 /**
  * `FASTAGENT_LOG_LEVEL` resolved PER EMIT, not at import: this module is imported transitively by every
  * command module, so an import-time read runs before any command reaches `loadDotEnv` and could never
- * see the agent's `.secrets/.env` — the one `FASTAGENT_*` key that file could not carry.
+ * see the agent's `.secrets/.env` — a key that file could not carry at all.
  *
  * Three states: a valid value wins over the posture; a present-but-invalid one warns (once per distinct
  * value) and is treated as absent, so a typo (meant to make logs louder) can never silently pin the

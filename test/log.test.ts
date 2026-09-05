@@ -78,12 +78,12 @@ describe("FASTAGENT_LOG_LEVEL override (read per emit)", () => {
   it("an invalid value warns once and falls back to the posture", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      vi.stubEnv("FASTAGENT_LOG_LEVEL", "trace");
+      vi.stubEnv("FASTAGENT_LOG_LEVEL", "verbose-typo"); // a value used nowhere else: the warn-once state is module-level and never reset
       setLogLevel("debug"); // the invalid value did not disable the posture default
       log.debug("[t] d2");
       log.debug("[t] d3");
       const lines = err.mock.calls.map((c) => String(c[0]));
-      expect(lines.filter((l) => /unknown FASTAGENT_LOG_LEVEL "trace"/.test(l))).toHaveLength(1);
+      expect(lines.filter((l) => /unknown FASTAGENT_LOG_LEVEL "verbose-typo"/.test(l))).toHaveLength(1);
       expect(lines.some((l) => l.includes("[t] d2"))).toBe(true);
     } finally {
       err.mockRestore();
