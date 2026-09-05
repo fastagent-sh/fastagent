@@ -24,6 +24,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { log } from "../log.ts";
+import type { StateUrls } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
 
 /** Snapshot envelope version — an unknown version fails the restore loudly (never a silent skip). */
@@ -62,14 +63,6 @@ interface StateSnapshot {
   files: Record<string, string>;
 }
 
-/** Presigned S3 URLs for the one snapshot object, minted per envelope by the forwarder. */
-export interface StateUrls {
-  getUrl: string;
-  putUrl: string;
-  /** Authenticated forwarder callback that re-mints URLs with current Lambda credentials. */
-  refresh?: { url: string; auth: string };
-}
-
 /** Every regular file under `root`, as root-relative POSIX paths (stable across platforms). */
 async function walk(root: string, dir = root, out: string[] = []): Promise<string[]> {
   let entries: Dirent[];
@@ -89,7 +82,10 @@ async function walk(root: string, dir = root, out: string[] = []): Promise<strin
   return out;
 }
 
-/** Pack the whole state root into one gzipped snapshot object. */
+/** Pack the whole state root into one gzipped snapshot object.
+ *  ponytail: the WHOLE root, every idle edge — O(state size) per settled turn, and session jsonl
+ *  grows without bound. Upgrade path when the 16 MiB warning is real for someone: a per-file
+ *  manifest with content hashes, uploading only what changed. */
 export async function packStateRoot(stateRoot: string, maxBytes = MAX_SNAPSHOT_BYTES): Promise<Buffer> {
   const files: Record<string, string> = {};
   let raw = 0;

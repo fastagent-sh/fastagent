@@ -8,12 +8,13 @@ import { Buffer } from "node:buffer";
 import * as nodeCrypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
+import { ENVELOPE_KINDS, RESERVED_PATHS } from "../src/channels/agentcore-protocol.ts";
 import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
 
 type Envelope = Record<string, unknown> & { kind?: string; wake?: { url: string } };
 
 interface HarnessOptions {
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   /** What the container's /invocations returns for a given envelope (transport status + JSON body). */
   containerReply?: (envelope: Envelope) => { statusCode?: number; body: unknown };
   /** Scheduler behavior per call — throw to simulate an API error. */
@@ -30,6 +31,7 @@ function loadForwarder(options: HarnessOptions = {}) {
     INGRESS_SESSION_ID: "fastagent-ingress-x-0000000000000000",
     INGRESS_SECRET: "ingress-s3cret",
     WEBHOOKS_ENABLED: "1",
+    MAX_WEBHOOK_BODY_BYTES: String(MAX_WEBHOOK_BODY_BYTES),
     ...options.env,
   };
   const envelopes: Envelope[] = [];
@@ -253,6 +255,14 @@ describe("agentcore forwarder (executed)", () => {
     const f = loadForwarder();
     const res = await f.handler(webhookEvent({ body: "x".repeat(MAX_WEBHOOK_BODY_BYTES + 1) }));
     expect(res.statusCode).toBe(413);
+    expect(f.envelopes).toHaveLength(0);
+  });
+
+  it("refuses to forward at all when the ceiling itself is missing", async () => {
+    // The limit is an env var now, and `NaN` compares false against everything: a stack whose template
+    // predates it would drop the cap SILENTLY — the body would wake AgentCore and come back as a 502.
+    const f = loadForwarder({ env: { MAX_WEBHOOK_BODY_BYTES: undefined } });
+    await expect(f.handler(webhookEvent())).rejects.toThrow(/MAX_WEBHOOK_BODY_BYTES/);
     expect(f.envelopes).toHaveLength(0);
   });
 
@@ -551,5 +561,29 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
     );
     expect(res.statusCode).toBe(500);
     expect(f.scheduleCalls).toHaveLength(1);
+  });
+});
+
+describe("the forwarder speaks the protocol module's spelling", () => {
+  // The forwarder is JavaScript and cannot import agentcore-protocol.ts, so its literals are pinned
+  // to it here: a rename on one side fails this test, not a live deployment.
+  const src = forwarderSource();
+
+  it("names every reserved path", () => {
+    for (const path of Object.values(RESERVED_PATHS)) expect(src).toContain(`"${path}"`);
+  });
+
+  it("emits every envelope kind the adapter dispatches on, except the two nobody forwards", () => {
+    // `invoke` is the public data plane (a caller's own InvokeAgentRuntime) and `checkpoint` is the
+    // deploy driver's — neither passes through the forwarder.
+    for (const kind of ENVELOPE_KINDS) {
+      if (kind === "invoke" || kind === "checkpoint") continue;
+      expect(src).toContain(`kind: "${kind}"`);
+    }
+  });
+
+  it("reads the two EventBridge shapes by the protocol's field names", () => {
+    expect(src).toContain("event?.wakePoke");
+    expect(src).toContain("event?.scheduleFire");
   });
 });

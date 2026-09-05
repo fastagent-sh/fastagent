@@ -9,20 +9,16 @@
  * next door proves the stack CONVERGES; this proves the template is well-formed even when nobody wants
  * to wait eight minutes.
  *
- * Needs `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` and the `aws` CLI. Nothing here
- * creates a resource: STS identity, a template validation, and two describes against names that do
- * not exist.
+ * Needs the `aws` CLI able to authenticate — an exported key or a logged-in profile, the driver takes
+ * either. Nothing here creates a resource: STS identity, a template validation, and two describes
+ * against names that do not exist.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { TEMPLATE_FILE, agentcoreName, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
-import { CLI, aws, run, requireEnv } from "./env.ts";
-
-requireEnv("AWS_ACCESS_KEY_ID", "an AWS key for an account that can reach Bedrock AgentCore");
-requireEnv("AWS_SECRET_ACCESS_KEY", "the secret for AWS_ACCESS_KEY_ID");
-requireEnv("AWS_REGION", "a region where Bedrock AgentCore is available, e.g. us-east-1");
+import { CLI, aws, run } from "./env.ts";
 
 /** Generated artifact dirs, removed however the run ends: this probe writes a template per run and
  *  creates nothing in AWS, so the only thing it can leak is disk. */
