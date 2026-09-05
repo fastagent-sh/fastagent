@@ -176,7 +176,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
               return "reported";
             },
           }),
-        ] as Parameters<typeof piAgentSessionFactory>[0]["tools"],
+        ],
       },
     );
 
@@ -267,7 +267,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         fauxAssistantMessage([fauxToolCall("probe-a", {}, { id: "a" }), fauxToolCall("probe-b", {}, { id: "b" })]),
         fauxAssistantMessage("done"),
       ],
-      { tools: [probe("probe-a"), probe("probe-b")] as Parameters<typeof piAgentSessionFactory>[0]["tools"] },
+      { tools: [probe("probe-a"), probe("probe-b")] },
     );
 
     await collect(agent.invoke({ session: "s" }, { text: "go" }));
@@ -302,7 +302,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
             input: z.object({}),
             execute: async () => "",
           }),
-        ] as Parameters<typeof piAgentSessionFactory>[0]["tools"],
+        ],
       },
     );
 
@@ -451,22 +451,21 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
 });
 
 describe("piAgentSessionFactory: deferred tools stay discovered", () => {
-  const deferredPair = () =>
-    [
-      defineTool({
-        name: "eager",
-        description: "Always available.",
-        input: z.object({}),
-        execute: async () => "",
-      }),
-      defineTool({
-        name: "weather_forecast",
-        description: "Look up the weather forecast for a place.",
-        deferred: true,
-        input: z.object({}),
-        execute: async () => "sunny",
-      }),
-    ] as Parameters<typeof piAgentSessionFactory>[0]["tools"];
+  const deferredPair = () => [
+    defineTool({
+      name: "eager",
+      description: "Always available.",
+      input: z.object({}),
+      execute: async () => "",
+    }),
+    defineTool({
+      name: "weather_forecast",
+      description: "Look up the weather forecast for a place.",
+      deferred: true,
+      input: z.object({}),
+      execute: async () => "sunny",
+    }),
+  ];
 
   it("a tool discovered in one turn is still callable in the next", async () => {
     const offered: string[][] = [];
@@ -488,7 +487,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
           return fauxAssistantMessage("still here");
         },
       ],
-      { tools: withSearchTool(deferredPair() ?? []) },
+      { tools: withSearchTool(deferredPair()) },
     );
 
     await collect(agent.invoke({ session: "discovers" }, { text: "what is the weather?" }));
@@ -505,7 +504,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
         fauxAssistantMessage(fauxToolCall("search_tools", { query: "weather forecast" }, { id: "s1" })),
         fauxAssistantMessage("found it"),
       ],
-      { sessions: store, tools: withSearchTool(deferredPair() ?? []) },
+      { sessions: store, tools: withSearchTool(deferredPair()) },
     );
     await collect(withTool.invoke({ session: "shrinks" }, { text: "weather?" }));
 
@@ -522,7 +521,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
         sessions: store,
         tools: withSearchTool([
           defineTool({ name: "eager", description: "Always available.", input: z.object({}), execute: async () => "" }),
-        ] as Parameters<typeof piAgentSessionFactory>[0]["tools"] as never),
+        ]),
       },
     );
 

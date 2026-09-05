@@ -14,7 +14,6 @@
  */
 import { dirname, join } from "node:path";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   type AgentSessionServices,
@@ -30,12 +29,8 @@ import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
-import { DEFAULT_THINKING_LEVEL } from "./models.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
-
-/** pi's Model with the API-shape generic erased; fastagent only passes models through. */
-// biome-ignore lint/suspicious/noExplicitAny: variance-friendly model type, audited at this single point
-type AnyModel = Model<any>;
 
 export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. Continuity = same store + same session id. */
@@ -128,10 +123,6 @@ const warnedDroppedActivations = new Set<string>();
  * tool needs the session to reach the turn context. A tool that somehow runs before that binding
  * throws rather than executing outside the turn: a broken lifecycle must not look like a normal
  * out-of-turn call.
- *
- * It carries the whole turn CONTEXT, not just the session: the activation bridge holds the lock that
- * orders concurrent activations, so it has to live as long as the session the activations mutate.
- * Building it here, per call, would hand each parallel tool its own.
  */
 function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext }, sessionId: string): ToolDefinition[] {
   return tools.map(
@@ -186,9 +177,7 @@ export interface BindPiSessionOptions {
  * land in, and in nothing else. Two copies of this drifted once (the tool adapter and the deferral
  * narrowing each existed twice, identical but for those parameters).
  */
-export async function bindPiSession(
-  options: BindPiSessionOptions,
-): Promise<Awaited<ReturnType<typeof createAgentSessionFromServices>> & { context: TurnContext }> {
+export async function bindPiSession(options: BindPiSessionOptions): ReturnType<typeof createAgentSessionFromServices> {
   const { services, sessionManager, model, thinkingLevel, tools, cwd, recordActivations } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
@@ -211,7 +200,7 @@ export async function bindPiSession(
   const { session } = result;
   // One context for the whole session: it describes the SESSION, not the call. The activation
   // bridge above all — a tool call has to see what the previous one activated.
-  const context: TurnContext = {
+  bound.context = {
     cwd,
     sessionManager: agentSessionManager(session, sessionId),
     // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
@@ -223,7 +212,6 @@ export async function bindPiSession(
         : undefined,
     ),
   };
-  bound.context = context;
   // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
   // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
   // add back what THIS session has already discovered.
@@ -248,7 +236,7 @@ export async function bindPiSession(
       session.setActiveToolsByName(next);
     }
   }
-  return { ...result, context };
+  return result;
 }
 
 /**

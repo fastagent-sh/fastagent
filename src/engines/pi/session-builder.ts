@@ -157,7 +157,7 @@ export async function buildAgentSessionRuntime(
     // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
     // here too would emit session_start twice per chat, so an extension opening a resource on start
     // would open two.
-    const { context: _context, ...result } = await bindPiSession({
+    const result = await bindPiSession({
       services,
       sessionManager,
       sessionStartEvent,

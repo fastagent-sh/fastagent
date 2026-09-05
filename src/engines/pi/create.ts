@@ -274,8 +274,7 @@ function assemblePi(opts: {
   cwd?: string;
   lease?: Lease;
 }): PiAssembly {
-  const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
-  const cwd = opts.cwd ?? env.cwd;
+  const cwd = opts.cwd ?? opts.env?.cwd ?? process.cwd();
   // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the
   // agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
@@ -360,8 +359,8 @@ export interface CreatePiAgentOptions {
   /** Session persistence. Defaults to in-memory; inject piSessionRecordStore for restart-surviving
    *  continuity. */
   sessions?: PiSessionRecordStore;
-  /** Supplies the working directory at L1, which loads no definition. Defaults to a local
-   *  NodeExecutionEnv at process.cwd(). At L2 it also reads persona.md and skills/.
+  /** Supplies the working directory at L1 (default: process.cwd()), which loads no definition.
+   *  At L2 it also reads persona.md and skills/.
    *  Tools and project-context discovery use the local process directly; this is not a sandbox. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */

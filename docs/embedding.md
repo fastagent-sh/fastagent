@@ -187,7 +187,7 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
-| `env` | local `NodeExecutionEnv` (cwd) | supplies cwd at L1; reads persona/skills at L2; not a sandbox |
+| `env` | `process.cwd()` at L1; local `NodeExecutionEnv` at L2 | supplies cwd at L1; reads persona/skills at L2; not a sandbox |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 

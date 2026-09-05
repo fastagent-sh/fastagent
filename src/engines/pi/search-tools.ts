@@ -6,7 +6,6 @@
  * (same rule as the wake pair).
  */
 import { z } from "zod";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { log } from "../../log.ts";
 import { type MountedTool, defineTool, isDeferredTool, stripDeferredMarker } from "./tool.ts";
 
@@ -27,13 +26,13 @@ export function withSearchTool(tools: MountedTool[]): MountedTool[] {
     );
     fixed = stripDeferredMarker(fixed);
   }
-  if ((fixed as { executionMode?: string }).executionMode !== "sequential") {
+  if (fixed.executionMode !== "sequential") {
     // A non-sequential loader silently revives the parallel double-attribution (pi's diff around SDK
     // tools in chat) — enforce the mode rather than hope the author read the docs; warn so they know.
     log.warn(
       '[fastagent] search_tools lacks executionMode: "sequential" — forcing it: parallel loader calls would misattribute activations',
     );
-    fixed = { ...fixed, executionMode: "sequential" } as AgentTool;
+    fixed = { ...fixed, executionMode: "sequential" };
   }
   return fixed === authored ? tools : tools.map((t) => (t === authored ? fixed : t));
 }
