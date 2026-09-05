@@ -17,8 +17,14 @@ export default defineConfig({
   // Scaffold templates import the PUBLISHED "@fastagent-sh/fastagent" (they are copied verbatim into user
   // workspaces — data to tsc, excluded from the program). Tests that EXECUTE a template resolve that
   // name to the current source instead: truer than dist/ (asserts the template against today's
-  // defineTool), and dist/ doesn't exist on CI anyway.
-  resolve: { alias: { "@fastagent-sh/fastagent": new URL("./src/index.ts", import.meta.url).pathname } },
+  // defineTool), and dist/ doesn't exist on CI anyway. A subpath must be listed BEFORE the bare name:
+  // a string alias also matches `<name>/...` and would rewrite the subpath onto index.ts.
+  resolve: {
+    alias: {
+      "@fastagent-sh/fastagent/slack": new URL("./src/slack.ts", import.meta.url).pathname,
+      "@fastagent-sh/fastagent": new URL("./src/index.ts", import.meta.url).pathname,
+    },
+  },
   test: {
     pool: "forks",
     testTimeout: 30000,

@@ -1,5 +1,6 @@
 /** Rotating Slack bot-token provider backed by owner-only channel state. */
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
 const REFRESH_EARLY_MS = 5 * 60_000;
@@ -100,6 +101,12 @@ async function refreshSlackBotToken(input: {
   throw new Error("Slack bot-token rotation failed; restore credentials or reinstall the app", { cause: lastError });
 }
 
+/** Where the rotating pair lives under a state root — the channel, the send tool and `deploy --run`
+ *  all read the one file. */
+export function slackBotAuthPath(stateRoot: string): string {
+  return join(stateRoot, "channels", "slack", "bot-auth.json");
+}
+
 export interface SlackBotTokenProviderOptions {
   statePath: string;
   botToken: string;
@@ -150,22 +157,29 @@ export function createSlackBotTokenProvider(options: SlackBotTokenProviderOption
   let state = persisted && persisted.expiresAt >= configured.expiresAt ? persisted : configured;
   let refreshing: Promise<void> | undefined;
 
+  const fresh = (): boolean => state.expiresAt > Date.now() + REFRESH_EARLY_MS;
+
   return async () => {
-    if (state.expiresAt > Date.now() + REFRESH_EARLY_MS) return state.accessToken;
-    refreshing ??= refreshSlackBotToken({
-      refreshToken: state.refreshToken,
-      clientId: options.clientId as string,
-      clientSecret: options.clientSecret as string,
-      apiBaseUrl: (options.apiBaseUrl ?? "https://slack.com/api").replace(/\/$/, ""),
-      fetch: options.fetch ?? globalThis.fetch,
-    })
-      .then((next) => {
-        save(options.statePath, next);
-        state = next;
-      })
-      .finally(() => {
-        refreshing = undefined;
+    if (fresh()) return state.accessToken;
+    refreshing ??= (async () => {
+      // A refresh token is single-use. Another provider on this file — `fastagent fire` beside a
+      // running `dev` — may have rotated since this one loaded: adopt its pair instead of spending a
+      // refresh token it has already consumed.
+      const persisted = load(options.statePath);
+      if (persisted && persisted.expiresAt > state.expiresAt) state = persisted;
+      if (fresh()) return;
+      const next = await refreshSlackBotToken({
+        refreshToken: state.refreshToken,
+        clientId: options.clientId as string,
+        clientSecret: options.clientSecret as string,
+        apiBaseUrl: (options.apiBaseUrl ?? "https://slack.com/api").replace(/\/$/, ""),
+        fetch: options.fetch ?? globalThis.fetch,
       });
+      save(options.statePath, next);
+      state = next;
+    })().finally(() => {
+      refreshing = undefined;
+    });
     await refreshing;
     return state.accessToken;
   };

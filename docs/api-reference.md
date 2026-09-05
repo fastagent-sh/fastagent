@@ -721,7 +721,7 @@ import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/sessi
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
-import { slackChannel } from "@fastagent-sh/fastagent/slack";
+import { slackChannel, slackTransport } from "@fastagent-sh/fastagent/slack";
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 import { larkChannel } from "@fastagent-sh/fastagent/lark";
 ```

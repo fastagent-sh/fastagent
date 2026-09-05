@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
-import { readSlackBotAuthEnv } from "../../../channels/slack/bot-auth.ts";
+import { readSlackBotAuthEnv, slackBotAuthPath } from "../../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars } from "../../../deploy/channel-ingress.ts";
@@ -201,6 +201,6 @@ function isOurArtifact(path: string, content: string, host: HostDeploy["isOurs"]
 
 function deployEnvironment(agentDir: string, channels: readonly DeclaredChannel[]): NodeJS.ProcessEnv {
   if (!channels.some((channel) => channel.name === "slack")) return process.env;
-  const latest = readSlackBotAuthEnv(join(resolveStateRoot(agentDir), "channels", "slack", "bot-auth.json"));
+  const latest = readSlackBotAuthEnv(slackBotAuthPath(resolveStateRoot(agentDir)));
   return { ...process.env, ...latest };
 }

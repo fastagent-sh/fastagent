@@ -531,13 +531,13 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("TELEGRAM_SECRET_TOKEN=keep-me");
   });
 
-  it("never clobbers an author's companion tool when scaffolding the channel", async () => {
+  it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {
     const dir = await readyWorkspace();
     await mkdir(join(dir, "tools"), { recursive: true });
-    await writeFile(join(dir, "tools", "telegram-send.ts"), "// mine\n"); // author already has this tool name
+    await writeFile(join(dir, "tools", "telegram-send.ts"), "// from an older package\n");
     await cliInit(["add", "telegram"], dir);
-    expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true); // channel still scaffolded
-    expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toBe("// mine\n"); // tool untouched
+    expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
+    expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toContain("defineTool(");
   });
 
   it("refuses (writing nothing) when the agent dir is not channel-ready, with an actionable message", async () => {
