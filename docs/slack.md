@@ -267,8 +267,11 @@ The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
 Markdown splitting, rate-limit handling, and **current rotating credentials** the channel replies with,
 resolved at execute time, never at load. With no channel mounted (`fastagent fire` / `invoke`) the
 transport is built from `.env` over the same persisted pair under the state root, so a proactive send
-as the first Slack activity after a restart still refreshes and persists correctly. The scaffold is
-the place for application policy (a fixed destination, an allowlist): the transport stays the package's.
+as the first Slack activity after a restart still refreshes and persists correctly. That fallback
+uses Slack's default API base: an `apiBaseUrl` set in `channels/slack.ts` reaches the tool only while
+the channel is mounted. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`;
+application policy (a fixed destination, an allowlist) belongs in a tool of your own that calls the
+same `slackTransport(ctx.cwd)`.
 
 File mode uses Slack's current [external upload
 protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):

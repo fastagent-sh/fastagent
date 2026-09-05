@@ -8,7 +8,8 @@
  * and rate-limit handling. The channel registers at mount; the tool resolves at EXECUTE, never at
  * load (on AgentCore, loading runs before the state snapshot is restored), and builds a transport
  * from the documented env names only where no channel is mounted (`fastagent fire` / `invoke`) —
- * over the same persisted pair, so the lineage stays one.
+ * over the same persisted pair, so the lineage stays one. That fallback knows no `apiBaseUrl`: the
+ * option lives in the channel's glue, which is not loaded on those paths, so it uses Slack's default.
  */
 import { resolvePlacement, resolveStateRoot } from "../../paths.ts";
 import { createSlackBotTokenProvider, slackBotAuthPath } from "./bot-auth.ts";
