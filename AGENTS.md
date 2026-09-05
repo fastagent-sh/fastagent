@@ -45,7 +45,7 @@ src/
 │                           # Every layer's dependency list is asserted in package-boundary.test.ts.
 ├── index.ts                 # supported all-in-one entry (re-exports core + node + session + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
-├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel — the ASSEMBLY lives in service.ts and the agentcore one in channels/agentcore-service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command)
+├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel — the ASSEMBLY lives in service.ts and the agentcore one in channels/agentcore-service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command — except `deploy`, whose dispatcher keeps only the host-neutral prelude and hands off to one `commands/deploy/<host>.ts` per target)
 ├── telegram.ts, github.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   slack.ts, feishu.ts,
 │   lark.ts
@@ -199,7 +199,7 @@ src/
 │   │                        # bought with a real deploy or a red nightly. A parser's judgement must also
 │   │                        # match the GRANULARITY of the action it drives (one question per command),
 │   │                        # and "we could not read the host" is a third answer, never "absent".
-│   │                        # The CLI branch that picks between them is cli/commands/deploy.ts; what it may NOT
+│   │                        # The CLI dispatcher that picks between them is cli/commands/deploy.ts; what it may NOT
 │   │                        # hold is a fact about ANOTHER host ("--into-linked is railway's" lived in three
 │   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per host-only flag
 │   │                        # that only WARNS elsewhere. `--tunnel` is host-only too and stays a usage GATE

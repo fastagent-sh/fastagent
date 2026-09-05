@@ -19,10 +19,7 @@ import { spawnRunner } from "../../../deploy/runner.ts";
 import { type ResolvedPlacement, exists } from "../../../paths.ts";
 import { loadSchedules } from "../../../schedule/discover.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor, writeArtifacts } from "./shared.ts";
-
-const ISOURS_AGENTCORE: HostDeploy["isOurs"] = (path, content) =>
-  path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content);
+import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
 
 /** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
 function shellArg(value: string): string {
@@ -30,12 +27,10 @@ function shellArg(value: string): string {
 }
 
 export const agentcoreHost: HostDeploy = {
-  isOurs: ISOURS_AGENTCORE,
+  isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, config, channels, webhookChannels, longConnectionChannels, pre } = ctx;
+    const { opts, agentDir, workspace, config, channels, webhookChannels, longConnectionChannels, pre, write } = ctx;
     const { modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
-    // AgentCore: one CloudFormation stack (runtime + forwarder Lambda + EventBridge schedules); no
-    // public URL and no resident process — see deploy/agentcore/plan.ts for the topology decisions.
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a
     // reclaimed session has nothing to wake it — events in the gap are silently lost. `--run` gates
     // (deploying a channel that can't connect); generate-only warns and prints the runbook.
@@ -114,10 +109,9 @@ export const agentcoreHost: HostDeploy = {
         console.error(`[fastagent] warn: ${msg}`);
       }
     }
-    await writeArtifacts(workspace, plan.artifacts, {
+    await write(plan.artifacts, {
       force: !!opts.force,
       alwaysWrite: [`${container.agentPrefix}${FORWARDER_FILE}`],
-      isOurs: ISOURS_AGENTCORE,
     });
     if (opts.run) {
       return runDeployAgentcore({
@@ -142,8 +136,8 @@ export const agentcoreHost: HostDeploy = {
 };
 
 /**
- * `deploy agentcore --run`: drive aws + docker to completion. Mirrors {@link runDeployFly} — same
- * credential carry via {@link assembleSecrets}, same runner seam (spawned `aws` + `docker`, cwd = the
+ * `deploy agentcore --run`: drive aws + docker to completion. Mirrors the fly driver — same
+ * credential carry via {@link carryCredentials}, same runner seam (spawned `aws` + `docker`, cwd = the
  * workspace so the build context is the agent). The AgentCore-specific sequence (identity → buildx →
  * ECR → CloudFormation → outputs → webhooks) lives in {@link deployAgentcoreRun}; the params temp
  * file (secret values off argv) is created here — 0600, removed after the run either way.

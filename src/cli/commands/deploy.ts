@@ -17,9 +17,9 @@ import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
 import { railwayHost } from "./deploy/railway.ts";
-import type { DeployOptions, HostDeploy } from "./deploy/shared.ts";
+import { type DeployOptions, type HostDeploy, writeArtifacts } from "./deploy/shared.ts";
 
-export { writeArtifacts } from "./deploy/shared.ts";
+export { writeArtifacts };
 
 /** Every host, by the name the CLI takes. Typed over {@link DeployHost} so a host added to the list
  *  without a module here fails to compile. */
@@ -31,7 +31,7 @@ export const HOSTS: Record<DeployHost, HostDeploy> = {
 };
 
 /** A flag exactly one host honours, and what the OTHERS do instead. `instead` is exhaustive over the
- *  non-owners, so a host added to {@link DEPLOY_HOSTS} cannot silently lose its line. */
+ *  non-owners, so a host added to `DEPLOY_HOSTS` cannot silently lose its line. */
 interface HostOnlyFlag<Owner extends DeployHost> {
   flag: string;
   owner: Owner;
@@ -135,7 +135,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
   const { channels } = pre;
   warnHostOnlyFlags(host, opts);
-  await HOSTS[host].deploy({
+  const target = HOSTS[host];
+  await target.deploy({
     opts,
     agentDir,
     workspace,
@@ -144,5 +145,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     channels,
     webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
     longConnectionChannels: channels.filter((channel) => channel.ingress === "long-connection"),
+    // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host
+    // module can pass one — the four that did each stated theirs twice, in a position where a
+    // neighbour's type-checks and silently makes `--force` a no-op for the host's own artifact.
+    write: (artifacts, options) => writeArtifacts(workspace, artifacts, { ...options, isOurs: target.isOurs }),
   });
 }

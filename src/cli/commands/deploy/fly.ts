@@ -17,14 +17,12 @@ import { deployFlyRun } from "../../../deploy/fly/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { type ResolvedPlacement, readTextIfExists } from "../../../paths.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor, writeArtifacts } from "./shared.ts";
-
-const ISOURS_FLY: HostDeploy["isOurs"] = (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content);
+import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
 
 export const flyHost: HostDeploy = {
-  isOurs: ISOURS_FLY,
+  isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, channels, longConnectionChannels, pre } = ctx;
+    const { opts, agentDir, workspace, channels, longConnectionChannels, pre, write } = ctx;
     const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets } = pre;
     // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
     // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
@@ -97,7 +95,7 @@ export const flyHost: HostDeploy = {
       autostop: opts.stop ? "stop" : "suspend",
       scaleToZero: opts.scaleToZero !== false,
     });
-    await writeArtifacts(workspace, plan.artifacts, { force: !!opts.force, isOurs: ISOURS_FLY });
+    await write(plan.artifacts, { force: !!opts.force });
     if (opts.run) {
       return runDeployFly({
         agentDir,

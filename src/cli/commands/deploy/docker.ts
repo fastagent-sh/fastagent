@@ -17,20 +17,15 @@ import { openExternalUrl } from "../../../open-url.ts";
 import { type ResolvedPlacement, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials, writeArtifacts } from "./shared.ts";
+import { type HostDeploy, carryCredentials } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 
-const ISOURS_DOCKER: HostDeploy["isOurs"] = (path, content) =>
-  path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content);
-
 export const dockerHost: HostDeploy = {
-  isOurs: ISOURS_DOCKER,
+  isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, channels, webhookChannels, pre } = ctx;
+    const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
     const { modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets } = pre;
     const hasDeclaredChannels = channels.length > 0;
-    // Docker: one app service + loopback port + state volume. `--tunnel` shapes the generated topology
-    // with an optional Quick Tunnel service; `--run` alone decides whether Docker receives side effects.
     const projectName = toDockerProjectName(basename(workspace));
     const dockerPlan = (tunnel: boolean) =>
       planDockerDeploy({
@@ -59,7 +54,7 @@ export const dockerHost: HostDeploy = {
       plan = dockerPlan(existingHasTunnel);
       keptWithoutRequestedTunnel = requestedTunnel && !existingHasTunnel;
     }
-    await writeArtifacts(workspace, plan.artifacts, { force: !!opts.force, isOurs: ISOURS_DOCKER });
+    await write(plan.artifacts, { force: !!opts.force });
     if (opts.run) {
       return runDeployDocker({
         agentDir,

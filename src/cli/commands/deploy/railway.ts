@@ -14,18 +14,13 @@ import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import type { ResolvedPlacement } from "../../../paths.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor, writeArtifacts } from "./shared.ts";
-
-const ISOURS_RAILWAY: HostDeploy["isOurs"] = (path, content) =>
-  path.endsWith("railway.json") && isGeneratedRailwayJson(content);
+import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
 
 export const railwayHost: HostDeploy = {
-  isOurs: ISOURS_RAILWAY,
+  isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, pre, channels } = ctx;
+    const { opts, agentDir, workspace, pre, channels, write } = ctx;
     const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
-    // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
-    // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
     const serviceName = toRailwayName(basename(workspace));
     const plan = planRailwayDeploy({
       serviceName,
@@ -35,7 +30,7 @@ export const railwayHost: HostDeploy = {
       hasTimeTriggers,
       ...container,
     });
-    await writeArtifacts(workspace, plan.artifacts, { force: !!opts.force, isOurs: ISOURS_RAILWAY });
+    await write(plan.artifacts, { force: !!opts.force });
     if (opts.run) {
       // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner sets
       // (Railway's documented non-root-Dockerfile route), and Railway's default restart policy already
@@ -65,8 +60,8 @@ export const railwayHost: HostDeploy = {
 };
 
 /**
- * `deploy railway --run`: drive the railway CLI to completion. Mirrors {@link runDeployFly} — same
- * credential carry (env key OR the OAuth auth.json as `FASTAGENT_AUTH_SEED`) via {@link assembleSecrets},
+ * `deploy railway --run`: drive the railway CLI to completion. Mirrors the fly driver — same
+ * credential carry (env key OR the OAuth auth.json as `FASTAGENT_AUTH_SEED`) via {@link carryCredentials},
  * same runner seam (spawned `railway`, cwd = the workspace so `railway up`'s upload is the whole workspace). The
  * Railway-specific sequence (linked-check → init/add/volume when fresh → variables → up → domain →
  * webhook) lives in {@link deployRailwayRun}; see there for why Railway differs from Fly.

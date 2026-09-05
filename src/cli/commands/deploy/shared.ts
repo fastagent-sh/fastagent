@@ -44,13 +44,22 @@ interface DeployContext {
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];
   longConnectionChannels: readonly DeclaredChannel[];
+  /** Write this host's planned artifacts into the workspace under the ownership rule. The dispatcher
+   *  binds {@link HostDeploy.isOurs} — a host cannot name a predicate here, because every host's has
+   *  the same type: passing a neighbour's, or forgetting a new host's, type-checks and then silently
+   *  turns `--force` into a no-op for that host's own artifact. */
+  write(
+    artifacts: { path: string; content: string }[],
+    options: { force: boolean; alwaysWrite?: string[] },
+  ): Promise<void>;
 }
 
 /** One deploy target, as the dispatcher sees it. A new host is a `deploy/<host>/` (plan + driver)
- *  plus one of these beside it, and a row in {@link DEPLOY_HOSTS}. */
+ *  plus one of these beside it, and a row in `HOSTS` (cli/commands/deploy.ts). */
 export interface HostDeploy {
   /** Did this host generate the file at `path`? Only the host's OWN artifacts — the container's
-   *  (Dockerfile, .dockerignore) are answered by {@link writeArtifacts} itself. */
+   *  (Dockerfile, .dockerignore) are answered by {@link writeArtifacts} itself. Read only through the
+   *  {@link DeployContext.write} the dispatcher binds from it. */
   isOurs(path: string, content: string): boolean;
   /** Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive
    *  the host CLI (`--run`) or print the runbook. Exits through `failStartup` on a gate. */
