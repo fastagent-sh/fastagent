@@ -1,12 +1,14 @@
-/** Slack Web API transport: one JSON pipeline plus authenticated, capped private-file downloads. */
-import { mkdir, writeFile } from "node:fs/promises";
+/** Slack Web API transport: one JSON pipeline, authenticated capped private-file downloads, and the
+ * external-upload protocol. */
+import { mkdir, open, stat, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import type { SlackFile } from "./model.ts";
 
 const API_TIMEOUT_MS = 30_000;
-const DOWNLOAD_TIMEOUT_MS = 120_000;
+const FILE_TRANSFER_TIMEOUT_MS = 120_000;
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
@@ -26,6 +28,11 @@ export interface DownloadedSlackFile {
   path: string;
   name: string;
   size: number;
+}
+
+export interface UploadedSlackFile {
+  id: string;
+  name: string;
 }
 
 interface SlackBody {
@@ -94,6 +101,13 @@ export interface SlackApi {
   fileInfo(fileId: string): Promise<SlackFile>;
   fetchImage(file: SlackFile): Promise<ImageRef>;
   fetchFile(file: SlackFile, channelId: string, filesDir: string): Promise<DownloadedSlackFile>;
+  /** Upload one local file into a channel/thread through Slack's external-upload protocol
+   *  (getUploadURLExternal → bytes → completeUploadExternal). */
+  uploadFile(
+    target: SlackTarget,
+    path: string,
+    options?: { title?: string; initialComment?: string },
+  ): Promise<UploadedSlackFile>;
 }
 
 /** Split a Slack text/Markdown field at a code-point-safe boundary, preferring a newline. */
@@ -254,7 +268,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       const token = await currentToken();
       response = await fetch(fileDownloadUrl(file), {
         headers: { authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
       });
     } catch (error) {
       throw new SlackApiError("file download", 0, String(error), undefined, { cause: error });
@@ -402,6 +416,49 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       await mkdir(dir, { recursive: true });
       await writeFile(path, bytes);
       return { path, name, size: bytes.byteLength };
+    },
+    async uploadFile(target, path, options = {}) {
+      const info = await stat(path);
+      if (!info.isFile()) throw new Error(`${path} is not a regular file`);
+      const name = basename(path);
+      const upload = await call<SlackBody & { upload_url?: string; file_id?: string }>("files.getUploadURLExternal", {
+        filename: name,
+        length: info.size,
+      });
+      if (!upload.upload_url || !upload.file_id) {
+        throw new SlackApiError("files.getUploadURLExternal", 200, "response carried no upload_url/file_id");
+      }
+      // Where upload_url points is Slack's call, as with url_private above; the bytes carry no token.
+      const handle = await open(path, "r");
+      let response: Response;
+      try {
+        response = await fetch(upload.upload_url, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: handle.readableWebStream(),
+          signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+          // Required by Node fetch for a streaming request body; not part of the browser RequestInit type.
+          duplex: "half",
+        } as RequestInit & { duplex: "half" });
+      } catch (error) {
+        throw new SlackApiError("file upload", 0, String(error), undefined, { cause: error });
+      } finally {
+        await handle.close().catch(() => {});
+      }
+      if (!response.ok) {
+        const detail = codePointPrefix(await response.text().catch(() => ""), 300) || "file bytes were rejected";
+        throw new SlackApiError("file upload", response.status, detail);
+      }
+      // At-least-once: if Slack commits this call but the response is lost, a retry may post a
+      // duplicate. Retrying here would hide that ambiguity, so only an explicit agent/user retry
+      // crosses this final side-effect boundary.
+      await call("files.completeUploadExternal", {
+        files: [{ id: upload.file_id, title: options.title ?? name }],
+        channel_id: target.channelId,
+        ...(options.initialComment ? { initial_comment: options.initialComment } : {}),
+        ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
+      });
+      return { id: upload.file_id, name };
     },
   };
   return api;

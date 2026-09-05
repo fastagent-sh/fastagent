@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -144,6 +144,58 @@ describe("Slack Web API transport", () => {
     expect(file.path).toBe(join(root, "c-C1", "F2-.._report.txt"));
     expect(readFileSync(file.path, "utf8")).toBe("report");
     expect(calls.every((call) => call.authorization === "Bearer xoxb-secret")).toBe(true);
+  });
+
+  it("uploads a local file with the three-step external protocol, bearer on the API calls only", async () => {
+    const calls: { url: string; authorization: string | null; contentType: string | null; body: unknown }[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      const api = url.startsWith("https://slack.test/api/");
+      let body: unknown = init?.body;
+      if (api) body = JSON.parse(String(init?.body));
+      else body = Buffer.from(await new Response(init?.body as ReadableStream).arrayBuffer()).toString();
+      calls.push({ url, authorization: headers.get("authorization"), contentType: headers.get("content-type"), body });
+      if (url.endsWith("/files.getUploadURLExternal")) {
+        return Response.json({ ok: true, upload_url: "https://files.slack.com/upload/v1/token", file_id: "F1" });
+      }
+      if (!api) return new Response("OK");
+      return Response.json({ ok: true, files: [{ id: "F1" }] });
+    });
+    const root = mkdtempSync(join(tmpdir(), "fa-slack-upload-"));
+    roots.push(root);
+    const path = join(root, "report.txt");
+    writeFileSync(path, "report");
+    const api = createSlackApi({ botToken: "xoxb-secret", baseUrl: "https://slack.test/api" });
+
+    await expect(
+      api.uploadFile({ channelId: "C1", threadTs: "9.0" }, path, { title: "Daily report", initialComment: "attached" }),
+    ).resolves.toEqual({ id: "F1", name: "report.txt" });
+    expect(calls).toEqual([
+      {
+        url: "https://slack.test/api/files.getUploadURLExternal",
+        authorization: "Bearer xoxb-secret",
+        contentType: "application/json; charset=utf-8",
+        body: { filename: "report.txt", length: 6 },
+      },
+      {
+        url: "https://files.slack.com/upload/v1/token",
+        authorization: null,
+        contentType: "application/octet-stream",
+        body: "report",
+      },
+      {
+        url: "https://slack.test/api/files.completeUploadExternal",
+        authorization: "Bearer xoxb-secret",
+        contentType: "application/json; charset=utf-8",
+        body: {
+          files: [{ id: "F1", title: "Daily report" }],
+          channel_id: "C1",
+          initial_comment: "attached",
+          thread_ts: "9.0",
+        },
+      },
+    ]);
   });
 
   it("refuses metadata above the 20 MB cap before fetching", async () => {

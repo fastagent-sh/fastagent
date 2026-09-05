@@ -9,7 +9,7 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { dotEnvPath, loadDotEnv } from "../../env.ts";
-import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath, exists } from "../../paths.ts";
+import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
@@ -21,6 +21,7 @@ import {
   channelExists,
   channelSetup,
   scaffoldChannel,
+  scaffoldCompanionTools,
 } from "../../scaffold/add-channel.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
@@ -53,8 +54,6 @@ export async function runAddChannel(
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
   // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
   const file = join(target, "channels", `${channelKind}.ts`);
-  const slackToolFile = join(target, "tools", "slack-send.ts");
-  const slackToolExisted = channelKind === "slack" ? await exists(slackToolFile) : false;
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
   const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
@@ -67,9 +66,11 @@ export async function runAddChannel(
     await assertChannelReady(target).catch(failStartup);
     await scaffoldChannel(target, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
-    if (channelKind === "slack") {
-      console.error(`[fastagent] ${slackToolExisted ? "kept existing" : "created"} ${relative(target, slackToolFile)}`);
-    }
+  }
+  // Companion tools are the package's, not authored glue: written on every add, so an upgraded
+  // package reaches an existing agent by re-running `add <kind>` (`--no-onboard` skips the prompts).
+  for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
+    console.error(`[fastagent] wrote ${relative(target, tool)}`);
   }
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);

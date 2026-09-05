@@ -3,7 +3,12 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendChannelDotEnv, channelSetup, scaffoldChannel } from "../src/scaffold/add-channel.ts";
+import {
+  appendChannelDotEnv,
+  channelSetup,
+  scaffoldChannel,
+  scaffoldCompanionTools,
+} from "../src/scaffold/add-channel.ts";
 
 describe("channel setup guidance", () => {
   it("puts recommended context-aware permission approval before publishing and explains mention-only degradation", () => {
@@ -45,10 +50,14 @@ describe("channel setup guidance", () => {
 
     const dir = await mkdtemp(join(tmpdir(), "fa-slack-scaffold-"));
     await scaffoldChannel(dir, "slack");
+    // A companion tool from an earlier package version is replaced on re-add; the channel file is not.
+    await mkdir(join(dir, "tools"));
+    await writeFile(join(dir, "tools", "slack-send.ts"), "// 0.20.0: process.env.SLACK_BOT_TOKEN");
+    await scaffoldCompanionTools(dir, "slack");
     const source = await readFile(join(dir, "channels", "slack.ts"), "utf8");
     expect(source).toContain('groupBehavior: "context"');
     expect(source).toContain('rendering: "native"');
-    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("files.completeUploadExternal");
+    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
 
     const mentionsDir = await mkdtemp(join(tmpdir(), "fa-slack-mentions-scaffold-"));
     await scaffoldChannel(mentionsDir, "slack", { groupBehavior: "mentions" });
