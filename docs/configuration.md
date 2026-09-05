@@ -42,14 +42,14 @@ Supported keys:
 | `tools` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
-| `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |
+| `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
 | `sessionControl` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, `fastagent attach`. Off by default (it is a remote-control surface). When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; the serve binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it. On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
 | `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |
 | `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
 
 Unknown keys fail at startup. This catches typos such as `modle` instead of silently degrading to defaults.
 
-The generated `.dockerignore` excludes `.git` to keep the image small. If your agent runs git over its **own** history (e.g. `git log`/`git blame` on the repo it ships in), delete the `.git` line from the generated `.dockerignore` so that history is included in the image.
+The generated `.dockerignore` keeps `.git` so an agent can inspect history and synchronize approved changes. Add a `.git` exclusion if you do not need it, and verify the selected host's packing behavior. See [what deploy bakes](deploy.md#what-deploy-bakes).
 
 ## Model selection
 
@@ -397,30 +397,34 @@ built for serving, and it is concurrency-safe.
 ### When the repo already owns `tools/` or `channels/`
 
 Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,
-never the workspace's names (the placement is structural — the `fastagent/` directory name is the
-marker, nothing is configured). Within the agent, a broken tool is reported and skipped, while
+never the workspace's names. `fastagent.config.*` identifies the agent directory; `fastagent/` is its
+default name. Within the agent, a broken tool is reported and skipped, while
 a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
 programmatic tools outside the agent, declare them with `config.tools`.
 
 ### More than one agent
 
-`fastagent/` is a fixed name, so a directory holds at most one agent. Give each agent its own
-directory instead — that is what `init <name>` is for:
+Several sibling agent directories can work on the same workspace:
 
 ```bash
-fastagent init reviewer     # reviewer/fastagent/
-fastagent init releaser     # releaser/fastagent/
+fastagent init . --agent-dir reviewer
+fastagent init . --agent-dir releaser
+FASTAGENT_AGENT=reviewer fastagent dev .
+FASTAGENT_AGENT=releaser fastagent deploy fly .
 ```
 
-Each is fully independent: its own persona, skills, tools, config, model, channels, schedules,
-`.state/` and `.secrets/`. Run them separately (`fastagent dev reviewer`), deploy them separately.
-They do not share code by symlink (see [Code inputs must be real files](#code-inputs-must-be-real-files));
-publish a package, or copy the file.
+Each has its own config, persona, skills, tools, channels, schedules, `.state/`, and `.secrets/`.
+With one agent, selection is automatic. With several, `fastagent/` is the default if present;
+otherwise set `FASTAGENT_AGENT` in the shell or `.envrc`. It is read before the agent's `.env`.
 
-One consequence to know: an agent's workspace is always the directory holding its `fastagent/`, so
-`reviewer`'s cwd is `reviewer/`, not the repo above it. Its `AGENTS.md` context still walks up to the
-repo root (the ancestor walk), and its tools can reach the repo through `../`; if that matters for
-your agent, say so in its `persona.md`.
+The workspace is always the directory passed to the command. `fastagent dev .` above operates on
+the shared project; `fastagent dev reviewer` operates on `reviewer/` itself. To give agents separate
+workspaces instead, use `fastagent init reviewer` and `fastagent init releaser`, which create
+`reviewer/fastagent/` and `releaser/fastagent/` respectively. A config at the workspace root takes
+precedence over child agents, so `init` refuses placements that would hide another definition.
+
+Share code through packages or real files, not symlinks in code-input directories. See
+[Code inputs must be real files](#code-inputs-must-be-real-files).
 
 ## Channels
 

@@ -10,18 +10,19 @@ FastAgent is the serving layer for local agent directories. It takes a directory
 
 ## Recommended path
 
-1. Read the [Overview](overview.md) to understand the shape.
-2. Run the [Quickstart](quickstart.md) to create and serve an agent.
+1. Start with [Develop an Agent with FastAgent](ai-start.md), the canonical authoring guide for humans and coding agents. It covers responsibilities, TypeScript, verification, channels, scheduling, and deployment.
+2. Use [Overview](overview.md) for the product shape or [Quickstart](quickstart.md) for a short first run.
 3. Use [Configuration](configuration.md) when choosing models, auth, ports, sessions, tools, and channels.
 4. Pick the integration path you need: [Embedding](embedding.md) or [Channels](channels.md).
 5. Ship the directory with [Deploy](deploy.md) when the agent should run on a host.
 
-Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for an AI-guided setup path.
+Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGENTS.md` and the maintainer notes below describe FastAgent development, not how to author an agent.
 
 ## Guides
 
 | Goal | Read |
 |---|---|
+| Develop an agent from responsibilities through verified deployment | [Agent development guide](ai-start.md) |
 | Understand what FastAgent is | [Overview](overview.md) |
 | Understand the design choices and non-goals | [Design principles](principles.md) |
 | Scaffold, run locally, add a tool, and start | [Quickstart](quickstart.md) |

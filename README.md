@@ -65,7 +65,9 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 
 ## Install
 
-For agents — paste this into Claude Code, Codex, Cursor, or any coding agent that reads the web:
+Start with the [agent development guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md), the authoring entry point for both humans and coding agents. It covers responsibilities, TypeScript tools, verification, channels, scheduling, and deployment. FastAgent's repository `AGENTS.md` is for maintainers.
+
+To work with Claude Code, Codex, Cursor, or another coding agent, paste:
 
 > Read https://fastagent.sh/start.md and build an agent in this project.
 
@@ -139,6 +141,7 @@ const agent = createPiAgent({
 
 | Document | Purpose |
 |---|---|
+| [Agent development guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md) | Canonical authoring path for humans and coding agents |
 | [Documentation index](https://fastagent.sh/docs/) | Documentation map |
 | [Quickstart](https://fastagent.sh/docs/quickstart/) | Scaffold, run, add a tool, and start |
 | [Configuration](https://fastagent.sh/docs/configuration/) | Configure model, auth, ports, sessions, tools, and channels |
