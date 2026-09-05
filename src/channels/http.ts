@@ -12,32 +12,11 @@
 import type { Agent } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
+import { sseResponse } from "./sse.ts";
 
 /** Request body cap (1 MiB) — shared by every Prompt-bearing wire surface (the control plane's
  *  dispatch imports it), so the two caps cannot drift apart. */
 export const MAX_BODY_BYTES = 1 << 20;
-
-const encoder = new TextEncoder();
-
-/** SSE comment-heartbeat interval, shared by every SSE surface (the control events route imports
- *  it, and the remote client sizes its dead-connection watchdog as a multiple of it). */
-export const SSE_HEARTBEAT_MS = 30_000;
-
-/** The emitting half of the heartbeat contract (the client watchdog is the other): starts the
- *  `: ping` comment interval on an SSE stream controller and returns its stop function — ONE
- *  implementation for every SSE surface, so the emission side cannot regress on one route while
- *  the shared client watchdog keeps assuming it. Self-stops if the controller is already closed. */
-export function sseHeartbeat(controller: ReadableStreamDefaultController<Uint8Array>): () => void {
-  const encoder = new TextEncoder();
-  const timer = setInterval(() => {
-    try {
-      controller.enqueue(encoder.encode(": ping\n\n"));
-    } catch {
-      clearInterval(timer);
-    }
-  }, SSE_HEARTBEAT_MS);
-  return () => clearInterval(timer);
-}
 
 /** A valid example request body for the invoke handler — lives HERE, next to the shape check it must
  *  satisfy, so the CLI's "try it" hint can't drift from the protocol. */
@@ -69,7 +48,7 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     if (typeof session !== "string" || typeof promptText !== "string") {
       return text('need { "session": string, "text": string }\n', 400);
     }
-    // ^ the request shape INVOKE_EXAMPLE_BODY (below) must keep satisfying.
+    // INVOKE_EXAMPLE_BODY must keep satisfying this request shape.
     // The OPTIONAL lineage extension (Scope): malformed values are a 400, not a silent drop — a
     // caller that sent them meant them.
     if (parentSession !== undefined && typeof parentSession !== "string") {
@@ -79,48 +58,15 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
       return text('"branchHints" must be an array of strings\n', 400);
     }
 
-    // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it and
-    // run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is produced on demand.
-    const iterator = agent
-      .invoke(
+    return sseResponse(
+      agent.invoke(
         {
           session,
           ...(parentSession !== undefined ? { parentSession } : {}),
           ...(branchHints !== undefined ? { branchHints } : {}),
         },
         { text: promptText },
-      )
-      [Symbol.asyncIterator]();
-    // Heartbeats: a QUIET stream (a long tool call, no events) is normal here — remote consumers
-    // distinguish "quiet but alive" from a dead connection by byte arrival, so silence must not
-    // look identical to a black hole (SSE comments are ignored by spec-conforming parsers).
-    let stopHeartbeat = () => {};
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        stopHeartbeat = sseHeartbeat(controller);
-      },
-      async pull(controller) {
-        const { value, done } = await iterator.next();
-        if (done) {
-          stopHeartbeat();
-          controller.close();
-          return;
-        }
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
-      },
-      async cancel() {
-        stopHeartbeat();
-        await iterator.return?.();
-      },
-    });
-
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-      },
-    });
+      ),
+    );
   };
 }

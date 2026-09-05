@@ -14,10 +14,8 @@
  *  5. Every failure is a {@link FeishuApiError} naming the call; self-description is a property of the
  *     error type, not per-call-site string assembly.
  *
- * On top of the pipeline sit thin typed methods (send/reply/edit/card/resource) — adding one is adding
- * a wrapper, not wire code. SDK tripwire: if this surface ever needs WebSocket long-connection ingress
- * or grows past ~a dozen methods, adopt @larksuiteoapi/node-sdk instead of growing it — the methods
- * here are shape-compatible with the SDK's `client.im.*` style, so the policy layer survives that swap.
+ * Typed methods cover messages, cards, resources and app configuration. Proactive tools share this
+ * transport through shared-api.ts. The official SDK handles WebSocket ingress in ws-ingress.ts.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import type { ImageRef } from "../../agent.ts";

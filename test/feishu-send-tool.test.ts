@@ -1,146 +1,195 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { Agent, AgentEvent } from "../src/agent.ts";
+import { turnContext } from "../src/engines/pi/tool-context.ts";
+import { createPiAgentFromDefinition, type FastagentTool } from "../src/pi.ts";
+import { feishuChannel } from "../src/feishu.ts";
+import { larkChannel } from "../src/lark.ts";
+import { makeFaux } from "./faux.ts";
 
-// The scaffolded send tool is real shipped code — its mode switch is the delivery path for
-// scheduled/woken turns, so the branches get real executions here. The template stays DATA to tsc
-// (excluded from the program — it imports the published "@fastagent-sh/fastagent", unresolvable in-repo), so
-// it is loaded via a non-literal dynamic import; vitest's alias resolves that name to today's source.
-
-type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
-let execute: (params: unknown) => Promise<{ details: unknown }>;
-let description: string;
-beforeAll(async () => {
-  const templatePath = new URL("../src/channels/feishu/scaffold/feishu-send.ts", import.meta.url).pathname;
-  const mod = (await import(templatePath)) as { default: unknown };
-  const tool = mod.default as { execute: RawExecute; description: string };
-  execute = (params) => tool.execute("call-1", params);
-  description = tool.description;
-});
-
-function stubOpenApi(): { calls: { url: string; body: Record<string, unknown> }[] } {
-  const calls: { url: string; body: Record<string, unknown> }[] = [];
-  vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    calls.push({ url: String(url), body });
-    if (String(url).includes("tenant_access_token")) {
-      return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
+function stubOpenApi() {
+  const calls: { url: string; body: Record<string, unknown>; authorization: string | null }[] = [];
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    calls.push({ url, body, authorization: new Headers(init?.headers).get("authorization") });
+    if (url.includes("tenant_access_token")) {
+      return Response.json({ code: 0, tenant_access_token: body.app_id, expire: 7200 });
     }
-    return Response.json({ code: 0, msg: "ok", data: { message_id: "om_1" } });
+    if (url.includes("/bot/v3/info")) return Response.json({ code: 0, bot: { open_id: "ou_bot" } });
+    if (url.includes("/application/v6/scopes")) {
+      return Response.json({
+        code: 0,
+        data: {
+          scopes: ["im:message.group_msg", "im:message:readonly"].map((scope_name) => ({
+            scope_name,
+            grant_status: 1,
+          })),
+        },
+      });
+    }
+    return Response.json({ code: 0, data: { message_id: "om_1" } });
   });
-  return { calls };
+  return calls;
 }
 
-const creds = () => {
-  vi.stubEnv("FEISHU_APP_ID", "cli_x");
-  vi.stubEnv("FEISHU_APP_SECRET", "sec");
+const agent: Agent = {
+  async *invoke() {
+    yield { type: "completed" };
+  },
 };
 
-describe("canonical scaffold feishu-send: text-or-markdown mode switch", () => {
-  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
-    expect(description).toMatch(/do not call this to answer/i);
-    expect(description).toMatch(/post the message twice/i);
-    // The tool's role is stated up front, and the addressing rule cannot point at the forbidden
-    // target: the destination comes from instructions — the context line only IDENTIFIES the
-    // current chat (the one chat a chat turn must not target).
-    expect(description).toMatch(/OUTSIDE the normal reply path/);
-    expect(description).toMatch(/must come from your instructions/i);
-    expect(description).toMatch(/only identifies the chat you are answering/i);
+describe.each([
+  { kind: "feishu", prefix: "FEISHU", base: "https://open.feishu.cn", channel: feishuChannel, other: larkChannel },
+  { kind: "lark", prefix: "LARK", base: "https://open.larksuite.com", channel: larkChannel, other: feishuChannel },
+])("scaffold $kind-send", ({ kind, prefix, base, channel, other }) => {
+  let tool: FastagentTool;
+  let cwd: string;
+  beforeAll(async () => {
+    // Scaffold files import the published package; Vitest aliases it to the current source.
+    const path = new URL(`../src/channels/${kind}/scaffold/${kind}-send.ts`, import.meta.url).pathname;
+    tool = ((await import(path)) as { default: FastagentTool }).default;
   });
-
-  afterEach(() => {
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), `fa-${kind}-send-`));
+    await writeFile(join(cwd, "fastagent.config.mjs"), "export default {};\n");
+    vi.stubEnv("FASTAGENT_STATE_DIR", "");
+    vi.stubEnv("FASTAGENT_AGENT", "");
+    vi.stubEnv(`${prefix}_APP_ID`, "");
+    vi.stubEnv(`${prefix}_APP_SECRET`, "");
+  });
+  afterEach(async () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const execute = (params: unknown) => turnContext.run({ cwd }, () => tool.execute("call-1", params));
+  const credentials = () => {
+    vi.stubEnv(`${prefix}_APP_ID`, "cli_env");
+    vi.stubEnv(`${prefix}_APP_SECRET`, "env-secret");
+  };
+
+  it("states the destination rule and avoids duplicating a normal chat reply", () => {
+    expect(tool.description).toMatch(/do not call this to answer/i);
+    expect(tool.description).toMatch(/post the message twice/i);
+    expect(tool.description).toMatch(/OUTSIDE the normal reply path/);
+    expect(tool.description).toMatch(/must come from your instructions/i);
+    expect(tool.description).toMatch(/only identifies the chat you are answering/i);
   });
 
-  it("text → a text message via the tenant token", async () => {
-    creds();
-    const { calls } = stubOpenApi();
-    const r = await execute({ chatId: "oc_42", text: "digest ready" });
-    expect(calls[0]?.url).toContain("/auth/v3/tenant_access_token/internal");
-    const send = calls[1];
-    expect(send?.url).toContain("/im/v1/messages?receive_id_type=chat_id");
-    expect(send?.body.receive_id).toBe("oc_42");
-    expect(send?.body.msg_type).toBe("text");
-    expect(JSON.parse(String(send?.body.content))).toEqual({ text: "digest ready" });
-    expect(JSON.stringify(r.details)).toContain("sent message to chat oc_42");
+  it("sends plain text through the correct cloud and env credentials", async () => {
+    credentials();
+    const calls = stubOpenApi();
+    expect((await execute({ chatId: "oc_42", text: "digest ready" })).details).toBe("sent message to chat oc_42");
+    expect(calls[0]?.body).toEqual({ app_id: "cli_env", app_secret: "env-secret" });
+    expect(calls[1]).toEqual({
+      url: `${base}/open-apis/im/v1/messages?receive_id_type=chat_id`,
+      authorization: "Bearer cli_env",
+      body: { receive_id: "oc_42", msg_type: "text", content: JSON.stringify({ text: "digest ready" }) },
+    });
+    expect(calls.every((call) => call.url.startsWith(`${base}/`))).toBe(true);
   });
 
-  it("markdown → an inline card with one markdown element", async () => {
-    creds();
-    const { calls } = stubOpenApi();
-    const r = await execute({ chatId: "oc_7", markdown: "# Report\n**done**" });
+  it.each([false, true])("sends from a config-free definition (independent cwd: %s)", async (independentCwd) => {
+    const definitionDir = join(cwd, "definition");
+    const workspace = join(cwd, "workspace");
+    await mkdir(definitionDir);
+    await mkdir(workspace);
+    await writeFile(join(definitionDir, "persona.md"), "Send scheduled updates.\n");
+    credentials();
+    const calls = stubOpenApi();
+    const name = `${kind}-send`;
+    const { faux } = makeFaux();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall(name, { chatId: "oc_embed", text: "embedded update" })),
+      fauxAssistantMessage("sent"),
+    ]);
+    const { agent: embedded } = await createPiAgentFromDefinition(definitionDir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      tools: [{ ...tool, name }],
+      ...(independentCwd ? { cwd: workspace } : {}),
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of embedded.invoke({ session: "embedded" }, { text: "Send the update." })) {
+      events.push(event);
+    }
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool_ended", isError: false }));
+    expect(calls).toHaveLength(2);
+    expect(calls.at(-1)).toMatchObject({
+      url: `${base}/open-apis/im/v1/messages?receive_id_type=chat_id`,
+      authorization: "Bearer cli_env",
+      body: { receive_id: "oc_embed", content: JSON.stringify({ text: "embedded update" }) },
+    });
+  });
+
+  it("sends Markdown as an inline static card", async () => {
+    credentials();
+    const calls = stubOpenApi();
+    expect((await execute({ chatId: "oc_7", markdown: "# Report\n**done**" })).details).toBe("sent card to chat oc_7");
     const send = calls[1];
     expect(send?.body.msg_type).toBe("interactive");
-    const card = JSON.parse(String(send?.body.content));
-    expect(card.body.elements[0]).toEqual({ tag: "markdown", content: "# Report\n**done**" });
-    expect(JSON.stringify(r.details)).toContain("sent card to chat oc_7");
+    expect(JSON.parse(String(send?.body.content))).toEqual({
+      schema: "2.0",
+      body: { elements: [{ tag: "markdown", content: "# Report\n**done**" }] },
+    });
   });
 
-  it("text AND markdown — or neither — is rejected before any network call", async () => {
-    creds();
-    const { calls } = stubOpenApi();
+  it("rejects ambiguous input and missing credentials before network IO", async () => {
+    const calls = stubOpenApi();
     await expect(execute({ chatId: "oc_1", text: "x", markdown: "y" })).rejects.toThrow(/exactly one/);
     await expect(execute({ chatId: "oc_1" })).rejects.toThrow(/exactly one/);
+    await expect(execute({ chatId: "oc_1", text: "x" })).rejects.toThrow(`${prefix}_APP_ID`);
     expect(calls).toHaveLength(0);
   });
 
-  it("missing credentials fail with the env-var names, before any network call", async () => {
-    const { calls } = stubOpenApi();
-    await expect(execute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/FEISHU_APP_ID/);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("an Open API error surfaces as a named tool error (fail-fast, no silent ok)", async () => {
-    creds();
-    vi.stubGlobal("fetch", async (url: string | URL) => {
-      if (String(url).includes("tenant_access_token")) {
-        return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
-      }
-      return Response.json({ code: 230013, msg: "bot has no availability to this user" });
-    });
+  it("surfaces a platform rejection as a named tool error", async () => {
+    credentials();
+    vi.stubGlobal("fetch", async (url: string | URL) =>
+      String(url).includes("tenant_access_token")
+        ? Response.json({ code: 0, tenant_access_token: "T", expire: 7200 })
+        : Response.json({ code: 230013, msg: "bot has no availability to this user" }),
+    );
     await expect(execute({ chatId: "oc_1", text: "hello" })).rejects.toThrow(/no availability/);
   });
 
-  it("the Feishu template is locked to the reference cloud", async () => {
-    creds();
-    const { calls } = stubOpenApi();
-    await execute({ chatId: "oc_1", text: "x" });
-    expect(calls.every((c) => c.url.startsWith("https://open.feishu.cn/"))).toBe(true);
-  });
-});
-
-// Lark keeps a branded send-tool edge, but it is the compatibility twin of the canonical Feishu tool.
-describe("scaffold lark-send: compatibility cloud binding", () => {
-  let larkExecute: (params: unknown) => Promise<{ details: unknown }>;
-  let larkDescription: string;
-  beforeAll(async () => {
-    const templatePath = new URL("../src/channels/lark/scaffold/lark-send.ts", import.meta.url).pathname;
-    const mod = (await import(templatePath)) as { default: unknown };
-    const tool = mod.default as { execute: RawExecute; description: string };
-    larkExecute = (params) => tool.execute("call-1", params);
-    larkDescription = tool.description;
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
+  it("reuses the token and splits long text with the channel's byte limit", async () => {
+    credentials();
+    const calls = stubOpenApi();
+    const text = "🙂".repeat(30_000);
+    await execute({ chatId: "oc_1", text });
+    await execute({ chatId: "oc_2", text: "next" });
+    expect(calls.filter((call) => call.url.includes("tenant_access_token"))).toHaveLength(1);
+    const chunks = calls
+      .filter((call) => call.body.receive_id === "oc_1")
+      .map((call) => JSON.parse(String(call.body.content)).text as string);
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk) <= 100 * 1024)).toBe(true);
   });
 
-  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
-    expect(larkDescription).toMatch(/do not call this to answer/i);
-    expect(larkDescription).toMatch(/post the message twice/i);
-  });
-
-  it("reads LARK_* credentials and talks to open.larksuite.com", async () => {
-    vi.stubEnv("LARK_APP_ID", "cli_x");
-    vi.stubEnv("LARK_APP_SECRET", "sec");
-    const { calls } = stubOpenApi();
-    const r = await larkExecute({ chatId: "oc_9", text: "hi" });
-    expect(calls.every((c) => c.url.startsWith("https://open.larksuite.com/"))).toBe(true);
-    expect(JSON.stringify(r.details)).toContain("sent message to chat oc_9");
-  });
-
-  it("missing credentials fail with the LARK env-var names, before any network call", async () => {
-    const { calls } = stubOpenApi();
-    await expect(larkExecute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/LARK_APP_ID/);
-    expect(calls).toHaveLength(0);
+  it("uses the mounted channel's credentials and gateway, keeping both clouds isolated", async () => {
+    const calls = stubOpenApi();
+    const ctx = { stateRoot: join(cwd, ".state"), agent };
+    channel({
+      appId: "cli_channel",
+      appSecret: "channel-secret",
+      verificationToken: "v",
+      apiBaseUrl: `https://${kind}.test`,
+    })(ctx);
+    other({ appId: "cli_other", appSecret: "other-secret", verificationToken: "v", apiBaseUrl: "https://other.test" })(
+      ctx,
+    );
+    // Wait for the channel's startup identity/scope requests before checking the tool's send.
+    await vi.waitFor(() => expect(calls.filter((call) => call.url.endsWith("/application/v6/scopes"))).toHaveLength(2));
+    await execute({ chatId: "oc_1", text: "scheduled update" });
+    expect(calls.at(-1)).toMatchObject({
+      url: `https://${kind}.test/open-apis/im/v1/messages?receive_id_type=chat_id`,
+      authorization: "Bearer cli_channel",
+    });
   });
 });

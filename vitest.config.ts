@@ -22,6 +22,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@fastagent-sh/fastagent/slack": new URL("./src/slack.ts", import.meta.url).pathname,
+      "@fastagent-sh/fastagent/feishu": new URL("./src/feishu.ts", import.meta.url).pathname,
+      "@fastagent-sh/fastagent/lark": new URL("./src/lark.ts", import.meta.url).pathname,
       "@fastagent-sh/fastagent": new URL("./src/index.ts", import.meta.url).pathname,
     },
   },

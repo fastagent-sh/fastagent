@@ -17,7 +17,6 @@ describe("loadChannels (filesystem discovery)", () => {
       routes: {},
       longConnections: [],
       routeChannels: [],
-      longConnectionChannels: [],
       collisions: [],
       failures: [],
     }); // no channels/ yet
@@ -172,7 +171,6 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(loaded.routes).toEqual({});
     expect(loaded.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
     expect(loaded.routeChannels).toEqual([]);
-    expect(loaded.longConnectionChannels).toEqual(["socket"]);
     expect(loaded.failures).toEqual([]);
 
     const inspected = await inspectChannels(dir);

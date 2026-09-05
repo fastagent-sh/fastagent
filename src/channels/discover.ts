@@ -128,7 +128,6 @@ export async function loadChannels(
   routes: Routes;
   longConnections: LoadedLongConnectionChannel[];
   routeChannels: string[];
-  longConnectionChannels: string[];
   collisions: ChannelCollision[];
   failures: ModuleLoadFailure[];
 }> {
@@ -140,7 +139,6 @@ export async function loadChannels(
   const routes: Routes = {};
   const longConnections: LoadedLongConnectionChannel[] = [];
   const routeChannels: string[] = [];
-  const longConnectionChannels: string[] = [];
   const collisions: ChannelCollision[] = [];
 
   for (const { name, label, file, mod } of modules) {
@@ -152,7 +150,6 @@ export async function loadChannels(
           name: channel.name,
           connect: (signal) => channel.connect(ctx, signal),
         });
-        longConnectionChannels.push(name);
         continue;
       }
       if (typeof mod.default !== "function") {
@@ -181,5 +178,5 @@ export async function loadChannels(
       failures.push({ label, file, message: (error as Error).message });
     }
   }
-  return { routes, longConnections, routeChannels, longConnectionChannels, collisions, failures };
+  return { routes, longConnections, routeChannels, collisions, failures };
 }

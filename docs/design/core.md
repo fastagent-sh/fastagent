@@ -362,12 +362,18 @@ route collision as fatal. A declared inbound endpoint must not silently disappea
 must never cause the default `/invoke` route to appear. The default HTTP/SSE route is mounted only when there are no
 enabled channel files.
 
-The serving CLI composition adds `GET /health`. A long-connection channel counts as declared (so the
-fallback `/invoke` does not appear) and keeps that health route for deployment probes. Built-in health
-returns 503 until every long connection first becomes ready. Route channels are served through `node:http`
-(`channels/serve.ts`, shared by every deploy target rather than being one of them); the CLI opens
-long-connection channels, aborts them on shutdown, and fails visibly when one closes unexpectedly. SIGINT/SIGTERM does not drain Agent turns: it aborts long connections, stops the
-listener, force-closes active HTTP streams, and has a bounded exit fallback so shutdown cannot hang.
+`mountAgentService` adds `GET /health`, starts long connections and schedules, and owns their shutdown.
+A long-connection channel counts as declared, so the fallback `/invoke` does not appear. Built-in health
+returns 503 until every long connection is ready and again if one closes unexpectedly. The CLI binds
+the service's handler through `channels/serve.ts` and exits on unexpected channel closure. Its
+SIGINT/SIGTERM handler closes the service and listener, force-closes active HTTP streams, and bounds
+shutdown time; it does not drain Agent turns.
+
+`channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
+eager subscription, heartbeat, serialization and iterator cleanup. The callers own their event shapes.
+Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
+during body streaming close the source and heartbeat and propagate through the response body.
+The remote invoke client stops at the first terminal event; malformed control envelopes fail visibly.
 
 ### GitHub
 
@@ -445,9 +451,10 @@ Feishu is the second stateful chat-channel reference, shaped as a sibling of Tel
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`thread-participants.ts` thread-participation cache, shared `../kit/seen.ts` bounded delivery dedup,
+shared `../kit/thread-participants.ts` thread-participation cache, `../kit/seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
-automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
+automation. `shared-api.ts` gives mounted channels and proactive send tools one transport per cloud and
+state root, so credentials, gateways, token caching, retries and text splitting have one implementation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
 `invoke-turn-kit` / `state`) live in `channels/kit/`, whose defining property is that its consumers
 are only platform directories like this one — `wait-health` (deploy/) and `registration` (deploy/ and
 cli/ as well as platform dirs) sit one level up because theirs are not.

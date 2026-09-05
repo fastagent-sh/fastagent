@@ -62,6 +62,7 @@ import {
   streamFeishuReply,
 } from "./preview.ts";
 import { connectFeishuWs } from "./ws-ingress.ts";
+import { registerFeishuApi } from "./shared-api.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
@@ -483,6 +484,7 @@ function createFeishuRuntimeFactory(
         );
       },
     });
+    registerFeishuApi(stateRoot, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
     // Who the agent has heard in a thread decides whether a bare message addresses it (participant

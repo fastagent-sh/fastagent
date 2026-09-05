@@ -42,7 +42,7 @@ import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime } from "./models.ts";
-import { reportModuleLoadFailures } from "../../log.ts";
+import { reportModuleLoadFailures } from "../../loader.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 

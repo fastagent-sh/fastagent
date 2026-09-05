@@ -9,37 +9,19 @@
  * its operator and stays on plain `console`. Everything here is operational logging to stderr.
  */
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
-
-export interface Logger {
-  debug(msg: string): void;
-  info(msg: string): void;
-  warn(msg: string): void;
-  error(msg: string): void;
-}
+type LogLevel = "debug" | "info" | "warn" | "error";
 
 const ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
-const isLevel = (s: string): s is LogLevel => s in ORDER;
+const isLevel = (s: string): s is LogLevel => Object.hasOwn(ORDER, s);
 const format = (level: LogLevel, msg: string): string => `${level.toUpperCase().padEnd(5)} ${msg}`;
-
-/** An embedded logger over an explicit sink — used in tests to assert level gating without the singleton. */
-export function createLogger(opts: { level: LogLevel; sink?: (line: string) => void }): Logger {
-  const sink = opts.sink ?? ((line) => console.error(line));
-  const make =
-    (level: LogLevel) =>
-    (msg: string): void => {
-      if (ORDER[level] >= ORDER[opts.level]) sink(format(level, msg));
-    };
-  return { debug: make("debug"), info: make("info"), warn: make("warn"), error: make("error") };
-}
 
 /**
  * `FASTAGENT_LOG_LEVEL` resolved PER EMIT, not at import: this module is imported transitively by every
  * command module, so an import-time read runs before any command reaches `loadDotEnv` and could never
  * see the agent's `.secrets/.env` — a key that file could not carry at all.
  *
- * Three states: a valid value wins over the posture; a present-but-invalid one warns (once per distinct
- * value) and is treated as absent, so a typo (meant to make logs louder) can never silently pin the
+ * Three states: a valid value wins over the posture; an invalid value warns when it differs from the
+ * last warned value and is treated as absent, so a typo (meant to make logs louder) can never silently pin the
  * level nor kill the posture default; absent leaves the posture. Empty is absent, matching
  * `resolveOverridePath` — `KEY=` is how a `.env` parks a key it does not want set, not a typo to warn
  * about. The warning is raw `console.error` because it is the logger reporting on its own gate, but
@@ -72,11 +54,4 @@ const emit =
   };
 
 /** The process logger. Runtime code imports this and calls `log.info(...)` etc. */
-import type { ModuleLoadFailure } from "./loader.ts";
-
-export const log: Logger = { debug: emit("debug"), info: emit("info"), warn: emit("warn"), error: emit("error") };
-
-/** A module the loader skipped, said once, the same way for tools, channels and schedules. */
-export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[]): void {
-  for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
-}
+export const log = { debug: emit("debug"), info: emit("info"), warn: emit("warn"), error: emit("error") };

@@ -15,7 +15,7 @@
  * visible as a thrown iteration error, a failed request as a rejected promise.
  */
 import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
-import { SSE_HEARTBEAT_MS } from "./channels/http.ts";
+import { SSE_HEARTBEAT_MS } from "./channels/sse.ts";
 import { abortFirstIterator } from "./collect.ts";
 import type { WireEvent } from "./channels/control.ts";
 import {
@@ -93,7 +93,7 @@ export class ControlRequestError extends Error {
 async function controlError(res: Response): Promise<ControlRequestError> {
   const body = await res.text();
   if (!res.headers.get("content-type")?.includes("application/json")) return new ControlRequestError(res.status, body);
-  let parsed: { code?: unknown };
+  let parsed: { code?: unknown } | null;
   try {
     parsed = JSON.parse(body) as typeof parsed;
   } catch {
@@ -101,7 +101,7 @@ async function controlError(res: Response): Promise<ControlRequestError> {
     // status over: both travel in one error rather than a bare SyntaxError from a rejection path.
     return new ControlRequestError(res.status, `${body} (declared application/json but did not parse)`);
   }
-  return new ControlRequestError(res.status, body, typeof parsed.code === "string" ? parsed.code : undefined);
+  return new ControlRequestError(res.status, body, typeof parsed?.code === "string" ? parsed.code : undefined);
 }
 
 /** Connection parameters shared by BOTH remote planes (`connectSessionControl` and
@@ -187,7 +187,14 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
                 `control events: non-JSON data on the stream (${String(parseError)}) — protocol mismatch?`,
               );
             }
-            if (typeof wire.seq !== "number" || typeof wire.event !== "object" || wire.event === null) {
+            if (
+              typeof wire !== "object" ||
+              wire === null ||
+              typeof wire.seq !== "number" ||
+              typeof wire.event !== "object" ||
+              wire.event === null ||
+              typeof wire.event.type !== "string"
+            ) {
               throw new Error("control events: malformed envelope — the endpoint does not speak this protocol version");
             }
             // Envelope checks — consumed HERE. (epoch is not compared: it cannot change within
@@ -215,6 +222,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           throw error;
         } finally {
           watchdog.stop();
+          abort.abort();
         }
       })();
     return {
@@ -366,9 +374,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             };
             return;
           }
-          // Exactly-one-terminal discipline across the wire: a drop AFTER the server's terminal
-          // must not append a second one (catch included), and a stream that ends WITHOUT one
-          // (server died mid-run) must be closed with a failed — never a terminal-less end.
+          // A terminal closes the stream. Cleanup errors must not append a second terminal.
           let terminalSeen = false;
           // Armed BEFORE the fetch — the run's driver must not hang on a black-holed connect
           // either (the connect await is a pending read; headers arriving disarm it).
@@ -405,37 +411,29 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
               try {
                 event = JSON.parse(data) as AgentEvent;
               } catch (parseError) {
-                // Protocol drift (version skew, non-SSE middlebox), NOT transport trouble:
-                // re-sending the same prompt cannot fix an unparseable stream — retryable: false.
-                // (Guarded by terminalSeen: garbage AFTER the terminal must not add a second one.)
-                if (!terminalSeen) {
-                  yield {
-                    type: "failed",
-                    details: `remote invoke: unparseable event on the stream (${String(parseError)})`,
-                    retryable: false,
-                  };
-                }
+                yield {
+                  type: "failed",
+                  details: `remote invoke: unparseable event on the stream (${String(parseError)})`,
+                  retryable: false,
+                };
                 return;
               }
               // Shape check, same discipline as the events plane: `data: null` / `data: 42` is
               // valid JSON but protocol drift — it must not TypeError into the catch below and be
               // misclassified as retryable network trouble.
               if (typeof event !== "object" || event === null || typeof event.type !== "string") {
-                if (!terminalSeen) {
-                  yield {
-                    type: "failed",
-                    details: "remote invoke: non-event data on the stream — protocol mismatch?",
-                    retryable: false,
-                  };
-                }
+                yield {
+                  type: "failed",
+                  details: "remote invoke: non-event data on the stream — protocol mismatch?",
+                  retryable: false,
+                };
                 return;
               }
-              if (event.type === "completed" || event.type === "failed") terminalSeen = true;
+              terminalSeen = event.type === "completed" || event.type === "failed";
               yield event;
+              if (terminalSeen) return;
             }
-            if (!terminalSeen) {
-              yield { type: "failed", details: "remote invoke: stream ended without a terminal", retryable: true };
-            }
+            yield { type: "failed", details: "remote invoke: stream ended without a terminal", retryable: true };
           } catch (error) {
             if (abort.signal.aborted) {
               if (watchdog.stale() && !terminalSeen) {
@@ -450,6 +448,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             if (!terminalSeen) yield toFailed(error);
           } finally {
             watchdog.stop();
+            abort.abort();
           }
         })();
       // ONE stream per invoke, like a local async generator (which is its own iterator): a second

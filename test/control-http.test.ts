@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
+import { createInvokeHandler } from "../src/channels/http.ts";
 import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
@@ -109,6 +110,16 @@ describe("session control over HTTP", () => {
     } finally {
       served.close();
     }
+  });
+
+  it("preserves the HTTP failure when its JSON error body is null", async () => {
+    await expect(
+      connectSessionControl({
+        url: "http://x",
+        token: TOKEN,
+        fetchFn: async () => Response.json(null, { status: 503 }),
+      }),
+    ).rejects.toMatchObject({ status: 503, message: "control request failed: 503 null" });
   });
 
   it("a browser can reach the plane: preflight without a token, CORS headers on every answer", async () => {
@@ -291,6 +302,36 @@ describe("session control over HTTP", () => {
     } finally {
       errors.mockRestore();
       server.close();
+    }
+  });
+
+  it("a synchronous subscription failure returns HTTP 500 through the real server", async () => {
+    const control = handleControl({
+      events: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next() {
+            throw new Error("subscription setup failed");
+          },
+        }),
+      }),
+    });
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
+    try {
+      const url = `http://127.0.0.1:${await server.listening}`;
+      const res = await fetch(`${url}/control/sessions/s/events`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(500);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      expect(await res.text()).toBe("internal error\n");
+      const remote = await connectSessionControl({ url, token: TOKEN });
+      const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
+      await expect(iterator.next()).rejects.toMatchObject({ status: 500 });
+      expect(errors).toHaveBeenCalledWith(expect.stringContaining("subscription setup failed"));
+    } finally {
+      await server.close();
+      errors.mockRestore();
     }
   });
 
@@ -585,6 +626,18 @@ describe("session control over HTTP", () => {
     }
   });
 
+  it("remote invoke stops at its terminal and releases the connection", async () => {
+    let signal: AbortSignal | null | undefined;
+    const fetchFn: typeof fetch = async (_input, init) => {
+      signal = init?.signal;
+      const events = [{ type: "completed" }, { type: "text", delta: "too late" }, { type: "completed" }];
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+    };
+    const agent = connectAgent({ url: "http://x", token: TOKEN, fetchFn });
+    expect(await drain(agent.invoke({ session: "s" }, { text: "hi" }))).toEqual([{ type: "completed" }]);
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("without an agent, /control/invoke is not mounted", async () => {
     const { control } = await fauxControlledAgent([], { boundary: false });
     const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
@@ -754,7 +807,12 @@ describe("session control over HTTP", () => {
       }) as typeof fetch;
     // Valid JSON, wrong shape (a foreign SSE endpoint) — and plain non-JSON: both THROW so a
     // consumer's failure budget applies; reconnecting can never fix a protocol mismatch.
-    for (const body of ['data: {"hello":"world"}\n\n', "data: not json at all\n\n"]) {
+    for (const body of [
+      'data: {"hello":"world"}\n\n',
+      "data: not json at all\n\n",
+      "data: null\n\n",
+      'data: {"seq":0,"event":{}}\n\n',
+    ]) {
       const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn: makeFetch(body) });
       const iterate = async () => {
         for await (const _ of remote.sessions.get("s").events()) void _;
@@ -1309,6 +1367,106 @@ describe("session control over HTTP", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe.each(["invoke", "events"] as const)("%s SSE lifecycle", (plane) => {
+  const respond = (source: AsyncIterable<unknown>): Promise<Response> => {
+    const headers = { authorization: `Bearer ${TOKEN}` };
+    if (plane === "invoke") {
+      return createInvokeHandler({ invoke: () => source as AsyncIterable<AgentEvent> })(
+        new Request("http://x/invoke", { method: "POST", body: '{"session":"s","text":"hi"}' }),
+      );
+    }
+    return Promise.resolve(
+      createControlPlane(handleControl({ events: () => source }), { token: TOKEN }).handler(
+        new Request("http://x/control/sessions/s/events", { headers }),
+      ),
+    );
+  };
+
+  it("closes the source and heartbeat when a pull fails", async () => {
+    vi.useFakeTimers();
+    const returned = vi.fn(async () => ({ done: true as const, value: undefined }));
+    try {
+      const res = await respond({
+        [Symbol.asyncIterator]: () => ({
+          next: async () => {
+            throw new Error("source failed");
+          },
+          return: returned,
+        }),
+      });
+      await expect(res.text()).rejects.toThrow("source failed");
+      expect(returned).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes the source and heartbeat when serialization fails", async () => {
+    vi.useFakeTimers();
+    const returned = vi.fn(async () => ({ done: true as const, value: undefined }));
+    try {
+      const res = await respond({
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({
+            done: false,
+            value: {
+              toJSON() {
+                throw new Error("serialization failed");
+              },
+            },
+          }),
+          return: returned,
+        }),
+      });
+      await expect(res.text()).rejects.toThrow("serialization failed");
+      expect(returned).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves both an asynchronous source error and a cleanup failure", async () => {
+    const sourceError = new Error("source failed");
+    const cleanupError = new Error("cleanup failed");
+    const res = await respond({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          throw sourceError;
+        },
+        return: async () => {
+          throw cleanupError;
+        },
+      }),
+    });
+    await expect(res.text()).rejects.toMatchObject({ cause: sourceError, errors: [sourceError, cleanupError] });
+  });
+
+  it("ignores a pending pull that settles after cancellation", async () => {
+    let settle!: (value: IteratorResult<unknown>) => void;
+    const pending = new Promise<IteratorResult<unknown>>((resolve) => {
+      settle = resolve;
+    });
+    const toJSON = vi.fn(() => ({ type: "text", delta: "late" }));
+    const returned = vi.fn(async () => {
+      settle({ done: false, value: { toJSON } });
+      return { done: true as const, value: undefined };
+    });
+    const res = await respond({
+      [Symbol.asyncIterator]: () => ({ next: () => pending, return: returned }),
+    });
+    const reader = res.body!.getReader();
+    const read = reader.read();
+    await reader.cancel();
+    await expect(read).resolves.toMatchObject({ done: true });
+    expect(returned).toHaveBeenCalledOnce();
+    expect(toJSON).not.toHaveBeenCalled();
   });
 });
 

@@ -67,7 +67,7 @@ src/
 ├── proxy.ts                 # HTTPS_PROXY wiring
 ├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
 ├── runtime.ts               # agent runtime/package-manager detection (node vs bun) + readPackageJson
-├── loader.ts                # neutral ESM module discovery/loading for tools/ channels/ schedules/ config
+├── loader.ts                # neutral ESM module discovery/loading and failure reporting for tools/ channels/ schedules/ config
 ├── paths.ts                # PLACEMENT + the path predicates everyone shares (isUnderDir):
 │                           # resolvePlacement — ONE marker (`fastagent.config.*`, at any
 │                           # NAME) and one rule: the workspace is the dir you point at, the agent is the
@@ -123,6 +123,7 @@ src/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
+│   ├── sse.ts               # Fetch-only response lifecycle shared by invoke and observation: subscription, heartbeat, cancellation and cleanup
 │   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
 │   │                     # so it lives here and not under engines/ (#365)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
@@ -182,6 +183,7 @@ src/
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
 │   │   ├── context-buffer.ts# feishu's entry shape + resource selection over the shared generic buffer
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
+│   │   ├── shared-api.ts    # channel/send-tool transport sharing per cloud and state root (Feishu + Lark)
 │   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
 │   │   └── scaffold/        # `add feishu` bundle
@@ -228,9 +230,6 @@ src/
 │   │                     # the container reads them back with. The read side lived in fly/run.ts, which
 │   │                     # `start` had to reach into to deploy nothing on Fly.
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
-│   ├── hosts.ts             # the deploy targets as a value (DEPLOY_HOSTS): the CLI's `<host>` choices and
-│   │                     # HOST_ONLY_FLAGS's exhaustiveness both read it. Dependency-free, so
-│   │                     # `cli/program.ts` imports it at load time without pulling a command module
 │   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
 │   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
 │   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)

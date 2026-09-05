@@ -30,11 +30,11 @@ import {
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
-import type { ModuleLoadFailure } from "../loader.ts";
+import { type ModuleLoadFailure, reportModuleLoadFailures } from "../loader.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
 import { type ResolvedPlacement, workspaceHint } from "../paths.ts";
-import { log, reportModuleLoadFailures } from "../log.ts";
+import { log } from "../log.ts";
 import { loadDotEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
