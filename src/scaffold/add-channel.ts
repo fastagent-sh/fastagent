@@ -79,7 +79,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
     steps: [
       "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write, channels:history, groups:history, mpim:history",
-      "enable Agents (agent_view) and token rotation; subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
+      "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
       "reinstall the app after changing scopes, then invite it to each channel it should read",
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
     ],
@@ -196,7 +196,7 @@ export function channelSetup(
       env: setup.env,
       steps: [
         "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write (no channel/group/mpim history scopes)",
-        "enable Agents (agent_view) and token rotation; subscribe app_home_opened, app_context_changed, app_mention, and message.im; set Request URL to <public-url>/slack",
+        "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, and message.im; set Request URL to <public-url>/slack",
         "group behavior: mention-only — bare thread replies and unsummoned group context remain disabled",
         ...setup.steps.slice(2),
       ],

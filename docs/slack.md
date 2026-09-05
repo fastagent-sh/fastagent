@@ -37,7 +37,7 @@ Three things, in three places:
 | Credential | Made by | Used for | Lives in |
 |---|---|---|---|
 | App Configuration Token pair (`xoxe.xoxp-…` + `xoxe-…`) | You, once, at [Your Apps](https://api.slack.com/apps) | `apps.manifest.create` / `apps.manifest.update`: creating the app, and updating its Request URL on `dev --tunnel` and `deploy --run`. Slack expires it in 12 hours; the CLI rotates it. | Builder machine only: `<state root>/channels/slack/onboarding.json` (0600). Never `.env`, never a deploy. |
-| OAuth client id / secret | `apps.manifest.create` | The one OAuth code exchange that installs the app. Setup-only. | `onboarding.json` until the install completes, then dropped. |
+| OAuth client id / secret | `apps.manifest.create` | The one OAuth code exchange that installs the app. Setup-only. | `onboarding.json`; the secret is dropped once the install completes. |
 | `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_SIGNING_SECRET` | The OAuth install / `apps.manifest.create` | Everything at runtime: replies, files, `slack-send`, and verifying each inbound webhook. Long-lived. | `.secrets/.env`, and the deploy's secrets. |
 
 Bot-token rotation is left OFF in the manifest, deliberately: it cannot be turned on and off again, and
@@ -342,10 +342,12 @@ console action. App Configuration tokens stay on the builder. Docker's optional 
 ephemeral; resident hosts need durable storage and one replica. AgentCore uses the
 [ingress-session S3 snapshot](deploy.md#aws-bedrock-agentcore).
 
-## Upgrading from a rotating-token app (releases up to 0.21)
+## Upgrading from a rotating-token app (releases up to 0.20)
 
-Apps created by earlier releases have token rotation on, and Slack does not let it be turned off. Create
-a new app: delete `channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*`
+Apps created by earlier releases have token rotation on, and Slack does not let it be turned off. Two
+symptoms name it: `slackChannel` refuses the `xoxe.…` token at startup, and `dev --tunnel` / `deploy
+--run` report that the app's manifest update was refused (`cannot_disable_once_enabled`). Create a new
+app: delete `channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*`
 lines in `.secrets/.env`, then run `fastagent add slack` again; the runtime secrets it writes are
 `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` alone. Remove the app in the Slack console when the new one
 answers.

@@ -511,6 +511,29 @@ describe("Slack Request URL registration", () => {
     );
   });
 
+  it("names the repair when an app created with rotation on refuses this release's manifest", async () => {
+    const stateRoot = await root();
+    writeSlackOnboardingState(stateRoot, {
+      ...newSlackOnboardingState({
+        appName: "Agent",
+        groupBehavior: "context",
+        configToken: "xoxe.config",
+        configRefreshToken: "xoxe-refresh",
+      }),
+      appId: "A1",
+      installedAt: new Date().toISOString(),
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ ok: false, error: "cannot_disable_once_enabled" }, { status: 200 }),
+    );
+    const logs: string[] = [];
+    await expect(
+      registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock, log: (line) => logs.push(line) }),
+    ).resolves.toBe("failed");
+    expect(logs.at(-1)).toMatch(/create a new app/);
+    expect(logs.at(-1)).not.toMatch(/replace-config/);
+  });
+
   it("retries while Slack cannot verify the Request URL yet, then registers", async () => {
     const stateRoot = await root();
     writeSlackOnboardingState(stateRoot, {

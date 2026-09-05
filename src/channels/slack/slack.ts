@@ -176,6 +176,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
 
   return ({ agent, stateRoot, control }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
+    // A rotating token from an app created by an earlier release would work for up to 12 hours and
+    // then fail as `token_expired`, far from the cause.
+    if (botToken.startsWith("xoxe."))
+      throw new Error(
+        "slackChannel got a rotating bot token (xoxe.…); this release uses a long-lived xoxb- token — " +
+          'create a new app (docs/slack.md → "Upgrading from a rotating-token app")',
+      );
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
     if (!isAbsolute(stateRoot)) throw new Error(`slackChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);

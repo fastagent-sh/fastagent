@@ -269,6 +269,17 @@ describe("Slack first-run welcome", () => {
   });
 });
 
+describe("Slack channel construction", () => {
+  it("refuses a rotating bot token at startup, naming the upgrade, instead of failing 12 hours later", () => {
+    expect(() =>
+      slackChannel({ botToken: "xoxe.xoxb-rotating", signingSecret: SECRET })({
+        agent: replyingAgent().agent,
+        stateRoot: root(),
+      }),
+    ).toThrow(/rotating bot token.*Upgrading from a rotating-token app/);
+  });
+});
+
 describe("Slack signed ingress", () => {
   it("verifies the raw-body HMAC and rejects stale timestamps", () => {
     const body = '{"type":"url_verification","challenge":"x"}';
