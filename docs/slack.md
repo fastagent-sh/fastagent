@@ -337,6 +337,15 @@ forever. File-backed channel state supports one process/replica only.
 stable `/slack` Request URL. `--run` deploys the app but still reports Slack registration as the required
 manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one replica.
 
+## Upgrading from the environment-token `slack-send`
+
+Releases up to 0.20.0 scaffolded a `tools/slack-send.ts` that read `SLACK_BOT_TOKEN` from the
+environment, so after the channel's first token rotation every proactive send failed with
+`token_expired`. After upgrading the package, re-run `fastagent add slack --no-onboard` in the agent:
+it keeps `channels/slack.ts`, `.secrets/.env` and the onboarding state, and rewrites
+`tools/slack-send.ts` with the transport-backed version. Any policy you added to the old tool has to
+be carried over by hand.
+
 ## Upgrading from the session-mode releases
 
 `directMessageSession` and `groupMessageSession` are **removed** — placement and session identity

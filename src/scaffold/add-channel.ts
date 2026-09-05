@@ -404,55 +404,60 @@ export async function scaffoldChannel(
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
   await mkdir(channelsDir, { recursive: true });
-  // `channel.ts` is THE adapter (→ channels/<kind>.ts); any other .ts in the bundle is a companion tool
-  // (→ tools/<name>, never clobbering an authored one).
-  for (const name of channelBundleFiles(kind)) {
-    let content = channelTemplate(kind, name);
-    if (name === "channel.ts") {
-      if ((kind === "feishu" || kind === "lark") && options.ingress === "websocket") {
-        const factory = `${kind}Channel`;
-        const wsFactory = `${kind}WebSocketChannel`;
-        let configured = content
-          .replace(`import { ${factory} }`, `import { ${wsFactory} }`)
-          .replace(`export default ${factory}({`, `export default ${wsFactory}({`);
-        if (configured === content) throw new Error(`${kind} channel template has no factory anchors`);
-        const prefix = kind === "feishu" ? "FEISHU" : "LARK";
-        const exportAt = configured.indexOf("export default");
-        const importEnd = configured.indexOf("\n\n");
-        if (exportAt < 0 || importEnd < 0) throw new Error(`${kind} channel template header anchors are missing`);
-        const brand = kind === "feishu" ? "Feishu" : "Lark";
-        configured =
-          `${configured.slice(0, importEnd)}\n\n` +
-          `// ${brand} WebSocket long connection: the process connects OUT to the platform, so no public URL,\n` +
-          `// Verification Token, Encrypt Key, or --tunnel is needed. In Events & Callbacks choose long\n` +
-          `// connection, subscribe im.message.receive_v1, then publish the app version. Keep one process\n` +
-          `// running in production: scale-to-zero/App Sleeping would disconnect ingress.\n` +
-          configured.slice(exportAt);
-        configured = configured
-          .split("\n")
-          .filter(
-            (line) =>
-              !line.includes(`verificationToken: process.env.${prefix}_VERIFICATION_TOKEN`) &&
-              !line.includes(`encryptKey: process.env.${prefix}_ENCRYPT_KEY`),
-          )
-          .join("\n");
-        content = configured;
-      }
-      if (kind === "slack" && options.groupBehavior === "mentions") {
-        const configured = content.replace('groupBehavior: "context"', 'groupBehavior: "mentions"');
-        if (configured === content) throw new Error("slack channel template has no groupBehavior anchor");
-        content = configured;
-      }
-      await writeFile(file, content, { flag: "wx" });
-      continue;
-    }
-    const toolFile = join(dir, "tools", name);
-    if (!(await exists(toolFile))) {
-      await mkdir(join(dir, "tools"), { recursive: true });
-      await writeFile(toolFile, content, { flag: "wx" });
-    }
+  let content = channelTemplate(kind, "channel.ts");
+  if ((kind === "feishu" || kind === "lark") && options.ingress === "websocket") {
+    const factory = `${kind}Channel`;
+    const wsFactory = `${kind}WebSocketChannel`;
+    let configured = content
+      .replace(`import { ${factory} }`, `import { ${wsFactory} }`)
+      .replace(`export default ${factory}({`, `export default ${wsFactory}({`);
+    if (configured === content) throw new Error(`${kind} channel template has no factory anchors`);
+    const prefix = kind === "feishu" ? "FEISHU" : "LARK";
+    const exportAt = configured.indexOf("export default");
+    const importEnd = configured.indexOf("\n\n");
+    if (exportAt < 0 || importEnd < 0) throw new Error(`${kind} channel template header anchors are missing`);
+    const brand = kind === "feishu" ? "Feishu" : "Lark";
+    configured =
+      `${configured.slice(0, importEnd)}\n\n` +
+      `// ${brand} WebSocket long connection: the process connects OUT to the platform, so no public URL,\n` +
+      `// Verification Token, Encrypt Key, or --tunnel is needed. In Events & Callbacks choose long\n` +
+      `// connection, subscribe im.message.receive_v1, then publish the app version. Keep one process\n` +
+      `// running in production: scale-to-zero/App Sleeping would disconnect ingress.\n` +
+      configured.slice(exportAt);
+    configured = configured
+      .split("\n")
+      .filter(
+        (line) =>
+          !line.includes(`verificationToken: process.env.${prefix}_VERIFICATION_TOKEN`) &&
+          !line.includes(`encryptKey: process.env.${prefix}_ENCRYPT_KEY`),
+      )
+      .join("\n");
+    content = configured;
   }
+  if (kind === "slack" && options.groupBehavior === "mentions") {
+    const configured = content.replace('groupBehavior: "context"', 'groupBehavior: "mentions"');
+    if (configured === content) throw new Error("slack channel template has no groupBehavior anchor");
+    content = configured;
+  }
+  await writeFile(file, content, { flag: "wx" });
   return file;
+}
+
+/**
+ * The bundle's companion tools (every `.ts` beside `channel.ts` → `tools/<name>`). Unlike the channel
+ * file they are the package's, not authored glue, so they are written on EVERY add: re-running
+ * `add <kind>` is how an upgraded tool reaches an existing agent.
+ */
+export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Promise<string[]> {
+  const written: string[] = [];
+  for (const name of channelBundleFiles(kind)) {
+    if (name === "channel.ts") continue;
+    const file = join(dir, "tools", name);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, channelTemplate(kind, name));
+    written.push(file);
+  }
+  return written;
 }
 
 /**
