@@ -298,6 +298,19 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           if (retriedAfterAnswer !== undefined) return; // decided; the retry's output is not ours
           if (event.type === "message_end" && event.message.role === "assistant") {
             finalAssistant = event.message as AssistantMessage;
+            // Details can contain provider payloads; keep those in the journal, not server logs.
+            for (const diagnostic of finalAssistant.diagnostics ?? []) {
+              log.warn(
+                `[fastagent] provider diagnostic ${diagnostic.type} (${finalAssistant.provider}/${finalAssistant.model}, session ${scope.session}, run ${runId})${diagnostic.error ? `: ${diagnostic.error.message}` : ""}`,
+              );
+            }
+          }
+          if (event.type === "compaction_end" && event.reason !== "manual") {
+            const status = event.aborted ? "aborted" : (event.errorMessage ?? "completed");
+            const emit = event.errorMessage && !event.aborted ? log.warn : log.debug;
+            emit(
+              `[fastagent] automatic compaction ${event.reason} (session ${scope.session}, run ${runId}): ${status}`,
+            );
           }
           // pi retries a failed assistant request by DISCARDING that attempt's assistant message and
           // asking again. Everything the turn achieved before it survives — executed tools keep

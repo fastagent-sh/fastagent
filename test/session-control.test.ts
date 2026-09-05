@@ -5,6 +5,7 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
@@ -1644,9 +1645,7 @@ describe("session control: boundary mutations", () => {
   );
 
   it("an abort that lands the instant compaction starts still stops it", async () => {
-    // What a client actually does: abort the moment it sees compaction_started. The narrower window
-    // pi opens (its controller is built one await later) is guarded in the source but not pinned
-    // here — a test cannot reliably land inside a single await.
+    // A client cancels as soon as admission is announced.
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
     await withCompactableHistory(agent, "sB10");
     const seen: SessionEvent[] = [];
@@ -1666,31 +1665,42 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sB10").state()).status).toBe("idle"); // the lease came back
   });
 
-  it("an abort that arrives BEFORE pi can be aborted is still applied", async () => {
-    // The window this guards: pi builds its compaction controller one await after compact() starts,
-    // so an abort landing first calls a no-op. The dispatch is issued from the compaction_started
-    // handler and then re-entered immediately, which puts at least one attempt inside that window;
-    // whether it lands there is timing, but the OUTCOME must not depend on which side it lands on.
+  it("keeps cancellation intent until pi creates its compaction controller", async () => {
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
-    await withCompactableHistory(agent, "sB11");
-    const seen: SessionEvent[] = [];
-    const watching = (async () => {
-      for await (const ev of control.sessions.get("sB11").events()) {
-        seen.push(ev);
-        if (ev.type === "compaction_started") {
-          // Fire several aborts back to back, the first synchronously with the event.
-          void control.sessions.get("sB11").abort();
-          void control.sessions.get("sB11").abort();
-        }
-        if (ev.type === "compaction_finished") break;
-      }
+    await withCompactableHistory(agent, "delayed-controller");
+    let entered!: () => void;
+    let resume!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const abort = vi.spyOn(AgentSession.prototype, "abort").mockImplementationOnce(async () => {
+      entered();
+      await gate;
+    });
+    const handle = control.sessions.get("delayed-controller");
+    const finished = (async () => {
+      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
     })();
-
-    expect(await control.sessions.get("sB11").compact()).toEqual({ ok: true });
-    await watching;
-
-    expect(seen.at(-1)?.data).toEqual({ aborted: true });
-    expect((await control.sessions.get("sB11").entries()).entries.map((e) => e.kind)).not.toContain("compaction");
+    try {
+      expect(await handle.compact()).toEqual({ ok: true });
+      await waiting;
+      vi.useFakeTimers();
+      expect(await handle.abort()).toEqual({ ok: true });
+      // The controller can be delayed arbitrarily; no finite polling budget can cover this window.
+      await vi.advanceTimersByTimeAsync(1000);
+      vi.useRealTimers();
+      resume();
+      expect((await finished)?.data).toEqual({ aborted: true });
+      expect((await handle.entries()).entries.some((entry) => entry.kind === "compaction")).toBe(false);
+      expect((await handle.state()).status).toBe("idle");
+    } finally {
+      resume();
+      vi.useRealTimers();
+      abort.mockRestore();
+    }
   });
 
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {

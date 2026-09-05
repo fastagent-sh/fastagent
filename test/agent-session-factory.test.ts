@@ -7,8 +7,9 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { type ExtensionContext, ModelRuntime, SessionManager, createReadTool } from "@earendil-works/pi-coding-agent";
+import type { MountedTool } from "../src/engines/pi/tool.ts";
+import { describe, expect, it, vi } from "vitest";
 import { collect } from "../src/collect.ts";
 import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
@@ -187,6 +188,61 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     expect(seenSessionId).toBe("-1001234567890");
   });
 
+  it("forwards progress and native context to tools, including the workspace for coding tools", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-tool-context-"));
+    await writeFile(join(cwd, "note.txt"), "workspace note");
+    const seen: SessionEvent[] = [];
+    let toolCwd: string | undefined;
+    let nativeId: string | undefined;
+    let headerId: string | undefined;
+    let absentHeader: unknown;
+    let nativeHistory = 0;
+    const probe: MountedTool = {
+      ...createReadTool(join(cwd, "different-root")),
+      name: "probe",
+      async execute(_id, _params, _signal, onUpdate, ctx?: ExtensionContext) {
+        toolCwd = ctx?.cwd;
+        nativeId = ctx?.sessionManager.getSessionId();
+        headerId = ctx?.sessionManager.getHeader()?.id;
+        const header = vi.spyOn(SessionManager.prototype, "getHeader").mockReturnValueOnce(null);
+        try {
+          absentHeader = ctx?.sessionManager.getHeader();
+        } finally {
+          header.mockRestore();
+        }
+        nativeHistory = ctx?.sessionManager.getBranch().length ?? 0;
+        onUpdate?.({ content: [{ type: "text", text: "working" }], details: { progress: 50 } });
+        return { content: [{ type: "text", text: "done" }], details: {} };
+      },
+    };
+    const { agent, control } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage([fauxToolCall("probe", { path: "note.txt" }), fauxToolCall("read", { path: "note.txt" })]),
+        (context) => {
+          expect(JSON.stringify(context.messages)).toContain("workspace note");
+          return fauxAssistantMessage("finished");
+        },
+      ],
+      { cwd, tools: [probe, createReadTool(join(cwd, "different-root"))] },
+    );
+    const watching = (async () => {
+      for await (const event of control.sessions.get("native-context").events()) {
+        seen.push(event);
+        if (event.type === "run_settled") break;
+      }
+    })();
+    expect((await collect(agent.invoke({ session: "native-context" }, { text: "go" }))).text).toBe("finished");
+    await watching;
+    expect(toolCwd).toBe(cwd);
+    expect(nativeId).toBe("native-context");
+    expect(headerId).toBe("native-context");
+    expect(absentHeader).toBeNull();
+    expect(nativeHistory).toBeGreaterThan(0);
+    expect(seen.filter((event) => event.type === "tool_progress")).toMatchObject([
+      { data: { name: "probe", partialResult: { details: { progress: 50 } } } },
+    ]);
+  });
+
   it("every tool call in a turn runs in the same turn context", async () => {
     // The context describes the SESSION, not the call — one cwd, one session manager, one activation
     // bridge — and the bridge is why it matters: a tool call has to see what the previous one
@@ -279,6 +335,35 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
 
     expect(seen[0]).toContain("the first persona");
     expect(seen[1]).toContain("the SECOND persona");
+  });
+
+  it("reloads a skill whose model-invocation flag changes between turns", async () => {
+    const seen: string[] = [];
+    let disabled = false;
+    const respond: FauxResponseStep = (context) => {
+      seen.push(context.systemPrompt ?? "");
+      return fauxAssistantMessage("ok");
+    };
+    const agent = await agentWith([respond, respond], {
+      tools: piAllCodingTools(process.cwd()),
+      live: async () => ({
+        systemPrompt: "test",
+        skills: [
+          {
+            name: "visible-skill",
+            description: "A skill",
+            filePath: "/skills/visible/SKILL.md",
+            content: "body",
+            disableModelInvocation: disabled,
+          },
+        ],
+      }),
+    });
+    await collect(agent.invoke({ session: "visibility" }, { text: "first" }));
+    disabled = true;
+    await collect(agent.invoke({ session: "visibility" }, { text: "second" }));
+    expect(seen[0]).toContain("visible-skill");
+    expect(seen[1]).not.toContain("visible-skill");
   });
 
   it("concurrent turns each run on a definition that exists, and neither blocks the other", async () => {

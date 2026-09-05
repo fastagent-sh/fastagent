@@ -15,12 +15,7 @@
  * itself (the control plane contends on the same lease and validates against the same registry), so
  * `assemblePiFromDefinition` hands it out and `createPiAgentFromDefinition` is it plus the L0.
  */
-import {
-  formatSkillsForSystemPrompt,
-  type ExecutionEnv,
-  type Skill,
-  type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createCodingTools,
@@ -159,18 +154,7 @@ export async function resolveAgentTools(
   };
 }
 
-// ── §2 prompt: four-segment systemPrompt assembly ───────────────────────────
-//
-//   systemPrompt = ① base (engine asset; a persona.md persona overrides its identity line)
-//                + ② project context (AGENTS.md files via pi's loadProjectContextFiles, <project_context>-wrapped)
-//                + ③ skills listing + ④ env context (cwd)
-//
-// AGENTS.md ≠ system prompt. Pure functions: segment ④ input (cwd) is caller-provided, so the
-// same inputs always produce the same prompt (testable, reproducible). No date: a date line would
-// invalidate the provider prompt cache (a prefix cache) for every session at each day boundary —
-// channel sessions routinely live for weeks (pi ≥0.80.7 dropped it from its default prompt for the
-// same reason). The model gets the date when it needs it: `bash date`, and the wake tool takes
-// relative delays ("30m") / cron — never an absolute now-derived instant.
+// Fastagent owns identity and project context; Pi appends skills and cwd for both serving and chat.
 
 /**
  * The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two
@@ -224,10 +208,6 @@ export interface AssembleSystemPromptOptions {
   base: string;
   /** ② project-context files (AGENTS.md et al. from loadProjectContextFiles); each wrapped `<project_instructions path=…>`. */
   contextFiles?: Array<{ path: string; content: string }>;
-  /** ③ Skills for the <available_skills> listing. */
-  skills?: Skill[];
-  /** ④ Env context, caller-provided (keeps this function pure). Omitted = segment omitted. */
-  cwd?: string;
 }
 
 export function assembleSystemPrompt(options: AssembleSystemPromptOptions): string {
@@ -241,10 +221,6 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
     }
     prompt += `</project_context>\n`;
   }
-  if (options.skills && options.skills.length > 0) {
-    prompt += `\n${formatSkillsForSystemPrompt(options.skills)}\n`;
-  }
-  if (options.cwd) prompt += `\nCurrent working directory: ${options.cwd}`;
   return prompt;
 }
 
@@ -349,24 +325,6 @@ export function agentOf(assembly: PiAssembly, observer?: SessionObserver): Agent
   return createPiAgentFromSession({ lease: assembly.lease, observer, sessionFactory: assembly.sessionFactory });
 }
 
-/**
- * L1 system prompt: `instructions` ARE the prompt (no engine base, no wrapping); the skills listing
- * is appended only when skills are mounted (the model must know what it can invoke). A factory so a
- * dynamic `instructions` and per-invoke freshness both work; undefined when there is nothing to send.
- */
-function instructionsPrompt(
-  instructions: string | (() => string) | undefined,
-  skills: Skill[] | undefined,
-): (() => string) | undefined {
-  const hasSkills = skills !== undefined && skills.length > 0;
-  if (instructions === undefined && !hasSkills) return undefined;
-  return () => {
-    const prose = typeof instructions === "function" ? instructions() : (instructions ?? "");
-    const listing = hasSkills ? formatSkillsForSystemPrompt(skills as Skill[]) : "";
-    return [prose, listing].filter((s) => s !== "").join("\n");
-  };
-}
-
 /** L1 options. Tier 1: model (spec) + instructions + tools. Tier 2: the injectable ports. */
 export interface CreatePiAgentOptions {
   /** Model spec "provider/modelId" (e.g. "openai-codex/gpt-5.5"), resolved against {@link models}. */
@@ -376,7 +334,7 @@ export interface CreatePiAgentOptions {
   /**
    * The system prompt itself — no engine base and no wrapping (unlike the directory path, which
    * assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string or
-   * a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
+   * a factory re-evaluated per invoke. Pi appends the skills listing when read is active.
    *
    * Not byte-for-byte verbatim: pi appends its own `Current working directory:` line to whatever
    * prompt it is given. What this rung guarantees is that no engine IDENTITY is imposed — a
@@ -421,7 +379,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
       thinkingLevel: options.thinkingLevel,
       providers: options.providers,
       authPath: options.authPath,
-      systemPrompt: instructionsPrompt(options.instructions, options.skills),
+      systemPrompt: options.instructions,
       // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
       tools: options.tools ? withSearchTool(options.tools) : options.tools,
       skills: options.skills,
@@ -535,10 +493,6 @@ export async function assemblePiFromDefinition(
           base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
-          skills: def.skills,
-          // The workspace, matching where the tools operate. Telling the model one directory while
-          // `read`/`bash` resolve relative paths against another is a lie it cannot detect.
-          cwd,
         }),
         skills: def.skills,
       };

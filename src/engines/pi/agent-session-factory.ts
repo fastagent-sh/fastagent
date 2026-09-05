@@ -133,21 +133,29 @@ const warnedDroppedActivations = new Set<string>();
  * orders concurrent activations, so it has to live as long as the session the activations mutate.
  * Building it here, per call, would hand each parallel tool its own.
  */
-function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext }): ToolDefinition[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    label: tool.name,
-    description: tool.description ?? "",
-    parameters: tool.parameters,
-    // An activating tool (the built-in loader) declares "sequential" so pi serializes its batch;
-    // without it pi's outer active-set diff double-stamps parallel calls.
-    executionMode: tool.executionMode,
-    execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
-      const context = bound.context;
-      if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
-      return turnContext.run(context, () => tool.execute(id, params, signal));
-    },
-  })) as unknown as ToolDefinition[];
+function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext }, sessionId: string): ToolDefinition[] {
+  return tools.map(
+    (tool): ToolDefinition => ({
+      ...tool,
+      label: tool.label || tool.name,
+      execute: (id, params, signal, onUpdate, ctx) => {
+        const context = bound.context;
+        if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
+        // Inherit Pi's live getters while exposing the caller's id rather than its filename encoding.
+        const sessionManager = Object.create(ctx.sessionManager, {
+          getSessionId: { value: () => sessionId },
+          getHeader: {
+            value: () => {
+              const header = ctx.sessionManager.getHeader();
+              return header ? { ...header, id: sessionId } : header;
+            },
+          },
+        });
+        const scoped = Object.create(ctx, { sessionManager: { value: sessionManager } });
+        return turnContext.run(context, () => tool.execute(id, params, signal, onUpdate, scoped));
+      },
+    }),
+  );
 }
 
 export interface BindPiSessionOptions {
@@ -185,6 +193,7 @@ export async function bindPiSession(
   const excludedToolNames = options.excludedToolNames ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
   const bound: { context?: TurnContext } = {};
+  const sessionId = options.sessionId ?? sessionManager.getSessionId();
   const result = await createAgentSessionFromServices({
     services,
     sessionManager,
@@ -197,10 +206,9 @@ export async function bindPiSession(
     // from `session_start` — `noTools: "builtin"` gives the guarantee the allowlist was there for.
     noTools: "builtin",
     ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
-    customTools: toolDefinitions(tools, bound),
+    customTools: toolDefinitions(tools, bound, sessionId),
   });
   const { session } = result;
-  const sessionId = options.sessionId ?? session.sessionManager.getSessionId();
   // One context for the whole session: it describes the SESSION, not the call. The activation
   // bridge above all — a tool call has to see what the previous one activated.
   const context: TurnContext = {
@@ -294,7 +302,7 @@ export function definitionResourceLoaderOptions(source: {
     // and substitutes its own coding-assistant identity, which an L1 agent
     // (`createPiAgent({ model, tools })`) never asked for. pi appends its own working-directory line
     // either way — that is engine behaviour this binding does not fight.
-    systemPromptOverride: () => source.systemPrompt() ?? " ",
+    systemPromptOverride: () => source.systemPrompt() || " ",
     appendSystemPromptOverride: () => [],
     skillsOverride: (base) => ({
       skills: toPiSkills(source.skills()) as typeof base.skills,
@@ -374,7 +382,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // front of every bind, to buy a guarantee nothing asks for.
       const loader = (await services).resourceLoader;
       const definitionChanged =
-        loader.getSystemPrompt() !== nextPrompt || loadedSkillSet(loader.getSkills().skills) !== skillSet(nextSkills);
+        loader.getSystemPrompt() !== (nextPrompt || " ") ||
+        skillSet(loader.getSkills().skills) !== skillSet(nextSkills);
       if (definitionChanged) {
         prompt = nextPrompt;
         skills = nextSkills;
@@ -409,13 +418,12 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
 }
 
 /** What a reload has to notice: the declared set, not the files behind it. */
-function skillSet(skills: Skill[]): string {
-  return skills.map((s) => `${s.name}\u0000${s.filePath}\u0000${s.description}`).join("\u0001");
-}
-
-/** The same signature, read back off the loader. */
-function loadedSkillSet(skills: readonly { name: string; filePath?: string; description: string }[]): string {
-  return skills.map((s) => `${s.name}\u0000${s.filePath ?? ""}\u0000${s.description}`).join("\u0001");
+function skillSet(
+  skills: readonly { name: string; filePath?: string; description: string; disableModelInvocation?: boolean }[],
+): string {
+  return skills
+    .map((s) => `${s.name}\u0000${s.filePath ?? ""}\u0000${s.description}\u0000${s.disableModelInvocation ?? false}`)
+    .join("\u0001");
 }
 
 /** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */

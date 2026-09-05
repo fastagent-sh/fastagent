@@ -155,8 +155,8 @@ Common options:
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
 | `instructions` | String or function returning the system prompt. |
-| `tools` | `MountedTool[]`: authored tools and pi's cwd-bound coding tools share the `AgentTool` contract. |
-| `skills` | Loaded Agent Skills. |
+| `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
+| `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |
 | `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads `persona.md` and `skills/`. Project context and tools use the local process directly. This is not a sandbox. |
 | `lease` | Same-session concurrency lease. |

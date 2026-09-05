@@ -743,36 +743,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       release();
       return failed(error);
     }
-    // The door is the session's own compaction abort — a real one, unlike a summarization call with
-    // no signal: `abort` must reach the model call (run/compaction symmetry).
-    //
-    // pi builds the controller that makes it abortable AFTER an internal await, so an abort arriving
-    // in that window would find nothing to cancel and the compaction would run to completion — the
-    // client's cancel silently doing nothing. The intent is latched and re-applied until it takes
-    // (`isCompacting` reports when it has).
-    //
-    // The retry is DEFENSIVE: the window is one await wide, and the test below lands after it, so
-    // this loop is not what makes that test pass. It is here because the window is on the code path,
-    // not because it has been observed.
+    // Pi creates the abort controller after an await and emits compaction_start immediately after.
+    // Retain early cancellation until that event; there is no time limit on session startup.
     let aborted = false;
-    let running = true; // cleared when the compaction settles, however it settles
-    const applyAbort = async () => {
-      // WAIT for the controller rather than requiring it: an abort that arrives before pi builds one
-      // sees isCompacting false, and a loop that only runs WHILE compacting would exit immediately —
-      // leaving the intent unapplied in exactly the window it exists for.
-      for (let attempt = 0; attempt < 200 && running; attempt++) {
-        if (bound.isCompacting) {
-          bound.abortCompaction();
-          if (!bound.isCompacting) return; // it took
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1));
-      }
-    };
     compacting.set(session, {
       abort: () => {
         aborted = true;
         bound.abortCompaction();
-        void applyAbort();
       },
     });
     emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
@@ -782,6 +759,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // backoff so a long gap is diagnosable (not confusable with a hang): as a session event for
       // attached observers, as a warn for server logs.
       const unsub = bound.subscribe((event) => {
+        if (event.type === "compaction_start" && event.reason === "manual" && aborted) bound.abortCompaction();
         if (event.type !== "summarization_retry_scheduled") return;
         log.warn(
           `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
@@ -807,7 +785,6 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // failure still reads as aborted).
         outcome = aborted ? { aborted: true } : { error: String(error) };
       }
-      running = false;
       unsub();
       teardown();
       // Release BEFORE emitting finished: a watcher seeing finished may act next — "finished ⇒ the
