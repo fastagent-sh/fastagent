@@ -98,6 +98,21 @@ describe("Slack Web API transport", () => {
     ]);
   });
 
+  it("continues a long body in the DM a user-id target resolved to, not by reopening it per chunk", async () => {
+    const channels: unknown[] = [];
+    vi.stubGlobal("fetch", async (_input: string | URL, init?: RequestInit) => {
+      channels.push((JSON.parse(String(init?.body)) as { channel: unknown }).channel);
+      return Response.json({ ok: true, ts: `${channels.length}.0`, channel: "D1" });
+    });
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+    await expect(api.sendMarkdown({ channelId: "U1" }, "line\n".repeat(6_000))).resolves.toEqual({
+      ts: "1.0",
+      channelId: "D1",
+    });
+    expect(channels.length).toBeGreaterThan(1);
+    expect(channels).toEqual(["U1", ...channels.slice(1).map(() => "D1")]);
+  });
+
   it("honours Retry-After for 429 and then succeeds", async () => {
     vi.useFakeTimers();
     let calls = 0;
