@@ -4,7 +4,7 @@ import { loadDotEnv } from "../../env.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 
 import { resolveAgentTools } from "../../engines/pi/create.ts";
-import { reportModuleLoadFailures } from "../../log.ts";
+import { reportModuleLoadFailures } from "../../loader.ts";
 import { turnContext } from "../../engines/pi/tool-context.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 

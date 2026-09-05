@@ -6,7 +6,7 @@
  */
 import { join } from "node:path";
 import { displayPath } from "../../paths.ts";
-import { reportModuleLoadFailures } from "../../log.ts";
+import { reportModuleLoadFailures } from "../../loader.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { loadSchedules } from "../../schedule/discover.ts";

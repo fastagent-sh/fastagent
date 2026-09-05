@@ -12,3 +12,4 @@ export {
   type LarkRoute,
   type LarkFailure,
 } from "./channels/lark/lark.ts";
+export { larkTransport, type FeishuTransport as LarkTransport } from "./channels/feishu/shared-api.ts";

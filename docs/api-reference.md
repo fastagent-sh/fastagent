@@ -722,8 +722,8 @@ import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackTransport } from "@fastagent-sh/fastagent/slack";
-import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
-import { larkChannel } from "@fastagent-sh/fastagent/lark";
+import { feishuChannel, feishuTransport, type FeishuTransport } from "@fastagent-sh/fastagent/feishu";
+import { larkChannel, larkTransport, type LarkTransport } from "@fastagent-sh/fastagent/lark";
 ```
 
 `/core` loads no third-party package at all, which is what makes it the right dependency for a

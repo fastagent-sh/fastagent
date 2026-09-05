@@ -33,7 +33,8 @@ import type { ChannelHandler } from "../channel.ts";
 import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
-import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
+import { MAX_BODY_BYTES, createInvokeHandler } from "./http.ts";
+import { sseResponse } from "./sse.ts";
 import { text } from "./respond.ts";
 import { secretEquals } from "./secret.ts";
 
@@ -474,59 +475,16 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
     }),
 
     [`GET /control/sessions/${SESSION_SEGMENT}/events`]: guard((_req, _url, session) => {
-      const iterator = control.sessions.get(session).events()[Symbol.asyncIterator]();
-      // EAGER registration: issue the first pull NOW, before the Response (and thus the client's
-      // fetch resolution) exists — hub subscription is registered synchronously inside next(), so
-      // "the client saw response headers" implies "events from that moment on will be delivered".
-      // Shrinks the subscribe/backfill race to network reordering instead of a full pull cycle.
-      let pending: Promise<IteratorResult<SessionEvent>> | undefined = iterator.next();
-      // Observed here so a client that disconnects BEFORE the first pull cannot turn a rejecting
-      // events iterator (this is the neutral contract face — any implementation may reject) into a
-      // process-killing unhandledRejection; awaiting `pending` at pull still surfaces the error.
-      pending.catch(() => {});
       let seq = 0;
-      let stopHeartbeat = () => {};
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          stopHeartbeat = sseHeartbeat(controller);
-        },
-        async pull(controller) {
-          let next: IteratorResult<SessionEvent>;
-          try {
-            next = await (pending ?? iterator.next());
-          } catch (error) {
-            // A rejecting implementation (the neutral contract permits it) must not leak its
-            // subscription: an errored stream never gets cancel(), so the unsubscribe and the
-            // heartbeat teardown happen HERE.
-            stopHeartbeat();
-            void iterator.return?.(undefined)?.catch?.(() => {});
-            controller.error(error);
-            return;
-          }
-          pending = undefined;
-          if (next.done) {
-            stopHeartbeat();
-            controller.close();
-            return;
-          }
-          const wire: WireEvent = { sessionId: session, epoch, seq: seq++, event: next.value };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(wire)}\n\n`));
-        },
-        cancel() {
-          stopHeartbeat();
-          // Same neutral-contract defense as the pull error path: a rejecting return() on client
-          // disconnect must not become a process-level unhandledRejection.
-          void iterator.return?.(undefined)?.catch?.(() => {});
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        },
-      });
+      return sseResponse(
+        control.sessions.get(session).events(),
+        (event): WireEvent => ({
+          sessionId: session,
+          epoch,
+          seq: seq++,
+          event,
+        }),
+      );
     }),
   };
 }

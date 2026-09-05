@@ -24,7 +24,8 @@ import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
-import { log, reportModuleLoadFailures } from "./log.ts";
+import { log } from "./log.ts";
+import { reportModuleLoadFailures } from "./loader.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. A channel that ignores its

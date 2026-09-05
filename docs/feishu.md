@@ -358,7 +358,19 @@ The state home lives under `.state/`, which the agent `.gitignore` excludes. Sin
 
 `fastagent add feishu` also scaffolds `tools/feishu-send.ts` (lark: `tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
 
-**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so; a workspace scaffolded before that was added keeps its own copy, so paste the boundary into the tool's `description` (or re-run `fastagent add` in a scratch dir and copy the file) if the Agent is double-posting.
+**Use it for proactive delivery only.** The channel delivers the current turn's reply; calling the tool
+as well posts it twice.
+
+The tools use `feishuTransport(ctx.cwd)` / `larkTransport(ctx.cwd)` from their respective package
+subpaths. Within a serving process, they share the mounted channel's credentials, custom gateway,
+token cache, bounded retries, and UTF-8 text splitting. Feishu and Lark remain isolated even in one
+workspace. With no channel mounted (`fire`, `invoke`, `tool`, or an embedded agent), the transport
+reads the matching `FEISHU_*` / `LARK_*` environment credentials and uses that cloud's default gateway.
+Standalone sending requires no `fastagent.config.*`; an embedded agent can use a bare definition
+directory or an independent `cwd`.
+
+Scaffolded files are workspace-owned copies. To adopt the current send tool in an existing workspace,
+generate it with `fastagent add feishu|lark` in a scratch directory and copy the tool file.
 
 ## Upgrading from the session-mode releases
 
@@ -377,7 +389,7 @@ Three behaviour changes, none of them opt-in:
 - **Unrelated to the model, but in the same release:** the scaffolded send tool's description gained a
   "do not use this to answer the current turn" boundary (without it the Agent posts its reply twice).
   Scaffolded files are copies, so an existing workspace keeps the old text — see the send-tool section
-  above for the one-line fix.
+  above for updating the tool.
 
 State does not clean itself up: `owned-threads.json` and the `buffers.json` buckets under the retired
 key shape are both left in place, unread and unreachable — which means **buffered discussion in threads

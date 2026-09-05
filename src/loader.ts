@@ -119,6 +119,11 @@ export interface ModuleLoadFailure {
   message: string;
 }
 
+/** A module the loader skipped, said once, the same way for tools, channels and schedules. */
+export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[]): void {
+  for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
+}
+
 /**
  * Import every module the directory declares ({@link moduleInventory}). A file that fails to IMPORT
  * is collected into `failures` (with {@link moduleLoadHint}) rather than thrown, so the caller can

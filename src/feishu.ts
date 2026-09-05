@@ -11,3 +11,4 @@ export {
   type FeishuRoute,
   type FeishuFailure,
 } from "./channels/feishu/feishu.ts";
+export { feishuTransport, type FeishuTransport } from "./channels/feishu/shared-api.ts";

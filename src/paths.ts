@@ -183,9 +183,9 @@ export function workspaceHint(
   return `${parent} looks like a project — point fastagent at it (\`..\`) to have the agent work ON it`;
 }
 
-/** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair,
- *  and without the throw. `login` is the caller: it is the one command allowed to run outside an agent,
- *  so it needs the answer as a value rather than as a refusal. */
+/** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair
+ *  or the throw. Login and standalone channel senders also operate outside configured agents, so
+ *  they need absence as a value. Filesystem errors still propagate. */
 export function findAgentDir(dir: string): string | undefined {
   return findPlacement(dir)?.agentDir;
 }
