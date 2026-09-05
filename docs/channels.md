@@ -166,7 +166,6 @@ export default slackChannel({
   botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
-  groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),

@@ -441,21 +441,18 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("records participation even where no rule reads it, so a posture change cannot leave a gap", async () => {
+  it("records a second human who summons it by mention, so it does not barge into a crowd later", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     await handler(signedRequest(message("30.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "30.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    // A second human summons it in the same thread — an `app_mention`, which IS delivered under
-    // `mentions` (a bare channel message is not, which is why the posture's under-count is documented
-    // as accepted in §3 rather than defended against here). Nothing reads participation in this
-    // posture, but the posture is configuration and this record outlives a change to it: skipping the
-    // write would leave `agentSpoke` on disk with U2 missing, and after a switch back to `context` the
-    // agent would barge into a thread it believes is two-party.
+    // A second human summons it by `app_mention` — the one group event a mention-only app (no history
+    // scopes) still receives. Their presence must be recorded off that event too, or the thread would
+    // read as two-party with U2 missing.
     await handler(
       signedRequest(message("30.2", { user: "U2", type: "app_mention", text: "<@UBOT> and also", thread_ts: "30.0" })),
     );
@@ -470,7 +467,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("a bare reply reaches the agent in a thread it answered in, while one human is in it", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context" });
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     // Mentioning it inside a thread is the bootstrap: it answers, which makes it a participant.
@@ -489,7 +486,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("a bare message that mentions only other people is discussion, not an ask", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
     await handler(signedRequest(message("14.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "14.0" })));
     await settle();
@@ -524,7 +521,7 @@ describe("Slack sessions, context, and thread participation", () => {
       ),
     );
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    const { handler, stateRoot } = mount(agent);
 
     await handler(signedRequest(message("50.1", { text: "<!here> standup in five" })));
     await settle();
@@ -536,7 +533,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("the labelled mention form counts too, on both sides of the guard", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     // `<@UBOT|agent>` is a summon, not background text.
@@ -567,7 +564,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("a top-level ask counts as heard in the thread the answer creates, so a stranger's reply does not summon", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     // U1 asks at CHANNEL top level: the ask carries no thread_ts, so the observation on the way in
@@ -587,7 +584,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    const { handler, stateRoot } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
@@ -620,7 +617,7 @@ describe("Slack sessions, context, and thread participation", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context" });
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     // Slack has no quote primitive, so answering in place means opening a thread on the ask — and the
@@ -636,23 +633,6 @@ describe("Slack sessions, context, and thread participation", () => {
     await settle();
     expect(calls).toHaveLength(2);
     expect(calls[1]?.scope.session).toBe("slack:T1:C1:20.0");
-  });
-
-  it("keeps mention-only mode available explicitly without buffering group traffic", async () => {
-    vi.stubGlobal("fetch", okFetch());
-    const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
-    await new Promise((resolve) => setImmediate(resolve));
-
-    await handler(signedRequest(message("1.0", { text: "background" })));
-    await handler(signedRequest(message("2.0", { type: "app_mention", text: "<@UBOT> answer" })));
-    await settle();
-    await handler(signedRequest(message("3.0", { text: "bare reply", thread_ts: "2.0" })));
-    await settle();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).not.toContain("background");
-    expect(() => readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toThrow();
   });
 
   it("persists a turn before ACK and uses only Slack file IDs in the intent", async () => {

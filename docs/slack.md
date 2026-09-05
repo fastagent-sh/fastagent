@@ -14,12 +14,11 @@ The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.
 fastagent add slack
 ```
 
-Choose one group behavior:
-
-| Mode | Group behavior | Additional access |
-|---|---|---|
-| `context` (default) | Explicit mentions, bare replies in threads the Agent takes part in, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
-| `mentions` | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
+`--group-behavior context|mentions` decides what the created app is allowed to hear. `context`
+(default) subscribes the channel/private-channel/MPIM message streams, which is what lets the Agent
+take part in a thread and read recent discussion ([Group context](#group-context)). `mentions` asks for
+`app_mention` and DMs only — least privilege, for a workspace that will not approve an app reading
+channel history. The runtime has one behavior either way; what differs is which events Slack delivers.
 
 The command creates:
 
@@ -87,10 +86,10 @@ files:write
 reactions:write
 ```
 
-Context mode additionally needs `channels:history`, `groups:history`, and `mpim:history`. Native mode
+A `context` app additionally needs `channels:history`, `groups:history`, and `mpim:history`. Native mode
 requires `assistant:write` and the **Agents** feature with the Agent messaging experience (`agent_view`);
 a manually configured classic-only app may omit those two Agent capabilities. Subscribe `app_home_opened`,
-`app_context_changed`, `app_mention`, and `message.im`; context mode additionally subscribes
+`app_context_changed`, `app_mention`, and `message.im`; a `context` app additionally subscribes
 `message.channels`, `message.groups`, and `message.mpim`. Set `https://<host>/slack` under Event
 Subscriptions while FastAgent is running,
 then put the Bot Token and Signing Secret in `.env`. Without local onboarding state, tunnel/deploy commands
@@ -112,7 +111,6 @@ export default slackChannel({
   botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
-  groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
@@ -139,8 +137,8 @@ The default route answers:
 
 - every human `message.im` DM;
 - human `app_mention` events in channels;
-- in context mode, unmentioned human replies in a thread the Agent takes part in while exactly one
-  human does (see [Group context](#group-context)).
+- unmentioned human replies in a thread the Agent takes part in while exactly one human does (see
+  [Group context](#group-context)) — an event the app receives only with the group message subscriptions.
 
 Bot messages, edits, deletes, hidden events, and service subtypes are ignored. `file_share` and
 `thread_broadcast` are new human content and remain eligible. Overlapping `app_mention` and `message.*`
@@ -171,7 +169,7 @@ custom route is then the complete authority.
 
 ## Group context
 
-In context mode the Agent behaves as a participant of the channel
+Given the group message subscriptions (the default app), the Agent behaves as a participant of the channel
 ([design note](design/participant-model.md)): it answers a bare message in a thread while it takes part
 and **has not heard a second human** there. Mentioning it inside a thread is the bootstrap — it answers,
 which makes it a participant, and later bare replies reach it without the name. When a second person
@@ -197,8 +195,9 @@ The next answered turn in that place receives a bounded sender-prefixed block. C
 3. commit exactly that snapshot only when the Agent emits `completed`;
 4. retain it on failure/crash, and retain messages that arrive while the turn is running.
 
-This mode deliberately lets the app read messages in channels where it is installed. Use `mentions` when
-that permission or retention boundary is inappropriate. State is local to the deployment and gitignored
+This deliberately lets the app read messages in channels where it is installed. Create the app with
+`--group-behavior mentions` when that permission or retention boundary is inappropriate: without the
+history subscriptions none of the above ever fires. State is local to the deployment and gitignored
 from git, but operators still own retention/privacy policy.
 
 ## Inbound files
@@ -319,12 +318,11 @@ Slack state lives under:
 
 `thread-participants.json` records what the Agent HEARD in each group thread — the humans it saw speak
 (capped at two, since the rule only asks whether a second one exists) and whether it has answered
-there. It is written for **every group thread the channel can see, in every posture** — including
-`groupBehavior: "mentions"` and behind a custom route, where the summon rule never reads it. That is
-deliberate: the posture is configuration and a record outlives a change to it, so gating the write
-would leave a thread marked as answered-in while the humans who spoke during the intervening window
-went unrecorded, and the Agent would then speak into a crowd. Deleting the file is safe; each thread
-then costs one mention to re-enter.
+there. It is written for **every group thread the channel can see**, including behind a custom route,
+where the summon rule never reads it: a route is configuration and the record outlives a change to it,
+so gating the write would leave a thread marked as answered-in while the humans who spoke in the
+intervening window went unrecorded, and the Agent would then speak into a crowd. Deleting the file is
+safe; each thread then costs one mention to re-enter.
 
 The onboarded App Manifest enables Slack token rotation. Before expiry, the runtime exchanges the bot
 refresh token, atomically persists the replacement pair in `bot-auth.json`, and uses that durable pair on

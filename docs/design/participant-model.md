@@ -114,18 +114,19 @@ narrowed — it must be the same place and the place's own session — which onl
 record, never a participant one with humans missing.)
 
 That condition is built from STRUCTURAL facts only — is this a group? is this a thread? — and never
-from configuration. A group-behaviour setting or the presence of a custom route is the tempting gate,
-since nothing reads participation without them, but configuration changes while records outlive the
-change: gate on it, switch back, and `agentSpoke` is still on disk with the humans of the intervening
-window missing. Both channels therefore record in postures where no rule will read the result. The
-condition is the same in both: a group thread, whatever the posture. Unread records are harmless:
+from configuration. Feishu's group-behaviour setting or the presence of a custom route is the tempting
+gate, since nothing reads participation without them, but configuration changes while records outlive
+the change: gate on it, switch back, and `agentSpoke` is still on disk with the humans of the
+intervening window missing. Both channels therefore record in postures where no rule will read the
+result. The condition is the same in both: a group thread, whatever the posture. Unread records are harmless:
 they cost two ids, and the cap evicts bystander threads
 (ones the agent has only listened to) before threads it takes part in, so listening traffic can never
 push out a thread being served.
 
 The cost runs both ways, and the second direction is not free. A record is only as complete as the
-channel's hearing when it was written: an agent answering a mention in a restricted posture (Slack
-`mentions`, Feishu without `im:message.group_msg`) records itself plus the human who summoned it, while
+channel's hearing when it was written: an agent answering a mention in a restricted posture (a Slack
+app created without the history scopes, Feishu without `im:message.group_msg`) records itself plus the
+human who summoned it, while
 everyone else's bare messages in that thread are never delivered. Widen the posture later and the thread
 reads "participant + one human" though it holds several. That is accepted rather than defended against —
 the failure is one unwanted reply, it corrects itself the moment a second human speaks, and detecting it

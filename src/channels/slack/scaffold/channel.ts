@@ -19,7 +19,6 @@ export default slackChannel({
   botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
-  groupBehavior: "context", // default; use "mentions" only for an explicit least-privilege setup
   // Slack Agent stream; its inline tool traces show each call's first argument and stay in the
   // delivered message. "classic" settles into the answer alone (and gives up native streaming).
   rendering: "native",

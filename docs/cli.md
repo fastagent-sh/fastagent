@@ -259,8 +259,8 @@ intentionally disable one, rename it to e.g. `channels/telegram.ts.disabled`; ch
 are the enable/disable source of truth.
 
 Slack scaffolds `channels/slack.ts` plus `tools/slack-send.ts`; `--group-behavior context|mentions`
-selects both runtime policy and manifest scopes/events, defaulting to context-aware `context`; choose
-`mentions` explicitly for least privilege. By default it opens Slack's App Configuration Token page,
+selects the created app's manifest scopes/events (the runtime has one behavior; it hears what the app
+is allowed to), defaulting to context-aware `context`; choose `mentions` explicitly for least privilege. By default it opens Slack's App Configuration Token page,
 creates a new internal app with `agent_view`, native Agent streaming, and suggested prompts through
 `apps.manifest.create`, installs it
 through OAuth, and writes rotating bot credentials + the Signing Secret to `.secrets/.env`. The configuration refresh token stays owner-readable
