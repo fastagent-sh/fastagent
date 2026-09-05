@@ -32,14 +32,7 @@ describe("channel setup guidance", () => {
 
   it("Slack group choice changes scopes/guidance and the generated runtime policy", async () => {
     const context = channelSetup("slack", "webhook", "context");
-    expect(context.env.map((entry) => entry.name)).toEqual([
-      "SLACK_BOT_TOKEN",
-      "SLACK_BOT_REFRESH_TOKEN",
-      "SLACK_BOT_TOKEN_EXPIRES_AT",
-      "SLACK_CLIENT_ID",
-      "SLACK_CLIENT_SECRET",
-      "SLACK_SIGNING_SECRET",
-    ]);
+    expect(context.env.map((entry) => entry.name)).toEqual(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"]);
     expect(context.steps.join("\n")).toContain("channels:history");
     expect(context.steps.join("\n")).toContain("message.channels");
 

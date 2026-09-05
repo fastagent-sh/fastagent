@@ -263,7 +263,7 @@ selects the created app's manifest scopes/events (the runtime has one behavior; 
 is allowed to), defaulting to context-aware `context`; choose `mentions` explicitly for least privilege. By default it opens Slack's App Configuration Token page,
 creates a new internal app with `agent_view`, native Agent streaming, and suggested prompts through
 `apps.manifest.create`, installs it
-through OAuth, and writes rotating bot credentials + the Signing Secret to `.secrets/.env`. The configuration refresh token stays owner-readable
+through OAuth, and writes the Bot User OAuth Token + the Signing Secret to `.secrets/.env`. The configuration refresh token stays owner-readable
 under `<state root>/channels/slack/` and is used locally by `dev --tunnel` / `deploy --run` to update the
 Events API URL; it never travels to the host. `--no-onboard` preserves the manual scaffold-only path.
 `--replace-config` skips the menu and directly replaces the local App Configuration token pair — the

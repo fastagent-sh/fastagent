@@ -86,7 +86,7 @@ export function isSlackNativeUnavailable(error: unknown): boolean {
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface SlackApiOptions {
-  botToken: string | (() => Promise<string>);
+  botToken: string;
   baseUrl?: string;
 }
 
@@ -209,9 +209,20 @@ async function readBytesCapped(response: Response): Promise<Buffer> {
   );
 }
 
+/** A rotating token (an app created by a release up to 0.20) would work for up to 12 hours and then
+ *  fail as `token_expired`, far from the cause — refuse it where the token enters, on both paths. */
+function assertLongLivedBotToken(botToken: string): void {
+  if (botToken.startsWith("xoxe.")) {
+    throw new Error(
+      "got a rotating Slack bot token (xoxe.…); this release uses a long-lived xoxb- token — " +
+        'create a new app (docs/slack.md → "Upgrading from a rotating-token app")',
+    );
+  }
+}
+
 export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions): SlackApi {
+  assertLongLivedBotToken(botToken);
   const apiBase = baseUrl.replace(/\/$/, "");
-  const currentToken = typeof botToken === "string" ? async () => botToken : botToken;
 
   const call = async <T extends SlackBody>(
     method: string,
@@ -228,11 +239,10 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       let response: Response;
       let raw: string;
       try {
-        const token = await currentToken();
         response = await fetch(url, {
           method: httpMethod,
           headers: {
-            authorization: `Bearer ${token}`,
+            authorization: `Bearer ${botToken}`,
             ...(httpMethod === "POST" ? { "content-type": "application/json; charset=utf-8" } : {}),
           },
           ...(httpMethod === "POST" ? { body: JSON.stringify(body) } : {}),
@@ -274,9 +284,8 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
   const download = async (file: SlackFile): Promise<{ bytes: Buffer; contentType?: string }> => {
     let response: Response;
     try {
-      const token = await currentToken();
       response = await fetch(fileDownloadUrl(file), {
-        headers: { authorization: `Bearer ${token}` },
+        headers: { authorization: `Bearer ${botToken}` },
         signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
       });
     } catch (error) {

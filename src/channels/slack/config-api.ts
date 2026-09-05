@@ -61,6 +61,27 @@ export function isSlackRequestUrlUnverified(error: unknown): boolean {
   );
 }
 
+/**
+ * Whether a manifest write was refused because the app has token rotation on, which Slack never lets
+ * off again — the refusal every app created by a release up to 0.20 meets, since this release sends
+ * `token_rotation_enabled: false`. Slack documents field rejections as `invalid_manifest` plus an
+ * `errors[]` of message + pointer; the bare code was what a real refusal once showed. Both shapes are
+ * read: a miss here sends the operator to repair configuration tokens that are not the problem.
+ */
+export function isSlackRotationLocked(error: unknown): boolean {
+  if (!(error instanceof SlackConfigApiError)) return false;
+  return (
+    error.code === "cannot_disable_once_enabled" ||
+    error.errors.some(
+      (e) => e.message?.includes("cannot_disable_once_enabled") || e.pointer?.endsWith("token_rotation_enabled"),
+    )
+  );
+}
+
+/** The upgrade every rotating-app refusal points at. */
+export const SLACK_ROTATING_APP_UPGRADE =
+  'this app has token rotation on, which this release no longer uses and Slack cannot turn off — create a new app (docs/slack.md → "Upgrading from a rotating-token app")';
+
 async function slackJson<T>(
   method: string,
   body: Record<string, unknown>,
@@ -184,8 +205,6 @@ export async function rotateSlackConfigToken(
 
 export interface SlackOAuthResult {
   botToken: string;
-  botRefreshToken: string;
-  botTokenExpiresAt: number;
   appId: string;
   teamId: string;
   teamName?: string;
@@ -240,8 +259,6 @@ export async function exchangeSlackOAuthCode(
   }
   let data: SlackErrorShape & {
     access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
     app_id?: string;
     scope?: string;
     bot_user_id?: string;
@@ -253,19 +270,11 @@ export async function exchangeSlackOAuthCode(
     throw new Error(`Slack oauth.v2.access failed: HTTP ${response.status} returned non-JSON`);
   }
   if (!response.ok || data.ok !== true) throw slackOAuthFailure(response.status, data.error);
-  if (
-    !data.access_token ||
-    !data.refresh_token ||
-    typeof data.expires_in !== "number" ||
-    !data.app_id ||
-    !data.team?.id
-  ) {
-    throw new Error("Slack oauth.v2.access succeeded but returned incomplete rotating bot credentials/app identity");
+  if (!data.access_token || !data.app_id || !data.team?.id) {
+    throw new Error("Slack oauth.v2.access succeeded but returned incomplete bot credentials/app identity");
   }
   return {
     botToken: data.access_token,
-    botRefreshToken: data.refresh_token,
-    botTokenExpiresAt: Date.now() + data.expires_in * 1_000,
     appId: data.app_id,
     teamId: data.team.id,
     teamName: data.team.name,

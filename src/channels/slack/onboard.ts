@@ -4,6 +4,8 @@ import {
   createSlackApp,
   exchangeSlackOAuthCode,
   isSlackRequestUrlUnverified,
+  isSlackRotationLocked,
+  SLACK_ROTATING_APP_UPGRADE,
   SlackConfigApiError,
   updateSlackAppManifest,
 } from "./config-api.ts";
@@ -15,15 +17,9 @@ export interface SlackOnboardIO {
   openUrl(url: string): void;
   /** Wait for the one OAuth redirect. Implementations must validate only the path; core validates state. */
   waitForOAuth(): Promise<{ code?: string; state?: string; error?: string }>;
-  /** Stage runtime-only credentials into the gitignored .env. */
-  writeRuntimeSecrets(values: {
-    botToken?: string;
-    botRefreshToken?: string;
-    botTokenExpiresAt?: number;
-    clientId?: string;
-    clientSecret?: string;
-    signingSecret?: string;
-  }): Promise<void>;
+  /** Stage the runtime secrets into the gitignored .env — the bot token and the signing secret, nothing
+   *  else: the client credentials are setup-only (the OAuth code exchange) and stay in onboarding state. */
+  writeRuntimeSecrets(values: { botToken?: string; signingSecret?: string }): Promise<void>;
 }
 
 export interface SlackOnboardInput {
@@ -121,7 +117,13 @@ export async function onboardSlackApp(
     }
     const appId = state.appId;
     io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
-    await whileUnverified(() => (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest));
+    try {
+      await whileUnverified(() => (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest));
+    } catch (error) {
+      // A resume of an app created with rotation on: the manifest is refused for good, so say what fixes it.
+      if (isSlackRotationLocked(error)) throw new Error(SLACK_ROTATING_APP_UPGRADE, { cause: error });
+      throw error;
+    }
   }
 
   if (state.signingSecret) {
@@ -159,13 +161,7 @@ export async function onboardSlackApp(
   if (slackBotScopes(state.groupBehavior).some((scope) => !oauth.scopes.includes(scope))) {
     throw new Error("Slack OAuth completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
-  await io.writeRuntimeSecrets({
-    botToken: oauth.botToken,
-    botRefreshToken: oauth.botRefreshToken,
-    botTokenExpiresAt: oauth.botTokenExpiresAt,
-    clientId: state.clientId,
-    clientSecret: state.clientSecret,
-  });
+  await io.writeRuntimeSecrets({ botToken: oauth.botToken });
   state = {
     ...state,
     clientSecret: undefined,

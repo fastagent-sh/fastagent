@@ -1,5 +1,10 @@
 import { retryWhile, type RegistrationOutcome } from "../registration.ts";
-import { isSlackRequestUrlUnverified, updateSlackAppManifest } from "./config-api.ts";
+import {
+  SLACK_ROTATING_APP_UPGRADE,
+  isSlackRequestUrlUnverified,
+  isSlackRotationLocked,
+  updateSlackAppManifest,
+} from "./config-api.ts";
 import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";
 
@@ -64,8 +69,8 @@ export async function registerSlackWebhook(
             name: current.state.appName,
             groupBehavior: current.state.groupBehavior,
             requestUrl: `${publicBaseUrl}/slack`,
-            // Token-rotation manifests require at least one OAuth redirect URL even after installation.
-            // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
+            // A manifest update replaces the whole manifest and redirect_urls may not be empty, so a
+            // placeholder is declared; a reinstall replaces it with its one-shot local setup callback.
             redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
           }),
           { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
@@ -83,6 +88,10 @@ export async function registerSlackWebhook(
     note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
     return "registered";
   } catch (error) {
+    if (isSlackRotationLocked(error)) {
+      note(`[fastagent] slack: ${SLACK_ROTATING_APP_UPGRADE}, or ${consoleFallback}`);
+      return "failed";
+    }
     note(
       isSlackRequestUrlUnverified(error)
         ? `[fastagent] slack: Slack could not verify ${publicBaseUrl}/slack after retries (last error: ${String(error)}) — ` +
