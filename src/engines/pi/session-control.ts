@@ -32,7 +32,6 @@ import {
   PARTIAL_UPDATE_CODE,
   UPDATE_FIELDS,
   RUN_COMMAND_FAILED_CODE,
-  type RetryScheduledEvent,
   type SessionCapabilities,
   type SessionControl,
   type SessionEntries,
@@ -51,6 +50,7 @@ import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
+import { toRetryScheduledEvent } from "./retry-event.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
@@ -127,17 +127,12 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
-/** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
- *  connection — the wire's ReadableStream backpressure stops pulling while invokes keep pushing)
- *  has its buffer FROZEN at the cap (memory bounded — the actual goal: ≈10k small events ≈ a few
- *  MB worst case per stuck connection) and its subscription marked closed. The close is observed
- *  via pulls — which a stalled connection by definition does not make — so a consumer that RESUMES
- *  pulling first drains the frozen backlog, then gets done (no buffered event dropped), while a
- *  permanently stalled one holds the frozen buffer until its TCP connection dies. Recovery either
- *  way is the standard reconnect+backfill, semantically lossless. */
+/** Per-subscriber backlog limits: event count and UTF-8 JSON bytes. Overflow freezes the accepted
+ *  prefix; the reader drains it before seeing done, then reconnects and backfills via entries(). */
 export const SUBSCRIBER_BUFFER_CAP = 10_000;
+export const SUBSCRIBER_BUFFER_BYTES = 8 * 1024 * 1024;
 
-/** One subscriber's push→pull queue, capped at {@link SUBSCRIBER_BUFFER_CAP}. `close()` settles a
+/** One subscriber's bounded push→pull queue. `close()` settles a
  *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
  *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
 class Subscriber {
@@ -148,7 +143,9 @@ class Subscriber {
   constructor(session: string) {
     this.session = session;
   }
-  private buffer: SessionEvent[] = [];
+  // Serialized snapshots cannot grow when a producer later mutates its event or tool result.
+  private buffer: Array<{ json: string; bytes: number }> = [];
+  private bufferedBytes = 0;
   // A QUEUE of waiters, not a single slot: concurrent next() calls are contract-legal (any wrapper
   // may poll twice), and a single `wake` field would let the second await overwrite the first's
   // resolver — hanging the first next() forever. Every wake flushes all waiters; each re-checks the
@@ -164,14 +161,17 @@ class Subscriber {
 
   push(event: SessionEvent): void {
     if (this.closed) return;
-    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
+    const json = JSON.stringify(event);
+    const bytes = Buffer.byteLength(json);
+    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP || this.bufferedBytes + bytes > SUBSCRIBER_BUFFER_BYTES) {
       log.warn(
-        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — no further events buffered; its stream ends after draining the backlog (or at connection death), then the client resyncs via entries()`,
+        `[fastagent] session-control subscriber for session "${this.session}" exceeded its buffer limit (${SUBSCRIBER_BUFFER_CAP} events / ${SUBSCRIBER_BUFFER_BYTES} bytes; ${this.bufferedBytes} bytes queued, ${bytes} incoming); its stream ends after draining the backlog, then the client resyncs via entries()`,
       );
       this.close();
       return;
     }
-    this.buffer.push(event);
+    this.buffer.push({ json, bytes });
+    this.bufferedBytes += bytes;
     this.flush();
   }
 
@@ -182,7 +182,11 @@ class Subscriber {
 
   async next(): Promise<IteratorResult<SessionEvent>> {
     while (true) {
-      if (this.buffer.length > 0) return { done: false, value: this.buffer.shift() as SessionEvent };
+      const item = this.buffer.shift();
+      if (item) {
+        this.bufferedBytes -= item.bytes;
+        return { done: false, value: JSON.parse(item.json) as SessionEvent };
+      }
       if (this.closed) return { done: true, value: undefined };
       await new Promise<void>((resolve) => {
         this.wakes.push(resolve);
@@ -743,36 +747,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       release();
       return failed(error);
     }
-    // The door is the session's own compaction abort — a real one, unlike a summarization call with
-    // no signal: `abort` must reach the model call (run/compaction symmetry).
-    //
-    // pi builds the controller that makes it abortable AFTER an internal await, so an abort arriving
-    // in that window would find nothing to cancel and the compaction would run to completion — the
-    // client's cancel silently doing nothing. The intent is latched and re-applied until it takes
-    // (`isCompacting` reports when it has).
-    //
-    // The retry is DEFENSIVE: the window is one await wide, and the test below lands after it, so
-    // this loop is not what makes that test pass. It is here because the window is on the code path,
-    // not because it has been observed.
+    // Pi creates the abort controller after an await and emits compaction_start immediately after.
+    // Retain early cancellation until that event; there is no time limit on session startup.
     let aborted = false;
-    let running = true; // cleared when the compaction settles, however it settles
-    const applyAbort = async () => {
-      // WAIT for the controller rather than requiring it: an abort that arrives before pi builds one
-      // sees isCompacting false, and a loop that only runs WHILE compacting would exit immediately —
-      // leaving the intent unapplied in exactly the window it exists for.
-      for (let attempt = 0; attempt < 200 && running; attempt++) {
-        if (bound.isCompacting) {
-          bound.abortCompaction();
-          if (!bound.isCompacting) return; // it took
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1));
-      }
-    };
     compacting.set(session, {
       abort: () => {
         aborted = true;
         bound.abortCompaction();
-        void applyAbort();
       },
     });
     emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
@@ -782,21 +763,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // backoff so a long gap is diagnosable (not confusable with a hang): as a session event for
       // attached observers, as a warn for server logs.
       const unsub = bound.subscribe((event) => {
+        if (event.type === "compaction_start" && event.reason === "manual" && aborted) bound.abortCompaction();
         if (event.type !== "summarization_retry_scheduled") return;
         log.warn(
           `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
         );
-        emitOwn(session, {
-          type: "retry_scheduled",
-          timestamp: Date.now(),
-          data: {
-            operation: "compaction",
-            attempt: event.attempt,
-            maxAttempts: event.maxAttempts,
-            delayMs: event.delayMs,
-            error: event.errorMessage,
-          },
-        } satisfies RetryScheduledEvent);
+        emitOwn(session, toRetryScheduledEvent(event));
       });
       try {
         const done = await bound.compact(instructions);
@@ -807,7 +779,6 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // failure still reads as aborted).
         outcome = aborted ? { aborted: true } : { error: String(error) };
       }
-      running = false;
       unsub();
       teardown();
       // Release BEFORE emitting finished: a watcher seeing finished may act next — "finished ⇒ the

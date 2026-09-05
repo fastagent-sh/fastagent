@@ -6,6 +6,7 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
+  type AgentSessionEvent,
   ModelRuntime,
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -17,6 +18,7 @@ import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts
 import type { RunControls } from "../src/engines/pi/turn-kit.ts";
 import type { SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
+import { log } from "../src/log.ts";
 
 /** Runs inside prompt-option resolution — the window between "the session exists" and "the model
  *  call starts", which a test cannot otherwise reach. */
@@ -162,6 +164,97 @@ describe("AgentSession L0: cancelling before the model call", () => {
 });
 
 describe("AgentSession L0: the observation plane", () => {
+  it.each([
+    ["auto_retry_start", "assistant"],
+    ["summarization_retry_scheduled", "compaction"],
+  ] as const)("projects %s with its operation and run identity", async (type, operation) => {
+    let emit!: (event: AgentSessionEvent) => void;
+    const session = {
+      ...promptRecordingSession().session,
+      subscribe: (listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      },
+      prompt: async () => {
+        emit({ type, attempt: 2, maxAttempts: 3, delayMs: 125, errorMessage: "temporarily unavailable" });
+        emit({ type: "message_end", message: fauxAssistantMessage("done") });
+      },
+    } as unknown as AgentSession;
+    const seen: SessionEvent[] = [];
+    const agent = createPiAgentFromSession({
+      sessionFactory: async () => session,
+      observer: (_id, event) => seen.push(event),
+    });
+    const events = await drain(agent.invoke({ session: "retry" }, { text: "hi" }));
+    expect(seen.find((event) => event.type === "retry_scheduled")).toEqual({
+      type: "retry_scheduled",
+      timestamp: expect.any(Number),
+      runId: seen[0]?.runId,
+      data: { operation, attempt: 2, maxAttempts: 3, delayMs: 125, error: "temporarily unavailable" },
+    });
+    expect(events).toEqual([
+      { type: "retrying", attempt: 2, maxAttempts: 3, delayMs: 125, reason: "temporarily unavailable" },
+      { type: "completed" },
+    ]);
+  });
+
+  it.each(["threshold", "overflow"] as const)("logs %s recovery without changing the turn outcome", async (reason) => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
+    let emit: (event: AgentSessionEvent) => void = () => {};
+    const message = {
+      ...fauxAssistantMessage("recovered"),
+      diagnostics: [
+        { type: "anthropic_input_transformations", timestamp: 1, details: { privatePayload: "do-not-log" } },
+      ],
+    };
+    const session = {
+      ...promptRecordingSession().session,
+      subscribe: (listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      },
+      prompt: async () => {
+        emit({
+          type: "compaction_end",
+          reason,
+          result: undefined,
+          aborted: false,
+          willRetry: false,
+          errorMessage: "summary failed: do-not-log",
+        });
+        emit({
+          type: "compaction_end",
+          reason,
+          result: undefined,
+          aborted: true,
+          willRetry: false,
+          errorMessage: "cancelled",
+        });
+        emit({ type: "message_end", message });
+      },
+    } as unknown as AgentSession;
+    const seen: SessionEvent[] = [];
+    const agent = createPiAgentFromSession({
+      sessionFactory: async () => session,
+      observer: (_id, event) => seen.push(event),
+    });
+    try {
+      const events = await drain(agent.invoke({ session: "recovery" }, { text: "hi" }));
+      expect(events.at(-1)).toEqual({ type: "completed" });
+      expect(seen.some((e) => e.type === "compaction_started" || e.type === "compaction_finished")).toBe(false);
+      expect(warn.mock.calls).toHaveLength(2);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(`automatic compaction ${reason} .*: failed$`));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider diagnostic anthropic_input_transformations"));
+      expect(JSON.stringify(warn.mock.calls)).toContain("session recovery, run");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("do-not-log");
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining("aborted"));
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+    }
+  });
+
   it("publishes one run, its rich events, and exactly one settlement", async () => {
     const { faux } = makeFaux();
     faux.setResponses([fauxAssistantMessage("hello there")]);

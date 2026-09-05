@@ -14,6 +14,7 @@ import {
   createPiAgentFromDefinition,
   defineTool,
   type CreatePiAgentFromDefinitionOptions,
+  type AgentEvent,
   z,
 } from "../src/index.ts";
 import {
@@ -148,41 +149,37 @@ describe("definition: loadAgentDefinition", () => {
     expect(pdf?.content).toContain("pypdf"); // the full SKILL.md body is loaded (for activation)
 
     // Progressive disclosure: name + description in the startup prompt; the body is deferred.
-    const prompt = assembleSystemPrompt({
-      base: piBasePrompt(),
-      contextFiles: def.contextFiles,
-      skills: def.skills,
-    });
+    let prompt = "";
+    const { faux } = makeFaux();
+    faux.setResponses([
+      (context) => {
+        prompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
+    await collect(agent.invoke({ session: "skill" }, { text: "hi" }));
     expect(prompt).toContain("<name>pdf</name>");
     expect(prompt).toContain("PDF files"); // description disclosed at stage 1
     expect(prompt).not.toContain("pypdf"); // body NOT disclosed until the skill activates
   });
 });
 
-describe("create: assembleSystemPrompt (four segments)", () => {
-  it("base + <project_instructions> + skills listing + env context", async () => {
+describe("create: assembleSystemPrompt (identity and project context)", () => {
+  it("assembles only the segments owned by fastagent", async () => {
     const def = await loadAgentDefinition(fixtureDir);
     const prompt = assembleSystemPrompt({
       base: piBasePrompt(), // required: base and toolset must agree, no silent default
       contextFiles: def.contextFiles,
-      skills: def.skills,
-      cwd: "/work",
     });
     // (1) base (inherited from the pi engine)
     expect(prompt).toContain("operating inside pi");
     // (2) instructions injected wrapped (not pasted bare)
     expect(prompt).toContain("<project_instructions");
     expect(prompt).toContain("Haiku Bot");
-    // ③ skills listing
-    expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain("season-words");
-    // ④ env context — cwd only; no date, by design: a date line would invalidate the provider prompt
-    // cache (a prefix cache) for every session at each day boundary (mirrors pi ≥0.80.7).
-    expect(prompt).toContain("Current working directory: /work");
-    expect(prompt).not.toContain("Current date");
-    // order: base before instructions, instructions before skills
+    expect(prompt).not.toContain("<available_skills>");
+    expect(prompt).not.toContain("Current working directory:");
     expect(prompt.indexOf("operating inside pi")).toBeLessThan(prompt.indexOf("<project_instructions"));
-    expect(prompt.indexOf("</project_context>")).toBeLessThan(prompt.indexOf("<available_skills>"));
   });
 
   it("base can be overridden; empty instructions/skills blocks are omitted", () => {
@@ -257,6 +254,9 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     // definition content actually reached the system prompt; base inherited from pi; tool list includes read
     expect(seenSystemPrompt).toContain("Haiku Bot");
     expect(seenSystemPrompt).toContain("season-words");
+    expect(seenSystemPrompt?.match(/<available_skills>/g)).toHaveLength(1);
+    expect(seenSystemPrompt?.match(/Current working directory:/g)).toHaveLength(1);
+    expect(seenSystemPrompt?.match(/<project_context>/g)).toHaveLength(1);
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
     // Every directory agent gets pi's complete coding set. Custom tools stay an explicit `tools:`
@@ -268,6 +268,43 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
 });
 
 describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
+  it("reads dynamic instructions once per invoke, never during construction", async () => {
+    const { faux } = makeFaux();
+    const seen: string[] = [];
+    const instructions = vi.fn((): string => `Instruction ${instructions.mock.calls.length}`);
+    faux.setResponses(
+      [1, 2].map(() => (context) => {
+        seen.push(context.systemPrompt ?? "");
+        return fauxAssistantMessage("ok");
+      }),
+    );
+    const agent = createPiAgent({ model: "faux/faux-1", providers: [faux.provider], instructions });
+    expect(instructions).not.toHaveBeenCalled();
+
+    await collect(agent.invoke({ session: "dynamic" }, { text: "first" }));
+    expect(instructions).toHaveBeenCalledTimes(1);
+    await collect(agent.invoke({ session: "dynamic" }, { text: "second" }));
+    expect(instructions).toHaveBeenCalledTimes(2);
+    expect(seen[0]).toContain("Instruction 1");
+    expect(seen[1]).toContain("Instruction 2");
+  });
+
+  it("reports an instruction read failure as a turn failure and recovers on the next invoke", async () => {
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("recovered")]);
+    const instructions = vi
+      .fn(() => "Ready")
+      .mockImplementationOnce(() => {
+        throw new Error("instructions unavailable");
+      });
+    const agent = createPiAgent({ model: "faux/faux-1", providers: [faux.provider], instructions });
+    const failed: AgentEvent[] = [];
+    for await (const event of agent.invoke({ session: "dynamic-failure" }, { text: "first" })) failed.push(event);
+    expect(failed).toMatchObject([{ type: "failed", details: "instructions unavailable" }]);
+    expect((await collect(agent.invoke({ session: "dynamic-failure" }, { text: "second" }))).text).toBe("recovered");
+    expect(instructions).toHaveBeenCalledTimes(2);
+  });
+
   it("resolves a model spec string and sends instructions verbatim — no engine base prepended", async () => {
     let seen: string | undefined;
     const { faux } = makeFaux();
@@ -320,7 +357,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     expect(offeredAfter).toEqual(["try_enable_bash"]);
   });
 
-  it("appends the skills listing when skills are mounted", async () => {
+  it.each([true, false])("lists skills only with an active read tool (read: %s)", async (read) => {
     let seen: string | undefined;
     const { faux } = makeFaux();
     faux.setResponses([
@@ -330,13 +367,20 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       },
     ]);
     const { skills } = await loadAgentDefinition(fixtureDir);
-    const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1", instructions: "P", skills });
+    const agent = createPiAgent({
+      providers: [faux.provider],
+      model: "faux/faux-1",
+      instructions: () => "P",
+      skills,
+      tools: read ? createReadOnlyTools(fixtureDir) : [],
+    });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(seen).toContain("P");
-    expect(seen).toContain("season-words"); // listed so the model can invoke it
+    expect(seen?.match(/<available_skills>/g) ?? []).toHaveLength(read ? 1 : 0);
+    expect(seen?.match(/Current working directory:/g)).toHaveLength(1);
   });
 
-  it("no instructions → no coding base forced on a hand-built agent", async () => {
+  it.each([undefined, "", () => ""])("empty instructions %s impose no coding identity", async (instructions) => {
     let seen: string | undefined;
     const { faux } = makeFaux();
     faux.setResponses([
@@ -345,7 +389,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
         return fauxAssistantMessage("ok");
       },
     ]);
-    const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1" });
+    const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1", instructions });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
     // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
@@ -414,9 +458,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
   });
 
   it("a persona.md edit between two invokes reaches the next turn's segment ① — no restart", async () => {
-    // Guards the PR's wiring point: persona must come from the per-turn live() re-read, NOT a boot-time
-    // closure value (the exact regression this PR fixes for `base`). If persona is hoisted out of live(),
-    // seen[1] stays DRAFT-BOT and the last assertion fails.
+    // Persona must come from the per-turn definition read rather than a boot-time snapshot.
     const dir = await mkdtemp(join(tmpdir(), "fa-live-persona-"));
     await writeFile(join(dir, "persona.md"), "You are DRAFT-BOT.\n");
     const seen: (string | undefined)[] = [];

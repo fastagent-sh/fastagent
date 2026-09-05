@@ -15,12 +15,8 @@
  * itself (the control plane contends on the same lease and validates against the same registry), so
  * `assemblePiFromDefinition` hands it out and `createPiAgentFromDefinition` is it plus the L0.
  */
-import {
-  formatSkillsForSystemPrompt,
-  type ExecutionEnv,
-  type Skill,
-  type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import { toUSVString } from "node:util";
+import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createCodingTools,
@@ -38,7 +34,7 @@ import type { ModuleLoadFailure } from "../../loader.ts";
 import { type ToolCollision, isDeferredTool, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
-import { piAgentSessionFactory } from "./agent-session-factory.ts";
+import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
@@ -71,7 +67,21 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 
 export function piAllCodingTools(cwd: string): MountedTool[] {
-  const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
+  const mutating = createCodingTools(cwd, {
+    bash: {
+      spawnHook(context) {
+        const { env } = context;
+        const id = env.PI_SESSION_ID;
+        delete env.PI_SESSION_ID_ENCODING;
+        // OS environment strings cannot preserve NUL or unpaired UTF-16 surrogates.
+        if (id !== undefined && (id.includes("\u0000") || toUSVString(id) !== id)) {
+          env.PI_SESSION_ID = JSON.stringify(id);
+          env.PI_SESSION_ID_ENCODING = "json";
+        }
+        return context;
+      },
+    },
+  }).filter((tool) => tool.name !== "read");
   return [...createReadOnlyTools(cwd), ...mutating];
 }
 
@@ -159,18 +169,7 @@ export async function resolveAgentTools(
   };
 }
 
-// ── §2 prompt: four-segment systemPrompt assembly ───────────────────────────
-//
-//   systemPrompt = ① base (engine asset; a persona.md persona overrides its identity line)
-//                + ② project context (AGENTS.md files via pi's loadProjectContextFiles, <project_context>-wrapped)
-//                + ③ skills listing + ④ env context (cwd)
-//
-// AGENTS.md ≠ system prompt. Pure functions: segment ④ input (cwd) is caller-provided, so the
-// same inputs always produce the same prompt (testable, reproducible). No date: a date line would
-// invalidate the provider prompt cache (a prefix cache) for every session at each day boundary —
-// channel sessions routinely live for weeks (pi ≥0.80.7 dropped it from its default prompt for the
-// same reason). The model gets the date when it needs it: `bash date`, and the wake tool takes
-// relative delays ("30m") / cron — never an absolute now-derived instant.
+// Fastagent owns identity and project context; Pi appends skills and cwd for both serving and chat.
 
 /**
  * The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two
@@ -224,10 +223,6 @@ export interface AssembleSystemPromptOptions {
   base: string;
   /** ② project-context files (AGENTS.md et al. from loadProjectContextFiles); each wrapped `<project_instructions path=…>`. */
   contextFiles?: Array<{ path: string; content: string }>;
-  /** ③ Skills for the <available_skills> listing. */
-  skills?: Skill[];
-  /** ④ Env context, caller-provided (keeps this function pure). Omitted = segment omitted. */
-  cwd?: string;
 }
 
 export function assembleSystemPrompt(options: AssembleSystemPromptOptions): string {
@@ -241,10 +236,6 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
     }
     prompt += `</project_context>\n`;
   }
-  if (options.skills && options.skills.length > 0) {
-    prompt += `\n${formatSkillsForSystemPrompt(options.skills)}\n`;
-  }
-  if (options.cwd) prompt += `\nCurrent working directory: ${options.cwd}`;
   return prompt;
 }
 
@@ -278,12 +269,8 @@ function assemblePi(opts: {
    *  models.json is in scope (see createPiModelRuntime); building it is async, which is why it
    *  happens in the caller — L1 has no directory, so it keeps the synchronous built-ins path. */
   models?: ModelRuntime;
-  systemPrompt?: string | (() => string);
+  readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
   tools?: MountedTool[];
-  skills?: Skill[];
-  /** Per-invoke prompt+skills source (see {@link PiAgentSessionFactoryOptions.live}); supersedes the
-   *  two above. */
-  live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
   /** Where conversations live. Defaults to in-memory; the directory opener passes a durable store. */
   sessions?: PiSessionRecordStore;
   /** Where pi reads its own settings; see {@link PiAgentSessionFactoryOptions.agentDir}. */
@@ -298,8 +285,7 @@ function assemblePi(opts: {
   cwd?: string;
   lease?: Lease;
 }): PiAssembly {
-  const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
-  const cwd = opts.cwd ?? env.cwd;
+  const cwd = opts.cwd ?? opts.env?.cwd ?? process.cwd();
   // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the
   // agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
@@ -326,9 +312,7 @@ function assemblePi(opts: {
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
-    systemPrompt: opts.systemPrompt,
-    skills: opts.skills,
-    live: opts.live,
+    readDefinition: opts.readDefinition,
     cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
@@ -349,24 +333,6 @@ export function agentOf(assembly: PiAssembly, observer?: SessionObserver): Agent
   return createPiAgentFromSession({ lease: assembly.lease, observer, sessionFactory: assembly.sessionFactory });
 }
 
-/**
- * L1 system prompt: `instructions` ARE the prompt (no engine base, no wrapping); the skills listing
- * is appended only when skills are mounted (the model must know what it can invoke). A factory so a
- * dynamic `instructions` and per-invoke freshness both work; undefined when there is nothing to send.
- */
-function instructionsPrompt(
-  instructions: string | (() => string) | undefined,
-  skills: Skill[] | undefined,
-): (() => string) | undefined {
-  const hasSkills = skills !== undefined && skills.length > 0;
-  if (instructions === undefined && !hasSkills) return undefined;
-  return () => {
-    const prose = typeof instructions === "function" ? instructions() : (instructions ?? "");
-    const listing = hasSkills ? formatSkillsForSystemPrompt(skills as Skill[]) : "";
-    return [prose, listing].filter((s) => s !== "").join("\n");
-  };
-}
-
 /** L1 options. Tier 1: model (spec) + instructions + tools. Tier 2: the injectable ports. */
 export interface CreatePiAgentOptions {
   /** Model spec "provider/modelId" (e.g. "openai-codex/gpt-5.5"), resolved against {@link models}. */
@@ -376,7 +342,8 @@ export interface CreatePiAgentOptions {
   /**
    * The system prompt itself — no engine base and no wrapping (unlike the directory path, which
    * assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string or
-   * a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
+   * a factory evaluated once per invoke, never during construction. Pi appends the skills listing
+   * when read is active.
    *
    * Not byte-for-byte verbatim: pi appends its own `Current working directory:` line to whatever
    * prompt it is given. What this rung guarantees is that no engine IDENTITY is imposed — a
@@ -402,8 +369,8 @@ export interface CreatePiAgentOptions {
   /** Session persistence. Defaults to in-memory; inject piSessionRecordStore for restart-surviving
    *  continuity. */
   sessions?: PiSessionRecordStore;
-  /** Supplies the working directory at L1, which loads no definition. Defaults to a local
-   *  NodeExecutionEnv at process.cwd(). At L2 it also reads persona.md and skills/.
+  /** Supplies the working directory at L1 (default: process.cwd()), which loads no definition.
+   *  At L2 it also reads persona.md and skills/.
    *  Tools and project-context discovery use the local process directly; this is not a sandbox. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
@@ -415,16 +382,19 @@ export interface CreatePiAgentOptions {
 
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
+  const { instructions, skills = [] } = options;
   return agentOf(
     assemblePi({
       model: options.model,
       thinkingLevel: options.thinkingLevel,
       providers: options.providers,
       authPath: options.authPath,
-      systemPrompt: instructionsPrompt(options.instructions, options.skills),
+      readDefinition: () => ({
+        systemPrompt: typeof instructions === "function" ? instructions() : instructions,
+        skills,
+      }),
       // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
       tools: options.tools ? withSearchTool(options.tools) : options.tools,
-      skills: options.skills,
       sessions: options.sessions,
       env: options.env,
       lease: options.lease,
@@ -488,7 +458,7 @@ export async function assemblePiFromDefinition(
   const cwd = options.cwd ?? dir;
   const env = options.env ?? new NodeExecutionEnv({ cwd });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
-  // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
+  // report (skills/diagnostics/collisions). Serving re-reads it through readDefinition below.
   // `cwd`, not `env.cwd`, for the same reason as the tools below: `cwd` is the run root whose
   // ancestors carry ② project context. Reading it off the env pointed the AGENTS.md walk at the
   // loader's directory whenever a caller supplied both.
@@ -525,7 +495,7 @@ export async function assemblePiFromDefinition(
     // the finding set changes (boot findings are the baseline) — a runtime-written bad skill must
     // not silently vanish from the agent, and a static one must not spam every turn's log. The
     // next good edit heals both.
-    live: async () => {
+    readDefinition: async () => {
       const def = await loadAgentDefinition(dir, { cwd, env });
       reportFindingsIfChanged(def.dir, def);
       return {
@@ -535,10 +505,6 @@ export async function assemblePiFromDefinition(
           base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
-          skills: def.skills,
-          // The workspace, matching where the tools operate. Telling the model one directory while
-          // `read`/`bash` resolve relative paths against another is a lie it cannot detect.
-          cwd,
         }),
         skills: def.skills,
       };
@@ -547,7 +513,7 @@ export async function assemblePiFromDefinition(
     sessions: options.sessions,
     // Discovered so the serving assembly can WARN that it does not run them (and so the refusals
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
-    // change without a restart, which is why this sits outside `live` above.
+    // change without a restart, which is why this sits outside readDefinition above.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     cwd,
     env,

@@ -13,6 +13,7 @@
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
@@ -51,8 +52,10 @@ export interface DefineToolOptions<I extends z.ZodType> {
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
-/** The AgentSession tool contract, shared by authored and cwd-bound coding tools. */
-export type MountedTool = AgentTool;
+/** AgentTool with Pi's optional per-call context; absent for sessionless CLI execution. */
+export type MountedTool = Omit<AgentTool, "execute"> & {
+  execute(...args: [...Parameters<AgentTool["execute"]>, context?: ExtensionContext]): ReturnType<AgentTool["execute"]>;
+};
 
 /** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
  *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the

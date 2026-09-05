@@ -187,13 +187,13 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
-| `env` | local `NodeExecutionEnv` (cwd) | supplies cwd at L1; reads persona/skills at L2; not a sandbox |
+| `env` | `process.cwd()` at L1; local `NodeExecutionEnv` at L2 | supplies cwd at L1; reads persona/skills at L2; not a sandbox |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 
 `env` governs definition loading. It does NOT govern the coding tools (`read`/`grep`/`find`/`ls`/
-`bash`/`edit`/`write`), which reach the local process directly, rooted at the workspace they were built
-for; nor author-written `tools/`, which are code and can import anything. Injecting `env` therefore
+`bash`/`edit`/`write`), which reach the local process directly using the session's workspace (or their
+construction cwd in a sessionless call); nor author-written `tools/`, which can import anything. Injecting `env` therefore
 does not isolate a directory agent — a sandbox has to constrain the process, and that adapter is
 future work.
 

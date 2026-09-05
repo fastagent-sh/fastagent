@@ -23,7 +23,7 @@ async function bindWithSettings(agentDir: string) {
   const factory = piAgentSessionFactory({
     sessions: piInMemorySessionRecordStore({ cwd }),
     engine: async () => ({ modelRuntime, model: faux.getModel() }),
-    systemPrompt: "test",
+    readDefinition: () => ({ systemPrompt: "test", skills: [] }),
     cwd,
     agentDir,
   });

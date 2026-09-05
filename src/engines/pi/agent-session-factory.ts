@@ -14,7 +14,6 @@
  */
 import { dirname, join } from "node:path";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   type AgentSessionServices,
@@ -30,12 +29,13 @@ import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
-import { DEFAULT_THINKING_LEVEL } from "./models.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
-/** pi's Model with the API-shape generic erased; fastagent only passes models through. */
-// biome-ignore lint/suspicious/noExplicitAny: variance-friendly model type, audited at this single point
-type AnyModel = Model<any>;
+interface PiSessionDefinition {
+  systemPrompt?: string;
+  skills: Skill[];
+}
 
 export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. Continuity = same store + same session id. */
@@ -51,13 +51,8 @@ export interface PiAgentSessionFactoryOptions {
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
-  /** Final assembled prompt, or a factory re-evaluated per turn. */
-  systemPrompt?: string | (() => string);
-  skills?: Skill[];
-  /** Per-turn source for the prompt+skills PAIR; supersedes the two above. This is what keeps
-   *  "the directory is the agent, LIVE" true on a shared `services`: the ResourceLoader is built
-   *  once, but what it serves is re-read here. */
-  live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
+  /** Read once per binding; prompt and skills come from the same definition read. */
+  readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
   /**
@@ -121,6 +116,8 @@ function recordedActivations(session: AgentSession): string[] {
  *  for weeks, so an un-deduped warn would repeat every turn and dilute its own signal. */
 const warnedDroppedActivations = new Set<string>();
 
+type ToolBinding = { session: AgentSession; context: TurnContext };
+
 /**
  * fastagent's tools as pi tool definitions, bound to ONE session.
  *
@@ -128,26 +125,36 @@ const warnedDroppedActivations = new Set<string>();
  * tool needs the session to reach the turn context. A tool that somehow runs before that binding
  * throws rather than executing outside the turn: a broken lifecycle must not look like a normal
  * out-of-turn call.
- *
- * It carries the whole turn CONTEXT, not just the session: the activation bridge holds the lock that
- * orders concurrent activations, so it has to live as long as the session the activations mutate.
- * Building it here, per call, would hand each parallel tool its own.
  */
-function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext }): ToolDefinition[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    label: tool.name,
-    description: tool.description ?? "",
-    parameters: tool.parameters,
-    // An activating tool (the built-in loader) declares "sequential" so pi serializes its batch;
-    // without it pi's outer active-set diff double-stamps parallel calls.
-    executionMode: tool.executionMode,
-    execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
-      const context = bound.context;
-      if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
-      return turnContext.run(context, () => tool.execute(id, params, signal));
-    },
-  })) as unknown as ToolDefinition[];
+function toolDefinitions(tools: MountedTool[], bound: { current?: ToolBinding }, sessionId: string): ToolDefinition[] {
+  return tools.map(
+    (tool): ToolDefinition => ({
+      ...tool,
+      label: tool.label || tool.name,
+      execute: (id, params, signal, onUpdate, ctx) => {
+        const binding = bound.current;
+        if (!binding) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
+        const { session, context } = binding;
+        // Expose the caller's id rather than Pi's filename encoding.
+        const sessionManager = Object.create(ctx.sessionManager, {
+          getSessionId: { value: () => sessionId },
+          getHeader: {
+            value: () => {
+              const header = ctx.sessionManager.getHeader();
+              return header ? { ...header, id: sessionId } : header;
+            },
+          },
+        });
+        // Pi's thinking getter uses a shared runtime; a restored cwd may be a symlink spelling.
+        const scoped = Object.create(ctx, {
+          sessionManager: { value: sessionManager },
+          cwd: { value: context.cwd },
+          thinkingLevel: { get: () => session.thinkingLevel },
+        });
+        return turnContext.run(context, () => tool.execute(id, params, signal, onUpdate, scoped));
+      },
+    }),
+  );
 }
 
 export interface BindPiSessionOptions {
@@ -178,13 +185,12 @@ export interface BindPiSessionOptions {
  * land in, and in nothing else. Two copies of this drifted once (the tool adapter and the deferral
  * narrowing each existed twice, identical but for those parameters).
  */
-export async function bindPiSession(
-  options: BindPiSessionOptions,
-): Promise<Awaited<ReturnType<typeof createAgentSessionFromServices>> & { context: TurnContext }> {
+export async function bindPiSession(options: BindPiSessionOptions): ReturnType<typeof createAgentSessionFromServices> {
   const { services, sessionManager, model, thinkingLevel, tools, cwd, recordActivations } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
-  const bound: { context?: TurnContext } = {};
+  const bound: { current?: ToolBinding } = {};
+  const sessionId = options.sessionId ?? sessionManager.getSessionId();
   const result = await createAgentSessionFromServices({
     services,
     sessionManager,
@@ -197,25 +203,25 @@ export async function bindPiSession(
     // from `session_start` — `noTools: "builtin"` gives the guarantee the allowlist was there for.
     noTools: "builtin",
     ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
-    customTools: toolDefinitions(tools, bound),
+    customTools: toolDefinitions(tools, bound, sessionId),
   });
   const { session } = result;
-  const sessionId = options.sessionId ?? session.sessionManager.getSessionId();
   // One context for the whole session: it describes the SESSION, not the call. The activation
   // bridge above all — a tool call has to see what the previous one activated.
-  const context: TurnContext = {
-    cwd,
-    sessionManager: agentSessionManager(session, sessionId),
-    // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
-    // the tool still callable next turn (see {@link TOOL_ACTIVATION_ENTRY}).
-    tools: sessionToolActivation(
-      session,
-      recordActivations
-        ? (added) => session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added })
-        : undefined,
-    ),
+  bound.current = {
+    session,
+    context: {
+      cwd,
+      sessionManager: agentSessionManager(session, sessionId),
+      // Persist each discovery so a served session can restore it on its next turn.
+      tools: sessionToolActivation(
+        session,
+        recordActivations
+          ? (added) => session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added })
+          : undefined,
+      ),
+    },
   };
-  bound.context = context;
   // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
   // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
   // add back what THIS session has already discovered.
@@ -240,7 +246,7 @@ export async function bindPiSession(
       session.setActiveToolsByName(next);
     }
   }
-  return { ...result, context };
+  return result;
 }
 
 /**
@@ -294,7 +300,7 @@ export function definitionResourceLoaderOptions(source: {
     // and substitutes its own coding-assistant identity, which an L1 agent
     // (`createPiAgent({ model, tools })`) never asked for. pi appends its own working-directory line
     // either way — that is engine behaviour this binding does not fight.
-    systemPromptOverride: () => source.systemPrompt() ?? " ",
+    systemPromptOverride: () => source.systemPrompt() || " ",
     appendSystemPromptOverride: () => [],
     skillsOverride: (base) => ({
       skills: toPiSkills(source.skills()) as typeof base.skills,
@@ -317,8 +323,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   }
   const tools = options.tools ?? [];
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
-  let prompt = typeof options.systemPrompt === "function" ? options.systemPrompt() : options.systemPrompt;
-  let skills = options.skills ?? [];
+  let definition: PiSessionDefinition;
   let services: Promise<AgentSessionServices> | undefined;
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
@@ -332,24 +337,17 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // CURRENT prompt/skills — serving refreshes both per turn, so a snapshot taken here would
       // serve a stale definition after the first edit.
       resourceLoaderOptions: definitionResourceLoaderOptions({
-        systemPrompt: () => prompt,
-        skills: () => skills,
+        systemPrompt: () => definition.systemPrompt,
+        skills: () => definition.skills,
       }),
     });
 
   return async (sessionId, inherit) => {
-    const fresh = options.live ? await options.live() : undefined;
-    const nextPrompt = fresh
-      ? fresh.systemPrompt
-      : typeof options.systemPrompt === "function"
-        ? options.systemPrompt()
-        : prompt;
-    const nextSkills = fresh ? (fresh.skills ?? []) : skills;
+    const next = await options.readDefinition();
     engine ??= options.engine();
     const { modelRuntime, model } = await engine;
     if (services === undefined) {
-      prompt = nextPrompt;
-      skills = nextSkills;
+      definition = next;
       services = buildServices(modelRuntime); // assigned before any await: concurrent turns share it
     } else {
       // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only
@@ -374,10 +372,10 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // front of every bind, to buy a guarantee nothing asks for.
       const loader = (await services).resourceLoader;
       const definitionChanged =
-        loader.getSystemPrompt() !== nextPrompt || loadedSkillSet(loader.getSkills().skills) !== skillSet(nextSkills);
+        loader.getSystemPrompt() !== (next.systemPrompt || " ") ||
+        skillSet(loader.getSkills().skills) !== skillSet(next.skills);
       if (definitionChanged) {
-        prompt = nextPrompt;
-        skills = nextSkills;
+        definition = next;
         await loader.reload();
       }
     }
@@ -409,13 +407,12 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
 }
 
 /** What a reload has to notice: the declared set, not the files behind it. */
-function skillSet(skills: Skill[]): string {
-  return skills.map((s) => `${s.name}\u0000${s.filePath}\u0000${s.description}`).join("\u0001");
-}
-
-/** The same signature, read back off the loader. */
-function loadedSkillSet(skills: readonly { name: string; filePath?: string; description: string }[]): string {
-  return skills.map((s) => `${s.name}\u0000${s.filePath ?? ""}\u0000${s.description}`).join("\u0001");
+function skillSet(
+  skills: readonly { name: string; filePath?: string; description: string; disableModelInvocation?: boolean }[],
+): string {
+  return skills
+    .map((s) => `${s.name}\u0000${s.filePath ?? ""}\u0000${s.description}\u0000${s.disableModelInvocation ?? false}`)
+    .join("\u0001");
 }
 
 /** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */

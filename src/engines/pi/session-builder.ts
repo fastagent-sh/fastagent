@@ -68,10 +68,8 @@ export async function buildAgentSessionRuntime(
   async function resolveAssembly(cwd: string) {
     // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving
     // opener uses (open.ts); those inputs cannot drift between the two consumption shapes.
-    // (Definition→prompt assembly is NOT shared: serving re-reads live per invoke, this runtime is a
-    // startup snapshot and pi appends skills/env itself — see the header.) `tools` arrives with
-    // search_tools applied; the bind below applies deferral like serving does (what you iterate is
-    // what you serve).
+    // Serving re-reads the definition per invoke; chat keeps a startup snapshot. Both pass identity
+    // and project context to Pi, which appends skills/cwd. `tools` already includes search_tools.
     const { config, modelSpec, agentDir, authPath, stateRoot, tools, toolCollisions, toolFailures } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
@@ -159,7 +157,7 @@ export async function buildAgentSessionRuntime(
     // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
     // here too would emit session_start twice per chat, so an extension opening a resource on start
     // would open two.
-    const { context: _context, ...result } = await bindPiSession({
+    const result = await bindPiSession({
       services,
       sessionManager,
       sessionStartEvent,

@@ -48,7 +48,7 @@ export function fauxAgent(
         return { modelRuntime, model: faux.getModel() };
       },
       ...(options.tools ? { tools: options.tools } : {}),
-      systemPrompt: options.systemPrompt ?? "test",
+      readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
       cwd,
     }),
   });
@@ -100,7 +100,7 @@ export async function fauxControlledAgent(
     engine: async () => ({ modelRuntime, model }),
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
-    systemPrompt: options.systemPrompt ?? "test",
+    readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
     cwd,
   });
   const { control, observer } = createPiSessionControl({

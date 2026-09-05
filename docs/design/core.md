@@ -181,15 +181,15 @@ The pi reference prompt has four segments:
 |---|---|
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
 | ② project context | `AGENTS.md` files loaded by pi from the agent dir and the workspace ancestor walk |
-| ③ skills listing | definition-local Agent Skills |
-| ④ runtime context | cwd only — no date, deliberately: a date line would invalidate the provider prefix cache at every day boundary (mirrors pi ≥0.80.7) |
+| ③ skills listing | Pi appends definition-local skills when `read` is active |
+| ④ runtime context | Pi appends cwd, without a date line that would invalidate the provider prefix cache daily |
 
 `persona.md` and `AGENTS.md` are deliberately different slots: persona is authored identity;
 `AGENTS.md` is project context. The definition is re-read for every invocation, so persona/context/
 skill edits take effect on the next turn. Code modules are reloaded by the dev supervisor instead.
 
 The low-level `createPiAgent({ instructions })` path is different on purpose: `instructions` is the
-system prompt verbatim, without the directory prompt assembly.
+prompt body without directory identity or project-context assembly. Pi appends skills and cwd on both paths.
 
 ## 3. Assembly ladder
 
@@ -277,7 +277,9 @@ Every `defineTool` execution receives the same generic runtime context. Serving 
 binds for the turn; chat adapts its resident one; both go through the same adapter onto the
 FastAgent-owned read-only port (`getSessionId`, `getHeader`, `getBranch`) — and `getSessionId` answers
 the CALLER's id, not pi's encoded record name. Sessionless direct execution provides cwd but no
-manager.
+manager. Native Pi tools receive the same workspace cwd and caller session id; their `thinkingLevel`
+getter reads the bound `AgentSession`, keeping shell effort consistent with the invoking session during
+concurrent runs.
 
 **Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
 schemas stay out of the request — and the model's sight — until the built-in `search_tools` loader
@@ -297,7 +299,7 @@ ToolActivation bridge (`sessionToolActivation`) riding the same turn context, so
 exactly what serves.
 
 **`ExecutionEnv` governs definition loading, not the tools.** The coding tools are
-pi-coding-agent's, rooted at the workspace at construction, and they reach `node:fs` directly. For a
+pi-coding-agent's, using the session's workspace, and they reach `node:fs` directly. For a
 while they were pi-agent-core's look-alikes, which take the env as the turn's tool context, so that
 `env` would be the single seam a sandbox adapter implements. That was given up deliberately: the seam
 never closed anything by itself — author-written `tools/` import whatever they like — while it cost a

@@ -154,13 +154,23 @@ Common options:
 | Option | Meaning |
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
-| `instructions` | String or function returning the system prompt. |
-| `tools` | `MountedTool[]`: authored tools and pi's cwd-bound coding tools share the `AgentTool` contract. |
-| `skills` | Loaded Agent Skills. |
+| `instructions` | String or function returning the system prompt. The function is evaluated once per invoke, never during construction; a thrown error becomes that turn's `failed` event. |
+| `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
+| `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |
 | `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads `persona.md` and `skills/`. Project context and tools use the local process directly. This is not a sandbox. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
+
+Tool contexts preserve the original caller session id. FastAgent's default `bash` tool also exposes it
+as `PI_SESSION_ID`. When the id contains NUL or unpaired UTF-16 surrogates, the shell receives its JSON
+string representation and `PI_SESSION_ID_ENCODING=json`. Otherwise the value is unchanged and the
+encoding marker is unset. Read both variables to distinguish an encoded id from a literal JSON-looking
+id; use `JSON.parse` only when the marker is `json`.
+
+Caller-created Pi shell tools retain their construction options. Configure their `spawnHook` with the
+same environment encoding policy, or use `exposeSessionEnvironment: false` when `PI_*` metadata is
+unnecessary. FastAgent cannot retrofit a spawn hook into an existing tool instance.
 
 ### `createPiAgentFromDefinition`
 

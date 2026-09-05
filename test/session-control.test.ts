@@ -5,6 +5,7 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
@@ -12,6 +13,7 @@ import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.t
 
 import {
   SUBSCRIBER_BUFFER_CAP,
+  SUBSCRIBER_BUFFER_BYTES,
   createPiSessionControl,
   type PiBoundaryWiring,
 } from "../src/engines/pi/session-control.ts";
@@ -663,6 +665,116 @@ describe("session control: run modulation", () => {
     expect(((await next) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
     await fresh.return?.(undefined);
   }, 10_000);
+
+  it("bounds stalled tool-progress subscribers by UTF-8 bytes without stopping the run or fast subscribers", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const text = "界".repeat(17_000);
+    const tool: AgentTool = {
+      ...echoTool,
+      async execute(_id, _params, _signal, onUpdate) {
+        for (let i = 0; i < 200; i++) {
+          onUpdate?.({ content: [{ type: "text", text: `${i}:${text}` }], details: undefined });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        return { content: [{ type: "text", text: "done" }], details: undefined };
+      },
+    };
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("echo", { value: "go" })), fauxAssistantMessage("done")],
+      { tools: [tool] },
+    );
+    const slow = control.sessions.get("sBytes").events()[Symbol.asyncIterator]();
+    const first = slow.next();
+    const fast = watchUntilSettled(control, "sBytes");
+    try {
+      expect((await drain(agent.invoke({ session: "sBytes" }, { text: "go" }))).at(-1)?.type).toBe("completed");
+      expect((await first).value.type).toBe("run_started");
+      const events = await fast;
+      expect(events.filter((event) => event.type === "tool_progress")).toHaveLength(200);
+      let bytes = 0;
+      let retained = 0;
+      for (const event of events.slice(1)) {
+        const size = Buffer.byteLength(JSON.stringify(event));
+        if (bytes + size > SUBSCRIBER_BUFFER_BYTES) break;
+        bytes += size;
+        retained++;
+        expect(await slow.next()).toEqual({ done: false, value: event });
+      }
+      expect(retained).toBeGreaterThan(100);
+      expect(retained).toBeLessThan(200);
+      expect((await slow.next()).done).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("sBytes"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("bytes"));
+    } finally {
+      await slow.return?.(undefined);
+      warn.mockRestore();
+    }
+  });
+
+  it("accepts an exact-budget snapshot, isolates later mutations, and returns its byte budget on consumption", async () => {
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const iterator = control.sessions.get("sExactBytes").events()[Symbol.asyncIterator]();
+    const event = {
+      type: "tool_progress",
+      timestamp: 0,
+      runId: "r",
+      data: { id: "call-1", name: "echo", partialResult: "" },
+    };
+    event.data.partialResult = "x".repeat(SUBSCRIBER_BUFFER_BYTES - Buffer.byteLength(JSON.stringify(event)));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 2; i++) {
+        const next = iterator.next();
+        observer("sExactBytes", event);
+        event.data.partialResult += "x";
+        const result = await next;
+        expect(result.done).toBe(false);
+        expect(Buffer.byteLength(JSON.stringify(result.value))).toBe(SUBSCRIBER_BUFFER_BYTES);
+        event.data.partialResult = event.data.partialResult.slice(0, -1);
+      }
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await iterator.return?.(undefined);
+      warn.mockRestore();
+    }
+  });
+
+  it("closes a pending subscription on a single oversized event and allows reconnection", async () => {
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const events = control.sessions.get("sOversized").events();
+    const iterator = events[Symbol.asyncIterator]();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const next = iterator.next();
+      observer("sOversized", {
+        type: "tool_progress",
+        timestamp: 0,
+        runId: "r",
+        data: { id: "call-1", name: "echo", partialResult: "x".repeat(SUBSCRIBER_BUFFER_BYTES) },
+      });
+      expect((await next).done).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("sOversized"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("bytes"));
+      const fresh = events[Symbol.asyncIterator]();
+      try {
+        const pending = fresh.next();
+        const event = { type: "run_settled", timestamp: 1, runId: "r", data: { status: "completed" } };
+        observer("sOversized", event);
+        expect((await pending).value).toEqual(event);
+      } finally {
+        await fresh.return?.(undefined);
+      }
+    } finally {
+      await iterator.return?.(undefined);
+      warn.mockRestore();
+    }
+  });
 
   it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
     const { control, observer } = createPiSessionControl({
@@ -1536,6 +1648,61 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sB4").state()).status).toBe("idle");
   });
 
+  it("publishes manual compaction retries without a run identity", async () => {
+    const { faux, models } = makeFaux();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const record = await sessions.openOrCreate("retry");
+    record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+    record.appendMessage({ role: "user", content: "recent", timestamp: 2 });
+    let emit!: (event: AgentSessionEvent) => void;
+    const session = {
+      sessionManager: record,
+      settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
+      subscribe: (listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      },
+      compact: async () => {
+        emit({
+          type: "summarization_retry_scheduled",
+          attempt: 2,
+          maxAttempts: 3,
+          delayMs: 125,
+          errorMessage: "temporarily unavailable",
+        });
+        return { summary: "summary" };
+      },
+      dispose: () => {},
+    } as unknown as AgentSession;
+    const { control } = createPiSessionControl({
+      sessions,
+      boundary: {
+        lease: inProcessLease(),
+        models,
+        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        sessionFactory: async () => session,
+      },
+    });
+    const seen: SessionEvent[] = [];
+    const handle = control.sessions.get("retry");
+    const watching = (async () => {
+      for await (const event of handle.events()) {
+        seen.push(event);
+        if (event.type === "compaction_finished") break;
+      }
+    })();
+    expect(await handle.compact()).toEqual({ ok: true });
+    await watching;
+    expect(seen.map((event) => event.type)).toEqual(["compaction_started", "retry_scheduled", "compaction_finished"]);
+    expect(seen[1]).toEqual({
+      type: "retry_scheduled",
+      timestamp: expect.any(Number),
+      data: { operation: "compaction", attempt: 2, maxAttempts: 3, delayMs: 125, error: "temporarily unavailable" },
+    });
+    expect(seen[1]).not.toHaveProperty("runId");
+  });
+
   it("while a compaction is in flight the lease is held: state() compacting, dispatch session_busy", async () => {
     // The accept-fast window is the refactor's new invariant: ok returned, lease still held.
     let releaseSummary: () => void = () => {};
@@ -1644,9 +1811,7 @@ describe("session control: boundary mutations", () => {
   );
 
   it("an abort that lands the instant compaction starts still stops it", async () => {
-    // What a client actually does: abort the moment it sees compaction_started. The narrower window
-    // pi opens (its controller is built one await later) is guarded in the source but not pinned
-    // here — a test cannot reliably land inside a single await.
+    // A client cancels as soon as admission is announced.
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
     await withCompactableHistory(agent, "sB10");
     const seen: SessionEvent[] = [];
@@ -1666,31 +1831,42 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sB10").state()).status).toBe("idle"); // the lease came back
   });
 
-  it("an abort that arrives BEFORE pi can be aborted is still applied", async () => {
-    // The window this guards: pi builds its compaction controller one await after compact() starts,
-    // so an abort landing first calls a no-op. The dispatch is issued from the compaction_started
-    // handler and then re-entered immediately, which puts at least one attempt inside that window;
-    // whether it lands there is timing, but the OUTCOME must not depend on which side it lands on.
+  it("keeps cancellation intent until pi creates its compaction controller", async () => {
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
-    await withCompactableHistory(agent, "sB11");
-    const seen: SessionEvent[] = [];
-    const watching = (async () => {
-      for await (const ev of control.sessions.get("sB11").events()) {
-        seen.push(ev);
-        if (ev.type === "compaction_started") {
-          // Fire several aborts back to back, the first synchronously with the event.
-          void control.sessions.get("sB11").abort();
-          void control.sessions.get("sB11").abort();
-        }
-        if (ev.type === "compaction_finished") break;
-      }
+    await withCompactableHistory(agent, "delayed-controller");
+    let entered!: () => void;
+    let resume!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const abort = vi.spyOn(AgentSession.prototype, "abort").mockImplementationOnce(async () => {
+      entered();
+      await gate;
+    });
+    const handle = control.sessions.get("delayed-controller");
+    const finished = (async () => {
+      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
     })();
-
-    expect(await control.sessions.get("sB11").compact()).toEqual({ ok: true });
-    await watching;
-
-    expect(seen.at(-1)?.data).toEqual({ aborted: true });
-    expect((await control.sessions.get("sB11").entries()).entries.map((e) => e.kind)).not.toContain("compaction");
+    try {
+      expect(await handle.compact()).toEqual({ ok: true });
+      await waiting;
+      vi.useFakeTimers();
+      expect(await handle.abort()).toEqual({ ok: true });
+      // The controller can be delayed arbitrarily; no finite polling budget can cover this window.
+      await vi.advanceTimersByTimeAsync(1000);
+      vi.useRealTimers();
+      resume();
+      expect((await finished)?.data).toEqual({ aborted: true });
+      expect((await handle.entries()).entries.some((entry) => entry.kind === "compaction")).toBe(false);
+      expect((await handle.state()).status).toBe("idle");
+    } finally {
+      resume();
+      vi.useRealTimers();
+      abort.mockRestore();
+    }
   });
 
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {

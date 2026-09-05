@@ -163,6 +163,16 @@ OpenAI-compatible servers differ in the details. `compat` (per provider, or per 
 carries the switches — e.g. `supportsDeveloperRole: false` for servers that reject the `developer`
 role, or `thinkingFormat` for reasoning models behind a chat template.
 
+Useful native `compat` settings:
+
+| Setting | Use |
+|---|---|
+| `vllmPriority` | OpenAI Completions: sends vLLM's request priority. Lower numbers run earlier; requires the server's `--scheduling-policy priority`. |
+| `supportsMaxOutputTokens: false` | OpenAI Responses: omits `max_output_tokens` for gateways that reject it. |
+| `supportsMidConvoEffort: true` | Anthropic Messages: enables per-turn effort and signed-thinking binding controls. Enable only for a verified Claude model and faithful transport. Pi persists the response effort in the session. |
+
+These belong in the definition-local `models.json`; fastagent adds no parallel settings.
+
 The schema is pi's own; its full field reference, including every `compat` flag and per-model
 override, is in pi's `docs/models.md` (`@earendil-works/pi-coding-agent`). Two things are specific to
 FastAgent:
