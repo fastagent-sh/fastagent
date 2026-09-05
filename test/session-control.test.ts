@@ -1601,6 +1601,48 @@ describe("session control: boundary mutations", () => {
     expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
   });
 
+  it.each(["retained", "missing-kept", "split"])(
+    "compaction admits %s history using the coding-agent journal",
+    async (shape) => {
+      const requests: string[] = [];
+      const { control, sessions } = await makeBoundary(
+        Array.from({ length: 4 }, () => (context) => {
+          requests.push(JSON.stringify(context.messages));
+          return fauxAssistantMessage("compact summary");
+        }),
+      );
+      const record = await sessions.openOrCreate("compact-shape");
+      record.appendModelChange("faux", "faux-thinker");
+      record.appendThinkingLevelChange("high");
+      record.appendMessage({ role: "user", content: "discarded", timestamp: 1 });
+      const kept = record.appendCustomEntry("metadata", {});
+      record.appendMessage({ role: "user", content: "carry-over", timestamp: 2 });
+      record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+      if (shape !== "split") {
+        record.appendCompaction("previous summary", shape === "retained" ? kept : "missing", 100000);
+        if (shape === "missing-kept") {
+          record.appendMessage({ role: "user", content: "after-boundary", timestamp: 3 });
+          record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+        }
+        record.appendMessage({ role: "user", content: "recent", timestamp: 4 });
+      }
+      record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+      record.appendThinkingLevelChange("low");
+      record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+      const handle = control.sessions.get("compact-shape");
+      const finished = (async () => {
+        for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+      })();
+
+      expect(await handle.compact()).toEqual({ ok: true });
+      expect((await finished)?.data).toMatchObject({ summary: expect.stringContaining("compact summary") });
+      expect(requests.join(" ")).toContain(shape === "missing-kept" ? "after-boundary" : "carry-over");
+      if (shape !== "split") expect(requests.join(" ")).not.toContain("discarded");
+      expect(await handle.compact()).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+      expect((await handle.state()).status).toBe("idle");
+    },
+  );
+
   it("an abort that lands the instant compaction starts still stops it", async () => {
     // What a client actually does: abort the moment it sees compaction_started. The narrower window
     // pi opens (its controller is built one await later) is guarded in the source but not pinned
@@ -1690,6 +1732,24 @@ describe("session control: boundary mutations", () => {
     // Converged: lease free, status recovered, nothing stuck.
     expect((await control.sessions.get("sB9").state()).status).toBe("idle");
     expect(await control.sessions.get("sB9").update({ thinkingLevel: "low" })).toEqual({ ok: true });
+  });
+
+  it("rejects a truncated summary without publishing a compaction entry", async () => {
+    const { agent, control, sessions } = await makeBoundary([
+      ...Array.from({ length: 3 }, () => fauxAssistantMessage(LONG_ANSWER)),
+      ...Array.from({ length: 4 }, () => ({ ...fauxAssistantMessage("incomplete"), stopReason: "length" as const })),
+    ]);
+    await withCompactableHistory(agent, "truncated");
+    const record = await sessions.openOrCreate("truncated");
+    const before = record.getEntries();
+    const handle = control.sessions.get("truncated");
+    const finished = (async () => {
+      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+    })();
+    expect(await handle.compact()).toEqual({ ok: true });
+    expect((await finished)?.data).toMatchObject({ error: expect.stringContaining("summary is incomplete") });
+    expect(record.getEntries()).toEqual(before);
+    expect((await handle.state()).status).toBe("idle");
   });
 
   it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {

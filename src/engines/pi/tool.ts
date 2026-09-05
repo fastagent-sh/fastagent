@@ -12,7 +12,7 @@
  */
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
-import type { AgentHarnessTool, ExecutionToolContext, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
@@ -51,14 +51,8 @@ export interface DefineToolOptions<I extends z.ZodType> {
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
-/**
- * A tool as MOUNTED: what the engine actually runs. Wider than the authored {@link AgentTool} on
- * purpose — a lower-level mounted tool may read an `ExecutionEnv` from the fifth `execute` parameter,
- * while coding-agent's cwd-bound tools ignore it and fastagent's authored tools take four arguments.
- * Naming the wider type is what lets `defineTool` stay context-free for authors while both families
- * live in one array; every helper that only inspects or reorders tools is typed on THIS.
- */
-export type MountedTool = AgentHarnessTool<ExecutionToolContext>;
+/** The AgentSession tool contract, shared by authored and cwd-bound coding tools. */
+export type MountedTool = AgentTool;
 
 /** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
  *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the
@@ -94,6 +88,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
   const { $schema: _drop, ...parameters } = z.toJSONSchema(options.input) as Record<string, unknown>;
   const tool = {
     name: options.name ?? "",
+    label: options.name ?? "",
     description: options.description,
     parameters,
     ...(options.deferred ? { deferred: true } : {}),

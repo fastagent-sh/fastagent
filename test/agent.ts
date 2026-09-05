@@ -2,7 +2,6 @@
  * One faux-backed agent, assembled the way serving assembles one. Tests that care about a channel,
  * the control plane or the HTTP surface should not each re-derive the engine wiring.
  */
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { FauxResponseStep } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../src/agent.ts";
@@ -51,7 +50,6 @@ export function fauxAgent(
       ...(options.tools ? { tools: options.tools } : {}),
       systemPrompt: options.systemPrompt ?? "test",
       cwd,
-      env: new NodeExecutionEnv({ cwd }),
     }),
   });
   return { agent, faux, sessions };
@@ -104,7 +102,6 @@ export async function fauxControlledAgent(
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
     systemPrompt: options.systemPrompt ?? "test",
     cwd,
-    env: new NodeExecutionEnv({ cwd }),
   });
   const { control, observer } = createPiSessionControl({
     sessions,

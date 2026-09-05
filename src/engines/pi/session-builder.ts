@@ -102,7 +102,6 @@ export async function buildAgentSessionRuntime(
       definition,
       extensionPaths,
       tools,
-      env,
       systemPrompt,
     };
   }
@@ -126,7 +125,7 @@ export async function buildAgentSessionRuntime(
   };
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const { modelRuntime, modelSpec, thinkingLevel, definition, extensionPaths, tools, env, systemPrompt } =
+    const { modelRuntime, modelSpec, thinkingLevel, definition, extensionPaths, tools, systemPrompt } =
       await assemblyFor(cwd);
 
     // Per session, NOT memoized with the assembly: pi replaces the session on /new, /resume and
@@ -167,9 +166,7 @@ export async function buildAgentSessionRuntime(
       model,
       thinkingLevel,
       tools,
-      env,
-      // rootCwd, not the raw `cwd` pi hands the factory: `env` above is rooted at the canonical
-      // path, and a tool must not see two spellings of one directory under a symlinked workspace.
+      // A tool must see one spelling of the workspace, including when opened through a symlink.
       cwd: rootCwd,
       recordActivations: false,
     });

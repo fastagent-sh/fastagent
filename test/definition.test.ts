@@ -7,7 +7,7 @@ import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { FileError, err } from "@earendil-works/pi-agent-core";
+import { type Context, FileError, err } from "@earendil-works/pi-agent-core";
 import {
   collect,
   createPiAgent,
@@ -107,11 +107,11 @@ describe("definition: loadAgentDefinition", () => {
 
   it("persona.md read errors other than not_found throw instead of silently dropping the persona", async () => {
     class DeniedEnv extends NodeExecutionEnv {
-      override async readTextFile(path: string) {
+      override async readTextFile(path: string, context: Context) {
         if (path.endsWith("persona.md")) {
           return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
         }
-        return super.readTextFile(path);
+        return super.readTextFile(path, context);
       }
     }
     const env = new DeniedEnv({ cwd: fixtureDir });
@@ -372,7 +372,7 @@ describe("create: toolset (real pi tools, fidelity)", () => {
     // tools, which take a cwd. Every caller builds them for the workspace the agent works on, so a
     // relative path resolves against that workspace and nothing else.
     const read = piAllCodingTools(fixtureDir).find((t) => t.name === "read")!;
-    const r = await read.execute("t1", { path: "AGENTS.md" }, undefined, undefined, {} as never);
+    const r = await read.execute("t1", { path: "AGENTS.md" });
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
   });
@@ -476,11 +476,11 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     await writeFile(join(dir, "AGENTS.md"), "You are a bot.\n");
     class FlakyEnv extends NodeExecutionEnv {
       deny = false;
-      override async readTextFile(path: string) {
+      override async readTextFile(path: string, context: Context) {
         if (this.deny && path.endsWith("persona.md")) {
           return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
         }
-        return super.readTextFile(path);
+        return super.readTextFile(path, context);
       }
     }
     const env = new FlakyEnv({ cwd: dir });

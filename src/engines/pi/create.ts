@@ -35,14 +35,7 @@ import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import {
-  type DefineToolOptions,
-  type ToolCollision,
-  isDeferredTool,
-  loadTools,
-  mergeDiscoveredTools,
-  type MountedTool,
-} from "./tool.ts";
+import { type ToolCollision, isDeferredTool, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
 import { piAgentSessionFactory } from "./agent-session-factory.ts";
@@ -342,7 +335,6 @@ function assemblePi(opts: {
     // `noTools: "builtin"` leaves pi's built-ins in the registry; a lower-level replacement must also
     // deny every omitted coding name so a loader cannot reactivate one later.
     excludedToolNames: omittedBuiltinNames(opts.tools ?? [], cwd),
-    env,
   });
   return {
     lease,
@@ -391,9 +383,7 @@ export interface CreatePiAgentOptions {
    * hand-built agent is not told it is a coding assistant.
    */
   instructions?: string | (() => string);
-  /** The tool set to mount. `FastagentTool` (AgentTool plus the optional `deferred` marker, see
-   *  {@link DefineToolOptions}) widens into {@link MountedTool}, which additionally admits pi's default
-   *  coding tools — those bind their workspace at construction rather than reading a turn context. */
+  /** The tool set to mount: authored tools or pi's cwd-bound coding tools, both AgentTool. */
   tools?: MountedTool[];
   skills?: Skill[];
   // ── Tier 2: injectable ports ───────────────────────────────────────────────
@@ -412,12 +402,9 @@ export interface CreatePiAgentOptions {
   /** Session persistence. Defaults to in-memory; inject piSessionRecordStore for restart-surviving
    *  continuity. */
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment, handed to tools that read one as the turn's context. Defaults to
-   *  a local NodeExecutionEnv at `process.cwd()`. At THIS rung nothing else consumes it: L1 loads no
-   *  definition. It does NOT constrain the coding tools (pi's own, rooted at the workspace they were
-   *  built for) or author-written `tools/`, which are code and can import anything. Not a
-   *  sandbox — see {@link createPiAgentFromDefinition} for the rung where it also reads the
-   *  definition. */
+  /** Supplies the working directory at L1, which loads no definition. Defaults to a local
+   *  NodeExecutionEnv at process.cwd(). At L2 it also reads persona.md and skills/.
+   *  Tools and project-context discovery use the local process directly; this is not a sandbox. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;

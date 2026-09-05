@@ -27,5 +27,7 @@
     "src/deploy/agentcore/forwarder.js",
     "test/fixtures/**"
   ],
+  // pi-coding-agent's SDK imports pi-server without declaring it (earendil-works/pi#9132).
+  "ignoreDependencies": ["@earendil-works/pi-server"],
   "ignoreBinaries": ["fastagent", "cloudflared"]
 }

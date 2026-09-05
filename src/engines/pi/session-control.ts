@@ -12,8 +12,13 @@
  * Writes take the same lease as runs. Without boundary wiring they reject before acceptance with
  * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
-import { prepareCompaction, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+  type SessionEntry as PiSessionEntry,
+  findCutPoint,
+  getLatestCompactionEntry,
+  sessionEntryToContextMessages,
+} from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
@@ -49,6 +54,22 @@ import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
+
+/** Admission uses coding-agent's cut point and context rules, including a split-turn prefix.
+ *  Its prepareCompaction is private; agent-core's namesake uses a different journal format. */
+function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number): boolean {
+  if (path.at(-1)?.type === "compaction") return false;
+  const previous = getLatestCompactionEntry(path);
+  let start = 0;
+  if (previous) {
+    const kept = path.findIndex((entry) => entry.id === previous.firstKeptEntryId);
+    start = kept >= 0 ? kept : path.indexOf(previous) + 1;
+  }
+  const { firstKeptEntryIndex } = findCutPoint(path, start, path.length, keepRecentTokens);
+  return path
+    .slice(start, firstKeptEntryIndex)
+    .some((entry) => entry.type !== "compaction" && sessionEntryToContextMessages(entry).length > 0);
+}
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -701,14 +722,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // The SAME settings pi will use inside compact(): asking with different thresholds would
       // either reject a compaction pi would have run, or admit one it refuses — and its refusal
       // arrives too late to be a pre-acceptance answer.
-      const path = bound.sessionManager.getBranch() as unknown as Parameters<typeof prepareCompaction>[0];
-      const prep = prepareCompaction(path, bound.settingsManager.getCompactionSettings());
-      if (!prep.ok) throw prep.error;
-      // Empty is the same answer as absent: pi ships two prepareCompaction implementations
-      // (agent-core answers with a Result, coding-agent with undefined) and they disagree on which
-      // one an unsummarizable session gets. What they agree on is the CONTENT — no messages to
-      // summarize — so that is what the gate reads.
-      if (!prep.value || prep.value.messagesToSummarize.length === 0) {
+      const path = bound.sessionManager.getBranch();
+      if (!hasCompactableHistory(path, bound.settingsManager.getCompactionSettings().keepRecentTokens)) {
         teardown();
         release();
         // A no-op, not a failure — its OWN code (the NO_ACTIVE_RUN pattern): a client must

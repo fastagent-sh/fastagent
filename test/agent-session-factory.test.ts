@@ -3,22 +3,27 @@
  * it declares, the tools it mounts — and the per-turn freshness that makes "the directory is the
  * agent, LIVE" true on a shared ResourceLoader.
  */
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { collect } from "../src/collect.ts";
 import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { type PropertyWrites, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import {
+  type PropertyWrites,
+  piInMemorySessionRecordStore,
+  piSessionRecordStore,
+} from "../src/engines/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
 import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { makeFaux } from "./faux.ts";
+import { fauxControlledAgent } from "./agent.ts";
+import type { SessionEvent } from "../src/session.ts";
 
 /** An agent built the way serving builds one, minus the directory read. */
 async function agentWith(
@@ -35,13 +40,109 @@ async function agentWith(
       sessions: piInMemorySessionRecordStore({ cwd }),
       engine: async () => ({ modelRuntime, model: faux.getModel() }),
       cwd,
-      env: new NodeExecutionEnv({ cwd }),
       ...options,
     }),
   });
 }
 
 describe("piAgentSessionFactory: the definition reaches the model", () => {
+  it("preserves provider effort across turns, forks, and a fresh store", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-effort-"));
+    const sessions = piSessionRecordStore({ dir: join(cwd, "sessions"), cwd });
+    const first = await agentWith(
+      [
+        { ...fauxAssistantMessage("high answer"), providerThinkingLevel: "high" },
+        (context) => {
+          expect(context.messages).toContainEqual(expect.objectContaining({ providerThinkingLevel: "high" }));
+          return { ...fauxAssistantMessage("low answer"), providerThinkingLevel: "low" };
+        },
+      ],
+      { cwd, sessions },
+    );
+    await collect(first.invoke({ session: "room" }, { text: "first" }));
+    await collect(first.invoke({ session: "room" }, { text: "second" }));
+    const record = await sessions.openOrCreate("room");
+    await sessions.fork("room", record.getLeafId()!, "fork", "effort-test");
+    const reopened = await agentWith(
+      [
+        (context) => {
+          const efforts = context.messages.filter((m) => m.role === "assistant").map((m) => m.providerThinkingLevel);
+          expect(efforts).toEqual(["high", "low"]);
+          return fauxAssistantMessage("continued");
+        },
+      ],
+      { cwd, sessions: piSessionRecordStore({ dir: join(cwd, "sessions"), cwd }) },
+    );
+    expect((await collect(reopened.invoke({ session: "fork" }, { text: "next" }))).text).toBe("continued");
+  });
+
+  it("compacts after a tool inside one run without repeating its side effect", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-same-run-compaction-"));
+    await mkdir(join(cwd, ".fastagent", "pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".fastagent", "pi", "settings.json"),
+      JSON.stringify({
+        compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 1600 },
+        retry: { enabled: false },
+      }),
+    );
+    let toolRuns = 0;
+    let turns = 0;
+    const requests: string[] = [];
+    const events: SessionEvent[] = [];
+    const respond: FauxResponseStep = (context) => {
+      if (!context.systemPrompt?.startsWith("Same-run test")) {
+        requests.push("summary");
+        return fauxAssistantMessage("A compact summary");
+      }
+      requests.push("assistant");
+      return ++turns === 1
+        ? fauxAssistantMessage(fauxToolCall("large", {}, { id: "large-1" }))
+        : fauxAssistantMessage("final answer");
+    };
+    const { agent, sessions, control } = await fauxControlledAgent(
+      Array.from({ length: 6 }, () => respond),
+      {
+        cwd,
+        systemPrompt: "Same-run test",
+        faux: { models: [{ id: "small", contextWindow: 2500, maxTokens: 1000 }] },
+        tools: [
+          defineTool({
+            name: "large",
+            description: "Large output",
+            input: z.object({}),
+            execute() {
+              toolRuns++;
+              return "x".repeat(6000);
+            },
+          }),
+        ],
+      },
+    );
+    const record = await sessions.openOrCreate("compact");
+    for (let i = 0; i < 4; i++) {
+      record.appendMessage({ role: "user", content: `Earlier question ${i}`, timestamp: i });
+      record.appendMessage(fauxAssistantMessage("h".repeat(1200)));
+    }
+
+    const watching = (async () => {
+      for await (const event of control.sessions.get("compact").events()) {
+        events.push(event);
+        if (event.type === "run_settled") break;
+      }
+    })();
+    expect((await collect(agent.invoke({ session: "compact" }, { text: "get large then answer" }))).text).toBe(
+      "final answer",
+    );
+    await watching;
+    expect(toolRuns).toBe(1);
+    expect(requests).toEqual(["assistant", "summary", "summary", "assistant"]);
+    expect(record.getEntries().filter((e) => e.type === "compaction")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "run_started")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "run_settled")).toHaveLength(1);
+    expect(events.some((e) => e.type === "compaction_started" || e.type === "compaction_finished")).toBe(false);
+  });
+
   it("the assembled prompt is what the model is asked with", async () => {
     let systemPrompt = "";
     const agent = await agentWith(

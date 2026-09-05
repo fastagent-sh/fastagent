@@ -1,6 +1,5 @@
 /** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 
@@ -32,12 +31,8 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   if (!tool) {
     failStartup(new Error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`));
   }
-  // Authored tools read cwd from turnContext; coding tools are already rooted at the workspace. Keep
-  // the fifth-argument env for lower-level MountedTools that explicitly consume it.
-  const env = new NodeExecutionEnv({ cwd: workspace });
-  const result = await turnContext
-    .run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args, undefined, undefined, { env }))
-    .catch(failStartup);
+  // Authored tools read cwd from turnContext; coding tools are already rooted at the workspace.
+  const result = await turnContext.run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
   const out =
     result?.details !== undefined
       ? result.details

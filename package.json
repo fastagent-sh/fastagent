@@ -106,9 +106,10 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.6.0",
-    "@earendil-works/pi-agent-core": "^0.84.3",
-    "@earendil-works/pi-ai": "^0.84.3",
-    "@earendil-works/pi-coding-agent": "^0.84.3",
+    "@earendil-works/pi-agent-core": "^0.85.0",
+    "@earendil-works/pi-ai": "^0.85.0",
+    "@earendil-works/pi-coding-agent": "^0.85.0",
+    "@earendil-works/pi-server": "^0.85.0",
     "@hono/node-server": "^2.1.1",
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@octokit/webhooks-methods": "^6.0.0",
