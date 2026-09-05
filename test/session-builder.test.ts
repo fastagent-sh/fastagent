@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, symlinkSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -326,6 +326,11 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         expect(rt.session.thinkingLevel).toBe("high");
+        const bash = rt.session.agent.state.tools.find((tool) => tool.name === "bash")!;
+        const params = { command: 'printf "%s" "$PI_REASONING_LEVEL"' };
+        expect((await bash.execute("high", params)).content).toEqual([{ type: "text", text: "high" }]);
+        rt.session.setThinkingLevel("low");
+        expect((await bash.execute("low", params)).content).toEqual([{ type: "text", text: "low" }]);
       } finally {
         rt.session.dispose?.();
       }
@@ -414,9 +419,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
 
 describe("session builder: a tool sees one spelling of the workspace", () => {
   it("binds the turn context to the canonical workspace when a resumed session records a symlinked one", async () => {
-    // pi hands the factory the session header's cwd, which is whatever spelling was recorded; the
-    // scope guard only canonicalizes to COMPARE. Passing that through put the tool's ctx.cwd and the
-    // ExecutionEnv (rooted at the canonical path) on two spellings of one directory.
+    // Different parents expose lexical ../ resolution through the symlink rather than the workspace.
     const root = realpathSync(await mkdtemp(join(tmpdir(), "fa-chat-symlink-")));
     const dir = join(root, "agent", "fastagent");
     const observedKey = "__fastagent_chat_tool_cwd_test__";
@@ -441,10 +444,11 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
            })],
          };\n`,
       );
-      // The same directory under a second name. A session recorded through it canonicalizes to the
-      // workspace, so the scope guard admits it — and the raw spelling reaches the bind.
-      symlinkSync(join(root, "agent"), join(root, "link"));
       const linked = join(root, "link", "fastagent");
+      await mkdir(join(root, "link"));
+      symlinkSync(dir, linked);
+      await writeFile(join(root, "agent", "parent.txt"), "canonical parent");
+      await writeFile(join(root, "link", "parent.txt"), "linked parent");
       const recorded = join(root, "linked-session.jsonl");
       await writeFile(
         recorded,
@@ -454,11 +458,32 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
       process.chdir(dir);
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, join(root, "sessions")));
       try {
+        const readParent = () =>
+          rt.session.agent.state.tools
+            .find((tool) => tool.name === "read")!
+            .execute("read-parent", { path: "../parent.txt" });
+        const before = await readParent();
+        expect(before.content).toEqual([{ type: "text", text: "canonical parent" }]);
         await expect(rt.importFromJsonl(recorded, linked)).resolves.toMatchObject({ cancelled: false });
         const tool = rt.session.agent.state.tools.find((candidate) => candidate.name === "inspect_cwd");
         expect(tool).toBeDefined();
         await tool!.execute("inspect-cwd-1", {});
         expect((globalThis as Record<string, unknown>)[observedKey]).toBe(dir);
+        expect((await readParent()).content).toEqual(before.content);
+
+        await rt.session.agent.state.tools
+          .find((tool) => tool.name === "edit")!
+          .execute("edit-parent", {
+            path: "../parent.txt",
+            edits: [{ oldText: "canonical parent", newText: "edited parent" }],
+          });
+        expect(await readFile(join(root, "agent", "parent.txt"), "utf8")).toBe("edited parent");
+        expect(await readFile(join(root, "link", "parent.txt"), "utf8")).toBe("linked parent");
+        await rt.session.agent.state.tools
+          .find((tool) => tool.name === "write")!
+          .execute("write-parent", { path: "../written.txt", content: "new file" });
+        expect(await readFile(join(root, "agent", "written.txt"), "utf8")).toBe("new file");
+        expect(existsSync(join(root, "link", "written.txt"))).toBe(false);
       } finally {
         delete (globalThis as Record<string, unknown>)[observedKey];
         rt.session.dispose?.();

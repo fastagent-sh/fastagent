@@ -7,7 +7,13 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { type ExtensionContext, ModelRuntime, SessionManager, createReadTool } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionContext,
+  ModelRuntime,
+  SessionManager,
+  createBashTool,
+  createReadTool,
+} from "@earendil-works/pi-coding-agent";
 import type { MountedTool } from "../src/engines/pi/tool.ts";
 import { describe, expect, it, vi } from "vitest";
 import { collect } from "../src/collect.ts";
@@ -242,6 +248,64 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     expect(seen.filter((event) => event.type === "tool_progress")).toMatchObject([
       { data: { name: "probe", partialResult: { details: { progress: 50 } } } },
     ]);
+  });
+
+  it("keeps native thinkingLevel and shell effort scoped to interleaved sessions", async () => {
+    let entered!: () => void;
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const levels = new Map<string, unknown[]>();
+    const outputs = new Map<string, unknown>();
+    const bash: MountedTool = createBashTool(process.cwd());
+    const probe: MountedTool = {
+      ...bash,
+      async execute(...args) {
+        const ctx = args[4]!;
+        const id = ctx.sessionManager.getSessionId();
+        const before = ctx.thinkingLevel;
+        if (id === "room-a") {
+          entered();
+          await gate;
+        }
+        levels.set(id, [before, ctx.thinkingLevel]);
+        const result = await bash.execute(...args);
+        outputs.set(id, result.content);
+        return result;
+      },
+    };
+    const command = { command: 'printf "%s" "$PI_REASONING_LEVEL"' };
+    const { agent, control, sessions } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("bash", command)),
+        fauxAssistantMessage(fauxToolCall("bash", command)),
+        fauxAssistantMessage("B done"),
+        fauxAssistantMessage("A done"),
+      ],
+      { tools: [probe], faux: { models: [{ id: "thinker", reasoning: true }] } },
+    );
+    await sessions.openOrCreate("room-a");
+    await sessions.openOrCreate("room-b");
+    expect(await control.sessions.get("room-a").update({ thinkingLevel: "high" })).toEqual({ ok: true });
+    expect(await control.sessions.get("room-b").update({ thinkingLevel: "low" })).toEqual({ ok: true });
+    const runningA = collect(agent.invoke({ session: "room-a" }, { text: "A" }));
+    try {
+      await paused;
+      expect((await collect(agent.invoke({ session: "room-b" }, { text: "B" }))).text).toBe("B done");
+      expect((await control.sessions.get("room-a").state()).thinkingLevel).toBe("high");
+      expect((await control.sessions.get("room-b").state()).thinkingLevel).toBe("low");
+    } finally {
+      resume();
+      await runningA;
+    }
+    expect(levels.get("room-a")).toEqual(["high", "high"]);
+    expect(levels.get("room-b")).toEqual(["low", "low"]);
+    expect(outputs.get("room-a")).toEqual([{ type: "text", text: "high" }]);
+    expect(outputs.get("room-b")).toEqual([{ type: "text", text: "low" }]);
   });
 
   it("every tool call in a turn runs in the same turn context", async () => {

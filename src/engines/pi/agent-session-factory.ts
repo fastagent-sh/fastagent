@@ -116,6 +116,8 @@ function recordedActivations(session: AgentSession): string[] {
  *  for weeks, so an un-deduped warn would repeat every turn and dilute its own signal. */
 const warnedDroppedActivations = new Set<string>();
 
+type ToolBinding = { session: AgentSession; context: TurnContext };
+
 /**
  * fastagent's tools as pi tool definitions, bound to ONE session.
  *
@@ -124,15 +126,16 @@ const warnedDroppedActivations = new Set<string>();
  * throws rather than executing outside the turn: a broken lifecycle must not look like a normal
  * out-of-turn call.
  */
-function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext }, sessionId: string): ToolDefinition[] {
+function toolDefinitions(tools: MountedTool[], bound: { current?: ToolBinding }, sessionId: string): ToolDefinition[] {
   return tools.map(
     (tool): ToolDefinition => ({
       ...tool,
       label: tool.label || tool.name,
       execute: (id, params, signal, onUpdate, ctx) => {
-        const context = bound.context;
-        if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
-        // Inherit Pi's live getters while exposing the caller's id rather than its filename encoding.
+        const binding = bound.current;
+        if (!binding) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
+        const { session, context } = binding;
+        // Expose the caller's id rather than Pi's filename encoding.
         const sessionManager = Object.create(ctx.sessionManager, {
           getSessionId: { value: () => sessionId },
           getHeader: {
@@ -142,7 +145,12 @@ function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext },
             },
           },
         });
-        const scoped = Object.create(ctx, { sessionManager: { value: sessionManager } });
+        // Pi's thinking getter uses a shared runtime; a restored cwd may be a symlink spelling.
+        const scoped = Object.create(ctx, {
+          sessionManager: { value: sessionManager },
+          cwd: { value: context.cwd },
+          thinkingLevel: { get: () => session.thinkingLevel },
+        });
         return turnContext.run(context, () => tool.execute(id, params, signal, onUpdate, scoped));
       },
     }),
@@ -181,7 +189,7 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
   const { services, sessionManager, model, thinkingLevel, tools, cwd, recordActivations } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
-  const bound: { context?: TurnContext } = {};
+  const bound: { current?: ToolBinding } = {};
   const sessionId = options.sessionId ?? sessionManager.getSessionId();
   const result = await createAgentSessionFromServices({
     services,
@@ -200,17 +208,19 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
   const { session } = result;
   // One context for the whole session: it describes the SESSION, not the call. The activation
   // bridge above all — a tool call has to see what the previous one activated.
-  bound.context = {
-    cwd,
-    sessionManager: agentSessionManager(session, sessionId),
-    // A served session HAS somewhere to record the discovery, so it does: the delta is what makes
-    // the tool still callable next turn (see {@link TOOL_ACTIVATION_ENTRY}).
-    tools: sessionToolActivation(
-      session,
-      recordActivations
-        ? (added) => session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added })
-        : undefined,
-    ),
+  bound.current = {
+    session,
+    context: {
+      cwd,
+      sessionManager: agentSessionManager(session, sessionId),
+      // Persist each discovery so a served session can restore it on its next turn.
+      tools: sessionToolActivation(
+        session,
+        recordActivations
+          ? (added) => session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added })
+          : undefined,
+      ),
+    },
   };
   // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
   // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then

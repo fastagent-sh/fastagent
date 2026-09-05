@@ -277,7 +277,9 @@ Every `defineTool` execution receives the same generic runtime context. Serving 
 binds for the turn; chat adapts its resident one; both go through the same adapter onto the
 FastAgent-owned read-only port (`getSessionId`, `getHeader`, `getBranch`) — and `getSessionId` answers
 the CALLER's id, not pi's encoded record name. Sessionless direct execution provides cwd but no
-manager.
+manager. Native Pi tools receive the same workspace cwd and caller session id; their `thinkingLevel`
+getter reads the bound `AgentSession`, keeping shell effort consistent with the invoking session during
+concurrent runs.
 
 **Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
 schemas stay out of the request — and the model's sight — until the built-in `search_tools` loader
