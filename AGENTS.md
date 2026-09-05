@@ -108,6 +108,10 @@ src/
 │   │                     # and the channel's real HTTP status rides INSIDE a transport-200 reply. The
 │   │                     # authentication boundary is here: InvokeAgentRuntime is an ordinary IAM action, so
 │   │                     # only a shared-secret envelope is the forwarder's; a public one runs `invoke` alone.
+│   ├── agentcore-protocol.ts # THE WIRE between the forwarder Lambda and the container, in one place: the
+│   │                     # envelope union, the webhook reply, the snapshot URL pair, the wake-alarm request,
+│   │                     # the reserved paths. The forwarder (deploy/agentcore/forwarder.js) is JavaScript
+│   │                     # and cannot import it, so agentcore-forwarder.test.ts pins its literals to these
 │   ├── agentcore-state.ts    # cross-deploy durability: the platform wipes the state mount on every version
 │   │                     # update, so the root is restored from / pushed to an S3 snapshot via presigned URLs
 │   │                     # the forwarder mints per envelope
@@ -229,7 +233,7 @@ src/
 │   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
 │   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
 │   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
-│   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts }  # AWS Bedrock AgentCore: ONE CloudFormation stack (runtime +
+│   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js }  # AWS Bedrock AgentCore: ONE CloudFormation stack (runtime +
 │                         # forwarder Lambda for webhooks + EventBridge rules for schedules). No public URL and no
 │                         # resident process — the two facts every difference in channels/agentcore*.ts follows from.
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)

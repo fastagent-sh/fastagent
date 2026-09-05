@@ -4,7 +4,7 @@
  * execution role.
  *
  * THE FIXTURE DECLARES NO CHANNEL AND NO SCHEDULE, and that is what the topology follows from: with
- * `needsForwarder` false (deploy.ts) there is no forwarder Lambda, no Function URL, no EventBridge
+ * `topology.forwarder` false (plan.ts agentcoreTopology) there is no forwarder Lambda, no Function URL, no EventBridge
  * rule and no state bucket — the driver skips creating one. The template's forwarder half is proven
  * to PARSE by agentcore.live.test.ts, whose fixture turns it on; what this probe adds is that the
  * minimal stack really converges and really serves. Teardown still sweeps the bucket, because the
@@ -41,12 +41,18 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { CLI, aws, destroyAgentcoreDeployment, invokeAgentcore, liveVersion, requireEnv, run } from "./env.ts";
+import {
+  CLI,
+  aws,
+  destroyAgentcoreDeployment,
+  invokeAgentcore,
+  liveVersion,
+  requireAwsAccount,
+  requireEnv,
+  run,
+} from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
-requireEnv("AWS_ACCESS_KEY_ID", "an AWS key scoped to fastagent-live-probe-* (this probe creates real resources)");
-requireEnv("AWS_SECRET_ACCESS_KEY", "the secret for AWS_ACCESS_KEY_ID");
-requireEnv("AWS_REGION", "a region where Bedrock AgentCore is available, e.g. us-east-1");
 
 /** The directory basename IS the agent name; every AWS resource derives from it. `live-probe-` keeps
  *  all of them inside the IAM policy's namespace once the driver prefixes `fastagent-`. */
@@ -57,9 +63,8 @@ let workspace = "";
 let account = "";
 
 beforeAll(async () => {
-  const identity = await aws(["sts", "get-caller-identity", "--output", "json"]);
-  expect(identity.code, `sts get-caller-identity failed: ${identity.stderr}`).toBe(0);
-  account = (JSON.parse(identity.stdout) as { Account: string }).Account;
+  // 45 = this probe's own declared budgets, 30 minutes for the deploy plus 15 for teardown.
+  account = await requireAwsAccount(45);
 
   // Registered BEFORE anything is created, so the workflow sweep can still find these resources if
   // this process is killed mid-deploy (a job timeout, a cancelled run) and afterAll never runs. The

@@ -3,6 +3,7 @@
   "files": {
     "includes": [
       "src/**/*.ts",
+      "src/deploy/agentcore/forwarder.js",
       "test/**/*.ts",
       "!src/scaffold/templates/**",
       "!src/channels/*/scaffold/**"
@@ -27,6 +28,10 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["src/deploy/agentcore/forwarder.js"],
+      "linter": { "rules": { "suspicious": { "noRedundantUseStrict": "off" } } }
+    },
     {
       "includes": ["test/**/*.ts"],
       "linter": {

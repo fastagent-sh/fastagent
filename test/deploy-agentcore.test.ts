@@ -211,6 +211,16 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain('schedule "impossible" has NO EventBridge rule');
     // Schedules alone (no route channels) still need the forwarder — it is the fire path.
     expect(template).toContain("Type: AWS::Lambda::Function");
+    expect(plan.topology).toEqual({ webhooks: false, forwarder: true, wakeAlarms: false });
+  });
+
+  it("the topology counts the schedules EventBridge CAN express — an untranslatable one alone buys no forwarder", () => {
+    // The CLI used to count every loaded schedule while the template counted the translated ones, so
+    // this definition deployed a bucket and forwarder parameters into a stack that declared neither.
+    const plan = planAgentcoreDeploy(baseInput({ schedules: [{ name: "impossible", cron: "0 9 1 * 1" }] }));
+    expect(plan.topology).toEqual({ webhooks: false, forwarder: false, wakeAlarms: false });
+    expect(plan.artifacts.map((a) => a.path)).not.toContain(FORWARDER_FILE);
+    expect(plan.artifacts[0]!.content).not.toContain("Type: AWS::Lambda::Function");
   });
 
   it("identifier collisions fail the plan visibly (a silently wrong stack is worse)", () => {

@@ -4,13 +4,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
-import {
-  type AgentcoreEnvelope,
-  UnknownScheduleError,
-  type WebhookReply,
-  agentcoreRoutes,
-  type RouteSurface,
-} from "../src/channels/agentcore.ts";
+import { UnknownScheduleError, agentcoreRoutes, type RouteSurface } from "../src/channels/agentcore.ts";
+import type { AgentcoreEnvelope, WebhookReply } from "../src/channels/agentcore-protocol.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { StateSync } from "../src/channels/agentcore-state.ts";
 import type { Routes } from "../src/channel.ts";

@@ -13,4 +13,7 @@ for (const entry of readdirSync("src/channels", { withFileTypes: true })) {
   }
 }
 
+// The AgentCore forwarder is a real .js file read beside its module at plan time; tsc does not copy it.
+cpSync("src/deploy/agentcore/forwarder.js", "dist/deploy/agentcore/forwarder.js");
+
 chmodSync("dist/cli.js", 0o755);
