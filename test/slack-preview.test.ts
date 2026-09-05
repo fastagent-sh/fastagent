@@ -11,7 +11,7 @@ function fakeApi(): SlackApi {
     updateMessage: vi.fn(async () => {}),
     updateMarkdown: vi.fn(async () => {}),
     deleteMessage: vi.fn(async () => {}),
-    sendMarkdown: vi.fn(async () => "1.0"),
+    sendMarkdown: vi.fn(async () => ({ ts: "1.0", channelId: "C1" })),
     startStream: vi.fn(async () => "1.0"),
     appendStream: vi.fn(async () => {}),
     stopStream: vi.fn(async () => {}),

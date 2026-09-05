@@ -48,6 +48,12 @@ describe("scaffold slack-send", () => {
     expect(result.details).toBe("sent message to Slack channel C1 (ts 1.0)");
   });
 
+  it("messages a user id and reports the DM channel Slack resolved it to", async () => {
+    vi.stubGlobal("fetch", async () => Response.json({ ok: true, ts: "1.0", channel: "D1" }));
+    const result = await execute({ channelId: "U1", text: "review this draft" });
+    expect(result.details).toBe("sent message to Slack user U1 in DM channel D1 (ts 1.0)");
+  });
+
   it("uploads a local file through the channel transport and names the file id", async () => {
     const urls: string[] = [];
     vi.stubGlobal("fetch", async (input: string | URL) => {

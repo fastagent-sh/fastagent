@@ -18,9 +18,10 @@ export default defineTool({
     "carrying — a scheduled or self-scheduled (wake) turn. In a normal chat turn the channel already " +
     "delivers your reply, so do NOT call this to answer (it would post the message twice). Pass exactly " +
     "one of `text`/`path`. channelId/threadTs come from the [slack: …] context line in a chat turn; a " +
-    "scheduled/woken turn has no context line, so name the destination in your instruction.",
+    "scheduled/woken turn has no context line, so name the destination in your instruction. A user ID " +
+    "(U…) as channelId messages that user's DM; a file upload needs the DM channel ID (D…) the text send reports.",
   input: z.object({
-    channelId: z.string().describe("target Slack channel ID"),
+    channelId: z.string().describe("target Slack channel ID, or a user ID (U…) to message that user's DM"),
     text: z.string().optional().describe("standard Markdown message text"),
     path: z.string().optional().describe("absolute path of a local file to upload"),
     title: z.string().optional().describe("file title (file mode only)"),
@@ -35,8 +36,11 @@ export default defineTool({
       if (title !== undefined || initialComment !== undefined) {
         throw new Error("`title`/`initialComment` are file-mode only");
       }
-      const ts = await slack.sendMarkdown(target, text);
-      return `sent message to Slack channel ${channelId} (ts ${ts})`;
+      const sent = await slack.sendMarkdown(target, text);
+      // A user-id target reports the DM channel Slack resolved it to — the id a file upload needs.
+      return sent.channelId === channelId
+        ? `sent message to Slack channel ${channelId} (ts ${sent.ts})`
+        : `sent message to Slack user ${channelId} in DM channel ${sent.channelId} (ts ${sent.ts})`;
     }
     const file = await slack.uploadFile(target, path as string, { title, initialComment });
     return `uploaded ${file.name} to Slack channel ${channelId} (file ${file.id})`;

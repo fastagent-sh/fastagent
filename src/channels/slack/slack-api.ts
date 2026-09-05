@@ -35,6 +35,13 @@ export interface UploadedSlackFile {
   name: string;
 }
 
+export interface SentSlackMessage {
+  /** The first message's ts (a long Markdown body continues in further messages). */
+  ts: string;
+  /** Where it landed: a user-id target (`U…`) resolves to that user's DM channel (`D…`). */
+  channelId: string;
+}
+
 interface SlackBody {
   ok?: boolean;
   error?: string;
@@ -90,7 +97,9 @@ export interface SlackApi {
   updateMessage(channelId: string, ts: string, text: string): Promise<void>;
   updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
-  sendMarkdown(target: SlackTarget, markdown: string): Promise<string | undefined>;
+  /** Post standard Markdown, split under Slack's limit. `target.channelId` may be a user id: Slack
+   *  then opens (or reuses) the app's DM with that user, and the result names it. */
+  sendMarkdown(target: SlackTarget, markdown: string): Promise<SentSlackMessage>;
   startStream(target: SlackTarget, markdown?: string): Promise<string>;
   appendStream(channelId: string, ts: string, markdown: string): Promise<void>;
   stopStream(channelId: string, ts: string, markdown?: string): Promise<void>;
@@ -280,6 +289,19 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     return { bytes: await readBytesCapped(response), contentType: response.headers.get("content-type") ?? undefined };
   };
 
+  const postMarkdown = async (target: SlackTarget, markdown: string): Promise<SentSlackMessage> => {
+    const data = await call<SlackBody & { ts?: string; channel?: string }>("chat.postMessage", {
+      channel: target.channelId,
+      markdown_text: markdown,
+      ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+    if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
+    // The response's `channel` is what resolves a user-id target to its DM; a channel target echoes itself.
+    return { ts: data.ts, channelId: data.channel ?? target.channelId };
+  };
+
   const api: SlackApi = {
     async authTest() {
       const data = await call<SlackBody & { team_id?: string; user_id?: string; bot_id?: string }>("auth.test", {});
@@ -297,15 +319,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       return data.ts;
     },
     async postMarkdown(target, markdown) {
-      const data = await call<SlackBody & { ts?: string }>("chat.postMessage", {
-        channel: target.channelId,
-        markdown_text: markdown,
-        ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
-        unfurl_links: false,
-        unfurl_media: false,
-      });
-      if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
-      return data.ts;
+      return (await postMarkdown(target, markdown)).ts;
     },
     async updateMessage(channelId, ts, text) {
       try {
@@ -327,12 +341,13 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       await call("chat.delete", { channel: channelId, ts });
     },
     async sendMarkdown(target, markdown) {
-      let first: string | undefined;
+      let first: SentSlackMessage | undefined;
       for (const chunk of chunkSlackMarkdown(markdown)) {
-        const ts = await api.postMarkdown(target, chunk);
-        first ??= ts;
+        // Continuations go to the resolved channel: a user-id target must not reopen the DM per chunk.
+        const sent = await postMarkdown(first ? { ...target, channelId: first.channelId } : target, chunk);
+        first ??= sent;
       }
-      return first;
+      return first as SentSlackMessage; // chunkSlackMarkdown never yields zero chunks
     },
     async startStream(target, markdown) {
       if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
