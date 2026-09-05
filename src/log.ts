@@ -40,15 +40,17 @@ export function createLogger(opts: { level: LogLevel; sink?: (line: string) => v
  *
  * Three states: a valid value wins over the posture; a present-but-invalid one warns (once per distinct
  * value) and is treated as absent, so a typo (meant to make logs louder) can never silently pin the
- * level nor kill the posture default; absent leaves the posture. The warning is raw `console.error`
- * because it is the logger reporting on its own gate, but reuses `format` for the same shape.
+ * level nor kill the posture default; absent leaves the posture. Empty is absent, matching
+ * `resolveOverridePath` — `KEY=` is how a `.env` parks a key it does not want set, not a typo to warn
+ * about. The warning is raw `console.error` because it is the logger reporting on its own gate, but
+ * reuses `format` for the same shape.
  */
 let posture: LogLevel = "info";
 let warnedFor: string | undefined;
 
 function effectiveLevel(): LogLevel {
   const raw = process.env.FASTAGENT_LOG_LEVEL;
-  if (raw === undefined) return posture;
+  if (!raw) return posture;
   const value = raw.toLowerCase();
   if (isLevel(value)) return value;
   if (warnedFor !== raw) {

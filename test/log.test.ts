@@ -32,7 +32,7 @@ describe("createLogger", () => {
 });
 
 describe("log singleton + setLogLevel", () => {
-  // Assumes FASTAGENT_LOG_LEVEL is unset (an env override would win and skip setLogLevel by design).
+  // Assumes FASTAGENT_LOG_LEVEL is unset: a valid one wins at every emit and would gate these lines.
   it("setLogLevel moves the threshold; the singleton writes to stderr", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -70,6 +70,20 @@ describe("FASTAGENT_LOG_LEVEL override (read per emit)", () => {
       const lines = err.mock.calls.map((c) => String(c[0]));
       expect(lines).toContain("ERROR [t] e");
       expect(lines.some((l) => l.includes("[t] d"))).toBe(false); // debug gated by the override
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("an empty value is absent, not a typo — `KEY=` parks a key in a .env", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.stubEnv("FASTAGENT_LOG_LEVEL", "");
+      setLogLevel("debug");
+      log.debug("[t] d4");
+      const lines = err.mock.calls.map((c) => String(c[0]));
+      expect(lines).toContain("DEBUG [t] d4"); // the posture applies
+      expect(lines.some((l) => /unknown FASTAGENT_LOG_LEVEL/.test(l))).toBe(false);
     } finally {
       err.mockRestore();
     }
