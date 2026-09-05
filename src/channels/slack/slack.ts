@@ -16,7 +16,6 @@ import { codePointPrefix } from "../kit/text.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
-import { createSlackBotTokenProvider, slackBotAuthPath } from "./bot-auth.ts";
 import { type SlackBufferEntry, collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { invokeSlackTurn } from "./invoke-turn.ts";
 import {
@@ -107,11 +106,6 @@ export interface SlackChannelOptions {
   botToken: string;
   /** App signing secret used to verify the raw Events API request body. */
   signingSecret: string;
-  /** Rotating OAuth credentials. Omit all four only for a manually managed long-lived bot token. */
-  botRefreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  botTokenExpiresAt?: number;
   /** `native` (default) uses Slack Agent streams for threaded replies. Its inline tool traces carry a
    * bounded summary of each call's first argument and cannot be retracted, so they stay in the
    * delivered message beside the answer. `classic` retains the compatibility renderer based on one
@@ -163,10 +157,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   const {
     botToken,
     signingSecret,
-    botRefreshToken,
-    clientId,
-    clientSecret,
-    botTokenExpiresAt,
     rendering = "native",
     aiDisclaimer,
     welcome = DEFAULT_WELCOME,
@@ -194,16 +184,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const formatError = onError ?? defaultErrorMessage;
     const stateHome = join(stateRoot, "channels", "slack");
     ensureStateHome(stateHome);
-    const currentBotToken = createSlackBotTokenProvider({
-      statePath: slackBotAuthPath(stateRoot),
-      botToken,
-      botRefreshToken,
-      clientId,
-      clientSecret,
-      botTokenExpiresAt,
-      apiBaseUrl,
-    });
-    const api = createSlackApi({ botToken: currentBotToken, baseUrl: apiBaseUrl });
+    const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
     registerSlackApi(stateRoot, api); // the send tool delivers through this one (shared-api.ts)
     let authenticatedTeamId: string | undefined;
     let botUserId: string | undefined;

@@ -11,10 +11,7 @@
  * one is red by its second run. Inbound Slack (signature verification, url_verification, delivery)
  * therefore stays offline-only, and this file says so rather than implying coverage it does not have.
  *
- * Needs a bot token WITHOUT token rotation (`createSlackBotTokenProvider` takes the long-lived path
- * when the four rotation fields are absent) and a channel the bot has joined. Rotation is covered
- * offline: slack-bot-auth.test.ts asserts the refresh, its single-flight and its 0600 persistence —
- * CI has no durable volume to catch a refreshed pair, which is exactly why this uses a static token.
+ * Needs a long-lived bot token (the only kind the channel takes) and a channel the bot has joined.
  */
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";

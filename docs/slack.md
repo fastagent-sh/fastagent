@@ -27,8 +27,23 @@ channels/slack.ts       # signed Events API adapter + policy
 tools/slack-send.ts     # text and external-upload file tool
 ```
 
-It also adds `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, and optional rotating-bot credential placeholders
-to `.env.example` and, by default, starts single-workspace internal-app onboarding.
+It also adds `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` placeholders to `.env.example` and, by
+default, starts single-workspace internal-app onboarding.
+
+## Credentials
+
+Three things, in three places:
+
+| Credential | Made by | Used for | Lives in |
+|---|---|---|---|
+| App Configuration Token pair (`xoxe.xoxp-…` + `xoxe-…`) | You, once, at [Your Apps](https://api.slack.com/apps) | `apps.manifest.create` / `apps.manifest.update`: creating the app, and updating its Request URL on `dev --tunnel` and `deploy --run`. Slack expires it in 12 hours; the CLI rotates it. | Builder machine only: `<state root>/channels/slack/onboarding.json` (0600). Never `.env`, never a deploy. |
+| OAuth client id / secret | `apps.manifest.create` | The one OAuth code exchange that installs the app. Setup-only. | `onboarding.json` until the install completes, then dropped. |
+| `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_SIGNING_SECRET` | The OAuth install / `apps.manifest.create` | Everything at runtime: replies, files, `slack-send`, and verifying each inbound webhook. Long-lived. | `.secrets/.env`, and the deploy's secrets. |
+
+Bot-token rotation is left OFF in the manifest, deliberately: it cannot be turned on and off again, and
+turning it on would ship a refresh token and the client secret to every host beside the access token — the
+same blast radius as one long-lived token, plus a 12-hour refresh lineage that has to stay single and
+durable. Two runtime secrets is the whole of it.
 
 ## Internal-app onboarding
 
@@ -51,8 +66,7 @@ The command then:
 2. creates the internal app from a mode-specific manifest;
 3. enables Slack's irreversible `agent_view`, native Agent streaming, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
 4. opens [Slack OAuth v2](https://docs.slack.dev/authentication/installing-with-oauth/), validates its `state`, exchanges the code, and installs into one workspace;
-5. writes the Signing Secret plus the rotating bot access/refresh token, expiry, OAuth client ID, and
-   client secret to the workspace `.secrets/.env`.
+5. writes the Signing Secret and the Bot User OAuth Token to the agent's `.secrets/.env`.
 
 App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
 re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:
@@ -105,12 +119,6 @@ import { slackChannel } from "@fastagent-sh/fastagent/slack";
 export default slackChannel({
   botToken: process.env.SLACK_BOT_TOKEN ?? "",
   signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
-  clientId: process.env.SLACK_CLIENT_ID || undefined,
-  clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
-  botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
-    ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
-    : undefined,
   rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
@@ -275,12 +283,9 @@ export default defineSchedule({
 
 The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
 `@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
-Markdown splitting, rate-limit handling, and **current rotating credentials** the channel replies with,
-resolved at execute time, never at load. With no channel mounted (`fastagent fire` / `invoke`) the
-transport is built from `.env` over the same persisted pair under the state root, so a proactive send
-as the first Slack activity after a restart still refreshes and persists correctly. That fallback
-uses Slack's default API base: an `apiBaseUrl` set in `channels/slack.ts` reaches the tool only while
-the channel is mounted. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
+token, `apiBaseUrl`, Markdown splitting and rate-limit handling the channel replies with. With no
+channel mounted (`fastagent fire` / `invoke`) the transport is built from `SLACK_BOT_TOKEN` against
+Slack's default API base. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
 
 File mode uses Slack's current [external upload
 protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
@@ -308,7 +313,6 @@ Slack state lives under:
 
 ```txt
 <state root>/channels/slack/
-├── bot-auth.json       # latest rotating bot access/refresh pair (0600)
 ├── turns.json
 ├── seen.json
 ├── thread-participants.json
@@ -324,19 +328,6 @@ so gating the write would leave a thread marked as answered-in while the humans 
 intervening window went unrecorded, and the Agent would then speak into a crowd. Deleting the file is
 safe; each thread then costs one mention to re-enter.
 
-The onboarded App Manifest enables Slack token rotation. Before expiry, the runtime exchanges the bot
-refresh token, atomically persists the replacement pair in `bot-auth.json`, and uses that durable pair on
-later restarts; all four rotation inputs must be configured together. `deploy --run` overlays any newer
-local pair onto the deploy secrets; at boot the runtime selects whichever env/persisted pair has the newer expiry.
-The channel and the `slack-send` tool share one credential provider per state root, so a refresh
-happens once per process however the two interleave. Before refreshing, a provider re-reads
-`bot-auth.json` and adopts a newer pair another process wrote (`fastagent fire` beside a running `dev`)
-rather than presenting a refresh token that process has already consumed.
-One Slack app must have one active FastAgent state lineage: stop local `dev` before running the deployed
-copy, or create separate Slack apps for local and production, so two machines never rotate the same
-single-use refresh token independently. A manual classic app may still use
-a long-lived `SLACK_BOT_TOKEN` by omitting every rotation input.
-
 An accepted turn is persisted before the 200 ACK and replayed after an interrupted process. Replay is
 at-least-once: side-effecting Agent tools must be idempotent or tolerate duplication. The execution ceiling
 drops a turn that repeatedly starts without finishing and notifies the thread instead of crash-looping
@@ -344,21 +335,20 @@ forever. File-backed channel state supports one process/replica only.
 
 ## Production
 
-`fastagent deploy docker|fly|railway|agentcore` discovers Slack and carries access/signing secrets plus
-configured runtime rotation credentials. For a reachable webhook ingress, `--run` updates the Request
+`fastagent deploy docker|fly|railway|agentcore` discovers Slack and carries `SLACK_BOT_TOKEN` and
+`SLACK_SIGNING_SECRET`. For a reachable webhook ingress, `--run` updates the Request
 URL using the builder's local onboarding state. Without that state, it reports the required manual
 console action. App Configuration tokens stay on the builder. Docker's optional Quick Tunnel URL is
 ephemeral; resident hosts need durable storage and one replica. AgentCore uses the
-[ingress-session S3 snapshot](deploy.md#aws-bedrock-agentcore). Preserve the single active credential/state
-lineage and verify proactive delivery separately from normal channel replies.
+[ingress-session S3 snapshot](deploy.md#aws-bedrock-agentcore).
 
-## Upgrading from the environment-token `slack-send`
+## Upgrading from a rotating-token app (releases up to 0.21)
 
-Releases up to 0.20.0 scaffolded a `tools/slack-send.ts` that read `SLACK_BOT_TOKEN` from the
-environment, so after the channel's first token rotation every proactive send failed with
-`token_expired`. After upgrading the package, re-run `fastagent add slack --no-onboard` in the agent:
-it keeps `channels/slack.ts`, `.secrets/.env` and the onboarding state, and rewrites
-`tools/slack-send.ts` with the transport-backed version.
+Apps created by earlier releases have token rotation on, and Slack does not let it be turned off. Create
+a new app: delete `channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*`
+lines in `.secrets/.env`, then run `fastagent add slack` again; the runtime secrets it writes are
+`SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` alone. Remove the app in the Slack console when the new one
+answers.
 
 ## Upgrading from the session-mode releases
 
@@ -386,4 +376,3 @@ Derivation in [design/participant-model.md](design/participant-model.md) §3 and
 - Edited/deleted messages do not mutate Agent history or buffered context.
 - Slack's Agent messaging experience is enabled for newly onboarded apps and cannot be switched back to the legacy Assistant experience.
 - `rendering: "classic"` exists for plans/apps without native Agent streaming and for intentional top-level replies.
-- Rotating bot credentials require durable single-process state; deleting `bot-auth.json` after the env refresh token has been consumed requires reinstalling/restoring credentials.

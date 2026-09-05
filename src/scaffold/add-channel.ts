@@ -74,23 +74,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
   slack: {
     env: [
-      { name: "SLACK_BOT_TOKEN", hint: "Slack app → rotating Bot User OAuth access token", required: true },
-      {
-        name: "SLACK_BOT_REFRESH_TOKEN",
-        hint: "Slack OAuth bot refresh token (required when token rotation is enabled)",
-        required: false,
-      },
-      {
-        name: "SLACK_BOT_TOKEN_EXPIRES_AT",
-        hint: "Slack rotating bot access-token expiry (epoch milliseconds)",
-        required: false,
-      },
-      { name: "SLACK_CLIENT_ID", hint: "Slack app OAuth client ID (for bot-token rotation)", required: false },
-      {
-        name: "SLACK_CLIENT_SECRET",
-        hint: "Slack app OAuth client secret (for bot-token rotation)",
-        required: false,
-      },
+      { name: "SLACK_BOT_TOKEN", hint: "Slack app → OAuth & Permissions → Bot User OAuth Token", required: true },
       { name: "SLACK_SIGNING_SECRET", hint: "Slack app → Basic Information → App Credentials", required: true },
     ],
     steps: [

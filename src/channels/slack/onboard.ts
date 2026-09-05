@@ -15,15 +15,9 @@ export interface SlackOnboardIO {
   openUrl(url: string): void;
   /** Wait for the one OAuth redirect. Implementations must validate only the path; core validates state. */
   waitForOAuth(): Promise<{ code?: string; state?: string; error?: string }>;
-  /** Stage runtime-only credentials into the gitignored .env. */
-  writeRuntimeSecrets(values: {
-    botToken?: string;
-    botRefreshToken?: string;
-    botTokenExpiresAt?: number;
-    clientId?: string;
-    clientSecret?: string;
-    signingSecret?: string;
-  }): Promise<void>;
+  /** Stage the runtime secrets into the gitignored .env — the bot token and the signing secret, nothing
+   *  else: the client credentials are setup-only (the OAuth code exchange) and stay in onboarding state. */
+  writeRuntimeSecrets(values: { botToken?: string; signingSecret?: string }): Promise<void>;
 }
 
 export interface SlackOnboardInput {
@@ -159,13 +153,7 @@ export async function onboardSlackApp(
   if (slackBotScopes(state.groupBehavior).some((scope) => !oauth.scopes.includes(scope))) {
     throw new Error("Slack OAuth completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
-  await io.writeRuntimeSecrets({
-    botToken: oauth.botToken,
-    botRefreshToken: oauth.botRefreshToken,
-    botTokenExpiresAt: oauth.botTokenExpiresAt,
-    clientId: state.clientId,
-    clientSecret: state.clientSecret,
-  });
+  await io.writeRuntimeSecrets({ botToken: oauth.botToken });
   state = {
     ...state,
     clientSecret: undefined,

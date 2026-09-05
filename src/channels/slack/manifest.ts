@@ -104,11 +104,11 @@ export function buildSlackManifest(input: {
         : {}),
       org_deploy_enabled: false,
       socket_mode_enabled: false,
-      // Constant, and Slack makes it permanent: once an app has rotation on, an update carrying `false`
-      // is refused (`cannot_disable_once_enabled`, verified against the API). Every manifest update is a
-      // full replacement, so a caller that ever sent anything else here would be deciding this for the
-      // app's whole life.
-      token_rotation_enabled: true,
+      // Off, and Slack makes the alternative permanent: an app with rotation on can never turn it off
+      // (`cannot_disable_once_enabled`, verified against the API). Rotation would ship the refresh token
+      // and the client secret to every host beside the access token — the same blast radius as one
+      // long-lived bot token, plus a 12-hour refresh lineage to keep single and durable.
+      token_rotation_enabled: false,
     },
   };
 }

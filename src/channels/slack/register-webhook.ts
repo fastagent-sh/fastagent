@@ -64,8 +64,8 @@ export async function registerSlackWebhook(
             name: current.state.appName,
             groupBehavior: current.state.groupBehavior,
             requestUrl: `${publicBaseUrl}/slack`,
-            // Token-rotation manifests require at least one OAuth redirect URL even after installation.
-            // Actual reinstall flows replace this placeholder with their one-shot local setup callback.
+            // Every manifest update is a full replacement, so the OAuth redirect URL the install used
+            // stays declared; a reinstall replaces this placeholder with its one-shot local setup callback.
             redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
           }),
           { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },

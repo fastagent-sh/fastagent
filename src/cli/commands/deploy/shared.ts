@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
-import { readSlackBotAuthEnv, slackBotAuthPath } from "../../../channels/slack/bot-auth.ts";
 import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars } from "../../../deploy/channel-ingress.ts";
@@ -89,10 +88,7 @@ export function registrarsFor(agentDir: string): Registrars {
 
 /**
  * The `--run` credential carry, for every host: the local model credential (an env key, or the whole
- * auth.json as a `FASTAGENT_AUTH_SEED`) plus channel secrets, read through the one environment that
- * accounts for Slack's rotated bot token. Four drivers assembled this identically; a fifth would have
- * had to remember the `deployEnvironment` wrapper, which is invisible when forgotten (a rotated token
- * silently deploys stale).
+ * auth.json as a `FASTAGENT_AUTH_SEED`) plus channel secrets. Four drivers assembled this identically.
  */
 export async function carryCredentials(params: {
   agentDir: string;
@@ -102,14 +98,14 @@ export async function carryCredentials(params: {
   channels: readonly DeclaredChannel[];
   extraSecrets: string[];
 }): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
-  const { agentDir, modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets } = params;
+  const { modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets } = params;
   return assembleSecrets({
     modelAuth,
     modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     extraSecrets,
-    env: deployEnvironment(agentDir, channels),
+    env: process.env,
   });
 }
 
@@ -197,10 +193,4 @@ function isOurArtifact(path: string, content: string, host: HostDeploy["isOurs"]
   if (path.endsWith("Dockerfile")) return isGeneratedDockerfile(content);
   if (path.endsWith(".dockerignore")) return isGeneratedDockerignore(content);
   return host(path, content);
-}
-
-function deployEnvironment(agentDir: string, channels: readonly DeclaredChannel[]): NodeJS.ProcessEnv {
-  if (!channels.some((channel) => channel.name === "slack")) return process.env;
-  const latest = readSlackBotAuthEnv(slackBotAuthPath(resolveStateRoot(agentDir)));
-  return { ...process.env, ...latest };
 }

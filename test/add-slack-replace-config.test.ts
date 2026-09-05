@@ -39,14 +39,7 @@ vi.mock("../src/channels/slack/setup-server.ts", () => ({
 import { onboardSlackInternalApp } from "../src/cli/add-slack.ts";
 import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
 
-const RUNTIME_ENV = [
-  "SLACK_BOT_TOKEN=xoxe.xoxb-runtime",
-  "SLACK_BOT_REFRESH_TOKEN=xoxe-runtime-refresh",
-  "SLACK_BOT_TOKEN_EXPIRES_AT=2000000000000",
-  "SLACK_CLIENT_ID=client",
-  "SLACK_CLIENT_SECRET=secret",
-  "SLACK_SIGNING_SECRET=signing",
-].join("\n");
+const RUNTIME_ENV = ["SLACK_BOT_TOKEN=xoxb-runtime", "SLACK_SIGNING_SECRET=signing"].join("\n");
 
 describe("add slack --replace-config", () => {
   let target: string;

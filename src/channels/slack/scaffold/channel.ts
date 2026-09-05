@@ -8,17 +8,11 @@ import { slackChannel } from "@fastagent-sh/fastagent/slack";
 //   3. Event Subscriptions: app_home_opened, app_context_changed, app_mention, message.im,
 //      message.channels, message.groups, and message.mpim. Mention-only may omit the last three.
 //      Set Request URL to https://<host>/slack.
-//   4. Enable token rotation and install/reinstall the app after changing scopes. Rotating credentials
-//      are written by `fastagent add slack`; manual long-lived tokens may omit the four rotation fields.
+//   4. Install the app (reinstall after changing scopes) and leave token rotation OFF: it cannot be
+//      turned off again, and this channel takes one long-lived Bot User OAuth Token.
 export default slackChannel({
-  botToken: process.env.SLACK_BOT_TOKEN ?? "", // Bot User OAuth Token (xoxb-… or rotating xoxe.xoxb-…)
+  botToken: process.env.SLACK_BOT_TOKEN ?? "", // OAuth & Permissions → Bot User OAuth Token (xoxb-…)
   signingSecret: process.env.SLACK_SIGNING_SECRET ?? "", // Basic Information → App Credentials
-  botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
-  clientId: process.env.SLACK_CLIENT_ID || undefined,
-  clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
-  botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
-    ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
-    : undefined,
   // Slack Agent stream; its inline tool traces show each call's first argument and stay in the
   // delivered message. "classic" settles into the answer alone (and gives up native streaming).
   rendering: "native",

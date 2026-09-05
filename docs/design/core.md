@@ -419,7 +419,7 @@ are host-restricted, timeout/cap guarded, and translated to vision images or abs
 files fail visibly; buffered files degrade individually. Outbound file delivery uses Slack's external
 upload three-step protocol and remains at-least-once across an ambiguous completion response.
 
-Newly onboarded apps use Slack's `agent_view`, `assistant:write`, token rotation, suggested prompts, Agent
+Newly onboarded apps use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
 the stream; each engine-neutral tool start appends a compact factual Markdown trace, and a failed tool end
 appends one line naming the call. Raw model thinking and tool output stay private — reading output would
@@ -432,9 +432,10 @@ separate future boundary rather than entering `ChannelModule` indirectly.
 
 `add slack` owns a single-workspace internal-app control plane outside `ChannelModule`: a temporary
 unguessable challenge/OAuth responder, mode-specific App Manifest creation, OAuth-v2 code exchange, and
-irreversible-boundary recovery state. Runtime rotating bot credentials + Signing Secret go to `.env` and rotate into owner-only durable channel
-state; the more powerful user/workspace App Configuration refresh token remains owner-local and never
-enters deployment secrets. `dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
+irreversible-boundary recovery state. The long-lived bot token + Signing Secret go to `.env` (bot-token
+rotation is left off: it is irreversible and would ship the refresh token and client secret beside the
+access token); the more powerful user/workspace App Configuration refresh token remains owner-local and
+never enters deployment secrets. `dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
 `apps.manifest.update`; missing onboarding state remains a truthful manual registration outcome. This is
 not Marketplace/multi-workspace installation storage.
 

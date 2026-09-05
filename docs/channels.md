@@ -160,12 +160,6 @@ import { slackChannel } from "@fastagent-sh/fastagent/slack";
 export default slackChannel({
   botToken: process.env.SLACK_BOT_TOKEN ?? "",
   signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
-  clientId: process.env.SLACK_CLIENT_ID || undefined,
-  clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
-  botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
-    ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
-    : undefined,
   rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),

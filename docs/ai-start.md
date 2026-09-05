@@ -317,27 +317,15 @@ onboarding. The owner chooses visibility, supplies App Configuration access/refr
 prompts, and approves installation in Slack. This enables Slack's irreversible Agent messaging experience;
 platform plan requirements and the manual `--no-onboard` path are in [Slack onboarding](slack.md#internal-app-onboarding).
 
-| Data | Ownership and lifecycle |
-|---|---|
-| App Configuration access/refresh tokens | Setup and manifest management on the builder only, in `<stateRoot>/channels/slack/onboarding.json`. Keep them out of runtime secrets and images. |
-| Signing Secret, bot access/refresh pair, expiry, OAuth client credentials | Runtime verification and bot authentication. Onboarding writes `.secrets/.env`; the native channel persists newer rotating pairs in `<stateRoot>/channels/slack/bot-auth.json`. |
-| Workspace, user, channel, and thread identifiers | Routing/destination configuration, not credentials. Choose authorized users and recipients explicitly; a single-workspace installation is not an owner-only access policy. |
+The credentials and where each lives are one table in [Slack → Credentials](slack.md#credentials): the
+App Configuration Token pair stays on the builder machine (`onboarding.json`), the OAuth client
+credentials are spent on the install, and the runtime has exactly `SLACK_BOT_TOKEN` and
+`SLACK_SIGNING_SECRET`. Retain the builder's onboarding state for automated Request URL registration;
+without it the CLI reports the manual console action. `fastagent add slack --replace-config` replaces
+only the builder's App Configuration credentials.
 
-One rotating Slack installation requires **one active credential/state lineage**. Stop local `dev` before
-starting its deployed copy, or use separate Slack apps for development and production. Let `deploy --run`
-carry the latest local pair and preserve deployed state; independent copies can consume the same
-single-use refresh token. Retain builder onboarding state for automated URL registration. Without it,
-the CLI reports the manual console action. Use `fastagent add slack --replace-config` when only the
-builder's App Configuration credentials need replacement.
-
-The transport-backed `slack-send` shares the channel's current rotating credentials through
-`slackTransport(ctx.cwd)`. Releases up to 0.20.0 generated an environment-token sender that fails after
-rotation. Check the installed package and generated tool: upgrade to a version exposing `slackTransport`,
-then follow the [sender upgrade instructions](slack.md#upgrading-from-the-environment-token-slack-send).
-Every `fastagent add slack` rewrites `tools/slack-send.ts`; preserve custom policy in a separate tool
-before rerunning it. Keep rotation enabled and verify proactive text/file delivery separately from chat
-replies. An installation still using the old sender remains unsuitable for unattended delivery across
-rotation; avoid copied Slack HTTP/refresh code or manual token synchronization.
+`slack-send` delivers through the mounted channel's transport (`slackTransport(ctx.cwd)`); every
+`fastagent add slack` rewrites `tools/slack-send.ts`.
 
 ### Replies and proactive delivery are different
 

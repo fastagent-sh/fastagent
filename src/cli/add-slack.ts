@@ -53,14 +53,9 @@ export async function onboardSlackInternalApp(input: {
         if (error.code === "ENOENT") return new Map<string, string>();
         throw error;
       });
-    const missingRuntime = [
-      "SLACK_BOT_TOKEN",
-      "SLACK_BOT_REFRESH_TOKEN",
-      "SLACK_BOT_TOKEN_EXPIRES_AT",
-      "SLACK_CLIENT_ID",
-      "SLACK_CLIENT_SECRET",
-      "SLACK_SIGNING_SECRET",
-    ].filter((name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""));
+    const missingRuntime = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"].filter(
+      (name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""),
+    );
     if (missingRuntime.length > 0) {
       throw new Error(
         `Slack app ${state.appId ?? "(unknown)"} is installed but ${dotEnvPath(input.target)} is missing ` +
@@ -194,20 +189,9 @@ export async function onboardSlackInternalApp(input: {
         note: (message) => clackLog.info(message),
         openUrl: openExternalUrl,
         waitForOAuth: () => server.waitForOAuth(),
-        writeRuntimeSecrets: async ({
-          botToken,
-          botRefreshToken,
-          botTokenExpiresAt,
-          clientId,
-          clientSecret,
-          signingSecret,
-        }) => {
+        writeRuntimeSecrets: async ({ botToken, signingSecret }) => {
           const values = {
             ...(botToken ? { SLACK_BOT_TOKEN: botToken } : {}),
-            ...(botRefreshToken ? { SLACK_BOT_REFRESH_TOKEN: botRefreshToken } : {}),
-            ...(botTokenExpiresAt ? { SLACK_BOT_TOKEN_EXPIRES_AT: String(botTokenExpiresAt) } : {}),
-            ...(clientId ? { SLACK_CLIENT_ID: clientId } : {}),
-            ...(clientSecret ? { SLACK_CLIENT_SECRET: clientSecret } : {}),
             ...(signingSecret ? { SLACK_SIGNING_SECRET: signingSecret } : {}),
           };
           if (Object.keys(values).length > 0) {

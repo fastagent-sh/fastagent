@@ -67,7 +67,7 @@ describe("Slack internal-app manifest and control API", () => {
     });
     expect(manifest.settings).toMatchObject({
       socket_mode_enabled: false,
-      token_rotation_enabled: true,
+      token_rotation_enabled: false,
       event_subscriptions: { request_url: "https://agent.test/slack" },
     });
   });
@@ -137,9 +137,7 @@ describe("Slack internal-app manifest and control API", () => {
       .mockResolvedValueOnce(
         Response.json({
           ok: true,
-          access_token: "xoxe.xoxb-bot",
-          refresh_token: "xoxe-bot-refresh",
-          expires_in: 43_200,
+          access_token: "xoxb-bot",
           app_id: "A1",
           scope: slackBotScopes("mentions").join(","),
           team: { id: "T1", name: "Acme" },
@@ -161,8 +159,7 @@ describe("Slack internal-app manifest and control API", () => {
         { fetch: fetchMock },
       ),
     ).resolves.toMatchObject({
-      botToken: "xoxe.xoxb-bot",
-      botRefreshToken: "xoxe-bot-refresh",
+      botToken: "xoxb-bot",
       appId: "A1",
       teamId: "T1",
     });
@@ -235,9 +232,7 @@ describe("Slack internal-app onboarding", () => {
           signingSecret: "signing-secret",
         }),
         exchangeCode: async () => ({
-          botToken: "xoxe.xoxb-bot",
-          botRefreshToken: "xoxe-bot-refresh",
-          botTokenExpiresAt: 2_000_000_000_000,
+          botToken: "xoxb-bot",
           appId: "A1",
           teamId: "T1",
           teamName: "Acme",
@@ -246,16 +241,8 @@ describe("Slack internal-app onboarding", () => {
       },
     );
 
-    expect(secrets).toEqual([
-      { signingSecret: "signing-secret" },
-      {
-        botToken: "xoxe.xoxb-bot",
-        botRefreshToken: "xoxe-bot-refresh",
-        botTokenExpiresAt: 2_000_000_000_000,
-        clientId: "C1",
-        clientSecret: "client-secret",
-      },
-    ]);
+    // The client credentials never reach .env: they are setup-only, spent on the code exchange.
+    expect(secrets).toEqual([{ signingSecret: "signing-secret" }, { botToken: "xoxb-bot" }]);
     expect(result).toMatchObject({ appId: "A1", teamId: "T1", teamName: "Acme" });
     expect(result.clientSecret).toBeUndefined();
     const persisted = readSlackOnboardingState(stateRoot);
@@ -373,9 +360,7 @@ describe("Slack internal-app onboarding", () => {
         createApp,
         retryMs: 1,
         exchangeCode: async () => ({
-          botToken: "xoxe.xoxb-bot",
-          botRefreshToken: "xoxe-bot-refresh",
-          botTokenExpiresAt: 2_000_000_000_000,
+          botToken: "xoxb-bot",
           appId: "A1",
           teamId: "T1",
           scopes: slackBotScopes("mentions"),
@@ -515,7 +500,7 @@ describe("Slack Request URL registration", () => {
         oauth_config: { redirect_urls: ["https://agent.test/slack/oauth/callback"] },
         settings: {
           event_subscriptions: { request_url: "https://agent.test/slack" },
-          token_rotation_enabled: true,
+          token_rotation_enabled: false,
         },
       });
       return Response.json({ ok: true });
