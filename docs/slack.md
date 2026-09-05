@@ -281,9 +281,7 @@ resolved at execute time, never at load. With no channel mounted (`fastagent fir
 transport is built from `.env` over the same persisted pair under the state root, so a proactive send
 as the first Slack activity after a restart still refreshes and persists correctly. That fallback
 uses Slack's default API base: an `apiBaseUrl` set in `channels/slack.ts` reaches the tool only while
-the channel is mounted. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`;
-application policy (a fixed destination, an allowlist) belongs in a tool of your own that calls the
-same `slackTransport(ctx.cwd)`.
+the channel is mounted. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
 
 File mode uses Slack's current [external upload
 protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
@@ -297,19 +295,6 @@ files.getUploadURLExternal
 `channel_id` and the parent `thread_ts` are supplied to the completion call. Upload delivery is
 at-least-once: if Slack commits completion but the network response is lost, an explicit retry may post a
 duplicate. The tool does not hide that uncertainty with an automatic final-step retry.
-
-## Restricting who the agent answers
-
-The Slack app installation is the access boundary: an internal app answers to one workspace, and only
-its members can reach it. To narrow that further, decide in `route` — an event routed to `null` never
-becomes a turn, buffered context, or a stop command:
-
-```ts
-route: (envelope) => (envelope.event?.user === "U0123456789" ? defaultSlackRoute(envelope) : null),
-```
-
-A custom `route` replaces the default thread-participation admission (bare replies in a thread the
-agent takes part in), which a DM-only agent does not use.
 
 ## Stopping a running turn
 
@@ -375,8 +360,7 @@ Releases up to 0.20.0 scaffolded a `tools/slack-send.ts` that read `SLACK_BOT_TO
 environment, so after the channel's first token rotation every proactive send failed with
 `token_expired`. After upgrading the package, re-run `fastagent add slack --no-onboard` in the agent:
 it keeps `channels/slack.ts`, `.secrets/.env` and the onboarding state, and rewrites
-`tools/slack-send.ts` with the transport-backed version. Any policy you added to the old tool has to
-be carried over by hand.
+`tools/slack-send.ts` with the transport-backed version.
 
 ## Upgrading from the session-mode releases
 
