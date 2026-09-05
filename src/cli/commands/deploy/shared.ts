@@ -91,7 +91,6 @@ export function registrarsFor(agentDir: string): Registrars {
  * auth.json as a `FASTAGENT_AUTH_SEED`) plus channel secrets. Four drivers assembled this identically.
  */
 export async function carryCredentials(params: {
-  agentDir: string;
   modelAuth: string | undefined;
   modelKeyInDefinition: boolean;
   authPath: string;

@@ -69,8 +69,8 @@ export async function registerSlackWebhook(
             name: current.state.appName,
             groupBehavior: current.state.groupBehavior,
             requestUrl: `${publicBaseUrl}/slack`,
-            // Every manifest update is a full replacement, so the OAuth redirect URL the install used
-            // stays declared; a reinstall replaces this placeholder with its one-shot local setup callback.
+            // A manifest update replaces the whole manifest and redirect_urls may not be empty, so a
+            // placeholder is declared; a reinstall replaces it with its one-shot local setup callback.
             redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
           }),
           { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },
