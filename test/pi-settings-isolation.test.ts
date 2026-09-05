@@ -8,7 +8,6 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
@@ -27,7 +26,6 @@ async function bindWithSettings(agentDir: string) {
     systemPrompt: "test",
     cwd,
     agentDir,
-    env: new NodeExecutionEnv({ cwd }),
   });
   return factory("s");
 }

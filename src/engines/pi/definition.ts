@@ -15,7 +15,13 @@
  */
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type ExecutionEnv, type Skill, type SkillDiagnostic, loadSkills } from "@earendil-works/pi-agent-core";
+import {
+  BACKGROUND_CONTEXT,
+  type ExecutionEnv,
+  type Skill,
+  type SkillDiagnostic,
+  loadSkills,
+} from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
@@ -70,7 +76,7 @@ export async function loadAgentDefinition(
   // never diverge if a caller passes a relative agentDir.
   const cwd = options.cwd ?? agentDir;
   const e = options.env ?? new NodeExecutionEnv({ cwd });
-  const rootResult = await e.absolutePath(agentDir);
+  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
   if (!rootResult.ok) {
     throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
   }
@@ -84,7 +90,7 @@ export async function loadAgentDefinition(
   // persona.md → segment ① persona (overrides the identity line). Same error policy as AGENTS.md:
   // only not_found means "absent"; any other read error surfaces rather than silently dropping the persona.
   const personaPath = join(root, "persona.md");
-  const personaRead = await e.readTextFile(personaPath);
+  const personaRead = await e.readTextFile(personaPath, BACKGROUND_CONTEXT);
   if (!personaRead.ok && personaRead.error.code !== "not_found") {
     throw new Error(`cannot read ${personaPath}: ${personaRead.error.message}`);
   }
@@ -137,12 +143,12 @@ export async function loadExtensionPaths(
 ): Promise<string[]> {
   const cwd = options.cwd ?? agentDir;
   const e = options.env ?? new NodeExecutionEnv({ cwd });
-  const rootResult = await e.absolutePath(agentDir);
+  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
   if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
   const root = rootResult.value;
   await assertInsideAgentDir(root, "extensions");
   const dir = join(root, "extensions");
-  const listed = await e.listDir(dir);
+  const listed = await e.listDir(dir, BACKGROUND_CONTEXT);
   if (!listed.ok) {
     if (listed.error.code === "not_found") return [];
     throw new Error(`cannot read ${dir}: ${listed.error.message}`);
@@ -187,7 +193,7 @@ export async function loadExtensionPaths(
 async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ path?: string; refused: boolean }> {
   let refused = false;
   for (const candidate of candidates) {
-    const info = await e.fileInfo(candidate);
+    const info = await e.fileInfo(candidate, BACKGROUND_CONTEXT);
     if (!info.ok) {
       if (info.error.code === "not_found") continue;
       throw new Error(`cannot read ${candidate}: ${info.error.message}`);
@@ -218,7 +224,7 @@ async function readSkills(
   // definition loads the same skills on every machine — and, like tools/channels/schedules, a symlink
   // that escapes the agent dir is refused rather than followed (the fourth of four surfaces).
   await assertInsideAgentDir(root, "skills");
-  const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")]);
+  const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")], BACKGROUND_CONTEXT);
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];
   for (const skill of raw) {
@@ -244,7 +250,7 @@ export async function loadAgentSkills(
 ): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[]; dir: string }> {
   const cwd = options.cwd ?? agentDir;
   const e = options.env ?? new NodeExecutionEnv({ cwd });
-  const rootResult = await e.absolutePath(agentDir);
+  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
   if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
   // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}: readers key per-definition state
   // (the findings memo) on it, and "./agent" vs an absolute path must not become two definitions.

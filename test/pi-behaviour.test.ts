@@ -29,6 +29,24 @@ async function withRecord(): Promise<{ dir: string; record: SessionManager }> {
 }
 
 describe("pi behaviour the session store is built on", () => {
+  it("restores entries with their IDs, retained context, and provider effort intact", () => {
+    const record = SessionManager.inMemory(process.cwd(), { id: "original" });
+    record.appendMessage({ role: "user", content: "old", timestamp: 1 });
+    const kept = record.appendThinkingLevelChange("high");
+    record.appendMessage({ ...fauxAssistantMessage("retained"), providerThinkingLevel: "high" });
+    record.appendCompaction("summary", kept, 1000);
+    const entries = record.getEntries();
+    const restored = SessionManager.inMemory(process.cwd(), { id: "restored" }, entries);
+
+    expect(restored.getEntries()).toEqual(entries);
+    expect(restored.buildSessionContext()).toEqual(record.buildSessionContext());
+    expect(restored.buildSessionContext().messages).toContainEqual(
+      expect.objectContaining({ role: "assistant", providerThinkingLevel: "high" }),
+    );
+    restored.appendMessage({ role: "user", content: "next", timestamp: 2 });
+    expect(restored.getLeafEntry()?.parentId).toBe(record.getLeafId());
+  });
+
   it("SessionManager.list swallows io errors, drops what it cannot parse, and FILTERS BY CWD", async () => {
     // Three reasons the store does its own readdir instead of asking pi for a listing. The third is
     // the one that cost the most: the cwd filter is right for a TUI ("this project's sessions") and

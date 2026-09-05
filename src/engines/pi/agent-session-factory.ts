@@ -13,7 +13,7 @@
  *   session it runs in and this posture has several in flight at once.
  */
 import { dirname, join } from "node:path";
-import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -91,8 +91,6 @@ export interface PiAgentSessionFactoryOptions {
   extensionPaths?: string[];
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
-  /** Filesystem/process environment: definition loading, and the turn context for tools that read one. */
-  env: ExecutionEnv;
 }
 
 /**
@@ -135,7 +133,7 @@ const warnedDroppedActivations = new Set<string>();
  * orders concurrent activations, so it has to live as long as the session the activations mutate.
  * Building it here, per call, would hand each parallel tool its own.
  */
-function toolDefinitions(tools: MountedTool[], env: ExecutionEnv, bound: { context?: TurnContext }): ToolDefinition[] {
+function toolDefinitions(tools: MountedTool[], bound: { context?: TurnContext }): ToolDefinition[] {
   return tools.map((tool) => ({
     name: tool.name,
     label: tool.name,
@@ -147,12 +145,7 @@ function toolDefinitions(tools: MountedTool[], env: ExecutionEnv, bound: { conte
     execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
       const context = bound.context;
       if (!context) throw new Error("tool executed before its turn context was bound (lifecycle invariant broken)");
-      return turnContext.run(
-        context,
-        // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
-        // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
-        () => tool.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
-      );
+      return turnContext.run(context, () => tool.execute(id, params, signal));
     },
   })) as unknown as ToolDefinition[];
 }
@@ -165,7 +158,6 @@ export interface BindPiSessionOptions {
   model: AnyModel;
   thinkingLevel: ThinkingLevel | undefined;
   tools: MountedTool[];
-  env: ExecutionEnv;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
   /** Built-ins omitted by an explicit lower-level tool list. */
@@ -189,7 +181,7 @@ export interface BindPiSessionOptions {
 export async function bindPiSession(
   options: BindPiSessionOptions,
 ): Promise<Awaited<ReturnType<typeof createAgentSessionFromServices>> & { context: TurnContext }> {
-  const { services, sessionManager, model, thinkingLevel, tools, env, cwd, recordActivations } = options;
+  const { services, sessionManager, model, thinkingLevel, tools, cwd, recordActivations } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
   const bound: { context?: TurnContext } = {};
@@ -205,7 +197,7 @@ export async function bindPiSession(
     // from `session_start` — `noTools: "builtin"` gives the guarantee the allowlist was there for.
     noTools: "builtin",
     ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
-    customTools: toolDefinitions(tools, env, bound),
+    customTools: toolDefinitions(tools, bound),
   });
   const { session } = result;
   const sessionId = options.sessionId ?? session.sessionManager.getSessionId();
@@ -313,7 +305,7 @@ export function definitionResourceLoaderOptions(source: {
 
 /** Open-or-create the record, then bind a fresh session to it. One call per invoke. */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
-  const { sessions, thinkingLevel, cwd, env } = options;
+  const { sessions, thinkingLevel, cwd } = options;
   const extensionPaths = options.extensionPaths ?? [];
   const excludedToolNames = options.excludedToolNames ?? [];
   if (extensionPaths.length > 0) {
@@ -407,7 +399,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
       tools,
-      env,
       cwd,
       excludedToolNames,
       sessionId,

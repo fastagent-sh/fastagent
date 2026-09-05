@@ -155,10 +155,10 @@ Common options:
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
 | `instructions` | String or function returning the system prompt. |
-| `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's cwd-bound coding tools. |
+| `tools` | `MountedTool[]`: authored tools and pi's cwd-bound coding tools share the `AgentTool` contract. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionRecordStore`. |
-| `env` | `ExecutionEnv` handed to lower-level tools that read one; at L2 it also reads `persona.md` and `skills/`. Not a sandbox: ② project context, all seven directory coding tools, and author-written `tools/` reach the machine directly. |
+| `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads `persona.md` and `skills/`. Project context and tools use the local process directly. This is not a sandbox. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 
