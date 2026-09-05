@@ -166,6 +166,7 @@ describe("config: listModels (fastagent models discovery)", () => {
     }
     expect(specs).toEqual([...specs].sort()); // sorted
     expect(specs).toContain("openai-codex/gpt-5.5"); // the spec used across the repo
+    expect(specs).toEqual(expect.arrayContaining(["openai/gpt-6-astra", "openai-codex/gpt-6-astra"]));
   });
 });
 

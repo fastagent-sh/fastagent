@@ -631,19 +631,18 @@ id holding a different history rejects `invalid_command`. Cloning is `fork` at t
 session's live `events()` streams; it is guarded by the same bearer token as every other call, which
 is the only key the framework owns.
 
-Overrides persist in the session record and every later turn's fresh session binding applies them — on any
-serving path, channels included. One exception: a recorded thinking level the session's CURRENT
-model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. The clamp
-happens where the pair is RESOLVED (`resolveSessionSettings`), not by rewriting the journal — the
-recorded level is the user's preference and returns when the session moves back to a capable model —
-so `state()` and the execution agree and the client gets the clamped level in the same
-`state_changed`; the resolve keeps clamping as a BACKSTOP for what the boundary cannot
-see (a deployment whose CONFIGURED model changed between restarts), and there it warns server-side
-while `state()` reports the recorded level. Note the clamp's direction: it takes the lowest supported
-level at or above the recorded one and only falls back downward if nothing above exists — a gap
-resolves upward, which costs more, not less. Writes require an EXISTING session (`no_such_session`
-otherwise): sessions are created by `invoke` or copied by `fork`, never minted by an update. Invalid
-payloads reject `invalid_command` before acceptance. `capabilities()` lists `allowedModels` (the
+Overrides persist in the session record and every later turn's fresh session binding applies them on any
+serving path, channels included. `resolveSessionSettings` clamps both recorded thinking levels and
+configured defaults to the current model's capabilities using pi's own clamp. Defaults apply when the
+active path has no valid thinking override, including after navigation removes one. The journal keeps
+the recorded preference, which returns when the session moves back to a capable model. `state()`,
+`state_changed`, and execution use the same resolved level, including after a deployment changes the
+configured model. The clamp takes the lowest supported level at or above the requested one and falls
+back downward only if nothing above exists; filling a gap can increase reasoning cost.
+
+Writes require an existing session (`no_such_session` otherwise): sessions are created by `invoke` or
+copied by `fork`, never minted by an update. Invalid payloads reject `invalid_command` before acceptance.
+`capabilities()` lists `allowedModels` (the
 deployment's registry — a static fact) but not thinking LEVELS: which exist depends on the model a
 session is running, so they ride `state().availableThinkingLevels`, and `update({ thinkingLevel })`
 validates against that same set rather than recording an override the run would ignore. Every write

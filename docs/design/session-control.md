@@ -712,10 +712,10 @@ What each part of the plane settled on, where the reason is not obvious from the
 - **Boundary mutations under the lease.** `update({ model | thinkingLevel })` appends durable session
   overrides, validated against the registry and the MODEL's own thinking levels (`reasoning` +
   `thinkingLevelMap`, not the bare scale; `invalid_command` before acceptance). The per-invoke resolve
-  (`resolveSessionSettings`) applies them on every later turn; a registry change across deploys falls
-  back to the default with a deduped warn instead of bricking the session. `state()`, the update gate
-  and the per-invoke binding all read that ONE resolution — model and thinking level are one setting,
-  so deriving them separately is what let the surfaces disagree.
+  (`resolveSessionSettings`) applies them on every later turn and clamps both recorded and configured
+  thinking levels to the selected model's capabilities. A recorded model absent from the registry
+  resolves to the configured default. `state()`, the update gate, and the per-invoke binding all read
+  that same resolution, including when navigation removes a thinking override.
 - **`compact` is accept-fast.** §5.2 has no exceptions: a summarization is a full model call, so the
   dispatch answers on admission (lease held, session bound) and the outcome travels as
   `compaction_finished{summary|error|aborted}`, emitted after the lease frees. Pre-acceptance failures

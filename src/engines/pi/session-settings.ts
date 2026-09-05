@@ -66,7 +66,7 @@ export interface SessionSettings {
   thinkingLevel: ThinkingLevel;
   /** What `update({ thinkingLevel })` accepts for this session. */
   availableThinkingLevels: string[];
-  /** Recorded but not honored — only the execution path reports it (as a warn). */
+  /** Recorded overrides that could not be applied. */
   dropped?: { model?: string; thinkingLevel?: { recorded: string; running: string; known: boolean } };
 }
 
@@ -88,7 +88,7 @@ export function resolveSessionSettings(
   }
 
   const availableThinkingLevels = getSupportedThinkingLevels(model) as string[];
-  let thinkingLevel = defaults.thinkingLevel;
+  let thinkingLevel = clampThinkingLevel(model, defaults.thinkingLevel) as ThinkingLevel;
   if (recorded.thinkingLevel !== undefined) {
     const level = recorded.thinkingLevel;
     if (!THINKING_LEVELS.has(level as ThinkingLevel)) {
