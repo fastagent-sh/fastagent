@@ -48,7 +48,7 @@ This generates `fastagent/Dockerfile`, a workspace-root `.dockerignore`, and `fa
 - the generated or user-owned Dockerfile,
 - `127.0.0.1:<port>` for safe host-local access,
 - a named volume mounted at `/data`,
-- `FASTAGENT_STATE_DIR=/data`, `PORT`, and the exact model/channel/extra secret names,
+- `FASTAGENT_STATE_DIR=/data/.state`, `FASTAGENT_SECRETS_DIR=/data/.secrets`, `PORT`, and the exact model/channel/extra secret names,
 - `restart: unless-stopped`.
 
 By default it contains no public ingress. If a webhook channel needs a temporary public URL, generate an independent cloudflared service alongside the app:
@@ -131,7 +131,7 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile`, `.docke
 1. `railway init` — create + link a project (or `railway link` to attach an existing one).
 2. `railway add --service <name>` — the volume and variables are service-scoped; the service must exist first.
 3. `railway volume add --mount-path /data` — persistent state.
-4. `railway variables set FASTAGENT_STATE_DIR=/data <SECRETS>` — **before** the first deploy, or the box boots without them.
+4. `railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets <SECRETS>` — **before** the first deploy, or the box boots without them.
 5. `railway up` — upload + build the Dockerfile on Railway (no local Docker). **A redeploy is this step alone.**
 6. `railway domain` — mint the public URL, then register route-channel webhooks; locally onboarded Slack updates from local state, manual Slack prints its URL, and long-connection channels are skipped.
 
@@ -206,7 +206,9 @@ The generated `Dockerfile` runs the directory on any container platform; `fastag
 
 ## Single-machine tier
 
-All shipped recipes are single-machine: state lives on **one** volume tied to **one** machine/service. Scaling to multiple instances gives each its own volume and splits sessions/turns — that needs a shared/external backend on the `PiSessionRecordStore` / `Lease` seams (see [Embedding](embedding.md)), not this recipe. Don't scale past one instance.
+Resident recipes require **one active replica** with durable storage. Multiple replicas need shared storage and coordination for sessions, channel state, and scheduled work; separate volumes split those records. The `PiSessionRecordStore` / `Lease` seams cover engine sessions (see [Embedding](embedding.md)), not every channel's state.
+
+AgentCore uses one webhook/schedule ingress state lineage backed by an S3 snapshot instead of a resident volume. Its direct runtime sessions have separate, limited persistence as described above.
 
 ## Where next
 

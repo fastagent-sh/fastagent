@@ -57,7 +57,7 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. The placement is structural, marked by the directory name itself, never configured or detected.
+**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. A `fastagent.config.*` file identifies the agent; `fastagent/` is only the default directory name.
 
 **The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.*` inside is what makes a directory an agent, never its name.
 
@@ -210,14 +210,17 @@ the cron, and without touching the real fire state):
 fastagent fire daily-digest
 ```
 
-The cron fires while `dev`/`start` is serving; `fastagent schedule history <name>` answers "did last
-night's run silently fail?", and `fastagent schedule list` shows everything that will fire. Agents can
+On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.
+[AgentCore ingress](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
+`fastagent schedule history <name>` answers "did last night's run silently fail?", and
+`fastagent schedule list` shows the selected local state's pending work. Agents can
 also schedule **themselves** (a built-in `wake` tool — "check the deploy in 10 minutes") — opt in with
 `selfSchedule: true` in `fastagent.config.*`. See the [CLI reference](cli.md) and
 [API reference](api-reference.md#schedule-authoring).
 
 ## Where next
 
+- [Agent development guide](ai-start.md) — responsibilities, TypeScript, verification, and host-specific operation.
 - [Embedding](embedding.md) — use FastAgent as a library inside your own app.
 - [Channels](channels.md) — webhook and bot adapters.
 - [Deploy](deploy.md) — ship the directory to Fly, Railway, AWS Bedrock AgentCore, or any Docker host.

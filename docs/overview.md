@@ -99,6 +99,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 
 | If you want to… | Read |
 |---|---|
+| Develop an agent from responsibilities through verification | [Agent development guide](ai-start.md) |
 | Get running quickly | [Quickstart](quickstart.md) |
 | Configure an agent | [Configuration](configuration.md) |
 | Understand design choices | [Design principles](principles.md) |
@@ -126,7 +127,7 @@ Implemented today:
 - HTTP/SSE invoke channel.
 - GitHub, Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit.
-- `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` (`--run` drives Docker Compose or the host CLI end-to-end).
+- `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
 
