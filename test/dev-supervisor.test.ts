@@ -45,6 +45,11 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, ".git"))).toBe(true);
   });
 
+  it("ignores imported helpers outside watched code directories", () => {
+    expect(ignored(join(root, "lib"))).toBe(true);
+    expect(ignored(join(root, "lib", "batches.ts"))).toBe(true);
+  });
+
   it("root-file names elsewhere do not match (package.json in a subdir is not a code input)", () => {
     expect(ignored(join(root, "out", "package.json"))).toBe(true);
     expect(ignored(join(root, "docs", ".env"))).toBe(true);

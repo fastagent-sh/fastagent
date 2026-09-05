@@ -281,9 +281,15 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev --bind 127.0.0.1
 ```
 
-`dev` is a long-running server. Markdown definition edits are read on the next turn; code/config edits
-restart its worker. `start` serves without watching. `chat` opens the same definition in an interactive
-TUI. A coding agent should background servers with a cleanup path or delegate them to the owner.
+`dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, and skills are read on the next turn.
+With watching enabled, changes under the agent's `tools/`, `channels/`, `schedules/`, and `extensions/`
+restart the worker, as do changes to its `fastagent.config.*`, `package.json`, `models.json`, and resolved
+`.env` (only when that file is inside the agent directory).
+
+**After editing `fastagent/lib/batches.ts` or another imported helper outside those watched directories,
+stop and restart `fastagent dev`.** `lib/` is not watched, and imported modules remain cached in the
+running worker. `start` serves without watching. `chat` opens the same definition in an interactive TUI.
+A coding agent should background servers with a cleanup path or delegate them to the owner.
 
 ## 6. Add a native channel
 
