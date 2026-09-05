@@ -433,6 +433,8 @@ Log verbosity is an environment knob, not a config key. `FASTAGENT_LOG_LEVEL` (`
 FASTAGENT_LOG_LEVEL=debug fastagent start
 ```
 
+The value is read when a line is logged, so setting it in the agent's `.secrets/.env` works the same as setting it on the command line.
+
 ## What is deliberately not config
 
 The following are library API injection points rather than config keys:
