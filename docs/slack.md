@@ -256,15 +256,7 @@ seconds. A native-configured turn also uses this renderer when a custom route se
 at channel top level, because Slack native streams must reply to a parent user message. This fallback is
 logged. Agent/API failures remain visible in the thread or operator logs.
 
-The scaffolded `slack-send` tool supports text or one local file. **FastAgent 0.20.0 has a rotating-token
-limitation:** the generated sender reads `SLACK_BOT_TOKEN` from the environment instead of resolving
-the channel's newer persisted credentials. It can fail after the channel rotates its token even while
-normal replies continue working. [#458](https://github.com/fastagent-sh/fastagent/issues/458) tracks
-package-owned proactive delivery sharing current credentials, transport, and destination policy.
-Do not rely on unattended proactive delivery across rotation until that capability ships. Keep the
-normal rotating-token setup rather than replacing it with application-owned refresh or HTTP code.
-
-**Do not use it to answer the current
+The scaffolded `slack-send` tool supports text or one local file. **Do not use it to answer the current
 turn** — the channel already delivers the reply, so calling the tool as well posts it twice; its
 scaffolded description says so. It is the delivery path for turns no channel is carrying: a cron
 schedule or a self-scheduled wake-up. A successful call names what it wrote (the message `ts`, or the

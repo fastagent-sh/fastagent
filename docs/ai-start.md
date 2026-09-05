@@ -330,13 +330,14 @@ single-use refresh token. Retain builder onboarding state for automated URL regi
 the CLI reports the manual console action. Use `fastagent add slack --replace-config` when only the
 builder's App Configuration credentials need replacement.
 
-**Current limitation ([#458](https://github.com/fastagent-sh/fastagent/issues/458)):** in FastAgent 0.20.0,
-the scaffolded `slack-send` reads the environment token independently of the native channel's refreshed
-credentials. Successful chat replies do not prove scheduled text/file delivery will work after token
-rotation. Shared proactive-send credentials and the owner-DM configuration path are tracked upstream.
-Keep rotation enabled in the normal onboarding path; do not substitute copied Slack HTTP/refresh code,
-manual token synchronization, or a claim of reliable unattended delivery. Verify the installed version
-and treat this as a blocker when that workflow is required.
+The transport-backed `slack-send` shares the channel's current rotating credentials through
+`slackTransport(ctx.cwd)`. Releases up to 0.20.0 generated an environment-token sender that fails after
+rotation. Check the installed package and generated tool: upgrade to a version exposing `slackTransport`,
+then follow the [sender upgrade instructions](slack.md#upgrading-from-the-environment-token-slack-send).
+Every `fastagent add slack` rewrites `tools/slack-send.ts`; preserve custom policy in a separate tool
+before rerunning it. Keep rotation enabled and verify proactive text/file delivery separately from chat
+replies. An installation still using the old sender remains unsuitable for unattended delivery across
+rotation; avoid copied Slack HTTP/refresh code or manual token synchronization.
 
 ### Replies and proactive delivery are different
 
