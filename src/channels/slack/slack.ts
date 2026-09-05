@@ -16,7 +16,7 @@ import { codePointPrefix } from "../kit/text.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
-import { createSlackBotTokenProvider } from "./bot-auth.ts";
+import { createSlackBotTokenProvider, slackBotAuthPath } from "./bot-auth.ts";
 import { type SlackBufferEntry, collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { invokeSlackTurn } from "./invoke-turn.ts";
 import {
@@ -48,6 +48,7 @@ import {
   streamSlackReply,
 } from "./preview.ts";
 import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
+import { registerSlackApi } from "./shared-api.ts";
 import { type SlackTarget, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
@@ -203,7 +204,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const stateHome = join(stateRoot, "channels", "slack");
     ensureStateHome(stateHome);
     const currentBotToken = createSlackBotTokenProvider({
-      statePath: join(stateHome, "bot-auth.json"),
+      statePath: slackBotAuthPath(stateRoot),
       botToken,
       botRefreshToken,
       clientId,
@@ -212,6 +213,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       apiBaseUrl,
     });
     const api = createSlackApi({ botToken: currentBotToken, baseUrl: apiBaseUrl });
+    registerSlackApi(stateRoot, api); // the send tool delivers through this one (shared-api.ts)
     let authenticatedTeamId: string | undefined;
     let botUserId: string | undefined;
     let authenticationState: "pending" | "ready" | "failed" = "pending";

@@ -259,8 +259,19 @@ logged. Agent/API failures remain visible in the thread or operator logs.
 The scaffolded `slack-send` tool supports text or one local file. **Do not use it to answer the current
 turn** — the channel already delivers the reply, so calling the tool as well posts it twice; its
 scaffolded description says so. It is the delivery path for turns no channel is carrying: a cron
-schedule or a self-scheduled wake-up. File mode uses Slack's current [external
-upload protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
+schedule or a self-scheduled wake-up. A successful call names what it wrote (the message `ts`, or the
+file id) so the agent can record the outcome.
+
+The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
+`@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
+Markdown splitting, rate-limit handling, and **current rotating credentials** the channel replies with,
+resolved at execute time, never at load. With no channel mounted (`fastagent fire` / `invoke`) the
+transport is built from `.env` over the same persisted pair under the state root, so a proactive send
+as the first Slack activity after a restart still refreshes and persists correctly. The scaffold is
+the place for application policy (a fixed destination, an allowlist): the transport stays the package's.
+
+File mode uses Slack's current [external upload
+protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
 
 ```txt
 files.getUploadURLExternal
@@ -306,6 +317,10 @@ The onboarded App Manifest enables Slack token rotation. Before expiry, the runt
 refresh token, atomically persists the replacement pair in `bot-auth.json`, and uses that durable pair on
 later restarts; all four rotation inputs must be configured together. `deploy --run` overlays any newer
 local pair onto the deploy secrets; at boot the runtime selects whichever env/persisted pair has the newer expiry.
+The channel and the `slack-send` tool share one credential provider per state root, so a refresh
+happens once per process however the two interleave. Before refreshing, a provider re-reads
+`bot-auth.json` and adopts a newer pair another process wrote (`fastagent fire` beside a running `dev`)
+rather than presenting a refresh token that process has already consumed.
 One Slack app must have one active FastAgent state lineage: stop local `dev` before running the deployed
 copy, or create separate Slack apps for local and production, so two machines never rotate the same
 single-use refresh token independently. A manual classic app may still use

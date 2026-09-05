@@ -27,6 +27,7 @@ function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
     }),
     fetchImage: async () => ({ mimeType: "image/png", data: "aW1n" }),
     fetchFile: async (file) => ({ path: `/state/${file.id}.txt`, name: `${file.id}.txt`, size: 4 }),
+    uploadFile: async () => ({ id: "F1", name: "x" }),
     ...overrides,
   };
 }

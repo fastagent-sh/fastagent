@@ -48,7 +48,7 @@ describe("channel setup guidance", () => {
     const source = await readFile(join(dir, "channels", "slack.ts"), "utf8");
     expect(source).toContain('groupBehavior: "context"');
     expect(source).toContain('rendering: "native"');
-    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("files.completeUploadExternal");
+    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
 
     const mentionsDir = await mkdtemp(join(tmpdir(), "fa-slack-mentions-scaffold-"));
     await scaffoldChannel(mentionsDir, "slack", { groupBehavior: "mentions" });

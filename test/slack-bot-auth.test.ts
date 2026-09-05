@@ -81,6 +81,38 @@ describe("Slack rotating bot credentials", () => {
     await expect(newerDeployPair()).resolves.toBe("xoxe.xoxb-from-deploy");
   });
 
+  it("adopts a pair another process rotated instead of spending its consumed refresh token", async () => {
+    // `fastagent fire` beside a running `dev`: two providers, one file. Both load the same expiring
+    // pair; whichever refreshes first writes the file, and the other must read it back rather than
+    // present a refresh token Slack has already consumed.
+    const statePath = join(root(), "bot-auth.json");
+    const options = {
+      statePath,
+      botToken: "xoxe.xoxb-old",
+      botRefreshToken: "xoxe-old-refresh",
+      clientId: "client",
+      clientSecret: "secret",
+      botTokenExpiresAt: Date.now() - 1,
+    };
+    const dev = createSlackBotTokenProvider({
+      ...options,
+      fetch: vi.fn(async () =>
+        Response.json({
+          ok: true,
+          access_token: "xoxe.xoxb-new",
+          refresh_token: "xoxe-new-refresh",
+          expires_in: 43_200,
+        }),
+      ),
+    });
+    const fireFetch = vi.fn(() => Promise.reject(new Error("must not refresh")));
+    const fire = createSlackBotTokenProvider({ ...options, fetch: fireFetch });
+
+    await expect(dev()).resolves.toBe("xoxe.xoxb-new");
+    await expect(fire()).resolves.toBe("xoxe.xoxb-new");
+    expect(fireFetch).not.toHaveBeenCalled();
+  });
+
   it("supports manual long-lived tokens but rejects a partial rotation configuration", async () => {
     const statePath = join(root(), "bot-auth.json");
     await expect(createSlackBotTokenProvider({ statePath, botToken: "xoxb-long-lived" })()).resolves.toBe(
