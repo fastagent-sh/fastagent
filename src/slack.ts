@@ -13,4 +13,4 @@ export {
   type SlackFailure,
 } from "./channels/slack/slack.ts";
 export { slackTransport, type SlackTransport } from "./channels/slack/shared-api.ts";
-export type { SlackTarget, UploadedSlackFile } from "./channels/slack/slack-api.ts";
+export type { SentSlackMessage, SlackTarget, UploadedSlackFile } from "./channels/slack/slack-api.ts";

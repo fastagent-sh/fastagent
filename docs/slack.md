@@ -262,6 +262,18 @@ scaffolded description says so. It is the delivery path for turns no channel is 
 schedule or a self-scheduled wake-up. A successful call names what it wrote (the message `ts`, or the
 file id) so the agent can record the outcome.
 
+The destination is what the turn's instruction names. A user id (`U…`) as `channelId` messages that
+user's DM — Slack opens it under `chat:write`, no `conversations.open` needed — and the result reports
+the DM channel id (`D…`), which is what a file upload to that user needs. A schedule that reports to its
+owner therefore needs only the owner's user id in its prompt:
+
+```ts
+export default defineSchedule({
+  cron: "0 9 * * 1-5",
+  prompt: "Summarize yesterday's growth notes and send them with slack-send to user U0123456789.",
+});
+```
+
 The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
 `@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
 Markdown splitting, rate-limit handling, and **current rotating credentials** the channel replies with,
@@ -285,6 +297,16 @@ files.getUploadURLExternal
 `channel_id` and the parent `thread_ts` are supplied to the completion call. Upload delivery is
 at-least-once: if Slack commits completion but the network response is lost, an explicit retry may post a
 duplicate. The tool does not hide that uncertainty with an automatic final-step retry.
+
+## Access: `allowUsers`
+
+`allowUsers: ["U0123456789"]` restricts the channel to the listed Slack user ids. An event from any
+other sender is ACKed and dropped before it can become a turn, be buffered as group context, act as a
+stop command, or trigger the DM-open welcome — the one boundary for an agent that answers to its owner
+alone. It composes with `groupBehavior` and a custom `route`, which only see events that passed it. An
+empty list is rejected at construction; omit the option to allow everyone the app can hear. Outbound
+destinations are not restricted by it: they are whatever the turn's instruction names, and an agent
+that must never write elsewhere wraps `slackTransport` in a tool of its own that checks the target.
 
 ## Stopping a running turn
 
