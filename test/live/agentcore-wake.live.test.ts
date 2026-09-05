@@ -24,6 +24,10 @@
  * state snapshot out of S3 and reading session records, which costs more than it settles here — that
  * half is AWS delivering a schedule it accepted, where the half above is our code and our IAM.
  *
+ * IT ALSO CARRIES THE INGRESS ASSERTIONS, for the reason the fixture list makes unavoidable: this is
+ * the only probe whose deployment HAS a forwarder and a Function URL, so the gates on that URL are
+ * reachable from nowhere else. They ride on the stack this probe already paid for.
+ *
  * COSTS REAL RESOURCES (a full AgentCore stack) and is the slowest probe in the suite: a deploy plus
  * the wake delay plus a teardown. It also needs MORE IAM than agentcore-deploy, in two ways that both
  * fail late — after the image is built and pushed — so they are listed where a policy author will see
@@ -43,15 +47,22 @@ import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { MAX_WEBHOOK_BODY_BYTES } from "../../src/channels/agentcore-limits.ts";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { MIN_WAKE_MS } from "../../src/schedule/wakeups.ts";
-import { CLI, aws, destroyAgentcoreDeployment, invokeAgentcore, liveVersion, requireEnv, run } from "./env.ts";
+import {
+  CLI,
+  aws,
+  destroyAgentcoreDeployment,
+  invokeAgentcore,
+  liveVersion,
+  requireAwsAccount,
+  requireEnv,
+  run,
+} from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
-requireEnv("AWS_ACCESS_KEY_ID", "an AWS key scoped to fastagent-live-probe-* (this probe creates real resources)");
-requireEnv("AWS_SECRET_ACCESS_KEY", "the secret for AWS_ACCESS_KEY_ID");
-requireEnv("AWS_REGION", "a region where Bedrock AgentCore is available, e.g. us-east-1");
 
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
@@ -69,11 +80,12 @@ const WAKE_MS = MIN_WAKE_MS + 30_000;
 
 let workspace = "";
 let account = "";
+/** Read off the converged stack by the probe below, consumed by the ingress assertions after it. */
+let forwarderUrl = "";
 
 beforeAll(async () => {
-  const identity = await aws(["sts", "get-caller-identity", "--output", "json"]);
-  expect(identity.code, `sts get-caller-identity failed: ${identity.stderr}`).toBe(0);
-  account = (JSON.parse(identity.stdout) as { Account: string }).Account;
+  // 45 = this probe's own declared budgets, 30 minutes for the deploy plus 15 for teardown.
+  account = await requireAwsAccount(45);
 
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
@@ -154,8 +166,14 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
       "json",
     ]);
     expect(outputs.code, `describe-stacks failed: ${outputs.stderr}`).toBe(0);
-    const runtimeArn = parseStackOutputs(outputs.stdout).RuntimeArn;
+    const stackOutputs = parseStackOutputs(outputs.stdout);
+    const runtimeArn = stackOutputs.RuntimeArn;
     expect(runtimeArn, `the converged stack has no RuntimeArn output:\n${outputs.stdout.slice(0, 500)}`).toBeTruthy();
+    forwarderUrl = (stackOutputs.ForwarderUrl ?? "").replace(/\/$/, "");
+    expect(
+      forwarderUrl,
+      `the converged stack has no ForwarderUrl output:\n${outputs.stdout.slice(0, 500)}`,
+    ).toBeTruthy();
 
     // Nothing has asked for a wake-up yet. Asserted so the alarm found below is THIS run's doing and
     // not a leftover the name prefix happened to match.
@@ -230,4 +248,33 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
         "EventBridge did not deliver it, or the forwarder rejected the poke",
     ).toHaveLength(0);
   }, 1_800_000);
+});
+
+/**
+ * The public half of the same deployment. This fixture declares NO webhook channel, so its Function URL
+ * exists only for the container's own callbacks — every ordinary request must be refused, and WHICH
+ * refusal comes first is the assertion: an oversized body is rejected by the forwarder BEFORE the
+ * webhooks gate, i.e. before anything can spend an AgentCore wake-up on it (the cost/DoS path).
+ *
+ * Offline, `agentcore-forwarder.test.ts` executes the same source under a fake `require` and pins both
+ * answers. What only a real Function URL can say is that the ceiling ARRIVED: it rides in as the
+ * template's `MAX_WEBHOOK_BODY_BYTES` env var, and a Lambda that never received it compares against
+ * `NaN` — every comparison false, the limit silently gone.
+ */
+describe("agentcore ingress: the forwarder's Function URL refuses what it must", () => {
+  const post = (body: string) =>
+    fetch(`${forwarderUrl}/telegram`, { method: "POST", headers: { "content-type": "text/plain" }, body });
+
+  it("refuses ordinary traffic on a schedule-only URL, and an oversized body before that", async () => {
+    expect(forwarderUrl, "the deploy above did not converge — nothing to probe").toBeTruthy();
+
+    const ordinary = await post("x");
+    expect(ordinary.status, "a URL with no webhook channel behind it served ordinary traffic").toBe(404);
+
+    // Under Lambda's own 6 MB request cap, so what answers is the forwarder and not the platform. The
+    // BODY is asserted for exactly that reason: AWS refuses an over-cap request with the same status.
+    const oversized = await post("x".repeat(MAX_WEBHOOK_BODY_BYTES + 1));
+    expect(oversized.status, "the advertised body ceiling is not enforced on the deployed forwarder").toBe(413);
+    expect(await oversized.text(), "the 413 is Lambda's own, not the forwarder's").toContain("payload too large");
+  }, 300_000);
 });
