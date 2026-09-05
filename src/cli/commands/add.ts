@@ -64,7 +64,7 @@ export async function runAddChannel(
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
     await assertChannelReady(target).catch(failStartup);
-    await scaffoldChannel(target, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(failStartup);
+    await scaffoldChannel(target, channelKind, { ingress }).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
   }
   // Companion tools are the package's, not authored glue: written on every add, so an upgraded

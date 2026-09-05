@@ -394,7 +394,7 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
 export async function scaffoldChannel(
   dir: string,
   kind: ChannelKind,
-  options: { ingress?: FeishuSubscriptionMode; groupBehavior?: GroupBehavior } = {},
+  options: { ingress?: FeishuSubscriptionMode } = {},
 ): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the agent dir; one inside it is fine.
@@ -432,11 +432,6 @@ export async function scaffoldChannel(
           !line.includes(`encryptKey: process.env.${prefix}_ENCRYPT_KEY`),
       )
       .join("\n");
-    content = configured;
-  }
-  if (kind === "slack" && options.groupBehavior === "mentions") {
-    const configured = content.replace('groupBehavior: "context"', 'groupBehavior: "mentions"');
-    if (configured === content) throw new Error("slack channel template has no groupBehavior anchor");
     content = configured;
   }
   await writeFile(file, content, { flag: "wx" });

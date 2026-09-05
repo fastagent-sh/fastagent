@@ -112,11 +112,6 @@ export interface SlackChannelOptions {
   clientId?: string;
   clientSecret?: string;
   botTokenExpiresAt?: number;
-  /** `context` (default) subscribes to group message streams, which is what lets the channel HEAR a
-   * thread: bare replies are then admitted by the participation rule (design/participant-model.md §3),
-   * and other discussion is buffered. `mentions` answers only app_mention plus DMs for an explicit
-   * least-privilege setup. */
-  groupBehavior?: "context" | "mentions";
   /** `native` (default) uses Slack Agent streams for threaded replies. Its inline tool traces carry a
    * bounded summary of each call's first argument and cannot be retracted, so they stay in the
    * delivered message beside the answer. `classic` retains the compatibility renderer based on one
@@ -172,7 +167,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     clientId,
     clientSecret,
     botTokenExpiresAt,
-    groupBehavior = "context",
     rendering = "native",
     aiDisclaimer,
     welcome = DEFAULT_WELCOME,
@@ -182,9 +176,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     apiBaseUrl = "https://slack.com/api",
   } = options;
 
-  if (!(["context", "mentions"] as const).includes(groupBehavior)) {
-    throw new Error('slackChannel groupBehavior must be "context" or "mentions"');
-  }
   if (!(["native", "classic"] as const).includes(rendering)) {
     throw new Error('slackChannel rendering must be "native" or "classic"');
   }
@@ -409,7 +400,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
       // are known — this channel answering.
-      // Structural facts only, never `groupBehavior` or `route` — see thread-participants.ts. Slack
+      // Structural facts only, never `route` — see thread-participants.ts. Slack
       // adds no delta of its own here; its summon rule is the only consumer.
       if (group && event.thread_ts !== undefined) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
@@ -432,7 +423,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // store cannot know about someone it has never heard.
       if (
         !routed &&
-        groupBehavior === "context" &&
         route === undefined &&
         group &&
         event.thread_ts !== undefined &&
@@ -446,7 +436,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       }
       if (!routed) {
         if (route === undefined && group && botUserId === undefined && mightBeTheBot) return;
-        if (groupBehavior === "context" && route === undefined && group) {
+        if (route === undefined && group) {
           const body = slackBufferText(slackMessageText(event));
           if (body) {
             const fileIds = slackFileIds(event);

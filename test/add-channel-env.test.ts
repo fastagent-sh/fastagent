@@ -55,13 +55,8 @@ describe("channel setup guidance", () => {
     await writeFile(join(dir, "tools", "slack-send.ts"), "// 0.20.0: process.env.SLACK_BOT_TOKEN");
     await scaffoldCompanionTools(dir, "slack");
     const source = await readFile(join(dir, "channels", "slack.ts"), "utf8");
-    expect(source).toContain('groupBehavior: "context"');
     expect(source).toContain('rendering: "native"');
     expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
-
-    const mentionsDir = await mkdtemp(join(tmpdir(), "fa-slack-mentions-scaffold-"));
-    await scaffoldChannel(mentionsDir, "slack", { groupBehavior: "mentions" });
-    expect(await readFile(join(mentionsDir, "channels", "slack.ts"), "utf8")).toContain('groupBehavior: "mentions"');
   });
 
   it("WebSocket setup needs only App ID/Secret and writes the WebSocket factory into the scaffold", async () => {

@@ -88,7 +88,6 @@ function mountChannel(stateRoot: string, expiresAt: number) {
     clientId: "SYNTHETIC-CLIENT",
     clientSecret: "SYNTHETIC-SECRET",
     botTokenExpiresAt: expiresAt,
-    groupBehavior: "mentions",
     welcome: false,
     reactionAck: false,
   })({ stateRoot, agent })["POST /slack"]!;
