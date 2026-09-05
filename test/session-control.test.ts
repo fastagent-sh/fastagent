@@ -19,6 +19,8 @@ import {
 } from "../src/engines/pi/session-control.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import {
@@ -1090,6 +1092,60 @@ describe("session control: boundary mutations", () => {
     const record = { getBranch: () => cut } as unknown as Parameters<typeof activePath>[0];
     expect(() => activePath(record)).toThrow(/missing from the journal/);
   });
+
+  it.each([
+    ["openai", "off"],
+    ["openai", "minimal"],
+    ["openai-codex", "off"],
+  ] as const)(
+    "%s Astra state matches execution after navigation restores the %s default",
+    async (provider, thinkingLevel) => {
+      const { mkdtemp, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const cwd = await mkdtemp(join(tmpdir(), "fa-astra-thinking-"));
+      try {
+        const modelRuntime = await createPiModelRuntime({ authPath: join(cwd, "auth.json") });
+        const model = modelRuntime.getModel(provider, "gpt-6-astra")!;
+        expect(model).toBeDefined();
+        const sessions = piInMemorySessionRecordStore({ cwd });
+        const sessionFactory = piAgentSessionFactory({
+          sessions,
+          engine: async () => ({ modelRuntime, model }),
+          thinkingLevel,
+          tools: [],
+          cwd,
+          readDefinition: () => ({ systemPrompt: "test", skills: [] }),
+        });
+        const { control } = createPiSessionControl({
+          sessions,
+          boundary: {
+            lease: inProcessLease(),
+            models: modelRuntime,
+            sessionFactory,
+            defaults: { model, thinkingLevel },
+          },
+        });
+        const initial = await sessionFactory("astra");
+        initial.dispose();
+        const handle = control.sessions.get("astra");
+        const { entries } = await handle.entries();
+        const modelEntry = entries.find((entry) => entry.kind === "model_change")!;
+        expect(modelEntry).toBeDefined();
+        expect(await handle.update({ leafEntryId: modelEntry.id })).toEqual({ ok: true });
+        const reported = await handle.state();
+        const rebound = await sessionFactory("astra");
+        try {
+          expect(reported.thinkingLevel).toBe(rebound.thinkingLevel);
+          expect(reported.availableThinkingLevels).toContain(reported.thinkingLevel);
+        } finally {
+          rebound.dispose();
+        }
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("the resolve still clamps as a BACKSTOP — the case the boundary cannot see", () => {
     const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
