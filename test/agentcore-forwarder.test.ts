@@ -14,7 +14,7 @@ import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
 type Envelope = Record<string, unknown> & { kind?: string; wake?: { url: string } };
 
 interface HarnessOptions {
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   /** What the container's /invocations returns for a given envelope (transport status + JSON body). */
   containerReply?: (envelope: Envelope) => { statusCode?: number; body: unknown };
   /** Scheduler behavior per call — throw to simulate an API error. */
@@ -255,6 +255,14 @@ describe("agentcore forwarder (executed)", () => {
     const f = loadForwarder();
     const res = await f.handler(webhookEvent({ body: "x".repeat(MAX_WEBHOOK_BODY_BYTES + 1) }));
     expect(res.statusCode).toBe(413);
+    expect(f.envelopes).toHaveLength(0);
+  });
+
+  it("refuses to forward at all when the ceiling itself is missing", async () => {
+    // The limit is an env var now, and `NaN` compares false against everything: a stack whose template
+    // predates it would drop the cap SILENTLY — the body would wake AgentCore and come back as a 502.
+    const f = loadForwarder({ env: { MAX_WEBHOOK_BODY_BYTES: undefined } });
+    await expect(f.handler(webhookEvent())).rejects.toThrow(/MAX_WEBHOOK_BODY_BYTES/);
     expect(f.envelopes).toHaveLength(0);
   });
 
