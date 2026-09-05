@@ -272,15 +272,15 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           if (retriedAfterAnswer !== undefined) return; // decided; the retry's output is not ours
           if (event.type === "message_end" && event.message.role === "assistant") {
             finalAssistant = event.message as AssistantMessage;
-            // Details can contain provider payloads; keep those in the journal, not server logs.
+            // Error messages and details can contain provider payloads; log only diagnostic metadata.
             for (const diagnostic of finalAssistant.diagnostics ?? []) {
               log.warn(
-                `[fastagent] provider diagnostic ${diagnostic.type} (${finalAssistant.provider}/${finalAssistant.model}, session ${scope.session}, run ${runId})${diagnostic.error ? `: ${diagnostic.error.message}` : ""}`,
+                `[fastagent] provider diagnostic ${diagnostic.type} (${finalAssistant.provider}/${finalAssistant.model}, session ${scope.session}, run ${runId})`,
               );
             }
           }
           if (event.type === "compaction_end" && event.reason !== "manual") {
-            const status = event.aborted ? "aborted" : (event.errorMessage ?? "completed");
+            const status = event.aborted ? "aborted" : event.errorMessage ? "failed" : "completed";
             const emit = event.errorMessage && !event.aborted ? log.warn : log.debug;
             emit(
               `[fastagent] automatic compaction ${event.reason} (session ${scope.session}, run ${runId}): ${status}`,

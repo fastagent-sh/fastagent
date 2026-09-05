@@ -221,7 +221,7 @@ describe("AgentSession L0: the observation plane", () => {
           result: undefined,
           aborted: false,
           willRetry: false,
-          errorMessage: "summary failed",
+          errorMessage: "summary failed: do-not-log",
         });
         emit({
           type: "compaction_end",
@@ -244,7 +244,7 @@ describe("AgentSession L0: the observation plane", () => {
       expect(events.at(-1)).toEqual({ type: "completed" });
       expect(seen.some((e) => e.type === "compaction_started" || e.type === "compaction_finished")).toBe(false);
       expect(warn.mock.calls).toHaveLength(2);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`automatic compaction ${reason}`));
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(`automatic compaction ${reason} .*: failed$`));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider diagnostic anthropic_input_transformations"));
       expect(JSON.stringify(warn.mock.calls)).toContain("session recovery, run");
       expect(JSON.stringify(warn.mock.calls)).not.toContain("do-not-log");

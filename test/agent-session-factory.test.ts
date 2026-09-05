@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { stream as streamPiMessages } from "@earendil-works/pi-ai/api/pi-messages";
 import {
   type ExtensionContext,
   ModelRuntime,
@@ -31,6 +32,7 @@ import { withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { makeFaux } from "./faux.ts";
 import { fauxControlledAgent } from "./agent.ts";
 import type { SessionEvent } from "../src/session.ts";
+import { log } from "../src/log.ts";
 
 /** An agent built the way serving builds one, minus the directory read. */
 async function agentWith(
@@ -54,6 +56,37 @@ async function agentWith(
 }
 
 describe("piAgentSessionFactory: the definition reaches the model", () => {
+  it("keeps gateway error bodies in the session record and failed event, outside server logs", async () => {
+    const { faux } = makeFaux();
+    const body = "gateway echoed private request: do-not-log";
+    const message = await streamPiMessages(
+      { ...faux.getModel(), api: "pi-messages", baseUrl: "https://gateway.invalid" },
+      { messages: [] },
+      { apiKey: "test", fetch: async () => new Response(body, { status: 400, statusText: "Bad Request" }) },
+    ).result();
+    expect(message.diagnostics?.[0]?.error?.message).toContain(body);
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const agent = await agentWith([message], { sessions });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const events = [];
+      for await (const event of agent.invoke({ session: "gateway" }, { text: "hi" })) events.push(event);
+      expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining(body) });
+      const record = await sessions.openOrCreate("gateway");
+      expect(record.getBranch()).toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ diagnostics: message.diagnostics }),
+        }),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider diagnostic pi_messages_response_failure"));
+      expect(JSON.stringify(warn.mock.calls)).toContain("session gateway, run");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(body);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("preserves provider effort across turns, forks, and a fresh store", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-effort-"));
     const sessions = piSessionRecordStore({ dir: join(cwd, "sessions"), cwd });
@@ -249,6 +282,69 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       { data: { name: "probe", partialResult: { details: { progress: 50 } } } },
     ]);
   });
+
+  it.each([
+    ["room\u0000a", '"room\\u0000a"', "json"],
+    ["room\ud800a", '"room\\ud800a"', "json"],
+    ['"room\\u0000a"', '"room\\u0000a"', ""],
+    ["room:会话/🌙", "room:会话/🌙", ""],
+    ["", "", ""],
+  ])(
+    "represents session %j in the shell environment without changing tool context",
+    async (sessionId, envId, encoding) => {
+      const tools = piAllCodingTools(process.cwd());
+      const bash = tools.find((tool) => tool.name === "bash")!;
+      const nativeIds: unknown[] = [];
+      const callerIds: unknown[] = [];
+      let shellResult: unknown;
+      const agent = await agentWith(
+        [
+          fauxAssistantMessage([
+            fauxToolCall("bash", { command: 'printf "ok\\n%s\\n%s" "$PI_SESSION_ID" "$PI_SESSION_ID_ENCODING"' }),
+            fauxToolCall("whoami", {}),
+          ]),
+          (context) => {
+            shellResult = context.messages.find(
+              (message) => message.role === "toolResult" && message.toolName === "bash",
+            );
+            return fauxAssistantMessage("done");
+          },
+        ],
+        {
+          tools: [
+            {
+              ...bash,
+              execute(...args) {
+                nativeIds.push(args[4]?.sessionManager.getSessionId(), args[4]?.sessionManager.getHeader()?.id);
+                return bash.execute(...args);
+              },
+            },
+            defineTool({
+              name: "whoami",
+              description: "Read the caller's session id.",
+              input: z.object({}),
+              async execute(_input, ctx) {
+                callerIds.push(ctx.sessionManager?.getSessionId(), (await ctx.sessionManager?.getHeader())?.id);
+                return "reported";
+              },
+            }),
+          ],
+        },
+      );
+      vi.stubEnv("PI_SESSION_ID_ENCODING", "json");
+      try {
+        expect((await collect(agent.invoke({ session: sessionId }, { text: "go" }))).text).toBe("done");
+        expect(shellResult).toMatchObject({
+          isError: false,
+          content: [{ type: "text", text: `ok\n${envId}\n${encoding}` }],
+        });
+        expect(nativeIds).toEqual([sessionId, sessionId]);
+        expect(callerIds).toEqual([sessionId, sessionId]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("keeps native thinkingLevel and shell effort scoped to interleaved sessions", async () => {
     let entered!: () => void;

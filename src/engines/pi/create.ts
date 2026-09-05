@@ -15,6 +15,7 @@
  * itself (the control plane contends on the same lease and validates against the same registry), so
  * `assemblePiFromDefinition` hands it out and `createPiAgentFromDefinition` is it plus the L0.
  */
+import { toUSVString } from "node:util";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
@@ -66,7 +67,21 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 
 export function piAllCodingTools(cwd: string): MountedTool[] {
-  const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
+  const mutating = createCodingTools(cwd, {
+    bash: {
+      spawnHook(context) {
+        const { env } = context;
+        const id = env.PI_SESSION_ID;
+        delete env.PI_SESSION_ID_ENCODING;
+        // OS environment strings cannot preserve NUL or unpaired UTF-16 surrogates.
+        if (id !== undefined && (id.includes("\u0000") || toUSVString(id) !== id)) {
+          env.PI_SESSION_ID = JSON.stringify(id);
+          env.PI_SESSION_ID_ENCODING = "json";
+        }
+        return context;
+      },
+    },
+  }).filter((tool) => tool.name !== "read");
   return [...createReadOnlyTools(cwd), ...mutating];
 }
 
