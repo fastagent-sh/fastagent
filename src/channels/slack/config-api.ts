@@ -61,6 +61,27 @@ export function isSlackRequestUrlUnverified(error: unknown): boolean {
   );
 }
 
+/**
+ * Whether a manifest write was refused because the app has token rotation on, which Slack never lets
+ * off again — the refusal every app created by a release up to 0.20 meets, since this release sends
+ * `token_rotation_enabled: false`. Slack documents field rejections as `invalid_manifest` plus an
+ * `errors[]` of message + pointer; the bare code was what a real refusal once showed. Both shapes are
+ * read: a miss here sends the operator to repair configuration tokens that are not the problem.
+ */
+export function isSlackRotationLocked(error: unknown): boolean {
+  if (!(error instanceof SlackConfigApiError)) return false;
+  return (
+    error.code === "cannot_disable_once_enabled" ||
+    error.errors.some(
+      (e) => e.message?.includes("cannot_disable_once_enabled") || e.pointer?.endsWith("token_rotation_enabled"),
+    )
+  );
+}
+
+/** The upgrade every rotating-app refusal points at. */
+export const SLACK_ROTATING_APP_UPGRADE =
+  'this app has token rotation on, which this release no longer uses and Slack cannot turn off — create a new app (docs/slack.md → "Upgrading from a rotating-token app")';
+
 async function slackJson<T>(
   method: string,
   body: Record<string, unknown>,

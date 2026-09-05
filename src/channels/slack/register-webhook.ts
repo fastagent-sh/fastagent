@@ -1,5 +1,10 @@
 import { retryWhile, type RegistrationOutcome } from "../registration.ts";
-import { SlackConfigApiError, isSlackRequestUrlUnverified, updateSlackAppManifest } from "./config-api.ts";
+import {
+  SLACK_ROTATING_APP_UPGRADE,
+  isSlackRequestUrlUnverified,
+  isSlackRotationLocked,
+  updateSlackAppManifest,
+} from "./config-api.ts";
 import { buildSlackManifest } from "./manifest.ts";
 import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-state.ts";
 
@@ -83,13 +88,8 @@ export async function registerSlackWebhook(
     note(`[fastagent] slack: Event Subscriptions Request URL registered → ${publicBaseUrl}/slack`);
     return "registered";
   } catch (error) {
-    // An app created with rotation on (releases up to 0.20) refuses the manifest this release sends,
-    // since Slack never lets rotation off again: the repair is a new app, not new configuration tokens.
-    if (error instanceof SlackConfigApiError && error.code === "cannot_disable_once_enabled") {
-      note(
-        `[fastagent] slack: this app has token rotation on, which this release no longer uses and Slack cannot turn off — ` +
-          `create a new app (docs/slack.md → "Upgrading from a rotating-token app"), or ${consoleFallback}`,
-      );
+    if (isSlackRotationLocked(error)) {
+      note(`[fastagent] slack: ${SLACK_ROTATING_APP_UPGRADE}, or ${consoleFallback}`);
       return "failed";
     }
     note(

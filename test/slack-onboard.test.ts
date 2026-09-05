@@ -523,15 +523,23 @@ describe("Slack Request URL registration", () => {
       appId: "A1",
       installedAt: new Date().toISOString(),
     });
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      Response.json({ ok: false, error: "cannot_disable_once_enabled" }, { status: 200 }),
-    );
-    const logs: string[] = [];
-    await expect(
-      registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock, log: (line) => logs.push(line) }),
-    ).resolves.toBe("failed");
-    expect(logs.at(-1)).toMatch(/create a new app/);
-    expect(logs.at(-1)).not.toMatch(/replace-config/);
+    // Slack documents field rejections as invalid_manifest + errors[]; the bare code was seen once too.
+    for (const body of [
+      { ok: false, error: "cannot_disable_once_enabled" },
+      {
+        ok: false,
+        error: "invalid_manifest",
+        errors: [{ message: "cannot_disable_once_enabled", pointer: "/settings/token_rotation_enabled" }],
+      },
+    ]) {
+      const fetchMock = vi.fn<typeof fetch>(async () => Response.json(body, { status: 200 }));
+      const logs: string[] = [];
+      await expect(
+        registerSlackWebhook("https://agent.test", { stateRoot, fetch: fetchMock, log: (line) => logs.push(line) }),
+      ).resolves.toBe("failed");
+      expect(logs.at(-1)).toMatch(/create a new app/);
+      expect(logs.at(-1)).not.toMatch(/replace-config/);
+    }
   });
 
   it("retries while Slack cannot verify the Request URL yet, then registers", async () => {

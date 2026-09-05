@@ -276,7 +276,7 @@ describe("Slack channel construction", () => {
         agent: replyingAgent().agent,
         stateRoot: root(),
       }),
-    ).toThrow(/rotating bot token.*Upgrading from a rotating-token app/);
+    ).toThrow(/rotating Slack bot token.*Upgrading from a rotating-token app/);
   });
 });
 

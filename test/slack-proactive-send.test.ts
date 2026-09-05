@@ -85,4 +85,11 @@ describe("Slack proactive delivery rides the channel's transport", () => {
       authorization: "Bearer xoxb-from-env",
     });
   });
+
+  it("refuses a rotating token on the fallback path too, naming the upgrade", async () => {
+    vi.stubEnv("FASTAGENT_STATE_DIR", "");
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxe.xoxb-left-in-env");
+    fakeSlack();
+    await expect(send(agentDir())).rejects.toThrow(/rotating Slack bot token.*Upgrading from a rotating-token app/);
+  });
 });

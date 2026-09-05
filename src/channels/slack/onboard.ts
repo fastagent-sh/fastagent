@@ -4,6 +4,8 @@ import {
   createSlackApp,
   exchangeSlackOAuthCode,
   isSlackRequestUrlUnverified,
+  isSlackRotationLocked,
+  SLACK_ROTATING_APP_UPGRADE,
   SlackConfigApiError,
   updateSlackAppManifest,
 } from "./config-api.ts";
@@ -115,7 +117,13 @@ export async function onboardSlackApp(
     }
     const appId = state.appId;
     io.note(`Resuming Slack app ${appId}; refreshing its temporary setup URLs…`);
-    await whileUnverified(() => (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest));
+    try {
+      await whileUnverified(() => (deps.updateManifest ?? updateSlackAppManifest)(current.token, appId, manifest));
+    } catch (error) {
+      // A resume of an app created with rotation on: the manifest is refused for good, so say what fixes it.
+      if (isSlackRotationLocked(error)) throw new Error(SLACK_ROTATING_APP_UPGRADE, { cause: error });
+      throw error;
+    }
   }
 
   if (state.signingSecret) {
