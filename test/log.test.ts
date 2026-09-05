@@ -32,7 +32,7 @@ describe("createLogger", () => {
 });
 
 describe("log singleton + setLogLevel", () => {
-  // Assumes FASTAGENT_LOG_LEVEL is unset (an env override would win and skip setLogLevel by design).
+  // Assumes FASTAGENT_LOG_LEVEL is unset: a valid one wins at every emit and would gate these lines.
   it("setLogLevel moves the threshold; the singleton writes to stderr", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -52,22 +52,21 @@ describe("log singleton + setLogLevel", () => {
   });
 });
 
-describe("FASTAGENT_LOG_LEVEL override (parsed at module load)", () => {
-  // Each test re-imports a fresh log.ts so the load-time env parse runs under a stubbed value.
+describe("FASTAGENT_LOG_LEVEL override (read per emit)", () => {
+  // The env is stubbed AFTER log.ts is imported — the shape a `.secrets/.env` has (#451): the file lands
+  // in process.env long after every command module has pulled this one in.
   afterEach(() => {
     vi.unstubAllEnvs();
-    vi.resetModules();
+    setLogLevel("info"); // restore the default the other suites rely on
   });
 
-  it("a valid value locks the level — setLogLevel is a no-op", async () => {
-    vi.stubEnv("FASTAGENT_LOG_LEVEL", "error");
-    vi.resetModules();
-    const fresh = await import("../src/log.ts");
+  it("a valid value set after import wins over the posture", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      fresh.setLogLevel("debug"); // would normally show debug; the valid override wins
-      fresh.log.debug("[t] d");
-      fresh.log.error("[t] e");
+      setLogLevel("debug");
+      vi.stubEnv("FASTAGENT_LOG_LEVEL", "error");
+      log.debug("[t] d");
+      log.error("[t] e");
       const lines = err.mock.calls.map((c) => String(c[0]));
       expect(lines).toContain("ERROR [t] e");
       expect(lines.some((l) => l.includes("[t] d"))).toBe(false); // debug gated by the override
@@ -76,18 +75,30 @@ describe("FASTAGENT_LOG_LEVEL override (parsed at module load)", () => {
     }
   });
 
-  it("an invalid value warns at load and falls back to posture — setLogLevel still works", async () => {
-    vi.stubEnv("FASTAGENT_LOG_LEVEL", "trace");
-    vi.resetModules();
-    const err = vi.spyOn(console, "error").mockImplementation(() => {}); // before import — catch the load-time warn
+  it("an empty value is absent, not a typo — `KEY=` parks a key in a .env", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const fresh = await import("../src/log.ts");
-      expect(err.mock.calls.map((c) => String(c[0])).some((l) => /unknown FASTAGENT_LOG_LEVEL "trace"/.test(l))).toBe(
-        true,
-      );
-      fresh.setLogLevel("debug"); // the invalid value did not disable the posture default
-      fresh.log.debug("[t] d2");
-      expect(err.mock.calls.map((c) => String(c[0])).some((l) => l.includes("[t] d2"))).toBe(true);
+      vi.stubEnv("FASTAGENT_LOG_LEVEL", "");
+      setLogLevel("debug");
+      log.debug("[t] d4");
+      const lines = err.mock.calls.map((c) => String(c[0]));
+      expect(lines).toContain("DEBUG [t] d4"); // the posture applies
+      expect(lines.some((l) => /unknown FASTAGENT_LOG_LEVEL/.test(l))).toBe(false);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("an invalid value warns once and falls back to the posture", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.stubEnv("FASTAGENT_LOG_LEVEL", "verbose-typo"); // a value used nowhere else: the warn-once state is module-level and never reset
+      setLogLevel("debug"); // the invalid value did not disable the posture default
+      log.debug("[t] d2");
+      log.debug("[t] d3");
+      const lines = err.mock.calls.map((c) => String(c[0]));
+      expect(lines.filter((l) => /unknown FASTAGENT_LOG_LEVEL "verbose-typo"/.test(l))).toHaveLength(1);
+      expect(lines.some((l) => l.includes("[t] d2"))).toBe(true);
     } finally {
       err.mockRestore();
     }

@@ -34,32 +34,41 @@ export function createLogger(opts: { level: LogLevel; sink?: (line: string) => v
 }
 
 /**
- * `FASTAGENT_LOG_LEVEL` parsed to three states: a valid value locks the level (overrides posture); a
- * present-but-invalid value warns and is treated as absent, so a typo (meant to make logs louder) can
- * never silently pin the level to info nor kill the posture default; absent returns undefined. The
- * warning is raw — the singleton below is not built yet — but reuses `format` for the same shape.
+ * `FASTAGENT_LOG_LEVEL` resolved PER EMIT, not at import: this module is imported transitively by every
+ * command module, so an import-time read runs before any command reaches `loadDotEnv` and could never
+ * see the agent's `.secrets/.env` — a key that file could not carry at all.
+ *
+ * Three states: a valid value wins over the posture; a present-but-invalid one warns (once per distinct
+ * value) and is treated as absent, so a typo (meant to make logs louder) can never silently pin the
+ * level nor kill the posture default; absent leaves the posture. Empty is absent, matching
+ * `resolveOverridePath` — `KEY=` is how a `.env` parks a key it does not want set, not a typo to warn
+ * about. The warning is raw `console.error` because it is the logger reporting on its own gate, but
+ * reuses `format` for the same shape.
  */
-function parseEnvOverride(): LogLevel | undefined {
+let posture: LogLevel = "info";
+let warnedFor: string | undefined;
+
+function effectiveLevel(): LogLevel {
   const raw = process.env.FASTAGENT_LOG_LEVEL;
-  if (raw === undefined) return undefined;
+  if (!raw) return posture;
   const value = raw.toLowerCase();
   if (isLevel(value)) return value;
-  console.error(format("warn", `[fastagent] unknown FASTAGENT_LOG_LEVEL "${raw}"; using the posture default`));
-  return undefined;
+  if (warnedFor !== raw) {
+    warnedFor = raw;
+    console.error(format("warn", `[fastagent] unknown FASTAGENT_LOG_LEVEL "${raw}"; using the posture default`));
+  }
+  return posture;
 }
 
-const override = parseEnvOverride();
-let currentLevel: LogLevel = override ?? "info";
-
-/** Set the posture default. A valid `FASTAGENT_LOG_LEVEL` override, if present, wins and is not changed. */
+/** Set the posture default. A valid `FASTAGENT_LOG_LEVEL` wins over it, whenever a line is emitted. */
 export function setLogLevel(level: LogLevel): void {
-  if (override === undefined) currentLevel = level;
+  posture = level;
 }
 
 const emit =
   (level: LogLevel) =>
   (msg: string): void => {
-    if (ORDER[level] >= ORDER[currentLevel]) console.error(format(level, msg));
+    if (ORDER[level] >= ORDER[effectiveLevel()]) console.error(format(level, msg));
   };
 
 /** The process logger. Runtime code imports this and calls `log.info(...)` etc. */
