@@ -23,25 +23,11 @@
  * wasted wake-up of the box, traded for never needing list/delete choreography.
  */
 import { readFileSync } from "node:fs";
+import { RESERVED_PATHS, type WakeAlarm, type WakeAlarmRequest } from "../channels/agentcore-protocol.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { scheduleFile, writeScheduleFile } from "./state.ts";
 import { type Wakeup, listWakeups } from "./wakeups.ts";
-
-/** The forwarder's reserved wake-alarm path — never forwarded to channel routes. */
-export const WAKE_ALARM_PATH = "/__fastagent/wake-alarm";
-
-/** One desired alarm: mirror of a pending wake-up (id names the EventBridge schedule; at = fireAt). */
-export interface WakeAlarm {
-  id: string;
-  at: string;
-}
-
-/** The wire shape the sink POSTs to {@link WAKE_ALARM_PATH} (the forwarder validates `secret`). */
-export interface WakeAlarmRequest {
-  secret: string;
-  alarms: WakeAlarm[];
-}
 
 const URL_FILE = "wake-alarm-url";
 
@@ -130,7 +116,7 @@ export function createWakeAlarmSink(options: {
     }
     const body: WakeAlarmRequest = { secret, alarms };
     try {
-      const res = await fetchImpl(`${url.replace(/\/$/, "")}${WAKE_ALARM_PATH}`, {
+      const res = await fetchImpl(`${url.replace(/\/$/, "")}${RESERVED_PATHS.wakeAlarm}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),

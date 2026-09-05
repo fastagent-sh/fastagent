@@ -14,6 +14,7 @@
  * a caller-provided temp parameters file (`file://…`, mode 0600, deleted by the caller) — the write
  * is injected to keep this module pure and the security-sensitive wiring testable.
  */
+import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
@@ -22,6 +23,7 @@ import { Buffer } from "node:buffer";
 import {
   AUTH_SEED_CHUNK_SIZE,
   AUTH_SEED_MAX_CHUNKS,
+  type AgentcoreTopology,
   cfnParamName,
   forwarderSource,
   ingressSessionId,
@@ -49,10 +51,9 @@ export interface AgentcoreRunPlan {
   missingSecrets: string[];
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
-  /** Whether the topology includes the forwarder Lambda (route channels / schedules / selfSchedule).
-   *  It owns the state snapshot's presigned URLs, so its absence means an invoke-only deployment
-   *  with no cross-deploy state to keep. */
-  needsForwarder: boolean;
+  /** What the stack contains — the plan's own reading, so this driver cannot disagree with the
+   *  template about whether a forwarder (and with it the state bucket and its parameters) exists. */
+  topology: AgentcoreTopology;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
@@ -63,7 +64,7 @@ const PROBE_TIMEOUT_MS = 120_000;
 const PROBE_INTERVAL_MS = 3_000;
 
 /**
- * Drive the forwarder's reserved `/__fastagent/probe` path until it answers, and read the runtime's
+ * Drive the forwarder's reserved probe path until it answers, and read the runtime's
  * STRUCTURED verdict. The path answers on every forwarder topology (a schedule-only URL refuses
  * ordinary public traffic, so a plain `GET /health` would 404 there), and the verdict rides a
  * transport-200 JSON body `{ ok, error? }` — the ordinary webhook relay folds a non-200 transport
@@ -291,7 +292,7 @@ export async function deployAgentcoreRun(
   //     out of CloudFormation means a `delete-stack` — or a rolled-back create — cannot take the
   //     agent's sessions, channel state and pending wake-ups with it.
   let forwarderParams: { bucket: string; key: string } | undefined;
-  if (plan.needsForwarder) {
+  if (plan.topology.forwarder) {
     const bucket = stateBucketName(plan.name, account);
     if ((await aws(["s3api", "head-bucket", "--bucket", bucket], { capture: true })).code !== 0) {
       log(`creating deployment bucket ${bucket}…`);
@@ -453,7 +454,7 @@ export async function deployAgentcoreRun(
   // Keyed on the FORWARDER: every current forwarder has a callback URL for state-capability refresh,
   // and every forwarder topology has an ingress session whose next event would otherwise land on compute still
   // running the previous image.
-  if (plan.needsForwarder) {
+  if (plan.topology.forwarder) {
     // CHECKPOINT FIRST. The stop cuts whatever turn is running, and that turn's durable intent was
     // written to a mount the version update erases — so without this flush "replay re-runs it" would
     // be false: the intent never reaches S3 and the message is simply gone. Best-effort: a session
@@ -536,9 +537,7 @@ export async function deployAgentcoreRun(
   //     check (there is no boot-time failStartup on this host). A missing output means an edited
   //     template; skipping the probe silently would let such a deploy report success unverified.
   //     Only a pure-invoke deployment (no forwarder) legitimately has no URL and nothing to probe.
-  //     `channels.length` is belt-and-braces: the planner derives needsForwarder FROM the channel
-  //     list, but this gate must not silently trust that invariant across callers.
-  if ((plan.needsForwarder || plan.channels.length > 0) && !url) {
+  if (plan.topology.forwarder && !url) {
     return gate(
       "this deployment needs the forwarder but the stack has no ForwarderUrl output — regenerate the " +
         "template with --force",
@@ -553,7 +552,7 @@ export async function deployAgentcoreRun(
   if (url) {
     log("probing the deployed runtime (state restore + channel construction)…");
     const verdict = await probeRuntime(
-      `${url}/__fastagent/probe`,
+      `${url}${RESERVED_PATHS.probe}`,
       plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
       probe.fetchImpl ?? fetch,
       probe.timeoutMs,

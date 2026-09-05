@@ -25,6 +25,53 @@ export function requireEnv(name: string, hint: string): string {
 }
 
 /**
+ * The AWS credential a probe is about to spend tens of minutes on, asked the way the DRIVER asks it
+ * (deploy/agentcore/run.ts): can the CLI authenticate, and is there a region — whatever supplies them.
+ *
+ * It replaced `requireEnv("AWS_ACCESS_KEY_ID"/"AWS_SECRET_ACCESS_KEY"/"AWS_REGION")`, which asked for
+ * one FORM and picked the wrong one to insist on. CI's long-lived key satisfies it; a workstation runs
+ * `aws login`, whose profile REFRESHES ITSELF (the driver and every `aws` call here use it happily) and
+ * whose exported snapshot does not — 15 minutes, against a probe that needs 45. So the variables were
+ * satisfiable here only in the form that cannot survive the probe.
+ *
+ * `minutes` is that window, and only a temporary credential has one to check: `AWS_CREDENTIAL_EXPIRATION`
+ * rides along with an exported snapshot, and a long-lived key carries none. Checked BEFORE the deploy,
+ * because expiry does not land where it happened — the first call to fail is somewhere past
+ * `docker push`, it says `ExpiredToken` in the shape of a permissions problem, and it leaves a
+ * half-created stack for a teardown whose credentials are equally dead.
+ *
+ * Returns the account id, which every AgentCore probe derives resource names from.
+ */
+export async function requireAwsAccount(minutes: number): Promise<string> {
+  const deadline = process.env.AWS_CREDENTIAL_EXPIRATION;
+  if (deadline) {
+    const at = Date.parse(deadline);
+    if (Number.isNaN(at)) throw new Error(`AWS_CREDENTIAL_EXPIRATION is not a date: ${deadline}`);
+    const left = Math.round((at - Date.now()) / 60_000);
+    if (left < minutes)
+      throw new Error(
+        `the exported AWS credentials expire in ${left} min and this probe needs ${minutes}. Re-export them, ` +
+          `or unset AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN/AWS_CREDENTIAL_EXPIRATION and ` +
+          `let the CLI profile refresh itself`,
+      );
+  }
+  const identity = await aws(["sts", "get-caller-identity", "--output", "json"]);
+  if (identity.code !== 0)
+    throw new Error(
+      `live probes need working AWS credentials (\`aws login\`, or AWS_ACCESS_KEY_ID/…): ${identity.stderr}`,
+    );
+  const account = (JSON.parse(identity.stdout) as { Account?: unknown }).Account;
+  if (typeof account !== "string") throw new Error(`sts get-caller-identity returned no Account: ${identity.stdout}`);
+  // The ECR registry hostname is built from it, so an unset region is a gate for the driver too.
+  const region =
+    process.env.AWS_REGION ||
+    process.env.AWS_DEFAULT_REGION ||
+    (await aws(["configure", "get", "region"])).stdout.trim();
+  if (!region) throw new Error("live probes need an AWS region (AWS_REGION, or `aws configure set region <region>`)");
+  return account;
+}
+
+/**
  * The published version under probe, read the same way by every probe: `FASTAGENT_LIVE_VERSION` when
  * it carries one — CI resolves the registry's current `latest` to an exact version ONCE and exports it
  * (.github/workflows/live.yml), so the registry install and the container image cannot report on two

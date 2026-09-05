@@ -36,6 +36,8 @@ const happyAws = (args: string[]): { code?: number; stdout?: string } => {
   return {};
 };
 
+const NO_FORWARDER = { webhooks: false, forwarder: false, wakeAlarms: false };
+const FORWARDER = { webhooks: true, forwarder: true, wakeAlarms: false };
 const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   name: "my-agent",
   templatePath: "agentcore.template.yaml",
@@ -44,7 +46,7 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   secrets: {},
   missingSecrets: [],
   channels: [],
-  needsForwarder: false,
+  topology: NO_FORWARDER,
   ...over,
 });
 
@@ -71,7 +73,7 @@ const run = (
 ) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, { telegram: tg });
 
 describe("the deployment bucket (the agent's memory outlives the stack)", () => {
-  const withForwarder = plan({ needsForwarder: true });
+  const withForwarder = plan({ topology: FORWARDER });
 
   it("creates it when absent, locks it down, and hands the stack the bucket + content-hashed key", async () => {
     const { cli: aws, cmds } = fakeCli((a) =>
@@ -120,13 +122,13 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
     const { cli: aws, cmds } = fakeCli((a) =>
       a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
     );
-    await run(plan({ needsForwarder: true, region: "us-east-1" }), aws, fakeCli().cli);
+    await run(plan({ topology: FORWARDER, region: "us-east-1" }), aws, fakeCli().cli);
     expect(cmds().find((c) => c.startsWith("s3api create-bucket"))).not.toContain("LocationConstraint");
 
     const { cli: other, cmds: otherCmds } = fakeCli((a) =>
       a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
     );
-    await run(plan({ needsForwarder: true, region: "eu-west-1" }), other, fakeCli().cli);
+    await run(plan({ topology: FORWARDER, region: "eu-west-1" }), other, fakeCli().cli);
     expect(otherCmds().find((c) => c.startsWith("s3api create-bucket"))).toContain("LocationConstraint=eu-west-1");
   });
 
@@ -141,7 +143,7 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
   it("an invoke-only deployment touches no bucket at all", async () => {
     const { cli: aws, cmds } = fakeCli(happyAws);
     writeParams.mockClear();
-    await run(plan({ needsForwarder: false }), aws, fakeCli().cli);
+    await run(plan({ topology: NO_FORWARDER }), aws, fakeCli().cli);
     expect(cmds().join("\n")).not.toContain("s3");
     expect(JSON.parse(writeParams.mock.calls[0]![0] as string).join()).not.toContain("StateBucket");
   });
@@ -155,7 +157,7 @@ describe("the pre-stop checkpoint", () => {
     const logs: string[] = [];
     const { cli } = checkpointReply('{"written":true}');
     await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       cli,
       fakeCli().cli,
       (m) => logs.push(m),
@@ -170,7 +172,7 @@ describe("the pre-stop checkpoint", () => {
     const logs: string[] = [];
     const { cli } = checkpointReply('{"written":false,"reason":"this session has never served a forwarder envelope"}');
     await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       cli,
       fakeCli().cli,
       (m) => logs.push(m),
@@ -188,7 +190,7 @@ describe("the pre-stop checkpoint", () => {
     const logs: string[] = [];
     const { cli } = fakeCli((a) => (a[1] === "invoke-agent-runtime" ? { code: 254 } : happyAws(a)));
     await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       cli,
       fakeCli().cli,
       (m) => logs.push(m),
@@ -208,7 +210,7 @@ describe("the pre-stop checkpoint", () => {
     });
     const { cli, calls } = checkpointReply('{"written":true}');
     await deployAgentcoreRun(
-      plan({ needsForwarder: true, secrets: { FASTAGENT_INGRESS_SECRET: ingressSecret } }),
+      plan({ topology: FORWARDER, secrets: { FASTAGENT_INGRESS_SECRET: ingressSecret } }),
       cli,
       fakeCli().cli,
       () => {},
@@ -226,7 +228,7 @@ describe("the pre-stop checkpoint", () => {
     const logs: string[] = [];
     const { cli } = checkpointReply('{"written":"true"}');
     await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       cli,
       fakeCli().cli,
       (message) => logs.push(message),
@@ -247,7 +249,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
-        needsForwarder: true,
+        topology: FORWARDER,
         secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
       }),
       aws,
@@ -417,7 +419,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
         : happyAws(a),
     );
-    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli);
+    const out = await run(plan({ channels: declaredChannels(["telegram"]), topology: FORWARDER }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
   });
 
@@ -429,7 +431,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         : happyAws(a),
     );
     const out = await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       aws,
       fakeCli().cli,
       (m) => logs.push(m),
@@ -454,7 +456,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         : happyAws(a),
     );
     const out = await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       aws,
       fakeCli().cli,
       () => {},
@@ -564,7 +566,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
     const out = await deployAgentcoreRun(
       plan({
         channels: declaredChannels(["telegram"]),
-        needsForwarder: true,
+        topology: FORWARDER,
         secrets: { FASTAGENT_INGRESS_SECRET: "s3cret" },
       }),
       fakeCli(happyAws).cli,
@@ -595,7 +597,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       Response.json({ ok: false, error: "channel construction failed: FEISHU_APP_SECRET is not set" }),
     );
     const out = await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
       () => {},
@@ -611,7 +613,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
   it("retries a non-200 forwarder answer to the deadline, then gates with the LAST answer", async () => {
     const fetchImpl = vi.fn(async () => new Response("forbidden\n", { status: 403 }));
     const out = await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
       () => {},
@@ -629,7 +631,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       throw new Error("getaddrinfo ENOTFOUND");
     });
     const out = await deployAgentcoreRun(
-      plan({ needsForwarder: true }),
+      plan({ topology: FORWARDER }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
       () => {},
@@ -642,7 +644,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
   });
 
   it("a forwarder topology whose stack LOST the ForwarderUrl output gates — even with no channels", async () => {
-    // schedule-only / selfSchedule-only: needsForwarder without first-party channels. The probe is
+    // schedule-only / selfSchedule-only: a forwarder topology without first-party channels. The probe is
     // their ONLY construction check, so a missing URL must be a gate, not a silent skip + success.
     const probe = vi.fn();
     vi.stubGlobal("fetch", probe);
@@ -651,7 +653,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
         ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
         : happyAws(a),
     );
-    const out = await run(plan({ needsForwarder: true }), aws, fakeCli().cli);
+    const out = await run(plan({ topology: FORWARDER }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
     expect(probe).not.toHaveBeenCalled();
   });

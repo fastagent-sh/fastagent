@@ -27,7 +27,8 @@
  */
 import { Buffer } from "node:buffer";
 import type { Agent } from "../agent.ts";
-import type { StateSync, StateUrls } from "./agentcore-state.ts";
+import type { StateSync } from "./agentcore-state.ts";
+import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork, onIdle } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { type PrefixMount, router } from "../channels/serve.ts";
@@ -39,61 +40,6 @@ import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
 import { secretEquals } from "./secret.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
-
-/** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
- *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
- *  ALARM sink (schedule/wake-alarm.ts) can call back without the URL being baked anywhere. */
-export type AgentcoreEnvelope = {
-  /** Shared secret proving this envelope came from the forwarder (FASTAGENT_INGRESS_SECRET). The
-   *  public `invoke` data plane neither has nor needs it — and may not carry the fields below. */
-  auth?: string;
-  wake?: { url: string };
-  state?: StateUrls;
-} & (
-  | {
-      kind: "webhook";
-      /** Original webhook request line, verbatim. `path` must be absolute ("/telegram"). */
-      method: string;
-      path: string;
-      /** Original raw query string (no leading `?`) — "verbatim" includes it; a channel reading
-       *  `request.url.searchParams` must see what the webhook sender sent. */
-      query?: string;
-      /** Original headers — signature material (secret tokens, Feishu signatures) rides here. */
-      headers?: Record<string, string>;
-      /** Original body, base64 (webhook bodies are JSON but the tunnel must be byte-exact). */
-      bodyB64?: string;
-    }
-  | {
-      kind: "schedule-fire";
-      name: string;
-      /** The cron instant this fire is FOR (ISO) — the slot-idempotency key. */
-      slot: string;
-    }
-  | { kind: "invoke"; session: string; text: string }
-  /** An EventBridge wake-up poke: the invocation ITSELF is the payload — it wakes the container,
-   *  whose boot drain / 30s wake pump then fires whatever is due. The handler only acks. */
-  | { kind: "wake-poke" }
-  /** Pre-stop checkpoint (`--run`, right before stop-runtime-session): push the state snapshot NOW.
-   *  A stop cuts an in-flight turn, and its durable turn intent — written pre-ACK by every replaying
-   *  channel — lives on a mount the version update is about to erase. Flushing first is what makes
-   *  "channels with replay re-run it" true rather than aspirational. */
-  | { kind: "checkpoint" }
-  /** The deploy driver's post-deploy verification (relayed by the forwarder's reserved
-   *  `/__fastagent/probe` path, which answers on EVERY forwarder topology — schedule-only URLs
-   *  refuse ordinary public traffic). Runs restore + channel construction end to end and answers a
-   *  TRANSPORT-200 structured verdict `{ ok, error? }`: the ordinary webhook path folds a non-200
-   *  transport into an opaque 502 at the forwarder, which would strip exactly the diagnostics this
-   *  probe exists to carry. */
-  | { kind: "probe" }
-);
-
-/** The webhook envelope's reply: the channel's real HTTP response, ridden inside a transport-200
- *  body so the forwarder can re-emit it verbatim (see the module header on AgentCore's 424 folding). */
-export interface WebhookReply {
-  status: number;
-  headers: Record<string, string>;
-  bodyB64: string;
-}
 
 /** What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control
  *  plane), so the adapter's INNER dispatch is assembled exactly like a direct host's. */
@@ -147,30 +93,85 @@ const json = (body: unknown, status: number): Response =>
  * platform routes into the container. The agent's own channels are not beside these: they are a table
  * inside the envelope dispatch below, reached only by unwrapping a forwarder envelope.
  */
+/**
+ * The process's BOOT, deferred to ingress. A resident host restores its state, wires its sinks and
+ * constructs its channels at start-up; here nothing before the first trusted envelope is
+ * authoritative (the mount is pre-restore, and the snapshot URLs only an envelope carries), so those
+ * steps run against the first one and are asserted again on every later one. Two things happen ONCE
+ * per process, in this order: the post-restore hook (the wake-alarm reconcile, which at boot would
+ * read the mount the platform just wiped), and channel construction — whose outcome is cached EITHER
+ * WAY. Success: the same resident channels a direct host keeps. Failure too: construction is an
+ * ACTIVATION with side effects — loadChannels builds every healthy channel (starting its queues and
+ * replaying durable turn intent) before reporting another module's failure — and there is no cleanup
+ * contract to unwind it, so re-running it per envelope could replay the same recovered turn
+ * concurrently. The first rejection is the process's answer: every later envelope fails with the same
+ * message (visible each time), the retry boundary is a fresh session (which scale-to-zero provides
+ * naturally), and the deploy driver's probe catches deterministic failures at deploy time.
+ */
+function createActivation(deps: {
+  stateSync: StateSync | undefined;
+  stateRoot: string;
+  onStateReady: (() => void) | undefined;
+  channels: AgentcoreAdapterOptions["channels"];
+}): {
+  /** Bring the state root up to date from what this envelope carries: refresh the snapshot URLs,
+   *  restore (once — the sync memoizes it), persist the forwarder's URL, run the post-restore hook
+   *  once. REJECTS when a snapshot exists but cannot be restored; the caller fails the request
+   *  rather than serve an empty agent (and then snapshot that emptiness over the good copy). */
+  restore(envelope: AgentcoreEnvelope): Promise<void>;
+  /** The channel surface, constructed on first use after a restore; the outcome is cached either way. */
+  channels(): Promise<ChannelHandler>;
+} {
+  const { stateSync, stateRoot, onStateReady } = deps;
+  let warnedUnsnapshotted = false;
+  let stateReadyFired = false;
+  let dispatchP: Promise<ChannelHandler> | undefined;
+  return {
+    async restore(envelope) {
+      if (stateSync) {
+        if (envelope.state && typeof envelope.state.getUrl === "string" && typeof envelope.state.putUrl === "string") {
+          stateSync.use(envelope.state);
+        } else if (envelope.kind !== "invoke" && !stateSync.configured() && !warnedUnsnapshotted) {
+          // webhook/schedule-fire/wake-poke/probe reach us ONLY through the forwarder, which mints the
+          // pair. Missing = a broken/stale topology whose state dies at the next deploy: say so, loudly,
+          // once per process (a direct `invoke` legitimately has none — its session storage is its own).
+          warnedUnsnapshotted = true;
+          log.warn(unsnapshottedWarning);
+        }
+        await stateSync.ready();
+      }
+      // The forwarder rides its public URL along on every envelope — persist it (write-if-changed) so
+      // the wake-alarm sink can call back. AFTER the restore: a stale snapshot copy must not win over
+      // the URL this deployment is actually reachable at. A bad persist must not fail the turn.
+      if (typeof envelope.wake?.url === "string") {
+        try {
+          rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
+        } catch (e) {
+          log.error(`[agentcore] could not persist the wake-alarm URL: ${String(e)}`);
+        }
+      }
+      if (onStateReady && !stateReadyFired) {
+        stateReadyFired = true;
+        onStateReady();
+      }
+    },
+    channels() {
+      if (!dispatchP) {
+        // The factory runs INSIDE the chain: a synchronous throw must land in the cached rejection,
+        // not escape before `dispatchP` is assigned (which would silently re-run the activation).
+        dispatchP = Promise.resolve()
+          .then(deps.channels)
+          .then((surface) => router(surface.routes, surface.mounts));
+        dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
+      }
+      return dispatchP;
+    },
+  };
+}
+
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
   const { channels, agent, stateRoot, isBusy, fire, stateSync, ingressSecret, onStateReady } = options;
-  // Lazy channel construction (see AgentcoreAdapterOptions.channels) — resolved ONCE per process, on
-  // the first trusted envelope after the state root is authoritative, and the outcome is cached
-  // EITHER WAY. Success: the same resident channels a direct host keeps. Failure too: construction
-  // is an ACTIVATION with side effects — loadChannels builds every healthy channel (starting its
-  // queues and replaying durable turn intent) before reporting another module's failure — and there
-  // is no cleanup contract to unwind it, so re-running it per envelope could replay the same
-  // recovered turn concurrently. The first rejection is therefore the process's answer: every later
-  // envelope fails with the same message (visible each time), the retry boundary is a fresh session
-  // (which scale-to-zero provides naturally), and the deploy driver's probe catches deterministic
-  // failures at deploy time.
-  let dispatchP: Promise<ChannelHandler> | undefined;
-  const resolveDispatch = (): Promise<ChannelHandler> => {
-    if (!dispatchP) {
-      // The factory runs INSIDE the chain: a synchronous throw must land in the cached rejection,
-      // not escape before `dispatchP` is assigned (which would silently re-run the activation).
-      dispatchP = Promise.resolve()
-        .then(channels)
-        .then((surface) => router(surface.routes, surface.mounts));
-      dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
-    }
-    return dispatchP;
-  };
+  const activation = createActivation({ stateSync, stateRoot, onStateReady, channels });
   const invokeHandler = createInvokeHandler(agent);
   // Snapshot on the 0-in-flight edge: webhook channels ACK fast and finish the turn in the
   // background, so "the request returned" is NOT when the state root settles.
@@ -178,8 +179,6 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     const off = onIdle(() => stateSync.save());
     options.signal?.addEventListener("abort", off, { once: true });
   }
-  let warnedUnsnapshotted = false;
-  let stateReadyFired = false;
 
   const handleInvocation = async (req: Request): Promise<Response> => {
     const body = await readBodyCapped(req, MAX_ENVELOPE_BYTES);
@@ -191,10 +190,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       return text("invalid json\n", 400);
     }
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
-      return text(
-        'need { "kind": "webhook" | "schedule-fire" | "invoke" | "wake-poke" | "checkpoint" | "probe", ... }\n',
-        400,
-      );
+      return text(`need { "kind": ${ENVELOPE_KINDS.map((k) => `"${k}"`).join(" | ")}, ... }\n`, 400);
     }
     // AUTHENTICATION BOUNDARY. `InvokeAgentRuntime` is an ordinary IAM action, so "reached this
     // handler" proves nothing about the sender. Only an envelope carrying the shared secret is the
@@ -211,62 +207,32 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       envelope.wake = undefined;
       envelope.state = undefined;
     }
-    // The forwarder rides its public URL along on every envelope — persist it (write-if-changed) so
-    // the wake-alarm sink can call back. Written AFTER the restore below: a stale snapshot copy must
-    // not win over the URL this deployment is actually reachable at. A bad persist must not fail the turn.
-    const rememberUrl = (): void => {
-      if (typeof envelope.wake?.url !== "string") return;
-      try {
-        rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
-      } catch (e) {
-        log.error(`[agentcore] could not persist the wake-alarm URL: ${String(e)}`);
-      }
-    };
     // Cross-deploy state: the platform wipes /mnt/state on every version update, so the durable copy
-    // must be pulled back BEFORE anything reads it. A failed restore fails the request — serving an
-    // empty agent (and then snapshotting that emptiness over the good copy) is the worse outcome.
-    if (stateSync) {
-      if (envelope.state && typeof envelope.state.getUrl === "string" && typeof envelope.state.putUrl === "string") {
-        stateSync.use(envelope.state);
-      } else if (envelope.kind !== "invoke" && !stateSync.configured() && !warnedUnsnapshotted) {
-        // webhook/schedule-fire/wake-poke/probe reach us ONLY through the forwarder, which mints the
-        // pair. Missing = a broken/stale topology whose state dies at the next deploy: say so, loudly,
-        // once per process (a direct `invoke` legitimately has none — its session storage is its own).
-        warnedUnsnapshotted = true;
-        log.warn(unsnapshottedWarning);
-      }
-      try {
-        await stateSync.ready();
-      } catch (e) {
-        log.error(`[agentcore] state restore failed: ${String(e)}`);
-        // The probe is the deploy driver's verification channel: its diagnostics must survive the
-        // forwarder, which folds a non-200 transport into an opaque 502 — so for it the failure
-        // rides a transport-200 structured verdict; every other kind keeps the plain 503.
-        if (envelope.kind === "probe") return json({ ok: false, error: `state restore failed: ${String(e)}` }, 200);
-        return text(`state restore failed: ${String(e)}\n`, 503);
-      }
+    // must be pulled back BEFORE anything reads it.
+    try {
+      await activation.restore(envelope);
+    } catch (e) {
+      log.error(`[agentcore] state restore failed: ${String(e)}`);
+      // The probe is the deploy driver's verification channel: its diagnostics must survive the
+      // forwarder, which folds a non-200 transport into an opaque 502 — so for it the failure
+      // rides a transport-200 structured verdict; every other kind keeps the plain 503.
+      if (envelope.kind === "probe") return json({ ok: false, error: `state restore failed: ${String(e)}` }, 200);
+      return text(`state restore failed: ${String(e)}\n`, 503);
     }
-    rememberUrl();
-    // The state root is authoritative only now — anything that must READ it at startup (the wake-alarm
-    // reconcile) runs here, once, rather than at boot against a mount the platform just wiped.
-    if (onStateReady && !stateReadyFired) {
-      stateReadyFired = true;
-      onStateReady();
-    }
-    // PROCESS INITIALIZATION, kind-independent: the (lazy) channels are constructed on the first
-    // trusted ingress after the state root became authoritative — whichever kind carries it, so a
-    // cold start woken by a schedule fire or an alarm poke still replays checkpointed turn intent.
-    // Two deliberate exceptions: `checkpoint` must push state even when a channel is broken, and a
-    // public `invoke` runs in its own isolated storage — constructing against THAT root would cache
-    // pre-restore emptiness for the ingress session. Failure policy is per kind below: webhook and
-    // wake-poke fail their request (503), the probe reports it structurally, and a schedule fire
-    // proceeds — cron does not consume channels, and letting an unrelated channel misconfiguration
-    // silence the clock would turn one fault into two (the error is logged here either way).
+    // The channels come up on the first trusted ingress after the state root became authoritative —
+    // whichever kind carries it, so a cold start woken by a schedule fire or an alarm poke still
+    // replays checkpointed turn intent. Two deliberate exceptions: `checkpoint` must push state even
+    // when a channel is broken, and a public `invoke` runs in its own isolated storage — constructing
+    // against THAT root would cache pre-restore emptiness for the ingress session. Failure policy is
+    // per kind below: webhook and wake-poke fail their request (503), the probe reports it
+    // structurally, and a schedule fire proceeds — cron does not consume channels, and letting an
+    // unrelated channel misconfiguration silence the clock would turn one fault into two (the error
+    // is logged here either way).
     let constructionError: string | undefined;
     let dispatch: ChannelHandler | undefined;
     if (trusted && envelope.kind !== "checkpoint" && envelope.kind !== "invoke") {
       try {
-        dispatch = await resolveDispatch();
+        dispatch = await activation.channels();
       } catch (e) {
         constructionError = String(e);
         log.error(`[agentcore] channel construction failed: ${constructionError}`);

@@ -8,6 +8,7 @@ import { basename, join } from "node:path";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../../channels/agentcore-limits.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
+  type AgentcoreTopology,
   FORWARDER_FILE,
   TEMPLATE_FILE,
   agentcoreName,
@@ -29,7 +30,7 @@ function shellArg(value: string): string {
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, config, channels, webhookChannels, longConnectionChannels, pre, write } = ctx;
+    const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
     const { modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a
     // reclaimed session has nothing to wake it — events in the gap are silently lost. `--run` gates
@@ -124,10 +125,7 @@ export const agentcoreHost: HostDeploy = {
         authPath,
         channels,
         extraSecrets,
-        selfSchedule: !!config.selfSchedule,
-        // Same predicate the template uses for the forwarder resource — kept in one expression so
-        // the run path and the topology cannot disagree about whether a forwarder exists.
-        needsForwarder: webhookChannels.length > 0 || loaded.schedules.length > 0 || !!config.selfSchedule,
+        topology: plan.topology,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -151,18 +149,17 @@ async function runDeployAgentcore(
     authPath: string;
     channels: readonly DeclaredChannel[];
     extraSecrets: string[];
-    selfSchedule: boolean;
-    needsForwarder: boolean;
+    topology: AgentcoreTopology;
   },
 ): Promise<void> {
-  const { agentDir, workspace, agentPrefix, name, channels, selfSchedule } = params;
+  const { agentDir, workspace, agentPrefix, name, channels, topology } = params;
   const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
   // The wake-alarm shared secret (container ↔ forwarder). Minted fresh each run — both sides receive
   // the SAME parameter, so rotation is atomic; it never needs to be remembered locally.
-  if (selfSchedule) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
+  if (topology.wakeAlarms) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
   // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM
   // principal's. Minted fresh each run — both sides receive the SAME parameter, so rotation is atomic.
-  if (params.needsForwarder) secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
+  if (topology.forwarder) secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
   gateOnModelCredential(needsModelCredential);
   // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides —
   // never argv); 0700/0600 and removed after the run, success or gate.
@@ -181,9 +178,7 @@ async function runDeployAgentcore(
         secrets,
         missingSecrets,
         channels,
-        // Same predicate the template uses: the forwarder exists for route channels, cron schedules
-        // or selfSchedule — and it is what mints the state snapshot's presigned URLs.
-        needsForwarder: params.needsForwarder,
+        topology,
       },
       spawnRunner("aws", workspace),
       spawnRunner("docker", workspace),
@@ -205,7 +200,7 @@ async function runDeployAgentcore(
     if (outcome.url) console.error(`[fastagent] webhook ingress → ${outcome.url}`);
     const logsDir = shellArg(workspace);
     console.error(`[fastagent] runtime logs → fastagent logs agentcore ${logsDir} --follow`);
-    if (params.needsForwarder) {
+    if (topology.forwarder) {
       console.error(`[fastagent] forwarder logs → fastagent logs agentcore ${logsDir} --source forwarder --follow`);
     }
     console.error(

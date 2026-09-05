@@ -5,10 +5,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import { RESERVED_PATHS, type WakeAlarmRequest } from "../src/channels/agentcore-protocol.ts";
 import {
   MAX_SYNC_ATTEMPTS,
-  WAKE_ALARM_PATH,
-  type WakeAlarmRequest,
   createWakeAlarmSink,
   readWakeAlarmUrl,
   rememberWakeAlarmUrl,
@@ -93,7 +92,7 @@ describe("schedule/wake-alarm: the sink", () => {
     ]);
     sink(root);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]!.url).toBe(`https://fn.on.aws${WAKE_ALARM_PATH}`); // trailing slash normalized
+    expect(calls[0]!.url).toBe(`https://fn.on.aws${RESERVED_PATHS.wakeAlarm}`); // trailing slash normalized
     expect(calls[0]!.body).toEqual({
       secret: "s3cret",
       alarms: [
