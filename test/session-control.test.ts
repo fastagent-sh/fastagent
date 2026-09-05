@@ -13,6 +13,7 @@ import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.t
 
 import {
   SUBSCRIBER_BUFFER_CAP,
+  SUBSCRIBER_BUFFER_BYTES,
   createPiSessionControl,
   type PiBoundaryWiring,
 } from "../src/engines/pi/session-control.ts";
@@ -664,6 +665,116 @@ describe("session control: run modulation", () => {
     expect(((await next) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
     await fresh.return?.(undefined);
   }, 10_000);
+
+  it("bounds stalled tool-progress subscribers by UTF-8 bytes without stopping the run or fast subscribers", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const text = "界".repeat(17_000);
+    const tool: AgentTool = {
+      ...echoTool,
+      async execute(_id, _params, _signal, onUpdate) {
+        for (let i = 0; i < 200; i++) {
+          onUpdate?.({ content: [{ type: "text", text: `${i}:${text}` }], details: undefined });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        return { content: [{ type: "text", text: "done" }], details: undefined };
+      },
+    };
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("echo", { value: "go" })), fauxAssistantMessage("done")],
+      { tools: [tool] },
+    );
+    const slow = control.sessions.get("sBytes").events()[Symbol.asyncIterator]();
+    const first = slow.next();
+    const fast = watchUntilSettled(control, "sBytes");
+    try {
+      expect((await drain(agent.invoke({ session: "sBytes" }, { text: "go" }))).at(-1)?.type).toBe("completed");
+      expect((await first).value.type).toBe("run_started");
+      const events = await fast;
+      expect(events.filter((event) => event.type === "tool_progress")).toHaveLength(200);
+      let bytes = 0;
+      let retained = 0;
+      for (const event of events.slice(1)) {
+        const size = Buffer.byteLength(JSON.stringify(event));
+        if (bytes + size > SUBSCRIBER_BUFFER_BYTES) break;
+        bytes += size;
+        retained++;
+        expect(await slow.next()).toEqual({ done: false, value: event });
+      }
+      expect(retained).toBeGreaterThan(100);
+      expect(retained).toBeLessThan(200);
+      expect((await slow.next()).done).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("sBytes"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("bytes"));
+    } finally {
+      await slow.return?.(undefined);
+      warn.mockRestore();
+    }
+  });
+
+  it("accepts an exact-budget snapshot, isolates later mutations, and returns its byte budget on consumption", async () => {
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const iterator = control.sessions.get("sExactBytes").events()[Symbol.asyncIterator]();
+    const event = {
+      type: "tool_progress",
+      timestamp: 0,
+      runId: "r",
+      data: { id: "call-1", name: "echo", partialResult: "" },
+    };
+    event.data.partialResult = "x".repeat(SUBSCRIBER_BUFFER_BYTES - Buffer.byteLength(JSON.stringify(event)));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 2; i++) {
+        const next = iterator.next();
+        observer("sExactBytes", event);
+        event.data.partialResult += "x";
+        const result = await next;
+        expect(result.done).toBe(false);
+        expect(Buffer.byteLength(JSON.stringify(result.value))).toBe(SUBSCRIBER_BUFFER_BYTES);
+        event.data.partialResult = event.data.partialResult.slice(0, -1);
+      }
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await iterator.return?.(undefined);
+      warn.mockRestore();
+    }
+  });
+
+  it("closes a pending subscription on a single oversized event and allows reconnection", async () => {
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const events = control.sessions.get("sOversized").events();
+    const iterator = events[Symbol.asyncIterator]();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const next = iterator.next();
+      observer("sOversized", {
+        type: "tool_progress",
+        timestamp: 0,
+        runId: "r",
+        data: { id: "call-1", name: "echo", partialResult: "x".repeat(SUBSCRIBER_BUFFER_BYTES) },
+      });
+      expect((await next).done).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("sOversized"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("bytes"));
+      const fresh = events[Symbol.asyncIterator]();
+      try {
+        const pending = fresh.next();
+        const event = { type: "run_settled", timestamp: 1, runId: "r", data: { status: "completed" } };
+        observer("sOversized", event);
+        expect((await pending).value).toEqual(event);
+      } finally {
+        await fresh.return?.(undefined);
+      }
+    } finally {
+      await iterator.return?.(undefined);
+      warn.mockRestore();
+    }
+  });
 
   it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
     const { control, observer } = createPiSessionControl({

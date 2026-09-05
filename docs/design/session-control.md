@@ -389,7 +389,12 @@ interface SessionEvent<TType extends string = string, TData extends Json = Json>
 ```
 
 In-process the stream is lossless and ordered; there is no sequence number to check and no epoch to
-compare. The vocabulary, grouped by the client maturity level that needs it:
+compare. The pi implementation caps each subscriber's backlog at 10,000 events and 8 MiB of UTF-8 JSON.
+Crossing either limit, including a single oversized event, logs a warning and closes that subscription
+after its buffered prefix drains. The client reconnects and backfills via `entries()`; slow readers
+never block the agent's execution.
+
+The vocabulary, grouped by the client maturity level that needs it:
 
 | Level | Events | Purpose |
 |---|---|---|

@@ -127,17 +127,12 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
-/** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
- *  connection — the wire's ReadableStream backpressure stops pulling while invokes keep pushing)
- *  has its buffer FROZEN at the cap (memory bounded — the actual goal: ≈10k small events ≈ a few
- *  MB worst case per stuck connection) and its subscription marked closed. The close is observed
- *  via pulls — which a stalled connection by definition does not make — so a consumer that RESUMES
- *  pulling first drains the frozen backlog, then gets done (no buffered event dropped), while a
- *  permanently stalled one holds the frozen buffer until its TCP connection dies. Recovery either
- *  way is the standard reconnect+backfill, semantically lossless. */
+/** Per-subscriber backlog limits: event count and UTF-8 JSON bytes. Overflow freezes the accepted
+ *  prefix; the reader drains it before seeing done, then reconnects and backfills via entries(). */
 export const SUBSCRIBER_BUFFER_CAP = 10_000;
+export const SUBSCRIBER_BUFFER_BYTES = 8 * 1024 * 1024;
 
-/** One subscriber's push→pull queue, capped at {@link SUBSCRIBER_BUFFER_CAP}. `close()` settles a
+/** One subscriber's bounded push→pull queue. `close()` settles a
  *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
  *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
 class Subscriber {
@@ -148,7 +143,9 @@ class Subscriber {
   constructor(session: string) {
     this.session = session;
   }
-  private buffer: SessionEvent[] = [];
+  // Serialized snapshots cannot grow when a producer later mutates its event or tool result.
+  private buffer: Array<{ json: string; bytes: number }> = [];
+  private bufferedBytes = 0;
   // A QUEUE of waiters, not a single slot: concurrent next() calls are contract-legal (any wrapper
   // may poll twice), and a single `wake` field would let the second await overwrite the first's
   // resolver — hanging the first next() forever. Every wake flushes all waiters; each re-checks the
@@ -164,14 +161,17 @@ class Subscriber {
 
   push(event: SessionEvent): void {
     if (this.closed) return;
-    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
+    const json = JSON.stringify(event);
+    const bytes = Buffer.byteLength(json);
+    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP || this.bufferedBytes + bytes > SUBSCRIBER_BUFFER_BYTES) {
       log.warn(
-        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — no further events buffered; its stream ends after draining the backlog (or at connection death), then the client resyncs via entries()`,
+        `[fastagent] session-control subscriber for session "${this.session}" exceeded its buffer limit (${SUBSCRIBER_BUFFER_CAP} events / ${SUBSCRIBER_BUFFER_BYTES} bytes; ${this.bufferedBytes} bytes queued, ${bytes} incoming); its stream ends after draining the backlog, then the client resyncs via entries()`,
       );
       this.close();
       return;
     }
-    this.buffer.push(event);
+    this.buffer.push({ json, bytes });
+    this.bufferedBytes += bytes;
     this.flush();
   }
 
@@ -182,7 +182,11 @@ class Subscriber {
 
   async next(): Promise<IteratorResult<SessionEvent>> {
     while (true) {
-      if (this.buffer.length > 0) return { done: false, value: this.buffer.shift() as SessionEvent };
+      const item = this.buffer.shift();
+      if (item) {
+        this.bufferedBytes -= item.bytes;
+        return { done: false, value: JSON.parse(item.json) as SessionEvent };
+      }
       if (this.closed) return { done: true, value: undefined };
       await new Promise<void>((resolve) => {
         this.wakes.push(resolve);
