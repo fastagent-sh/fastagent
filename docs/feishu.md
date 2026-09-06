@@ -369,8 +369,10 @@ reads the matching `FEISHU_*` / `LARK_*` environment credentials and uses that c
 Standalone sending requires no `fastagent.config.*`; an embedded agent can use a bare definition
 directory or an independent `cwd`.
 
-Scaffolded files are workspace-owned copies. To adopt the current send tool in an existing workspace,
-generate it with `fastagent add feishu|lark` in a scratch directory and copy the tool file.
+`tools/feishu-send.ts` / `tools/lark-send.ts` are the package's, not authored glue: re-running
+`fastagent add feishu|lark` rewrites the tool, keeps `channels/<kind>.ts` and the credentials already in
+`.env`, and re-checks the app's group visibility. That is how an agent scaffolded by an earlier release
+picks up the current tool.
 
 ## Upgrading from the session-mode releases
 
@@ -388,8 +390,8 @@ Three behaviour changes, none of them opt-in:
 
 - **Unrelated to the model, but in the same release:** the scaffolded send tool's description gained a
   "do not use this to answer the current turn" boundary (without it the Agent posts its reply twice).
-  Scaffolded files are copies, so an existing workspace keeps the old text — see the send-tool section
-  above for updating the tool.
+  An agent scaffolded earlier still carries the old text — re-run `fastagent add feishu|lark` to rewrite
+  the tool (see the send-tool section above).
 
 State does not clean itself up: `owned-threads.json` and the `buffers.json` buckets under the retired
 key shape are both left in place, unread and unreachable — which means **buffered discussion in threads

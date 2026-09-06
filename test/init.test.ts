@@ -457,6 +457,15 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     await cliInit(["add", "github"], dir);
     expect(await exists(join(dir, "channels", "github.ts"))).toBe(true);
     expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
+
+    // Re-running add on an existing channel keeps the authored glue and rewrites the package-owned
+    // companion tool — the upgrade path for an agent scaffolded by an earlier release.
+    await writeFile(join(dir, "channels", "telegram.ts"), `${src}// edited\n`);
+    await writeFile(join(dir, "tools", "telegram-send.ts"), "// 0.20.0\n");
+    const out3 = await cliInit(["add", "telegram"], dir);
+    expect(out3).toContain("channels/telegram.ts already exists — keeping it");
+    expect(await readFile(join(dir, "channels", "telegram.ts"), "utf8")).toBe(`${src}// edited\n`);
+    expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
   });
 
   it("writes generated telegram secret to .secrets/.env, leaving only the BotFather token as a manual step", async () => {

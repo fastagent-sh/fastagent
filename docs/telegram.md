@@ -223,7 +223,7 @@ The state home lives under `.state/`, which the agent `.gitignore` excludes, so 
 
 `fastagent add telegram` also scaffolds `tools/telegram-send.ts`. Because tool names come from filenames, the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a text message or a local file back through the bot. It is also the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up, whose plain reply is not delivered anywhere; those turns have no `[telegram: chat …]` line, so the schedule's prompt (or the wake's) must name the target chat id.
 
-**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so; a workspace scaffolded before that was added keeps its own copy, so paste the boundary into the tool's `description` (or re-run `fastagent add` in a scratch dir and copy the file) if the Agent is double-posting.
+**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so. `tools/telegram-send.ts` is the package's, not authored glue: re-running `fastagent add telegram` rewrites it and keeps `channels/telegram.ts`, which is how an agent scaffolded by an earlier release picks up the current tool if it is double-posting.
 
 ## Limits
 
