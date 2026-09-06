@@ -50,17 +50,14 @@ export async function runAddChannel(
   const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
   const envPath = dotEnvPath(target);
   const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
-  // Preconditions before the write, so a refusal is side-effect-free. slack/feishu/lark are exceptions:
-  // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
-  // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
+  // An existing channel file is authored glue: kept, never rewritten. The add continues past it — the
+  // companion tools below are refreshed, and slack/feishu/lark resume a failed/cancelled app or OAuth
+  // flow — so re-running `add <kind>` never requires hand-deleting the glue.
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
   const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
-    if (channelKind !== "slack" && channelKind !== "feishu" && channelKind !== "lark") {
-      failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
-    }
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
     await assertChannelReady(target).catch(failStartup);
@@ -68,7 +65,7 @@ export async function runAddChannel(
     console.error(`[fastagent] created ${relative(target, file)}`);
   }
   // Companion tools are the package's, not authored glue: written on every add, so an upgraded
-  // package reaches an existing agent by re-running `add <kind>` (`--no-onboard` skips the prompts).
+  // package reaches an existing agent by re-running `add <kind>` (slack: `--no-onboard` skips the prompts).
   for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] wrote ${relative(target, tool)}`);
   }

@@ -156,13 +156,13 @@ fastagent start
 
 `start` uses the same assembly as `dev`, but does not watch files. There is no build step: copy the agent to a host with Node >= 22.19, install dependencies, and run `fastagent start`.
 
-For deployments, point the whole machine-state root (auth, sessions, **and** channel state — Telegram's durable turn replay lives there too) at durable storage:
+For deployments, point both machinery roots at durable storage: the state root (sessions **and** channel state — Telegram's durable turn replay lives there too) and the secrets dir (the agent's `.env` and the `auth.json` an OAuth refresh rotates on the box):
 
 ```bash
-FASTAGENT_STATE_DIR=/data/fastagent fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
-(`FASTAGENT_SESSIONS_DIR` / `--sessions-dir` override just the sessions path; they do not move channel state.)
+(`FASTAGENT_SESSIONS_DIR` / `--sessions-dir` override just the sessions path; they do not move channel state, and neither knob moves `auth.json`.)
 
 ## 7. Add channels
 
