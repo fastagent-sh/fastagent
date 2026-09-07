@@ -1704,6 +1704,114 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sB4").state()).status).toBe("idle");
   });
 
+  it.each(["subscribe", "unsubscribe", "dispose", "abort"])(
+    "compaction survives a %s defect and releases before publishing its outcome",
+    async (defect) => {
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const { faux, models } = makeFaux();
+        const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+        const record = await sessions.openOrCreate("cleanup");
+        record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+        record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+        record.appendMessage({ role: "user", content: "recent", timestamp: 2 });
+        const lease = inProcessLease();
+        const finish = Promise.withResolvers<void>();
+        let disposed = false;
+        const session = {
+          sessionManager: record,
+          settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
+          subscribe: () => {
+            if (defect === "subscribe") throw new Error("subscribe defect");
+            return () => {
+              if (defect === "unsubscribe") throw new Error("unsubscribe defect");
+            };
+          },
+          compact: async () => {
+            if (defect === "abort") await finish.promise;
+            return { summary: "summary" };
+          },
+          abortCompaction: () => {
+            finish.resolve();
+            throw new Error("abort defect");
+          },
+          dispose: () => {
+            disposed = true;
+            if (defect === "dispose") throw new Error("dispose defect");
+          },
+        } as unknown as AgentSession;
+        const { control } = createPiSessionControl({
+          sessions,
+          boundary: {
+            lease,
+            models,
+            defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+            sessionFactory: async () => session,
+          },
+        });
+        const handle = control.sessions.get("cleanup");
+        const finished = (async () => {
+          for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+        })();
+        expect(await handle.compact()).toEqual({ ok: true });
+        if (defect === "abort")
+          expect(await handle.abort()).toMatchObject({
+            ok: false,
+            error: {
+              code: RUN_COMMAND_FAILED_CODE,
+              message: "Error: abort defect",
+              retryable: false,
+            },
+          });
+        expect((await finished)?.data).toEqual(
+          defect === "subscribe" ? { error: "Error: subscribe defect" } : { summary: "summary" },
+        );
+        expect(disposed).toBe(true);
+        const release = lease.tryAcquire("cleanup");
+        expect(release).toBeTypeOf("function");
+        release?.();
+        expect((await handle.state()).status).toBe("idle");
+        if (defect === "unsubscribe" || defect === "dispose")
+          expect(warn.mock.calls.flat().join(" ")).toContain(`${defect} defect`);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("every mutation translates an initial store rejection into a command result", async () => {
+    const { faux, models } = makeFaux();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    vi.spyOn(sessions, "openIfExists").mockRejectedValue(new Error("store unavailable"));
+    const { control } = createPiSessionControl({
+      sessions,
+      boundary: {
+        lease: inProcessLease(),
+        models,
+        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        sessionFactory: async () => {
+          throw new Error("must not bind");
+        },
+      },
+    });
+    const handle = control.sessions.get("unreadable");
+    const results = await Promise.all([
+      handle.update({ name: "new" }),
+      handle.delete(),
+      handle.compact(),
+      control.sessions.fork({ from: "unreadable", at: "entry", into: "target" }),
+    ]);
+    for (const result of results)
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: BOUNDARY_COMMAND_FAILED_CODE,
+          message: "Error: store unavailable",
+          retryable: true,
+        },
+      });
+  });
+
   it("publishes manual compaction retries without a run identity", async () => {
     const { faux, models } = makeFaux();
     const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });

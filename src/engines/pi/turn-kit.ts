@@ -6,7 +6,6 @@
  *
  *   Lease       — single-writer concurrency floor (injectable port + in-process default)
  *   Terminals   — a settled pi message or a thrown error → the SPEC terminal, `retryable` included
- *   EventQueue  — push→pull plumbing for engines that emit events beside their result
  *   Prompt prep — SPEC images → pi's ImageContent
  *   Projection  — the rich SessionEvent stream → the narrow SPEC one
  *   Observation — the seam a control-plane hub attaches to (RunControls + SessionObserver)
@@ -199,49 +198,5 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
     }
     default:
       return null;
-  }
-}
-
-// ── EventQueue: push→pull plumbing for a two-port engine ────────────────────
-//
-// Single-consumer async queue; single-threaded JS means no await interleaves between push and
-// drain, so no locking. Engines that are natively async-iterable would not need it.
-
-export class EventQueue<T> {
-  private buffer: T[] = [];
-  private wake?: () => void;
-
-  push(item: T): void {
-    this.buffer.push(item);
-    const wake = this.wake;
-    this.wake = undefined;
-    wake?.();
-  }
-
-  /**
-   * Yield pushed events in order until `done` settles AND the buffer is drained. The terminal is
-   * produced separately (toTerminal); rejections of `done` are swallowed here (the caller awaits
-   * `run` itself) to avoid unhandled rejections.
-   */
-  async *drainUntil(done: Promise<unknown>): AsyncGenerator<T> {
-    let settled = false;
-    const onSettle = () => {
-      settled = true;
-      const wake = this.wake;
-      this.wake = undefined;
-      wake?.();
-    };
-    const finished = done.then(onSettle, onSettle);
-
-    while (true) {
-      while (this.buffer.length > 0) {
-        yield this.buffer.shift() as T;
-      }
-      if (settled) break;
-      await new Promise<void>((resolve) => {
-        this.wake = resolve;
-      });
-    }
-    await finished;
   }
 }

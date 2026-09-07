@@ -1,8 +1,4 @@
-/**
- * The AgentSession L0's own turn-boundary discipline. The conformance suite drives a real engine;
- * this drives a stub, because the case that matters — a run that settles without producing anything —
- * is exactly what a healthy engine never does.
- */
+/** Per-invoke terminal, cancellation and resource-ownership checks, including faulty SDK boundaries. */
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -15,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import type { RunControls } from "../src/engines/pi/turn-kit.ts";
+import { inProcessLease, type RunControls } from "../src/engines/pi/turn-kit.ts";
 import type { SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
 import { log } from "../src/log.ts";
@@ -93,8 +89,7 @@ describe("AgentSession L0: cancelling before the model call", () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
     const iterator = agent.invoke({ session: "early-cancel" }, { text: "go" })[Symbol.asyncIterator]();
-    // The consumer leaves before the first event exists — the window where the cancellation door is
-    // armed but the session is still idle, so knocking on it does nothing.
+    // Cancellation arrives before any event exists, while the session is still being prepared.
     const first = iterator.next();
     await iterator.return?.(undefined);
     const settled = await first;
@@ -105,8 +100,7 @@ describe("AgentSession L0: cancelling before the model call", () => {
   it("never starts the turn when the consumer walks away while the prompt's images are resized", async () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
-    // Park the generator INSIDE prompt-option resolution: the session exists and is idle, so the
-    // armed door has nothing to abort — only a latch read after this await can stop the turn.
+    // The session is idle while images are prepared. Cancellation must prevent the model call.
     let leaveTheWindow!: () => void;
     let entered!: () => void;
     const inTheWindow = new Promise<void>((resolve) => (entered = resolve));
@@ -322,5 +316,188 @@ describe("AgentSession L0: the observation plane", () => {
 
     await expect(controls?.steer({ text: "too late" })).rejects.toThrow(/already settled/);
     await expect(controls?.abort()).rejects.toThrow(/already settled/);
+  });
+});
+
+describe("invocation execution scope", () => {
+  it("joins late acquisition before disposing and releasing, without starting the model", async () => {
+    const opened = Promise.withResolvers<AgentSession>();
+    const entered = Promise.withResolvers<void>();
+    const lease = inProcessLease();
+    const { session, prompted } = promptRecordingSession();
+    const disposed = vi.spyOn(session, "dispose");
+    session.steer = vi.fn(async () => {});
+    let command: Promise<boolean> | undefined;
+    const agent = createPiAgentFromSession({
+      lease,
+      observer: (_s, _event, run) => {
+        if (run)
+          command = run.steer({ text: "queued" }).then(
+            () => true,
+            () => false,
+          );
+      },
+      sessionFactory: () => {
+        entered.resolve();
+        return opened.promise;
+      },
+    });
+    const iterator = agent.invoke({ session: "late" }, { text: "hi" })[Symbol.asyncIterator]();
+    const read = iterator.next();
+    await entered.promise;
+    let returned = false;
+    const closed = iterator.return?.().then(() => {
+      returned = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(returned).toBe(false);
+    expect(lease.tryAcquire("late")).toBeNull();
+    opened.resolve(session);
+    await closed;
+    expect(await read).toEqual({ done: true, value: undefined });
+    expect(prompted()).toBe(false);
+    expect(await command).toBe(false);
+    expect(session.steer).not.toHaveBeenCalled();
+    expect(disposed).toHaveBeenCalledTimes(1);
+    const release = lease.tryAcquire("late");
+    expect(release).toBeTypeOf("function");
+    release?.();
+  });
+
+  it.each([false, true, "pending"])("holds the lease through buffered consumption (cancel=%s)", async (cancel) => {
+    const lease = inProcessLease();
+    const session = silentSessionAfterHistory();
+    const disposed = vi.spyOn(session, "dispose");
+    let emit!: (event: AgentSessionEvent) => void;
+    session.subscribe = (listener) => {
+      emit = listener;
+      return () => {};
+    };
+    const produced = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    session.prompt = async () => {
+      for (const delta of ["one", "two"])
+        emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } } as AgentSessionEvent);
+      await finish.promise;
+      emit({ type: "message_end", message: fauxAssistantMessage("one two") });
+      produced.resolve();
+    };
+    const seen: SessionEvent[] = [];
+    let controls: RunControls | undefined;
+    const agent = createPiAgentFromSession({
+      lease,
+      sessionFactory: async () => session,
+      observer: (_s, event, run) => {
+        if (run) controls = run;
+        seen.push(event);
+      },
+    });
+    const iterator = agent.invoke({ session: "buffered" }, { text: "hi" })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "text", delta: "one" });
+    if (cancel === "pending") expect((await iterator.next()).value).toEqual({ type: "text", delta: "two" });
+    finish.resolve();
+    await produced.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(controls?.steer({ text: "too late" })).rejects.toThrow(/already settled/);
+    expect(lease.tryAcquire("buffered")).toBeNull();
+    expect(disposed).not.toHaveBeenCalled();
+    if (cancel === "pending") {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const terminal = iterator.next();
+      await iterator.return?.();
+      expect(await terminal).toEqual({ done: true, value: undefined });
+    } else if (cancel) {
+      await iterator.return?.();
+    } else {
+      expect((await iterator.next()).value).toEqual({ type: "text", delta: "two" });
+      expect((await iterator.next()).value).toEqual({ type: "completed" });
+      expect(lease.tryAcquire("buffered")).toBeNull();
+      expect(disposed).not.toHaveBeenCalled();
+    }
+    expect((await iterator.next()).done).toBe(true);
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(seen.filter((e) => e.type === "run_settled")).toMatchObject([
+      { data: { status: cancel ? "aborted" : "completed" } },
+    ]);
+    const release = lease.tryAcquire("buffered");
+    expect(release).toBeTypeOf("function");
+    release?.();
+  });
+
+  it.each(["subscribe", "prompt"])(
+    "translates a callback defect during %s into a failure without continuing SDK work",
+    async (phase) => {
+      const session = silentSessionAfterHistory();
+      const started = Promise.withResolvers<void>();
+      const stopped = Promise.withResolvers<void>();
+      const event: AgentSessionEvent = {
+        type: "message_update",
+        message: fauxAssistantMessage(""),
+        get assistantMessageEvent(): never {
+          throw new Error("bad callback");
+        },
+      };
+      let emit!: (event: AgentSessionEvent) => void;
+      session.subscribe = (listener) => {
+        emit = listener;
+        if (phase === "subscribe") emit(event);
+        return () => {};
+      };
+      session.prompt = vi.fn(async () => {
+        started.resolve();
+        await stopped.promise;
+      });
+      session.abort = async () => {
+        stopped.resolve();
+      };
+      const agent = createPiAgentFromSession({ sessionFactory: async () => session });
+      const result = drain(agent.invoke({ session: "defect" }, { text: "hi" }));
+      if (phase === "prompt") {
+        await started.promise;
+        expect(() => emit(event)).not.toThrow();
+      }
+      expect(await result).toMatchObject([{ type: "failed", details: "bad callback", retryable: false }]);
+      expect(session.prompt).toHaveBeenCalledTimes(phase === "prompt" ? 1 : 0);
+    },
+  );
+
+  it("continues all cleanup after defects without changing the primary protocol failure", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const calls: string[] = [];
+      const session = silentSessionAfterHistory();
+      session.subscribe = () => () => {
+        calls.push("unsubscribe");
+        throw new Error("unsubscribe defect");
+      };
+      session.dispose = () => {
+        calls.push("dispose");
+        throw new Error("dispose defect");
+      };
+      session.prompt = async () => {
+        throw Object.assign(new Error("provider unavailable"), { status: 503 });
+      };
+      const agent = createPiAgentFromSession({
+        sessionFactory: async () => session,
+        lease: {
+          tryAcquire: () => () => {
+            calls.push("release");
+            throw new Error("release defect");
+          },
+        },
+        observer: (_s, event) => {
+          if (event.type === "run_settled") calls.push("settled");
+        },
+      });
+      expect(await drain(agent.invoke({ session: "cleanup" }, { text: "hi" }))).toMatchObject([
+        { type: "failed", details: "provider unavailable", retryable: true },
+      ]);
+      expect(calls).toEqual(["unsubscribe", "dispose", "settled", "release"]);
+      expect(warn.mock.calls.flat().join(" ")).toContain("unsubscribe defect");
+      expect(warn.mock.calls.flat().join(" ")).toContain("dispose defect");
+      expect(warn.mock.calls.flat().join(" ")).toContain("release defect");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
