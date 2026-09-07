@@ -369,6 +369,15 @@ the service's handler through `channels/serve.ts` and exits on unexpected channe
 SIGINT/SIGTERM handler closes the service and listener, force-closes active HTTP streams, and bounds
 shutdown time; it does not drain Agent turns.
 
+The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and
+closure observers, and the caller's abort listener. Shutdown broadcasts the transport abort before
+closing the scope, then waits for all connections under one deadline. Its result is cached so
+concurrent and repeated `close()` calls wait for the same completion or failure. Startup rollback
+uses that same shutdown, logging cleanup errors while preserving the startup failure. The public
+`ready` waiter stays outside the scope it may close; channel authors still return ordinary Promises
+and consume an `AbortSignal`. Agent turns and durable replay state remain outside this scope.
+Effect is an internal dependency of `/node`; the contracts and `/core` remain dependency-free.
+
 `channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
 eager subscription, heartbeat, serialization and iterator cleanup. The callers own their event shapes.
 Synchronous subscription errors reach the HTTP error boundary before a response is created; errors

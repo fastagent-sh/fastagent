@@ -14,6 +14,11 @@
  * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
  * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
  */
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Scope from "effect/Scope";
 import type { Agent } from "./agent.ts";
 import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
@@ -34,41 +39,43 @@ import type { LoadedSchedule } from "./schedule/schedule.ts";
  *  the process leaves at 0 before the failure is known. */
 const CLOSE_DEADLINE_MS = 5_000;
 
-/** Settle when every connection has closed, or when the deadline passes. Reports the ones that did
- *  NOT settle — named individually, so a single stuck channel is not reported as all of them. */
-async function closeWithin(
+/** One deadline for all connections; a failed close must not hide a sibling that is still running. */
+function closeWithin(
   runs: readonly LongConnection[],
   names: readonly string[],
   deadlineMs: number,
-): Promise<{ stuck: string[]; failures: unknown[] }> {
-  const pending = new Set(runs.map((_, i) => i));
-  const failures: unknown[] = [];
-  const tracked = runs.map((run, i) =>
-    run.closed.then(
-      () => {
-        pending.delete(i);
-      },
-      (error: unknown) => {
-        pending.delete(i);
-        failures.push(error);
-      },
-    ),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      Promise.all(tracked),
-      // NOT unref'd: this timer is the thing being awaited, and an unref'd one lets the loop go
-      // idle with nothing left to advance it. Cleared below so a prompt close does not hold the
-      // process for the rest of the deadline.
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, deadlineMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-  return { stuck: [...pending].map((i) => names[i] ?? "channel"), failures };
+): Effect.Effect<void, unknown> {
+  return Effect.gen(function* () {
+    const pending = new Set(runs.map((_, i) => i));
+    const failures: unknown[] = [];
+    yield* Effect.forEach(
+      runs,
+      (run, i) =>
+        Effect.tryPromise({ try: () => run.closed, catch: (error) => error }).pipe(
+          Effect.match({
+            onSuccess: () => {
+              pending.delete(i);
+            },
+            onFailure: (error) => {
+              pending.delete(i);
+              failures.push(error);
+            },
+          }),
+        ),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.timeoutOrElse({ duration: deadlineMs, orElse: () => Effect.void }));
+    if (pending.size > 0) {
+      const stuck = [...pending].map((i) => names[i] ?? "channel");
+      return yield* Effect.fail(
+        new Error(`long connection(s) did not stop within ${deadlineMs}ms: ${stuck.join(", ")}`),
+      );
+    }
+    if (failures.length > 0) {
+      return yield* Effect.fail(
+        failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close"),
+      );
+    }
+  });
 }
 
 export interface ServingSurface {
@@ -320,158 +327,151 @@ export async function mountAgentService(
   // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
   // with no service for the caller to close. Free to order correctly; expensive to discover later.
   const handler = router(withControl.routes, withControl.mounts);
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule);
-
-  const abort = new AbortController();
-  // A connection that drops while others are still dialling must not be undone by their later
-  // readiness: the service is missing a declared channel from that moment on, whatever else arrives.
-  let dropped = false;
-  const onClosed =
-    options.onChannelClosed ??
-    ((name, error) =>
-      log.error(`[fastagent] long connection ${name} ${error === undefined ? "closed" : `failed: ${String(error)}`}`));
-  const runs: LongConnection[] = [];
-
-  // A FUNCTION declaration, not a const: `close()` detaches this listener, and a rollback can call
-  // `close()` before this point is reached — a `const` would be in its temporal dead zone there, so
-  // the cleanup would throw a ReferenceError and silently skip everything after it.
-  //
-  // Detached because a caller that closes services itself while holding one long-lived signal would
-  // otherwise accumulate listeners, each pinning a whole service through its closure. The signal
-  // path has no caller awaiting the promise, so a failure to stop is reported rather than left as an
-  // unhandled rejection — in an embedded library, potentially the host's exit.
-  function onAbort(): void {
-    void close().catch((error: unknown) => log.error(`[fastagent] service close failed: ${String(error)}`));
-  }
-
-  let closing: Promise<void> | undefined;
-  const close = (): Promise<void> => {
-    // Awaits the connections rather than only signalling them: `close()` promises they are stopped,
-    // and a caller tearing down a test or a request-scoped service needs that to be true on return.
-    closing ??= (async () => {
-      abort.abort();
-      scheduled.stop();
-      options.signal?.removeEventListener("abort", onAbort);
-      // A failure to stop is the caller's to know about — swallowing it would let `close()` report
-      // success over a channel still holding on. Bounded, because a channel that ignores its abort
-      // signal must not hang the teardown either.
-      const { stuck, failures } = await closeWithin(
-        runs,
-        routed.longConnections.map((c) => c.name),
-        closeTimeoutMs,
-      );
-      if (stuck.length > 0) {
-        throw new Error(`long connection(s) did not stop within ${closeTimeoutMs}ms: ${stuck.join(", ")}`);
-      }
-      if (failures.length > 0) {
-        throw failures.length === 1 ? failures[0] : new AggregateError(failures, "long connections failed to close");
-      }
-    })();
-    return closing;
-  };
-
-  // Rollback IS close(), plus keeping the original error: a failure to clean up is the aftermath,
-  // and replacing the reason the caller needs with it hides the actual cause.
-  const rollback = async (error: unknown): Promise<never> => {
-    await close().catch((closeError: unknown) =>
-      log.error(`[fastagent] cleanup after a failed start also failed: ${String(closeError)}`),
-    );
-    throw error;
-  };
-  // Rolled back on failure: a connection that throws while the ones before it are open, and the
-  // scheduler already ticking, would otherwise leave both running behind a rejected open().
-  for (const connection of routed.longConnections) {
-    let run: LongConnection;
-    try {
-      run = connection.connect(abort.signal);
-    } catch (error) {
-      return rollback(error);
-    }
-    if (typeof run?.ready?.then !== "function" || typeof run?.closed?.then !== "function") {
-      return rollback(new Error(`${connection.name} connect(signal) must return { ready: Promise, closed: Promise }`));
-    }
-    void run.closed.then(
-      () => {
-        if (abort.signal.aborted) return;
-        // A channel that dies leaves the service serving something it no longer has.
-        dropped = true;
-        routed.setReady(false);
-        onClosed(connection.name);
-      },
-      (error: unknown) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const lifetime = yield* Scope.make();
+      const abort = new AbortController();
+      const runs: LongConnection[] = [];
+      const names = routed.longConnections.map((c) => c.name);
+      // A connection lost during startup must not be hidden by a sibling becoming ready later.
+      let dropped = false;
+      const onClosed =
+        options.onChannelClosed ??
+        ((name, error) =>
+          log.error(
+            `[fastagent] long connection ${name} ${error === undefined ? "closed" : `failed: ${String(error)}`}`,
+          ));
+      const notifyClosed = (name: string, error?: unknown): void => {
         if (abort.signal.aborted) return;
         dropped = true;
         routed.setReady(false);
-        onClosed(connection.name, error);
-      },
-    );
-    runs.push(run);
-  }
+        onClosed(name, error);
+      };
 
-  if (options.signal?.aborted) await close();
-  else options.signal?.addEventListener("abort", onAbort, { once: true });
-
-  // Health answers 503 until EVERY long connection is up, so a load balancer does not route into a
-  // service whose socket-mode channels are still dialling. An abort before that settles `ready` as
-  // cancellation, not readiness — a service being torn down must not report itself healthy.
-  const ready = (async () => {
-    try {
-      await Promise.all(
-        runs.map(async (run, i) => {
-          const name = routed.longConnections[i]?.name ?? "channel";
-          // Raced against `closed`, because the contract puts a terminal failure THERE: a channel
-          // that dies dialling may leave `ready` pending forever, and waiting on it alone hangs
-          // startup with no diagnosis.
-          await Promise.race([
-            run.ready,
-            run.closed.then(
-              () => Promise.reject(new Error(`${name} closed before it was ready`)),
-              (error: unknown) => Promise.reject(new Error(`${name} failed before it was ready: ${String(error)}`)),
-            ),
-          ]);
-          if (!abort.signal.aborted) log.info(`[fastagent] long connection ready: ${name}`);
+      // Scope.close alone does not join concurrent closes or retain their failure. Cache the whole
+      // shutdown so every caller waits for the same result, including startup rollback.
+      const shutdown = yield* Effect.cached(
+        Effect.gen(function* () {
+          abort.abort();
+          yield* Scope.close(lifetime, Exit.void);
         }),
       );
-    } catch (error) {
-      // A connection that cannot come up is a startup failure, not a degraded service: tear the rest
-      // down before rejecting, so nothing is left running behind a caller that saw an error. A
-      // cleanup that ALSO fails is logged, never rethrown — it would replace the reason the caller
-      // actually needs with the aftermath of it.
-      await close().catch((closeError: unknown) =>
-        log.error(`[fastagent] cleanup after a failed start also failed: ${String(closeError)}`),
+      const close = (): Promise<void> => Effect.runPromise(shutdown);
+      const rollback = shutdown.pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() =>
+            log.error(`[fastagent] cleanup after a failed start also failed: ${String(Cause.squash(cause))}`),
+          ),
+        ),
       );
-      throw error;
-    }
-    // A `ready` that settles because the service was CLOSED is cancellation, not readiness — the
-    // contract lets a connection resolve it on abort. Returning normally would tell a caller its
-    // channels are up while the service is shut and health says 503.
-    if (abort.signal.aborted) throw new Error("service closed before it became ready");
-    // A drop DURING startup fails it. `dropped` is only reachable here from the startup window —
-    // after this line `ready` has settled — and resolving while health is permanently 503 would
-    // hand the caller two contradictory answers about the same surface.
-    if (dropped) {
-      await close();
-      throw new Error("a long connection closed before startup completed");
-    }
-    routed.setReady(true);
-  })();
-  // Observed here so a rejection is never unhandled; every caller still sees it through `ready`.
-  ready.catch(() => {});
+      const onAbort = (): void => {
+        void close().catch((error: unknown) => log.error(`[fastagent] service close failed: ${String(error)}`));
+      };
 
-  return {
-    handler,
-    agent,
-    routes: withControl.routes,
-    agentDir,
-    workspace,
-    channels: {
-      routes: routed.routeChannels,
-      longConnections: routed.longConnections.map((c) => c.name),
-      builtinInvoke: routed.builtinInvoke,
-    },
-    schedules: scheduled.schedules,
-    ready,
-    ...(withControl.control ? { control: withControl.control } : {}),
-    close,
-  };
+      return yield* Effect.gen(function* () {
+        // Registered first, so subscriptions and schedule timers stop before waiting for transports.
+        // Finalizers have no typed error channel; a close failure must reject the public Promise.
+        yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
+        const scheduled = yield* Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => startSchedules(agentDir, agent, stateRoot, opened.selfSchedule),
+            catch: (error) => error,
+          }),
+          (scheduled) => Effect.sync(scheduled.stop),
+        );
+        const readiness = yield* Effect.forEach(routed.longConnections, (connection) =>
+          Effect.gen(function* () {
+            const run = yield* Effect.try({
+              try: () => connection.connect(abort.signal),
+              catch: (error) => error,
+            });
+            if (typeof run?.ready?.then !== "function" || typeof run?.closed?.then !== "function") {
+              return yield* Effect.fail(
+                new Error(`${connection.name} connect(signal) must return { ready: Promise, closed: Promise }`),
+              );
+            }
+            runs.push(run);
+            const closed = Effect.tryPromise({ try: () => run.closed, catch: (error) => error });
+            yield* closed.pipe(
+              Effect.match({
+                onSuccess: () => notifyClosed(connection.name),
+                onFailure: (error) => notifyClosed(connection.name, error),
+              }),
+              Effect.catchCause((cause) =>
+                Effect.sync(() =>
+                  log.error(`[fastagent] channel closure callback failed: ${String(Cause.squash(cause))}`),
+                ),
+              ),
+              Effect.forkScoped({ startImmediately: true }),
+            );
+            // Observe ready immediately, including when a later connect() throws and mount rolls back.
+            return yield* Effect.raceFirst(
+              Effect.tryPromise({ try: () => run.ready, catch: (error) => error }),
+              closed.pipe(
+                Effect.matchEffect({
+                  onSuccess: () => Effect.fail(new Error(`${connection.name} closed before it was ready`)),
+                  onFailure: (error) =>
+                    Effect.fail(new Error(`${connection.name} failed before it was ready: ${String(error)}`)),
+                }),
+              ),
+            ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (!abort.signal.aborted) log.info(`[fastagent] long connection ready: ${connection.name}`);
+                }),
+              ),
+              Effect.forkScoped({ startImmediately: true }),
+            );
+          }),
+        );
+
+        if (options.signal?.aborted) yield* shutdown;
+        else
+          yield* Effect.acquireRelease(
+            Effect.sync(() => options.signal?.addEventListener("abort", onAbort, { once: true })),
+            () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
+          );
+
+        // The public readiness waiter lives outside the scope it may roll back. Its source fibers
+        // belong to the service, so closing also releases waits on an uncooperative channel.
+        const ready = Effect.runPromise(
+          Effect.gen(function* () {
+            yield* Effect.forEach(readiness, Fiber.join, { concurrency: "unbounded", discard: true });
+            if (abort.signal.aborted) return yield* Effect.fail(new Error("service closed before it became ready"));
+            if (dropped) return yield* Effect.fail(new Error("a long connection closed before startup completed"));
+            routed.setReady(true);
+          }).pipe(
+            Effect.catchCause((cause) =>
+              abort.signal.aborted
+                ? Effect.fail(new Error("service closed before it became ready"))
+                : Effect.failCause(cause),
+            ),
+            Effect.onError(() => rollback),
+          ),
+        );
+        // The rejection is still delivered to callers that await ready.
+        ready.catch(() => {});
+
+        return {
+          handler,
+          agent,
+          routes: withControl.routes,
+          agentDir,
+          workspace,
+          channels: {
+            routes: routed.routeChannels,
+            longConnections: names,
+            builtinInvoke: routed.builtinInvoke,
+          },
+          schedules: scheduled.schedules,
+          ready,
+          ...(withControl.control ? { control: withControl.control } : {}),
+          close,
+        };
+      }).pipe(
+        Scope.provide(lifetime),
+        Effect.onError(() => rollback),
+      );
+    }),
+  );
 }
