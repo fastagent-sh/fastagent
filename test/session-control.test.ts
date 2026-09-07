@@ -508,6 +508,69 @@ async function waitForToolStarted(control: SessionControl, session: string) {
 }
 
 describe("session control: run modulation", () => {
+  it.each(["steer", "followUp"] as const)(
+    "observes %s queued during session binding before the model starts",
+    async (method) => {
+      const { control, observer, sessions, lease, models, faux } = await fauxControlledAgent([
+        fauxAssistantMessage("first answer"),
+        fauxAssistantMessage("queued answer"),
+      ]);
+      const factory = piAgentSessionFactory({
+        sessions,
+        engine: async () => ({ modelRuntime: models, model: faux.getModel() }),
+        readDefinition: () => ({ systemPrompt: "test", skills: [] }),
+        cwd: process.cwd(),
+      });
+      const session = await factory("binding");
+      const binding = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
+      const startPrompt = Promise.withResolvers<void>();
+      const prompt = session.prompt.bind(session);
+      session.prompt = async (...args) => {
+        await startPrompt.promise;
+        return prompt(...args);
+      };
+      const seen: SessionEvent[] = [];
+      const agent = createPiAgentFromSession({
+        lease,
+        observer: (id, event, run) => {
+          observer(id, event, run);
+          seen.push(event);
+        },
+        sessionFactory: async () => {
+          entered.resolve();
+          await binding.promise;
+          return session;
+        },
+      });
+      const invoked = drive(agent, "binding");
+      try {
+        await entered.promise;
+        const handle = control.sessions.get("binding");
+        const before = await handle.state();
+        const command = handle[method]({ text: "queued during binding" });
+        // Flush prompt preparation so the command is waiting on binding before the factory returns.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        binding.resolve();
+        expect(await command).toEqual({ ok: true, runId: before.activeRunId });
+        expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages()).toEqual([
+          "queued during binding",
+        ]);
+        const pending = { steering: method === "steer" ? 1 : 0, followUp: method === "followUp" ? 1 : 0 };
+        expect((await handle.state()).pending).toEqual(pending);
+        expect(seen.filter((event) => event.type === "queue_changed")).toMatchObject([
+          { runId: before.activeRunId, data: pending },
+        ]);
+      } finally {
+        binding.resolve();
+        startPrompt.resolve();
+        await invoked;
+      }
+      expect((await control.sessions.get("binding").state()).pending).toEqual({ steering: 0, followUp: 0 });
+      expect(seen.at(-1)).toMatchObject({ type: "run_settled", data: { status: "completed" } });
+    },
+  );
+
   it("steer joins the active run: accepted with its runId, delivered before the next model call, settle window spans it", async () => {
     const { agent, control, gate } = await makeGated([
       fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
@@ -612,33 +675,58 @@ describe("session control: run modulation", () => {
     await expect((captured as NonNullable<typeof captured>).abort()).rejects.toThrow(/already settled/);
   });
 
-  it("a dispatch racing a failing harness build gets run_command_failed with the setup error", async () => {
-    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    const { control, observer } = createPiSessionControl({ sessions });
-    let releaseFactory: () => void = () => {};
-    const factoryGate = new Promise<void>((r) => {
-      releaseFactory = r;
-    });
-    const agent = createPiAgentFromSession({
-      observer,
-      sessionFactory: async () => {
-        await factoryGate;
-        throw new Error("boom: setup exploded");
-      },
-    });
-    const invoked = drive(agent, "sSetup");
-    await waitForRunning(control, "sSetup"); // run_started observed; the session is still being built
-    const pending = control.sessions.get("sSetup").steer({ text: "late" });
-    releaseFactory(); // → factory throws → gate rejects → the pending dispatch learns it
-    const result = await pending;
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe(RUN_COMMAND_FAILED_CODE);
-      expect(result.error.message).toContain("boom");
-    }
-    const events = await invoked;
-    expect(events.at(-1)).toMatchObject({ type: "failed" }); // the data plane failed visibly too
-  });
+  it.each(["factory", "subscribe"])(
+    "commands waiting on a failing %s get run_command_failed with the setup error",
+    async (phase) => {
+      const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+      const { control, observer } = createPiSessionControl({ sessions });
+      let releaseFactory: () => void = () => {};
+      const factoryGate = new Promise<void>((r) => {
+        releaseFactory = r;
+      });
+      const error = new Error(`boom: ${phase} exploded`);
+      const session = {
+        subscribe: () => {
+          throw error;
+        },
+        steer: vi.fn(async () => {}),
+        followUp: vi.fn(async () => {}),
+        abort: vi.fn(async () => {}),
+        prompt: vi.fn(async () => {}),
+        dispose: vi.fn(),
+      };
+      const agent = createPiAgentFromSession({
+        observer,
+        sessionFactory: async () => {
+          await factoryGate;
+          if (phase === "factory") throw error;
+          return session as unknown as AgentSession;
+        },
+      });
+      const invoked = drive(agent, "sSetup");
+      await waitForRunning(control, "sSetup"); // run_started observed; the session is still being built
+      const handle = control.sessions.get("sSetup");
+      const pending = Promise.all([handle.steer({ text: "late" }), handle.followUp({ text: "late" }), handle.abort()]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      releaseFactory();
+      for (const result of await pending)
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            code: RUN_COMMAND_FAILED_CODE,
+            message: expect.stringContaining(error.message),
+            retryable: false,
+          },
+        });
+      const events = await invoked;
+      expect(events).toEqual([{ type: "failed", details: error.message, retryable: false }]);
+      expect(session.steer).not.toHaveBeenCalled();
+      expect(session.followUp).not.toHaveBeenCalled();
+      expect(session.abort).not.toHaveBeenCalled();
+      expect(session.prompt).not.toHaveBeenCalled();
+      expect(session.dispose).toHaveBeenCalledTimes(phase === "subscribe" ? 1 : 0);
+    },
+  );
 
   it("a subscriber far behind is closed instead of buffering without bound", async () => {
     const { control, observer } = createPiSessionControl({

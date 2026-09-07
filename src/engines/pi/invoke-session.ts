@@ -126,7 +126,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
   ): AsyncGenerator<AgentEvent> {
     const queue = Effect.runSync(Queue.unbounded<AgentEvent, Cause.Done>());
     const consumed = Deferred.makeUnsafe<void>();
-    const bound = Deferred.makeUnsafe<AgentSession, SessionOperationError>();
+    const bound = Deferred.makeUnsafe<AgentSession, SessionBusy | SessionOperationError>();
     const abort = new AbortController();
     onCancelReady(() => abort.abort());
     const runId = crypto.randomUUID();
@@ -215,7 +215,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
               parentSession: scope.parentSession,
               ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
             },
-      ).pipe(Effect.onExit((exit) => Deferred.done(bound, exit)));
+      );
       let finalAssistant: AssistantMessage | undefined;
       let streamedAnswer = false;
       let retriedAfterAnswer: string | undefined;
@@ -268,6 +268,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }),
         (unsubscribe) => sessionCleanup("unsubscribe", unsubscribe),
       );
+      // Completing the gate can run waiting controls synchronously; their queue events must be observed.
+      yield* Deferred.succeed(bound, session);
       const promptOptions = yield* sessionOperation("prepare prompt", () => toPiPromptOptions(prompt));
       if (eventFailure) return yield* Effect.fail(eventFailure);
       yield* sessionWork(
@@ -285,7 +287,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
               details: "the engine settled the run without ending an assistant message",
               retryable: false,
             } as const);
-    });
+    }).pipe(Effect.onError((cause) => Deferred.failCause(bound, cause)));
 
     const work = Effect.runFork(
       Effect.scoped(

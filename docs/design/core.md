@@ -241,7 +241,7 @@ the scoped acquisition and typed SDK-failure adapters shared with control-plane 
    queues on it rather than finding no run;
 3. open/create the record and bind a session to it;
 4. subscribe, translating pi events ONCE into the rich `SessionEvent` vocabulary (the SPEC stream is
-   its projection);
+   its projection), then wake waiting controls so their synchronous queue events are observed;
 5. run the prompt;
 6. queue exactly one `completed` or `failed` terminal and wait for consumer settlement;
 7. unsubscribe, dispose, publish exactly one `run_settled`, and release the lease.
