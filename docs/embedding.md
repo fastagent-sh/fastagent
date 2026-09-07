@@ -251,6 +251,10 @@ package at all. `@fastagent-sh/fastagent/node` adds what needs a Node runtime (`
 `@fastagent-sh/fastagent/pi` is the engine-specific assembly. The root entry re-exports every one of
 them, which is what every example above uses.
 
+The resident service manages its lifecycle internally with Effect. Embedders and channel authors
+continue to use the Promise, AsyncIterable, and Fetch APIs above; they do not need to create or
+configure an Effect runtime.
+
 ## Where next
 
 - [SPEC](SPEC.md) — the Agent Handler contract the whole thing rests on.

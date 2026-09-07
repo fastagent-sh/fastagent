@@ -116,6 +116,7 @@
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "croner": "^10.0.1",
+    "effect": "4.0.0-rc.112",
     "giget": "^3.3.0",
     "ignore": "^7.0.5",
     "proper-lockfile": "^4.1.2",
