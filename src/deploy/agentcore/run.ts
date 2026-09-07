@@ -165,10 +165,12 @@ export interface CheckpointReply {
   reason?: string;
 }
 
-/** Parse the runtime's checkpoint acknowledgement without treating malformed output as success. */
+/** Parse the runtime's checkpoint acknowledgement without treating malformed output as success.
+ *  With `/dev/stdout` as the outfile the CLI writes the body there and then its own metadata JSON to
+ *  the same stream, so stdout holds two values; the container's reply is the one line before it. */
 export function parseCheckpointReply(stdout: string): CheckpointReply | undefined {
   try {
-    const parsed = JSON.parse(stdout.trim()) as unknown;
+    const parsed = JSON.parse(stdout.trim().split("\n")[0] ?? "") as unknown;
     if (
       parsed === null ||
       typeof parsed !== "object" ||
