@@ -544,6 +544,15 @@ describe("deploy/agentcore/run: helpers", () => {
     for (const invalid of ["not json", "{}", '{"written":"true"}', "null"]) {
       expect(parseCheckpointReply(invalid)).toBeUndefined();
     }
+    // What `aws bedrock-agentcore invoke-agent-runtime … /dev/stdout` really prints: the body, then
+    // the CLI's own metadata block on the same stream (#470).
+    const metadata =
+      '{\n    "runtimeSessionId": "fastagent-ingress-x",\n    "contentType": "application/json",\n    "statusCode": 200\n}\n';
+    expect(parseCheckpointReply(`{"written":true}\n${metadata}`)).toEqual({ written: true, reason: undefined });
+    expect(parseCheckpointReply(`{"written":false,"reason":"idle"}\n${metadata}`)).toEqual({
+      written: false,
+      reason: "idle",
+    });
   });
 });
 
