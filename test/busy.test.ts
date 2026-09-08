@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeWork, beginWork } from "../src/channels/busy.ts";
-import { createTaskTracker } from "../src/channels/kit/tasks.ts";
+import { createTaskTracker, taskEffect } from "../src/channels/kit/tasks.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
 
 /** Wait until `cond` holds (settlement callbacks run on the microtask queue). */
@@ -25,7 +25,7 @@ describe("channels/busy: the process-wide in-flight signal", () => {
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const queue = createTurnQueue<{ session: string }>({ label: "[test]", run: () => gate });
+    const queue = createTurnQueue<{ session: string }>({ label: "[test]", run: () => taskEffect(() => gate) });
     queue.accept({ session: "s" });
     expect(activeWork()).toBe(base + 1); // queued/running both count — the process must not idle
     release();
@@ -40,7 +40,7 @@ describe("channels/busy: the process-wide in-flight signal", () => {
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const queue = createTurnQueue<{ session: string }>({ label: "[test]", run: () => gate });
+    const queue = createTurnQueue<{ session: string }>({ label: "[test]", run: () => taskEffect(() => gate) });
     queue.accept({ session: "s" });
     queue.accept({ session: "s" });
     expect(activeWork()).toBe(base + 2);

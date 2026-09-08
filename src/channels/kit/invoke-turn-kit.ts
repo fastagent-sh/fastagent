@@ -14,7 +14,12 @@
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.
  */
+import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
+import { cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
 
 /** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
@@ -34,11 +39,10 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
 
 /**
  * Stream one Agent turn with the shared busy-wait. `onCompleted` (if given) fires on the turn's
- * `completed` event — the durable-commit point: only then does the turn provably live in the session,
- * so a failure or crash at ANY earlier point leaves the caller's pre-ACK state (turn intent, context
- * buffer) intact for replay/the next summon. The caller uses it to remove the turn intent AND commit
- * the context buffer, in that order, so a crash between the two clears cannot replay a
- * context-stripped turn.
+ * `completed` event — the durable-commit point: the turn now lives in the session. The callback
+ * removes its intent before committing the consumed context snapshot. Other endings retain context;
+ * the runner separately decides whether an intent is removed (caught execution failure) or retained
+ * (interruption). Source pulls remain demand-driven, including while final platform delivery runs.
  *
  * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn holds this session's
  * lease and OUR turn never started — replay-safe. Retry (bounded) instead of yielding it: the user
@@ -47,33 +51,117 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
  * busy retries — a fail-fast reject is the only shape the engine emits it in, so nothing that started
  * is ever re-run.
  */
-export async function* streamTurnWithBusyRetry(
+export function streamTurnWithBusyRetry(
   agent: Agent,
-  /** The full scope, not a session string — channels that set extension fields (lineage) pass them
-   *  through here; channels that don't pass `{ session }` and nothing changes. */
   scope: Scope,
   prompt: Prompt,
   options: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
 ): AsyncIterable<AgentEvent> {
-  const { label, onCompleted, busyRetry = DEFAULT_BUSY_RETRY } = options;
-  const session = scope.session;
-  const deadline = Date.now() + busyRetry.maxWaitMs;
-  for (;;) {
-    let retryBusy = false;
-    let first = true;
-    for await (const e of agent.invoke(scope, prompt)) {
-      if (first && e.type === "failed" && e.code === SESSION_BUSY_CODE && Date.now() + busyRetry.delayMs < deadline) {
-        retryBusy = true; // fail-fast reject — the stream ends after this event; wait and re-invoke
-        break;
+  return cancellableStream(async function* ({ onCancelReady }) {
+    // Effect implements return/throw; AsyncIterator makes them optional for arbitrary iterables.
+    const iterator = Stream.toAsyncIterable(busyRetryStream(agent, scope, prompt, options))[
+      Symbol.asyncIterator
+    ]() as Required<AsyncIterator<AgentEvent>>;
+    let closing: Promise<IteratorResult<AgentEvent>> | undefined;
+    // Stream.return interrupts a pending pull; the shared wrapper also silences an already-pulled event.
+    onCancelReady(() => {
+      closing = iterator.return();
+    });
+    try {
+      for (;;) {
+        const result = await iterator.next();
+        if (result.done) return;
+        yield result.value;
       }
-      first = false;
-      if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
-      yield e;
+    } finally {
+      await (closing ?? iterator.return());
     }
-    if (!retryBusy) return;
-    log.info(`${label} session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`);
-    await new Promise((r) => setTimeout(r, busyRetry.delayMs));
-  }
+  });
+}
+
+/** Pull-based execution keeps commit and source cleanup under downstream backpressure. */
+export function busyRetryStream(
+  agent: Agent,
+  scope: Scope,
+  prompt: Prompt,
+  {
+    label,
+    onCompleted,
+    busyRetry = DEFAULT_BUSY_RETRY,
+  }: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
+): Stream.Stream<AgentEvent, unknown> {
+  return Stream.unwrap(
+    Effect.map(Clock.currentTimeMillis, (started) => {
+      const deadline = started + busyRetry.maxWaitMs;
+      const attempt = (): Stream.Stream<AgentEvent, unknown> =>
+        Stream.suspend(() => {
+          let retryBusy = false;
+          return Stream.fromPull(
+            Effect.gen(function* () {
+              let exhausted = false;
+              let first = true;
+              const iterator = yield* Effect.acquireRelease(
+                Effect.sync(() => agent.invoke(scope, prompt)[Symbol.asyncIterator]()),
+                (iterator) => {
+                  const close = iterator.return?.bind(iterator);
+                  // Match for-await: natural exhaustion already closed the source.
+                  if (!close || exhausted) return Effect.void;
+                  // Diagnose every exit, including cancellation. Keep Cause intact for the caller boundary.
+                  return Effect.promise(close).pipe(
+                    Effect.onError((cause) =>
+                      Effect.sync(() =>
+                        log.warn(
+                          `${label} source cleanup failed (session=${scope.session}): ${String(Cause.squash(cause))}`,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              );
+              return Effect.gen(function* () {
+                const result = yield* Effect.tryPromise({ try: () => iterator.next(), catch: (error) => error });
+                if (result.done) {
+                  exhausted = true;
+                  return yield* Cause.done();
+                }
+                const event = result.value;
+                if (
+                  first &&
+                  event.type === "failed" &&
+                  event.code === SESSION_BUSY_CODE &&
+                  (yield* Clock.currentTimeMillis) + busyRetry.delayMs < deadline
+                ) {
+                  retryBusy = true;
+                  return yield* Cause.done();
+                }
+                first = false;
+                if (event.type === "completed") onCompleted?.();
+                return [event] as const;
+              });
+            }),
+          ).pipe(
+            Stream.scoped,
+            // concat closes the attempt's scope (and its iterator) before the wait or next invoke.
+            Stream.concat(
+              Stream.suspend(() =>
+                retryBusy
+                  ? Stream.unwrap(
+                      Effect.gen(function* () {
+                        log.info(
+                          `${label} session ${scope.session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`,
+                        );
+                        yield* Effect.sleep(busyRetry.delayMs);
+                        return attempt();
+                      }),
+                    )
+                  : Stream.empty,
+              ),
+            ),
+          );
+        });
+      return attempt();
+    }),
+  );
 }
 
 /** What the attached-files manifest renders per file: display name, byte size, absolute local path. */

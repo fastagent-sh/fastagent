@@ -390,14 +390,40 @@ concurrent and repeated `close()` calls wait for the same completion or failure.
 uses that same shutdown, logging cleanup errors while preserving the startup failure. The public
 `ready` waiter stays outside the scope it may close; channel authors still return ordinary Promises
 and consume an `AbortSignal`. Agent turns and durable replay state remain outside this scope.
-Effect is internal to `/node` service assembly and `/pi` execution/control. The contracts, `/core`,
-and `/session` remain dependency-free; public APIs expose no Effect runtime or types.
+Effect is internal to `/node` service assembly, `/pi` execution/control, and the stateful chat channels'
+shared execution kit. The contracts, `/core`, and `/session` remain dependency-free; public APIs expose
+no Effect runtime or types.
 
 `channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
 eager subscription, heartbeat, serialization and iterator cleanup. The callers own their event shapes.
 Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
 during body streaming close the source and heartbeat and propagate through the response body.
 The remote invoke client stops at the first terminal event; malformed control envelopes fail visibly.
+
+### Shared chat execution
+
+Telegram, Slack, and Feishu/Lark use the same execution lifecycle. Acceptance persists intent before
+ACK and counts queued work as busy immediately. Each turn runs in an independent Effect root fiber;
+per-session successors wait for the preceding scope to close, while other sessions run concurrently.
+Request completion does not close these fibers, and service shutdown still does not drain them.
+
+`tasks.ts` translates Promise rejection into `TaskFailure` and joins already-started work on
+interruption. Platform hooks expose no abort operation, so releasing ownership while their Promises
+still run would permit overlapping work and premature idle snapshots. Side-task drains observe only
+the tasks tracked when called. Queue notices are observed from acceptance and joined at dequeue,
+including when a notice's cancellation hook fails.
+
+`runQueuedTurn` separates business settlement from resource cleanup. The `completed` callback removes
+intent before committing the exact context snapshot consumed; later discussion remains buffered.
+Caught execution/delivery failures retain the existing intent-removal policy. Effect interruption and
+process termination preserve unfinished intent for recovery. Store formats, poison-attempt limits,
+post-ACK write policies, and at-least-once replay are unchanged.
+
+The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
+first-event `session_busy` rejection closes that iterator before waiting on the Effect clock. Other
+failures never reopen the retry window. The AsyncIterable adapter reuses abort-first cancellation,
+so returning during a quiet read aborts the actual Agent iterator and returning during backoff cancels
+the timer. Natural source exhaustion needs no additional `return()` call.
 
 ### GitHub
 
