@@ -9,14 +9,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeWork } from "../src/channels/busy.ts";
+import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
+import { activeWork, onIdle } from "../src/channels/busy.ts";
+import { log } from "../src/log.ts";
+import { createScheduler } from "../src/schedule/scheduler.ts";
+import { createWakeAlarmSink } from "../src/schedule/wake-alarm.ts";
+import { setWakeupsSink } from "../src/schedule/wakeups.ts";
 import {
   MAX_SNAPSHOT_BYTES,
   SNAPSHOT_VERSION,
-  createStateSync,
+  createStateSync as stateSync,
   packStateRoot,
   unpackIntoStateRoot,
 } from "../src/channels/agentcore-state.ts";
+
+const createStateSync = (options: Parameters<typeof stateSync>[0]) => Effect.runSync(stateSync(options));
 
 const dirs: string[] = [];
 async function stateRoot(files: Record<string, string> = {}): Promise<string> {
@@ -128,6 +136,20 @@ describe("agentcore state snapshot", () => {
     await expect(unpackIntoStateRoot(target, Buffer.from("not gzip"))).rejects.toThrow(/unreadable/);
   });
 
+  it.each([[], { "a.json": [1, 2] }])(
+    "rejects malformed snapshot files before treating the root as authoritative: %j",
+    async (files) => {
+      const packed = gzipSync(Buffer.from(JSON.stringify({ v: SNAPSHOT_VERSION, files })));
+      const { impl, calls } = fakeFetch(() => new Response(packed));
+      const sync = createStateSync({ stateRoot: await stateRoot(), fetchImpl: impl });
+      sync.use(urls);
+      await expect(sync.ready()).rejects.toThrow(/unsupported shape|invalid file content/);
+      sync.save();
+      await sync.flush();
+      expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+    },
+  );
+
   it("caps the packed size — a runaway state root fails visibly instead of OOMing the microVM", async () => {
     const dir = await stateRoot();
     await writeFile(join(dir, "big.bin"), Buffer.alloc(4096));
@@ -138,6 +160,197 @@ describe("agentcore state snapshot", () => {
   });
 
   describe("sync lifecycle", () => {
+    it.each([false, true])(
+      "snapshots the settled wake after a synchronous alarm pass (future wake=%s)",
+      async (future) => {
+        const now = new Date("2026-07-28T10:00:00Z");
+        const pending = [{ id: "due", session: "s", prompt: "go", fireAt: now.toISOString() }];
+        if (future) pending.push({ id: "future", session: "s", prompt: "later", fireAt: "2026-07-28T11:00:00Z" });
+        const before = '{"role":"user","content":"go"}\n';
+        const after = `${before}{"role":"assistant","content":"done"}\n`;
+        const local = await stateRoot({ "sessions/s.jsonl": before, "schedule/wakeups.json": JSON.stringify(pending) });
+        const entered = Promise.withResolvers<void>();
+        const finishTurn = Promise.withResolvers<void>();
+        const putStarted = Promise.withResolvers<void>();
+        const finishPut = Promise.withResolvers<void>();
+        const { impl, calls } = fakeFetch(async (_url, init) => {
+          if (init?.method === "PUT") {
+            putStarted.resolve();
+            await finishPut.promise;
+            return new Response(null);
+          }
+          return new Response(null, { status: 404 });
+        });
+        const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+        sync.use(urls);
+        await sync.ready();
+        const alarmFetch = vi.fn<typeof fetch>();
+        setWakeupsSink(Effect.runSync(createWakeAlarmSink({ secret: "s", fetchImpl: alarmFetch, now: () => now })));
+        const idle = vi.fn(() => sync.save());
+        const off = onIdle(idle);
+        const scheduler = Effect.runSync(
+          createScheduler({
+            stateRoot: local,
+            schedules: [],
+            now: () => now,
+            agent: {
+              async *invoke() {
+                entered.resolve();
+                await finishTurn.promise;
+                await writeFile(join(local, "sessions/s.jsonl"), after);
+                yield { type: "text", delta: "done" };
+                yield { type: "completed" };
+              },
+            },
+          }),
+        );
+        try {
+          scheduler.start();
+          await entered.promise;
+          // If admission emitted idle, freeze that already-packed upload until the turn has settled.
+          if (idle.mock.calls.length > 0) await putStarted.promise;
+          scheduler.stop();
+          finishTurn.resolve();
+          const auditPath = join(local, "schedule/runs.jsonl");
+          await vi.waitFor(async () =>
+            expect(JSON.parse(await readFile(auditPath, "utf8"))).toMatchObject({
+              outcome: "completed",
+              reply: "done",
+            }),
+          );
+          await putStarted.promise;
+          finishPut.resolve();
+          await sync.flush();
+          const puts = calls.filter((c) => c.method === "PUT");
+          expect(puts).toHaveLength(1);
+          expect(JSON.parse(gunzipSync(puts[0]!.body!).toString()).files).toMatchObject({
+            "sessions/s.jsonl": Buffer.from(after).toString("base64"),
+            "schedule/runs.jsonl": (await readFile(auditPath)).toString("base64"),
+          });
+          expect(alarmFetch).not.toHaveBeenCalled();
+        } finally {
+          off();
+          setWakeupsSink(undefined);
+          scheduler.stop();
+          finishTurn.resolve();
+          finishPut.resolve();
+          await sync.flush();
+        }
+      },
+    );
+
+    it("does not overwrite newer envelope URLs with a late refresh response", async () => {
+      const local = await stateRoot();
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const { impl, calls } = fakeFetch(async (_url, init) => {
+        if (init?.method === "POST") {
+          entered.resolve();
+          await finish.promise;
+          return Response.json({ getUrl: "https://s3/old-get", putUrl: "https://s3/old-put" });
+        }
+        return new Response(null, { status: init?.method === "GET" ? 404 : 200 });
+      });
+      const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+      sync.use({ ...urls, refresh: { url: "https://forwarder/refresh", auth: "secret" } });
+      await sync.ready();
+      sync.save();
+      await entered.promise;
+      sync.use({ getUrl: "https://s3/new-get", putUrl: "https://s3/new-put" });
+      finish.resolve();
+      await sync.flush();
+      expect(calls.filter((c) => c.method === "PUT").map((c) => c.url)).toEqual(["https://s3/new-put"]);
+    });
+
+    it("serializes fresh checkpoints behind a save without resaving its own idle edge", async () => {
+      const local = await stateRoot({ "intent.json": "old" });
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      let active = 0,
+        peak = 0;
+      const { impl, calls } = fakeFetch(async (_url, init) => {
+        if (init?.method === "PUT") {
+          active++;
+          peak = Math.max(peak, active);
+          if (calls.filter((c) => c.method === "PUT").length === 1) {
+            entered.resolve();
+            await finish.promise;
+          }
+          active--;
+        }
+        return new Response(null, { status: init?.method === "GET" ? 404 : 200 });
+      });
+      const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+      sync.use(urls);
+      await sync.ready();
+      const off = onIdle(() => sync.save());
+      try {
+        sync.save();
+        await entered.promise;
+        await writeFile(join(local, "intent.json"), "new");
+        const checkpoints = [sync.checkpoint(), sync.checkpoint()];
+        finish.resolve();
+        expect(await Promise.all(checkpoints)).toEqual([{ written: true }, { written: true }]);
+        await sync.flush();
+        const puts = calls.filter((c) => c.method === "PUT");
+        expect(puts).toHaveLength(3);
+        expect(peak).toBe(1);
+        for (const put of puts.slice(1)) {
+          expect(JSON.parse(gunzipSync(put.body!).toString()).files["intent.json"]).toBe(
+            Buffer.from("new").toString("base64"),
+          );
+        }
+      } finally {
+        off();
+        finish.resolve();
+        await sync.flush();
+      }
+    });
+
+    it("uses the captured deadline and joins a late PUT failure before releasing busy ownership", async () => {
+      const local = await stateRoot();
+      const base = activeWork();
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const aborted = vi.fn();
+      const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+      let fail = true;
+      const { impl, calls } = fakeFetch(async (_url, init) => {
+        if (init?.method === "PUT" && fail) {
+          init.signal?.addEventListener("abort", aborted, { once: true });
+          entered.resolve();
+          await finish.promise;
+          throw new Error("late PUT failure");
+        }
+        return new Response(null, { status: init?.method === "GET" ? 404 : 200 });
+      });
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const sync = yield* stateSync({ stateRoot: local, fetchImpl: impl });
+            sync.use(urls);
+            yield* Effect.promise(() => sync.ready());
+            sync.save();
+            yield* Effect.promise(() => entered.promise);
+            yield* TestClock.adjust(60_000);
+            expect(aborted).toHaveBeenCalledOnce();
+            expect(activeWork()).toBe(base + 1);
+            finish.resolve();
+            yield* Effect.promise(() => sync.flush());
+            expect(activeWork()).toBe(base);
+            expect(errors).toHaveBeenCalledOnce();
+            expect(errors).toHaveBeenCalledWith(expect.stringContaining("TimeoutError"));
+            fail = false;
+            sync.save();
+            yield* Effect.promise(() => sync.flush());
+            expect(calls.filter((c) => c.method === "PUT")).toHaveLength(2);
+          }).pipe(Effect.provide(TestClock.layer())),
+        );
+      } finally {
+        finish.resolve();
+        errors.mockRestore();
+      }
+    });
     it("restores on the first ready() and pushes the packed root on save()", async () => {
       const remote = await packStateRoot(await stateRoot({ "sessions/a.jsonl": "history" }));
       const local = await stateRoot();
@@ -339,7 +552,9 @@ describe("agentcore state snapshot", () => {
     it("an upload failure is logged, not thrown — the local mount still holds the data until next settle", async () => {
       const local = await stateRoot({ "a.json": "1" });
       const { impl } = fakeFetch((_u, init) =>
-        init?.method === "PUT" ? new Response(null, { status: 403 }) : new Response(null, { status: 404 }),
+        init?.method === "PUT"
+          ? new Response("private snapshot response", { status: 403 })
+          : new Response(null, { status: 404 }),
       );
       const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
       sync.use(urls);
@@ -348,6 +563,8 @@ describe("agentcore state snapshot", () => {
       const spy = vi.spyOn(console, "error").mockImplementation(() => {});
       sync.save();
       await expect(sync.flush()).resolves.toBeUndefined();
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("state snapshot PUT failed: 403"));
+      expect(spy.mock.calls.flat().join(" ")).not.toContain("private snapshot response");
       spy.mockRestore();
     });
   });

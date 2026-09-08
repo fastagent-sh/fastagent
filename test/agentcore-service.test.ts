@@ -9,7 +9,14 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { gzipSync } from "node:zlib";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import { activeWork } from "../src/channels/busy.ts";
+import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import type { Agent } from "../src/agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { mountAgentcoreService } from "../src/channels/agentcore-service.ts";
 
@@ -26,7 +33,96 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 
 const open = async (dir: string) => createPiAgentFromDir(dir, { serving: true });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
 describe("mountAgentcoreService", () => {
+  it.each([false, true])(
+    "starts wake polling only after restore and owns its wait (close during restore=%s)",
+    async (closeEarly) => {
+      const opened = await open(await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`));
+      const wake = (id: string) => ({ id, session: id, prompt: "go", fireAt: "2020-01-01T00:00:00Z" });
+      writeScheduleFile(scheduleFile(opened.stateRoot, "wakeups"), [wake("seed")]);
+      const snapshot = gzipSync(
+        Buffer.from(
+          JSON.stringify({
+            v: 1,
+            files: {
+              "schedule/wakeups.json": Buffer.from(JSON.stringify([wake("restored")])).toString("base64"),
+            },
+          }),
+        ),
+      );
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      vi.stubEnv("FASTAGENT_INGRESS_SECRET", "s");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url, init) => {
+          if (init?.method === "GET") {
+            entered.resolve();
+            await finish.promise;
+            return new Response(snapshot);
+          }
+          return new Response(null);
+        }),
+      );
+      const calls: string[] = [];
+      const agent: Agent = {
+        async *invoke(scope) {
+          calls.push(scope.session);
+          yield { type: "completed" };
+        },
+      };
+      const base = activeWork();
+      const service = await mountAgentcoreService(opened, { wrapAgent: () => agent });
+      const clock = Effect.runSync(Clock.Clock);
+      const sleep = clock.sleep.bind(clock);
+      let armed = 0,
+        cleared = 0;
+      vi.spyOn(clock, "sleep").mockImplementation((ms) => {
+        if (Duration.toMillis(ms) !== 30_000) return sleep(ms);
+        armed++;
+        return Effect.never.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              cleared++;
+            }),
+          ),
+        );
+      });
+      try {
+        await new Promise(setImmediate);
+        expect(calls).toEqual([]);
+        const pending = service.handler(
+          new Request("http://x/invocations", {
+            method: "POST",
+            body: JSON.stringify({
+              auth: "s",
+              kind: "probe",
+              state: { getUrl: "https://s3/get", putUrl: "https://s3/put" },
+            }),
+          }),
+        );
+        await entered.promise;
+        expect(calls).toEqual([]);
+        if (closeEarly) await service.close();
+        finish.resolve();
+        expect(await (await pending).json()).toEqual({ ok: true });
+        await vi.waitFor(() => expect(activeWork()).toBe(base));
+        expect(calls).toEqual(closeEarly ? [] : ["restored"]);
+        expect(armed).toBe(closeEarly ? 0 : 1);
+        await service.close();
+        await vi.waitFor(() => expect(cleared).toBe(armed));
+      } finally {
+        finish.resolve();
+        await service.close();
+      }
+    },
+  );
   it("serves the adapter surface, not the channel routes", async () => {
     // The channel exists, but on this host it is reachable only THROUGH an envelope — the platform
     // invokes POST /invocations and nothing else.
@@ -88,7 +184,7 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("owns the schedules, and close() is safe to call twice", async () => {
+  it("reports loaded schedules, and close() is safe to call twice", async () => {
     const dir = await agentDir(
       { "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
       `{ model: "openai-codex/gpt-5.5" }`,
@@ -99,8 +195,5 @@ describe("mountAgentcoreService", () => {
     await service.close();
     // Both the shutdown hook and an explicit close can run.
     await expect(service.close()).resolves.toBeUndefined();
-    // NOT asserted: that the scheduler's timers are gone. Fake timers would have to be installed
-    // before the assembly, which deadlocks its filesystem IO, so the stop is unobservable from here
-    // — see the note on close() in agentcore-service.ts.
   });
 });

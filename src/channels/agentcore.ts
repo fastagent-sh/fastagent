@@ -26,6 +26,8 @@
  * the platform reclaim the microVM (that idle-to-zero IS the point of this deployment).
  */
 import { Buffer } from "node:buffer";
+import * as Effect from "effect/Effect";
+import { AgentcoreFailure, agentcoreOperation } from "./agentcore-effects.ts";
 import type { Agent } from "../agent.ts";
 import type { StateSync } from "./agentcore-state.ts";
 import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
@@ -118,54 +120,67 @@ function createActivation(deps: {
    *  restore (once — the sync memoizes it), persist the forwarder's URL, run the post-restore hook
    *  once. REJECTS when a snapshot exists but cannot be restored; the caller fails the request
    *  rather than serve an empty agent (and then snapshot that emptiness over the good copy). */
-  restore(envelope: AgentcoreEnvelope): Promise<void>;
+  restore(envelope: AgentcoreEnvelope): Effect.Effect<void, AgentcoreFailure>;
   /** The channel surface, constructed on first use after a restore; the outcome is cached either way. */
-  channels(): Promise<ChannelHandler>;
+  channels: Effect.Effect<ChannelHandler, AgentcoreFailure>;
 } {
   const { stateSync, stateRoot, onStateReady } = deps;
   let warnedUnsnapshotted = false;
-  let stateReadyFired = false;
-  let dispatchP: Promise<ChannelHandler> | undefined;
+  const stateReady = Effect.runSync(
+    Effect.cached(
+      agentcoreOperation(async () => {
+        onStateReady?.();
+      }),
+    ),
+  );
+  const channels = Effect.runSync(
+    Effect.cached(
+      agentcoreOperation(async () => {
+        const surface = await deps.channels();
+        return router(surface.routes, surface.mounts);
+      }),
+    ),
+  );
   return {
-    async restore(envelope) {
-      if (stateSync) {
-        if (envelope.state && typeof envelope.state.getUrl === "string" && typeof envelope.state.putUrl === "string") {
-          stateSync.use(envelope.state);
-        } else if (envelope.kind !== "invoke" && !stateSync.configured() && !warnedUnsnapshotted) {
-          // webhook/schedule-fire/wake-poke/probe reach us ONLY through the forwarder, which mints the
-          // pair. Missing = a broken/stale topology whose state dies at the next deploy: say so, loudly,
-          // once per process (a direct `invoke` legitimately has none — its session storage is its own).
-          warnedUnsnapshotted = true;
-          log.warn(unsnapshottedWarning);
+    restore: (envelope) =>
+      Effect.gen(function* () {
+        if (stateSync) {
+          yield* agentcoreOperation(async () => {
+            if (
+              envelope.state &&
+              typeof envelope.state.getUrl === "string" &&
+              typeof envelope.state.putUrl === "string"
+            ) {
+              stateSync.use(envelope.state);
+            } else if (envelope.kind !== "invoke" && !stateSync.configured() && !warnedUnsnapshotted) {
+              // webhook/schedule-fire/wake-poke/probe reach us ONLY through the forwarder, which mints the
+              // pair. Missing = a broken/stale topology whose state dies at the next deploy: say so, loudly,
+              // once per process (a direct `invoke` legitimately has none — its session storage is its own).
+              warnedUnsnapshotted = true;
+              log.warn(unsnapshottedWarning);
+            }
+            await stateSync.ready();
+          });
         }
-        await stateSync.ready();
-      }
-      // The forwarder rides its public URL along on every envelope — persist it (write-if-changed) so
-      // the wake-alarm sink can call back. AFTER the restore: a stale snapshot copy must not win over
-      // the URL this deployment is actually reachable at. A bad persist must not fail the turn.
-      if (typeof envelope.wake?.url === "string") {
-        try {
-          rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
-        } catch (e) {
-          log.error(`[agentcore] could not persist the wake-alarm URL: ${String(e)}`);
+        // The forwarder rides its public URL along on every envelope — persist it (write-if-changed) so
+        // the wake-alarm sink can call back. AFTER the restore: a stale snapshot copy must not win over
+        // the URL this deployment is actually reachable at. A bad persist must not fail the turn.
+        if (typeof envelope.wake?.url === "string") {
+          const url = envelope.wake.url;
+          yield* Effect.try({
+            try: () => rememberWakeAlarmUrl(stateRoot, url),
+            catch: (cause) => new AgentcoreFailure(cause),
+          }).pipe(
+            Effect.catchTag("AgentcoreFailure", (error) =>
+              Effect.sync(() => {
+                log.error(`[agentcore] could not persist the wake-alarm URL: ${String(error.cause)}`);
+              }),
+            ),
+          );
         }
-      }
-      if (onStateReady && !stateReadyFired) {
-        stateReadyFired = true;
-        onStateReady();
-      }
-    },
-    channels() {
-      if (!dispatchP) {
-        // The factory runs INSIDE the chain: a synchronous throw must land in the cached rejection,
-        // not escape before `dispatchP` is assigned (which would silently re-run the activation).
-        dispatchP = Promise.resolve()
-          .then(deps.channels)
-          .then((surface) => router(surface.routes, surface.mounts));
-        dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
-      }
-      return dispatchP;
-    },
+        yield* stateReady;
+      }),
+    channels,
   };
 }
 
@@ -176,8 +191,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
   // Snapshot on the 0-in-flight edge: webhook channels ACK fast and finish the turn in the
   // background, so "the request returned" is NOT when the state root settles.
   if (stateSync) {
-    const off = onIdle(() => stateSync.save());
-    options.signal?.addEventListener("abort", off, { once: true });
+    if (!options.signal?.aborted) {
+      const off = onIdle(() => stateSync.save());
+      options.signal?.addEventListener("abort", off, { once: true });
+    }
   }
 
   const handleInvocation = async (req: Request): Promise<Response> => {
@@ -210,7 +227,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     // Cross-deploy state: the platform wipes /mnt/state on every version update, so the durable copy
     // must be pulled back BEFORE anything reads it.
     try {
-      await activation.restore(envelope);
+      await Effect.runPromise(activation.restore(envelope).pipe(Effect.mapError((error) => error.cause)));
     } catch (e) {
       log.error(`[agentcore] state restore failed: ${String(e)}`);
       // The probe is the deploy driver's verification channel: its diagnostics must survive the
@@ -232,7 +249,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     let dispatch: ChannelHandler | undefined;
     if (trusted && envelope.kind !== "checkpoint" && envelope.kind !== "invoke") {
       try {
-        dispatch = await activation.channels();
+        dispatch = await Effect.runPromise(activation.channels.pipe(Effect.mapError((error) => error.cause)));
       } catch (e) {
         constructionError = String(e);
         log.error(`[agentcore] channel construction failed: ${constructionError}`);

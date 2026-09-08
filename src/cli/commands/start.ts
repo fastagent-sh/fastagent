@@ -3,6 +3,7 @@
  * directory is the agent), just no file-watching. No build step: start reads the definition directly.
  */
 import { dirname } from "node:path";
+import * as Effect from "effect/Effect";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
@@ -133,7 +134,7 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
 }
 
 /**
- * Install the wake-ALARM sink before the scheduler starts — the boot wake pump may advance a
+ * Install the wake-ALARM sink before the scheduler starts — the first wake poll may advance a
  * recurring entry, and that save must already re-arm its alarm. Returns the post-restore reconcile:
  * running it at boot would read the pre-restore state mount, see no pending wake-ups, and conclude
  * there is nothing to re-arm.
@@ -147,7 +148,7 @@ function armWakeAlarms(stateRoot: string): (() => void) | undefined {
     );
     return undefined;
   }
-  const sink = createWakeAlarmSink({ secret });
+  const sink = Effect.runSync(createWakeAlarmSink({ secret }));
   setWakeupsSink(sink);
   log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
   // Boot reconcile: pending wake-ups may exist while their alarms were lost (a deploy replaced the

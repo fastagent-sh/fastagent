@@ -112,9 +112,10 @@ src/
 │   │                     # envelope union, the webhook reply, the snapshot URL pair, the wake-alarm request,
 │   │                     # the reserved paths. The forwarder (deploy/agentcore/forwarder.js) is JavaScript
 │   │                     # and cannot import it, so agentcore-forwarder.test.ts pins its literals to these
+│   ├── agentcore-effects.ts  # typed host IO + abort-and-join request deadlines; request/background error policies stay with callers
 │   ├── agentcore-state.ts    # cross-deploy durability: the platform wipes the state mount on every version
 │   │                     # update, so the root is restored from / pushed to an S3 snapshot via presigned URLs
-│   │                     # the forwarder mints per envelope
+│   │                     # the forwarder mints per envelope; cached restore + owned/coalesced upload fibers and fresh checkpoints
 │   ├── agentcore-limits.ts   # the HOST's body ceilings, computed once (a Function URL caps at 6 MB, and the
 │   │                     # body rides base64 inside a JSON envelope) — deploy states it at plan time
 │   ├── busy.ts               # process-wide in-flight work counter + the 0-in-flight EDGE. Webhook channels ACK
@@ -246,7 +247,7 @@ src/
 │   ├── audit.ts            # runs.jsonl append-only run audit (full reply) + `schedule history` reader — "did last night's run silently fail?"
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: on a scale-to-zero host nothing is resident to
 │   │                     # poll, so each pending wake-up is mirrored into a one-shot EventBridge schedule
-│   │                     # through the forwarder, plus the boot reconcile that re-arms alarms a deploy lost
+│   │                     # through the forwarder, plus post-restore reconcile; Effect clock/backoff owns bounded retries and joined requests
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── service.ts           # createAgentService: the public one-call shortcut = this engine's opener +
