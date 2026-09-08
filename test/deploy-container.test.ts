@@ -1,6 +1,7 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts } from "../src/deploy/container.ts";
+import { piBasePrompt } from "../src/engines/pi/create.ts";
 
 const input = {
   hasPackageJson: true,
@@ -48,5 +49,27 @@ describe("deploy/container: shared Docker context", () => {
     expect(tracked.filter((path) => !ships(path))).toEqual([]);
     expect(sensitive.filter(ships)).toEqual([]);
     expect(ships(".git/HEAD")).toBe(true);
+  });
+
+  // The two halves live on opposite sides of the deploy/runtime boundary and are joined by a literal
+  // env name (like FASTAGENT_AGENTCORE), so they are asserted together: a marker only one side writes
+  // is a silently missing warning inside a container nobody reads the prompt of.
+  it("marks the image baked, and the base prompt turns that marker into the write-back rule", () => {
+    const values = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }]
+      .map((i) => containerArtifacts(i).find((artifact) => artifact.path === "fastagent/Dockerfile")!.content)
+      .map((content) => /^ENV FASTAGENT_DEPLOYED=(\S+)$/m.exec(content)?.[1]);
+    expect(values).toEqual(["1", "1", "1"]);
+
+    const before = process.env.FASTAGENT_DEPLOYED;
+    try {
+      delete process.env.FASTAGENT_DEPLOYED;
+      expect(piBasePrompt()).not.toContain("BAKED");
+      process.env.FASTAGENT_DEPLOYED = values[0];
+      expect(piBasePrompt()).toContain("BAKED into this deployment's image");
+      expect(piBasePrompt()).toContain("commit and push it in the same turn");
+    } finally {
+      if (before === undefined) delete process.env.FASTAGENT_DEPLOYED;
+      else process.env.FASTAGENT_DEPLOYED = before;
+    }
   });
 });

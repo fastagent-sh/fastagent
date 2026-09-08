@@ -110,6 +110,11 @@ function dockerfile(input: ContainerInput): string {
   // workspace, single agent or not — the value is a fact of this image, and asserting it means a build
   // context that dropped the agent fails loudly rather than serving a sibling.
   const pin = prefix ? `ENV FASTAGENT_AGENT=${prefix.replace(/\/$/, "")}\n` : "";
+  // The definition ships INSIDE this image, outside every durable mount, so an edit the agent makes
+  // to it dies with the container. The running agent is the only one who can see that promise break
+  // (its persona invites self-improvement), so the image tells it: the base prompt reads this marker
+  // and adds the write-back rule (engines/pi/create.ts piBasePrompt).
+  const baked = `ENV FASTAGENT_DEPLOYED=1\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent`
   // from PATH. That needs npm + a global bin, which live on node:22-slim, NOT on oven/bun — so this path
   // pins node:22-slim regardless of input.runtime (a stray bun lockfile with no package.json would
@@ -120,7 +125,7 @@ function dockerfile(input: ContainerInput): string {
 # npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
 FROM node:22-slim
 ${apt}WORKDIR /app
-${pin}RUN npm i -g @fastagent-sh/fastagent@${input.version}
+${baked}${pin}RUN npm i -g @fastagent-sh/fastagent@${input.version}
 COPY . .
 CMD ["fastagent", "start", "/app"]
 `;
@@ -134,7 +139,7 @@ CMD ["fastagent", "start", "/app"]
 ${note}
 FROM ${base}
 ${apt}WORKDIR /app
-${pin}`;
+${baked}${pin}`;
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
   // we can't tell a repo-as-agent from a purpose-built agent, so the safe default keeps everything.
