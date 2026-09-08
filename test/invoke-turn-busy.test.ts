@@ -1,5 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
+import * as Cause from "effect/Cause";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +9,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Agent, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
-import { type BusyRetry, busyRetryStream, streamTurnWithBusyRetry } from "../src/channels/kit/invoke-turn-kit.ts";
-import { invokeTurn } from "../src/channels/telegram/invoke-turn.ts";
+import { type BusyRetry, busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
+import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
+import type { TaskFailure } from "../src/channels/kit/tasks.ts";
+import { run as runEffect } from "./channel-effects.ts";
 import { log } from "../src/log.ts";
 
 /** A fake agent scripted per-invoke: call N yields script[N] (the last entry repeats). */
@@ -41,14 +45,10 @@ async function run(agent: Agent, retry: BusyRetry = FAST): Promise<AgentEvent[]>
     chatId: 1,
     filesDir: await mkdtemp(join(tmpdir(), "fa-")),
   };
-  return read(invokeTurn(agent, "s", "hi", transport, noAttachments, undefined, retry));
+  return read(telegramTurnStream(agent, "s", "hi", transport, noAttachments, undefined, retry));
 }
 
-async function read(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
-  const out: AgentEvent[] = [];
-  for await (const event of events) out.push(event);
-  return out;
-}
+const read = (events: Stream.Stream<AgentEvent, TaskFailure>) => runEffect(Stream.runCollect(events));
 
 afterEach(() => {
   vi.useRealTimers();
@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 const relay = (agent: Agent, onCompleted?: () => void, busyRetry = FAST) =>
-  streamTurnWithBusyRetry(agent, { session: "s" }, { text: "hi" }, { label: "[test]", onCompleted, busyRetry });
+  busyRetryStream(agent, { session: "s" }, { text: "hi" }, { label: "[test]", onCompleted, busyRetry });
 
 it("uses a virtual clock and closes the rejected attempt before its retry delay", async () => {
   const order: string[] = [];
@@ -97,24 +97,19 @@ it("uses a virtual clock and closes the rejected attempt before its retry delay"
 it("cancels an active backoff without another invoke or a leaked timer", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const { agent, invokes } = scriptedAgent([[busyEvent]]);
-  const iterator = relay(agent, undefined, { delayMs: 60_000, maxWaitMs: 180_000 })[Symbol.asyncIterator]();
-  const pending = iterator.next();
+  const abort = new AbortController();
+  const done = Effect.runPromiseExit(
+    Stream.runDrain(relay(agent, undefined, { delayMs: 60_000, maxWaitMs: 180_000 })),
+    { signal: abort.signal },
+  );
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(vi.getTimerCount()).toBe(1);
-  let closed = false;
-  const closing = iterator.return?.().then(() => {
-    closed = true;
-  });
-  try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(closed).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(invokes()).toBe(1);
-    expect(await pending).toMatchObject({ done: true });
-  } finally {
-    await vi.runAllTimersAsync();
-    await closing;
-  }
+  abort.abort();
+  const exit = await done;
+  expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+  await vi.advanceTimersByTimeAsync(180_000);
+  expect(invokes()).toBe(1);
 });
 
 it("keeps source pulls and completion commits behind consumer demand", async () => {
@@ -125,15 +120,21 @@ it("keeps source pulls and completion commits behind consumer demand", async () 
     .mockResolvedValueOnce({ done: false, value: { type: "text", delta: "answer" } })
     .mockResolvedValueOnce({ done: false, value: { type: "completed" } });
   const agent: Agent = { invoke: () => ({ [Symbol.asyncIterator]: () => ({ next, return: close }) }) };
-  const iterator = relay(agent, onCompleted)[Symbol.asyncIterator]();
-  expect(next).not.toHaveBeenCalled();
-  expect((await iterator.next()).value).toEqual(ok[0]);
-  expect(next).toHaveBeenCalledTimes(1);
-  expect(onCompleted).not.toHaveBeenCalled();
-  expect((await iterator.next()).value).toEqual(ok[1]);
-  expect(onCompleted).toHaveBeenCalledTimes(1);
-  expect(close).not.toHaveBeenCalled();
-  await iterator.return?.();
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const pull = yield* Stream.toPull(relay(agent, onCompleted));
+        expect(next).not.toHaveBeenCalled();
+        expect(yield* pull).toEqual([ok[0]]);
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(onCompleted).not.toHaveBeenCalled();
+        expect(yield* pull).toEqual([ok[1]]);
+        expect(onCompleted).toHaveBeenCalledTimes(1);
+        expect(close).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
   expect(close).toHaveBeenCalledTimes(1);
 });
 
@@ -197,9 +198,22 @@ it("diagnoses source cleanup failure when a paused consumer cancels", async () =
     }),
   };
   const agent: Agent = { invoke: () => ({ [Symbol.asyncIterator]: () => source }) };
-  const iterator = relay(agent)[Symbol.asyncIterator]();
-  await iterator.next();
-  await iterator.return?.();
+  const pulled = Promise.withResolvers<void>();
+  const abort = new AbortController();
+  const done = Effect.runPromiseExit(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const pull = yield* Stream.toPull(relay(agent));
+        yield* pull;
+        pulled.resolve();
+        yield* Effect.never;
+      }),
+    ),
+    { signal: abort.signal },
+  );
+  await pulled.promise;
+  abort.abort();
+  await done;
   expect(source.return).toHaveBeenCalledTimes(1);
   expect(warn.mock.calls.flat().join(" ")).toContain("cancel cleanup broke");
 });
@@ -225,14 +239,14 @@ it("passes future events and extended scope through without reopening the retry 
     yield future;
     yield busyEvent;
   });
-  expect(await read(streamTurnWithBusyRetry({ invoke }, scope, { text: "hi" }, { label: "[test]" }))).toEqual([
+  expect(await read(busyRetryStream({ invoke }, scope, { text: "hi" }, { label: "[test]" }))).toEqual([
     future,
     busyEvent,
   ]);
   expect(invoke).toHaveBeenCalledExactlyOnceWith(scope, { text: "hi" });
 });
 
-describe("invokeTurn busy-wait (the reverse of the scheduler's wake defer)", () => {
+describe("telegramTurnStream busy-wait (the reverse of the scheduler's wake defer)", () => {
   it("a fail-fast busy reject retries (bounded) and the user gets the ANSWER, not an error", async () => {
     // Invoke 1: busy (an external wake turn holds the lease). Invoke 2: the lease freed — normal turn.
     const { agent, invokes } = scriptedAgent([[busyEvent], ok]);

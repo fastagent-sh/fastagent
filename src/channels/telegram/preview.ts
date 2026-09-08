@@ -7,11 +7,10 @@
  */
 import type { AgentEvent } from "../../agent.ts";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
+import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { eventStream } from "../kit/event-stream.ts";
 import { previewPump, renderReply } from "../kit/delivery.ts";
-import { type TaskFailure, runTask, taskEffect } from "../kit/tasks.ts";
+import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -41,7 +40,7 @@ const EDIT_THROTTLE_MS = 1500;
 const THINKING_PREVIEW = 280;
 
 /**
- * The terminal-write POLICY: resolve the single preview message into `text`. streamReply owns the
+ * The terminal-write POLICY: resolve the single preview message into `text`. telegramReply owns the
  * preview lifecycle, so this composition of transport primitives lives here, not in telegram-api. One
  * message → edit the preview in place; if the edit fails (preview gone, or a persistent 429/5xx) fall
  * back to deleting the placeholder and sending fresh, so no "Thinking…" is left pinned above the answer.
@@ -87,28 +86,6 @@ async function finalize(
  * model). Preview edits are best-effort (logged once if they fail); the final write is authoritative
  * and surfaces a real failure (bad token, etc.).
  */
-export function streamReply(
-  events: AsyncIterable<AgentEvent>,
-  api: string,
-  botToken: string,
-  target: Target,
-  formatError: (failed: TelegramFailure) => string | undefined,
-  previewId?: number,
-): Promise<void> {
-  return runTask(
-    Effect.scoped(
-      telegramReply(
-        eventStream(() => events, "[telegram]").pipe(Stream.scoped),
-        api,
-        botToken,
-        target,
-        formatError,
-        previewId,
-      ),
-    ),
-  );
-}
-
 export function telegramReply(
   events: Stream.Stream<AgentEvent, TaskFailure>,
   api: string,

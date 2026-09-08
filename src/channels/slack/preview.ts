@@ -5,8 +5,7 @@ import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { previewPump, renderReply, serialWriter } from "../kit/delivery.ts";
-import { eventStream } from "../kit/event-stream.ts";
-import { TaskFailure, runTask, taskEffect } from "../kit/tasks.ts";
+import { TaskFailure, taskEffect } from "../kit/tasks.ts";
 import { log } from "../../log.ts";
 import {
   RETRY_NOTICE,
@@ -472,26 +471,6 @@ function streamNativeSlackReply(
     );
     if (!finalized) yield* Effect.fail(new TaskFailure(new Error("stream ended without a terminal event")));
   });
-}
-
-export function streamSlackReply(
-  events: AsyncIterable<AgentEvent>,
-  api: SlackApi,
-  target: SlackTarget,
-  formatError: (failure: SlackFailure) => string | undefined,
-  options: Parameters<typeof slackReply>[4] = {},
-): Promise<void> {
-  return runTask(
-    Effect.scoped(
-      slackReply(
-        eventStream(() => events, options.label ?? "[slack]").pipe(Stream.scoped),
-        api,
-        target,
-        formatError,
-        options,
-      ),
-    ),
-  );
 }
 
 export function slackReply(

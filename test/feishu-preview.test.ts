@@ -7,7 +7,8 @@ import {
   streamingCardJson,
 } from "../src/channels/feishu/card.ts";
 import type { FeishuApi } from "../src/channels/feishu/feishu-api.ts";
-import { streamFeishuReply } from "../src/channels/feishu/preview.ts";
+import { feishuReply } from "../src/channels/feishu/preview.ts";
+import { run, stream } from "./channel-effects.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -110,12 +111,12 @@ describe("streaming card shape (pure)", () => {
   });
 });
 
-describe("streamFeishuReply two-element streaming (direct)", () => {
+describe("feishuReply two-element streaming (direct)", () => {
   it("process churn (sliding thinking tail, tool flips) never rewrites the answer element", async () => {
     vi.useFakeTimers();
     const { api, created, elementWrites, cardWrites } = fakeApi();
     const src = eventSource();
-    const turn = streamFeishuReply(src.iterable, api, { chatId: "oc_1" }, neutral);
+    const turn = run(feishuReply(stream(src.iterable), api, { chatId: "oc_1" }, neutral));
     await vi.advanceTimersByTimeAsync(0); // mount flush
     expect(created).toHaveLength(1);
 
@@ -185,7 +186,7 @@ describe("streamFeishuReply two-element streaming (direct)", () => {
     vi.useFakeTimers();
     const { api, created, elementWrites } = fakeApi();
     const src = eventSource();
-    const turn = streamFeishuReply(src.iterable, api, { chatId: "oc_1" }, neutral);
+    const turn = run(feishuReply(stream(src.iterable), api, { chatId: "oc_1" }, neutral));
     await vi.advanceTimersByTimeAsync(0); // mount flush — process seeded with the placeholder
     const mounted = JSON.parse(created[0] ?? "{}") as { body: { elements: { content: string }[] } };
     expect(mounted.body.elements[0]?.content).toBe("💭 Thinking…");
@@ -209,7 +210,7 @@ describe("streamFeishuReply two-element streaming (direct)", () => {
     vi.useFakeTimers();
     const { api, elementWrites } = fakeApi();
     const src = eventSource();
-    const turn = streamFeishuReply(src.iterable, api, { chatId: "oc_1" }, neutral);
+    const turn = run(feishuReply(stream(src.iterable), api, { chatId: "oc_1" }, neutral));
     await vi.advanceTimersByTimeAsync(0); // mount flush
     // 30 tool lines × ~60 points ≈ 1800 points — well past the 1000-point process budget.
     for (let i = 0; i < 30; i++) {
@@ -238,7 +239,7 @@ describe("streamFeishuReply two-element streaming (direct)", () => {
     vi.useFakeTimers();
     const { api, elementWrites } = fakeApi();
     const src = eventSource();
-    const turn = streamFeishuReply(src.iterable, api, { chatId: "oc_1" }, neutral);
+    const turn = run(feishuReply(stream(src.iterable), api, { chatId: "oc_1" }, neutral));
     await vi.advanceTimersByTimeAsync(0); // mount flush
     src.push({ type: "thinking", delta: "short" });
     await vi.advanceTimersByTimeAsync(1100);

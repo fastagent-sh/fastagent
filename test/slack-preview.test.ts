@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { sanitizeSlackMarkdown, slackReply, streamSlackReply } from "../src/channels/slack/preview.ts";
+import { sanitizeSlackMarkdown, slackReply } from "../src/channels/slack/preview.ts";
+import { run, stream } from "./channel-effects.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
@@ -52,9 +53,11 @@ describe("Slack reply rendering", () => {
       yield { type: "failed", details: "model failed", retryable: false };
     })();
     await expect(
-      streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => {
-        throw new Error("formatter failed");
-      }),
+      run(
+        slackReply(stream(events), api, { channelId: "D1", threadTs: "1.0" }, () => {
+          throw new Error("formatter failed");
+        }),
+      ),
     ).rejects.toThrow("agent failed: model failed");
     expect(api.startStream).toHaveBeenCalledOnce();
     expect(api.stopStream).toHaveBeenCalledOnce();
@@ -68,7 +71,7 @@ describe("Slack reply rendering", () => {
     const error = new Error("stop response was lost");
     vi.mocked(api.stopStream).mockRejectedValue(error);
     await expect(
-      streamSlackReply(quickClassicTurn(), api, { channelId: "D1", threadTs: "1.0" }, () => "failed"),
+      run(slackReply(stream(quickClassicTurn()), api, { channelId: "D1", threadTs: "1.0" }, () => "failed")),
     ).rejects.toBe(error);
     expect(api.stopStream).toHaveBeenCalledOnce();
   });
@@ -79,10 +82,12 @@ describe("Slack reply rendering", () => {
     );
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await streamSlackReply(quickClassicTurn(), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-      rendering: "native",
-      disclaimer: false,
-    });
+    await run(
+      slackReply(stream(quickClassicTurn()), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "native",
+        disclaimer: false,
+      }),
+    );
 
     expect(api.sendMarkdown).toHaveBeenCalledWith({ channelId: "D1", threadTs: "1.0" }, "**answer**");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("native Slack stream was unavailable"));
@@ -95,10 +100,12 @@ describe("Slack reply rendering", () => {
     );
 
     await expect(
-      streamSlackReply(quickClassicTurn(), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-        rendering: "native",
-        disclaimer: false,
-      }),
+      run(
+        slackReply(stream(quickClassicTurn()), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+          rendering: "native",
+          disclaimer: false,
+        }),
+      ),
     ).rejects.toThrow(/connection reset/);
     expect(api.sendMarkdown).not.toHaveBeenCalled();
   });
@@ -106,10 +113,12 @@ describe("Slack reply rendering", () => {
   it("enforces Slack's three-second chat.update interval across a completed pump", async () => {
     vi.useFakeTimers();
     const api = fakeApi();
-    const pending = streamSlackReply(quickClassicTurn(), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-      rendering: "classic",
-      disclaimer: false,
-    });
+    const pending = run(
+      slackReply(stream(quickClassicTurn()), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "classic",
+        disclaimer: false,
+      }),
+    );
 
     await vi.advanceTimersByTimeAsync(2_999);
     expect(api.postMarkdown).toHaveBeenCalledWith({ channelId: "D1", threadTs: "1.0" }, "💭 Thinking…");
@@ -180,10 +189,12 @@ describe("native Slack tool traces", () => {
       yield { type: "completed" };
     })();
 
-    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-      rendering: "native",
-      disclaimer: false,
-    });
+    await run(
+      slackReply(stream(events), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "native",
+        disclaimer: false,
+      }),
+    );
 
     const invocation = vi.mocked(api.startStream).mock.calls[0]?.[1] ?? "";
     expect(invocation).toContain("**Bash** — `npm test &lt;!channel>");
@@ -207,10 +218,12 @@ describe("native Slack tool traces", () => {
       yield { type: "completed" };
     })();
 
-    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-      rendering: "native",
-      disclaimer: false,
-    });
+    await run(
+      slackReply(stream(events), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "native",
+        disclaimer: false,
+      }),
+    );
 
     const written = [
       vi.mocked(api.startStream).mock.calls[0]?.[1] ?? "",
@@ -228,10 +241,12 @@ describe("native Slack tool traces", () => {
       yield { type: "completed" };
     })();
 
-    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-      rendering: "native",
-      disclaimer: false,
-    });
+    await run(
+      slackReply(stream(events), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "native",
+        disclaimer: false,
+      }),
+    );
 
     const written = [
       vi.mocked(api.startStream).mock.calls[0]?.[1] ?? "",
@@ -252,10 +267,12 @@ describe("native Slack tool traces", () => {
       yield { type: "completed" };
     })();
 
-    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
-      rendering: "native",
-      disclaimer: false,
-    });
+    await run(
+      slackReply(stream(events), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "native",
+        disclaimer: false,
+      }),
+    );
 
     expect(vi.mocked(api.startStream).mock.calls[0]?.[1]).toContain("**Deploy** — `sk-live-secret`");
   });
@@ -297,10 +314,12 @@ describe("native DM Agent status around a retry backoff", () => {
     const statuses = () => vi.mocked(api.setThreadStatus).mock.calls.map((c) => c[1]);
 
     const src = eventSource();
-    const turn = streamSlackReply(src.iterable, api, { channelId: "D1", threadTs: "1.0" }, () => undefined, {
-      rendering: "native",
-      disclaimer: false,
-    });
+    const turn = run(
+      slackReply(stream(src.iterable), api, { channelId: "D1", threadTs: "1.0" }, () => undefined, {
+        rendering: "native",
+        disclaimer: false,
+      }),
+    );
     await flush();
     gates.shift()?.(); // initial "is working…" status (awaited before the loop)
     await flush();

@@ -1,15 +1,13 @@
 /**
  * Run one turn (the IO half of Telegram→Agent translation): assemble its inputs — resolve attachments
  * (download files to disk, load vision images) — and stream `agent.invoke` with the assembled prompt.
- * `invokeTurn` is the export; attachment resolution is an internal step. Split from parse.ts (which is
- * pure) because this half touches the Bot API + disk; split from telegram.ts so the factory keeps only
- * wiring and the per-turn lifecycle.
+ * Split from parse.ts because this half touches the Bot API + disk; split from telegram.ts so the
+ * factory keeps only wiring and the per-turn lifecycle.
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
-import { toEvents } from "../kit/event-stream.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -108,13 +106,9 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
 
 /**
  * Run one turn: resolve its attachments, then stream agent.invoke with the shared busy-wait
- * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
+ * (invoke-turn-kit — `onCompleted` is the durable-commit point; see busyRetryStream). A
  * primary-attachment failure surfaces as a `failed` event (never a silent drop).
  */
-export function invokeTurn(...args: Parameters<typeof telegramTurnStream>): AsyncIterable<AgentEvent> {
-  return toEvents(telegramTurnStream(...args));
-}
-
 export function telegramTurnStream(
   agent: Agent,
   session: string,

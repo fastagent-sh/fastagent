@@ -7,7 +7,8 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import { expect, it, vi } from "vitest";
 import { previewPump, serialWriter, renderReply, type PreviewPump } from "../src/channels/kit/delivery.ts";
-import { runTask, taskFailure, TaskFailure, taskEffect } from "../src/channels/kit/tasks.ts";
+import { taskFailure, TaskFailure, taskEffect } from "../src/channels/kit/tasks.ts";
+import { run } from "./channel-effects.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -157,7 +158,7 @@ it("scope interruption drains accepted native writes in order before releasing",
 it("a failed writer surfaces its original cause, and closed admission fails visibly", async () => {
   const error = new Error("append failed");
   await expect(
-    runTask(
+    run(
       Effect.scoped(
         Effect.gen(function* () {
           const writer = yield* serialWriter();
@@ -169,7 +170,7 @@ it("a failed writer surfaces its original cause, and closed admission fails visi
       ),
     ),
   ).rejects.toBe(error);
-  await runTask(
+  await run(
     Effect.scoped(
       Effect.gen(function* () {
         const writer = yield* serialWriter();
@@ -192,7 +193,7 @@ it.each(["source", "completed"] as const)(
       }),
     );
     await expect(
-      runTask(
+      run(
         Effect.scoped(
           renderReply(
             phase === "source" ? Stream.fail(new TaskFailure(primary)) : Stream.succeed({ type: "completed" } as const),

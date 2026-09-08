@@ -2,7 +2,7 @@
  * Shared pieces of the channels' invoke-turn modules (telegram/feishu/slack `invoke-turn.ts`) — the
  * halves that are channel-independent, so a retry-policy or prompt-wording change lands ONCE:
  *
- *   - {@link streamTurnWithBusyRetry}: the busy-retry loop around `agent.invoke`, with the
+ *   - {@link busyRetryStream}: the busy-retry loop around `agent.invoke`, with the
  *     `onCompleted` durable-commit point;
  *   - the prompt-suffix wording: {@link attachedFilesManifest}, {@link backgroundImagesManifest},
  *     {@link missingAttachmentsNote}, {@link attributedFileName}.
@@ -18,7 +18,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
-import { eventStream, toEvents } from "./event-stream.ts";
+import { eventStream } from "./event-stream.ts";
 import { TaskFailure } from "./tasks.ts";
 import { log } from "../../log.ts";
 
@@ -51,16 +51,6 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
  * busy retries — a fail-fast reject is the only shape the engine emits it in, so nothing that started
  * is ever re-run.
  */
-export function streamTurnWithBusyRetry(
-  agent: Agent,
-  scope: Scope,
-  prompt: Prompt,
-  options: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
-): AsyncIterable<AgentEvent> {
-  return toEvents(busyRetryStream(agent, scope, prompt, options));
-}
-
-/** Pull-based execution keeps commit and source cleanup under downstream backpressure. */
 export function busyRetryStream(
   agent: Agent,
   scope: Scope,

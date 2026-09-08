@@ -29,10 +29,6 @@ export function taskEffect<A>(run: () => Promise<A>): Effect.Effect<A, TaskFailu
   );
 }
 
-export function runTask<A>(work: Effect.Effect<A, TaskFailure>): Promise<A> {
-  return Effect.runPromise(work.pipe(Effect.mapError((error) => error.cause)));
-}
-
 export interface TaskTracker {
   /** Track already-started work. Rejections are logged without failing the drain. */
   track(task: Promise<unknown>): void;

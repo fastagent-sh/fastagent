@@ -3,7 +3,6 @@ import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
-import { toEvents } from "../kit/event-stream.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -95,10 +94,6 @@ async function resolveInputs(
     images: allImages.length ? allImages : undefined,
     promptSuffix: `${missingNote}${imageManifest}${attachedFilesManifest(allFiles)}`,
   };
-}
-
-export function invokeSlackTurn(...args: Parameters<typeof slackTurnStream>): AsyncIterable<AgentEvent> {
-  return toEvents(slackTurnStream(...args));
 }
 
 export function slackTurnStream(

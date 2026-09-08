@@ -18,12 +18,15 @@ import {
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { collect, AgentFailure } from "../src/collect.ts";
-import { streamTurnWithBusyRetry } from "../src/channels/kit/invoke-turn-kit.ts";
+import { busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Stream from "effect/Stream";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
+import * as Cause from "effect/Cause";
 import { runQueuedTurn } from "../src/channels/kit/turn-runner.ts";
 import type { TurnRecordBase } from "../src/channels/kit/turn-store.ts";
-import { toEvents } from "../src/channels/kit/event-stream.ts";
 import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
 import { telegramReply } from "../src/channels/telegram/preview.ts";
 
@@ -193,10 +196,10 @@ describe("AgentSession L0: pi's auto-retry vs. append-only deltas", () => {
 it.each([
   ["return", "direct"],
   ["throw", "direct"],
-  ["return", "channel"],
-  ["throw", "channel"],
-  ["return", "delivery"],
-  ["throw", "delivery"],
+  ["abort", "channel"],
+  ["interrupt", "channel"],
+  ["abort", "delivery"],
+  ["interrupt", "delivery"],
 ] as const)(
   "quiet consumer %s through %s aborts the actual tool and joins cleanup before releasing",
   async (method, entry) => {
@@ -239,60 +242,76 @@ it.each([
       );
     }
     const removed = vi.fn();
-    const events =
-      entry === "delivery"
-        ? toEvents(
-            Stream.fromEffectDrain(
-              runQueuedTurn<TurnRecordBase, TurnRecordBase, never>(
-                {
-                  label: "[test]",
-                  store: { add: () => {}, remove: removed, recover: () => [], startAttempt: () => "run" },
-                  buffer: { push: () => {}, peek: () => ({ text: "", consumed: [] }), commit: () => {} },
-                  toStored: (rec) => ({ ...rec, attempts: 0 }),
-                  fromStored: (rec) => rec,
-                  bufferKey: () => "quiet",
-                  where: () => "test",
-                  onDeferred: () => {},
-                  notifyDropped: () => {},
-                  execute: () =>
-                    telegramReply(
-                      telegramTurnStream(
-                        agent,
-                        "quiet",
-                        "go",
-                        { api: "https://api.telegram.org", botToken: "token", chatId: 1, filesDir: "/tmp" },
-                        { primary: { imageFileIds: [], fileIds: [] }, buffered: { images: [], files: [], skipped: 0 } },
-                      ),
-                      "https://api.telegram.org",
-                      "token",
-                      { chatId: 1 },
-                      () => "neutral notice",
+    const stop = (() => {
+      if (entry === "direct") {
+        const iterator = agent.invoke({ session: "quiet" }, { text: "go" })[Symbol.asyncIterator]();
+        const first = iterator.next();
+        return async () => {
+          expect((await first).value).toMatchObject({ type: "tool_started" });
+          const pending = iterator.next();
+          const error = new Error("consumer stopped");
+          if (method === "return") await iterator.return?.();
+          else await expect(iterator.throw?.(error)).rejects.toBe(error);
+          expect(await pending).toEqual({ done: true, value: undefined });
+        };
+      }
+      const work =
+        entry === "delivery"
+          ? runQueuedTurn<TurnRecordBase, TurnRecordBase, never>(
+              {
+                label: "[test]",
+                store: { add: () => {}, remove: removed, recover: () => [], startAttempt: () => "run" },
+                buffer: { push: () => {}, peek: () => ({ text: "", consumed: [] }), commit: () => {} },
+                toStored: (rec) => ({ ...rec, attempts: 0 }),
+                fromStored: (rec) => rec,
+                bufferKey: () => "quiet",
+                where: () => "test",
+                onDeferred: () => {},
+                notifyDropped: () => {},
+                execute: () =>
+                  telegramReply(
+                    telegramTurnStream(
+                      agent,
+                      "quiet",
+                      "go",
+                      { api: "https://api.telegram.org", botToken: "token", chatId: 1, filesDir: "/tmp" },
+                      { primary: { imageFileIds: [], fileIds: [] }, buffered: { images: [], files: [], skipped: 0 } },
                     ),
-                },
-                { id: "turn", session: "quiet", attempts: 0 },
-              ),
-            ),
-          )
-        : entry === "channel"
-          ? streamTurnWithBusyRetry(agent, { session: "quiet" }, { text: "go" }, { label: "[test]" })
-          : agent.invoke({ session: "quiet" }, { text: "go" });
-    const iterator = events[Symbol.asyncIterator]();
-    const first = iterator.next();
-    if (entry !== "delivery") expect((await first).value).toMatchObject({ type: "tool_started" });
+                    "https://api.telegram.org",
+                    "token",
+                    { chatId: 1 },
+                    () => "neutral notice",
+                  ),
+              },
+              { id: "turn", session: "quiet", attempts: 0 },
+            )
+          : Stream.runDrain(busyRetryStream(agent, { session: "quiet" }, { text: "go" }, { label: "[test]" }));
+      if (method === "abort") {
+        const abort = new AbortController();
+        const done = Effect.runPromiseExit(work, { signal: abort.signal });
+        return async () => {
+          abort.abort();
+          const exit = await done;
+          expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+        };
+      }
+      const fiber = Effect.runFork(work);
+      return async () => {
+        await Effect.runPromise(Fiber.interrupt(fiber));
+        const exit = await Effect.runPromise(Fiber.await(fiber));
+        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+      };
+    })();
     await entered.promise;
-    const pending = entry === "delivery" ? first : iterator.next();
-    const error = new Error("consumer stopped");
-    const closing = method === "return" ? iterator.return?.() : iterator.throw?.(error);
-    const checked = method === "return" ? closing : expect(closing).rejects.toBe(error);
+    const closing = stop();
     try {
       await aborted.promise;
       expect(disposed).toBe(false);
       expect(lease.tryAcquire("quiet")).toBeNull();
     } finally {
       finishCleanup.resolve();
-      await checked;
+      await closing;
     }
-    expect(await pending).toEqual({ done: true, value: undefined });
     expect(disposed).toBe(true);
     expect(removed).not.toHaveBeenCalled();
     const release = lease.tryAcquire("quiet");

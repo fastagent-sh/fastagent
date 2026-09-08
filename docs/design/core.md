@@ -421,9 +421,9 @@ post-ACK write policies, and at-least-once replay are unchanged.
 
 The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
 first-event `session_busy` rejection closes that iterator before waiting on the Effect clock. Other
-failures never reopen the retry window. The AsyncIterable adapter reuses abort-first cancellation,
-so returning during a quiet read aborts the actual Agent iterator and returning during backoff cancels
-the timer. Natural source exhaustion needs no additional `return()` call.
+failures never reopen the retry window. Interrupting consumption closes the actual Agent iterator
+during a quiet read and cancels the timer during backoff. Natural source exhaustion needs no
+additional `return()` call.
 
 The runner's internal `execute` hook returns an Effect, so input loading, source consumption, previews,
 terminal delivery, and Slack reaction cleanup remain children of the turn. Platform API clients retain

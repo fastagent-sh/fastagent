@@ -1,13 +1,12 @@
-/** Promise/AsyncIterable adapters for internal channel streams. Public errors retain their original identity. */
+/** Own an Agent's AsyncIterable inside a typed, demand-driven channel stream. */
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
 import { TaskFailure } from "./tasks.ts";
 
-/** Acquire lazily; match for-await's natural exhaustion and abort-first return behavior. */
+/** Acquire lazily; interruption closes the source, while natural exhaustion needs no extra return. */
 export function eventStream<A>(
   open: () => AsyncIterable<A>,
   label: string,
@@ -40,25 +39,4 @@ export function eventStream<A>(
       });
     }),
   );
-}
-
-export function toEvents<A>(stream: Stream.Stream<A, TaskFailure>): AsyncIterable<A> {
-  return cancellableStream(async function* ({ onCancelReady }) {
-    const iterator = Stream.toAsyncIterable(stream.pipe(Stream.mapError((error) => error.cause)))[
-      Symbol.asyncIterator
-    ]() as Required<AsyncIterator<A>>;
-    let closing: Promise<IteratorResult<A>> | undefined;
-    onCancelReady(() => {
-      closing = iterator.return();
-    });
-    try {
-      for (;;) {
-        const result = await iterator.next();
-        if (result.done) return;
-        yield result.value;
-      }
-    } finally {
-      await (closing ?? iterator.return());
-    }
-  });
 }

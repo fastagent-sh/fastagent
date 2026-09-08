@@ -24,11 +24,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AgentEvent } from "../../agent.ts";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
+import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { eventStream } from "../kit/event-stream.ts";
 import { previewPump, renderReply } from "../kit/delivery.ts";
-import { type TaskFailure, runTask, taskEffect } from "../kit/tasks.ts";
+import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
 import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
@@ -102,7 +101,7 @@ function tailLines(text: string, maxPoints: number): string {
 }
 
 /** A visible preview mounted into the chat. Exported only for the channel wiring: a queued turn mounts
- * one before execution, then hands the exact entity/message to {@link streamFeishuReply} for takeover. */
+ * one before execution, then hands the exact entity/message to {@link feishuReply} for takeover. */
 export type MountedFeishuPreview =
   | { kind: "card"; cardId: string; messageId: string }
   | { kind: "text"; messageId: string };
@@ -234,28 +233,6 @@ export async function settleFeishuPreview(
  * turn's already-mounted card/text message: the pump and terminal write mutate that same message rather
  * than recalling it and posting another reply.
  */
-export function streamFeishuReply(
-  events: AsyncIterable<AgentEvent>,
-  api: FeishuApi,
-  target: FeishuTarget,
-  formatError: (failed: FeishuFailure) => string | undefined,
-  initialPreview?: MountedFeishuPreview,
-  label = "[feishu]",
-): Promise<void> {
-  return runTask(
-    Effect.scoped(
-      feishuReply(
-        eventStream(() => events, label).pipe(Stream.scoped),
-        api,
-        target,
-        formatError,
-        initialPreview,
-        label,
-      ),
-    ),
-  );
-}
-
 export function feishuReply(
   events: Stream.Stream<AgentEvent, TaskFailure>,
   api: FeishuApi,

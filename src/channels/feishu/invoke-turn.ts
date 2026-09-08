@@ -346,7 +346,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
 
 /**
  * Run one turn: resolve its inputs, then stream agent.invoke with the shared busy-wait
- * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
+ * (invoke-turn-kit — `onCompleted` is the durable-commit point; see busyRetryStream). A
  * primary-input failure surfaces as a `failed` event (never a silent drop).
  */
 export function feishuTurnStream(
