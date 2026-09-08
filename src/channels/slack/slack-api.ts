@@ -12,6 +12,20 @@ const FILE_TRANSFER_TIMEOUT_MS = 120_000;
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
+
+/**
+ * Per-call transport options.
+ *
+ * `retries` exists for ONE distinction the pipeline cannot make for itself: whether this write is
+ * worth waiting for. A classic live-preview FRAME is a full SNAPSHOT — redrawn by the next frame and
+ * superseded by the final write — so absorbing Slack's `retry-after` for it would park the turn, and
+ * everything queued behind it, for up to 3 × MAX_RETRY_AFTER_S seconds to deliver a view nobody needs.
+ * A droppable write passes 0: the frame is lost, the answer is not. NOT for `chat.appendStream`, whose
+ * ordered appends each carry content of their own — dropping one loses it.
+ */
+export interface SlackCallOptions {
+  retries?: number;
+}
 /** Slack's standard-Markdown fields cap each call at 12,000 characters. Keep headroom for
  * code-fence balancing and future server-side transformations. */
 const SLACK_MAX_MARKDOWN = 10_000;
@@ -95,7 +109,7 @@ export interface SlackApi {
   postMessage(target: SlackTarget, text: string): Promise<string>;
   postMarkdown(target: SlackTarget, markdown: string): Promise<string>;
   updateMessage(channelId: string, ts: string, text: string): Promise<void>;
-  updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
+  updateMarkdown(channelId: string, ts: string, markdown: string, opts?: SlackCallOptions): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   /** Post standard Markdown, split under Slack's limit. `target.channelId` may be a user id: Slack
    *  then opens (or reuses) the app's DM with that user, and the result names it. */
@@ -228,7 +242,9 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     method: string,
     body: Record<string, unknown>,
     httpMethod: "GET" | "POST" = "POST",
+    opts: SlackCallOptions = {},
   ): Promise<T> => {
+    const retries = opts.retries ?? RETRIES;
     const url = new URL(`${apiBase}/${method}`);
     if (httpMethod === "GET") {
       for (const [name, value] of Object.entries(body)) {
@@ -260,7 +276,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       if (response.ok && data.ok === true) return data;
       const rateLimited = response.status === 429 || data.error === "ratelimited";
-      if (rateLimited && attempt < RETRIES) {
+      if (rateLimited && attempt < retries) {
         const retryAfter = Number(response.headers.get("retry-after") ?? attempt + 1);
         if (Number.isFinite(retryAfter) && retryAfter <= MAX_RETRY_AFTER_S) {
           await wait(Math.max(1, retryAfter) * 1000);
@@ -338,9 +354,9 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         throw error;
       }
     },
-    async updateMarkdown(channelId, ts, markdown) {
+    async updateMarkdown(channelId, ts, markdown, opts) {
       try {
-        await call("chat.update", { channel: channelId, ts, markdown_text: markdown });
+        await call("chat.update", { channel: channelId, ts, markdown_text: markdown }, "POST", opts);
       } catch (error) {
         if (error instanceof SlackApiError && error.slackError === "message_not_modified") return;
         throw error;

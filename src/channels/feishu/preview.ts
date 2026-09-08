@@ -293,15 +293,17 @@ export function feishuReply(
         // `last*` advances BEFORE each write: a frame that fails for a non-streaming reason is logged
         // once (the pump's onError) and not re-sent until its content actually changes. An EMPTY
         // process frame is written like any other — it is the placeholder being cleared (processView).
+        // Droppable frames: the next one carries the same snapshot under a higher sequence, so a
+        // rate-limit backoff here would only delay the answer behind a view that is already stale.
         if (process !== lastProcess) {
           lastProcess = process;
-          await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq());
+          await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq(), { retries: 0 });
         }
         const answer = answerView();
         // Never write an empty answer snapshot — the element is born empty and the answer only grows.
         if (answer !== "" && answer !== lastAnswer) {
           lastAnswer = answer;
-          await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq());
+          await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq(), { retries: 0 });
         }
       } catch (e) {
         if (isCardStreamingClosed(e)) {

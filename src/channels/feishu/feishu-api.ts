@@ -29,6 +29,19 @@ const API_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 /** How many rate-limit rejects one call absorbs before giving up. */
 const RETRIES = 3;
+
+/**
+ * Per-call transport options.
+ *
+ * `retries` exists for ONE distinction the pipeline cannot make for itself: whether this write is
+ * worth waiting for. A card live-preview FRAME is a full content SNAPSHOT under a strictly increasing
+ * sequence — the next frame carries the same view and the settle write replaces the whole entity — so
+ * absorbing a rate-limit backoff for it only parks the answer behind a view nobody needs. A droppable
+ * write passes 0: the frame is lost, the answer is not.
+ */
+interface FeishuCallOptions {
+  retries?: number;
+}
 /** Download sanity cap; a larger resource is rejected visibly (the engine resizes vision images
  *  anyway, so this is a transport guard, not a model limit). */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
@@ -209,7 +222,13 @@ export interface FeishuApi {
   /** Create a card entity (card JSON 2.0). Returns its card_id. */
   createCard(cardJson: string): Promise<string>;
   /** Stream-update a card element's text (full-content snapshot + strictly increasing sequence). */
-  updateCardElement(cardId: string, elementId: string, content: string, sequence: number): Promise<void>;
+  updateCardElement(
+    cardId: string,
+    elementId: string,
+    content: string,
+    sequence: number,
+    opts?: FeishuCallOptions,
+  ): Promise<void>;
   /** Replace a card entity's content (the settle write; also flips streaming_mode off via the JSON). */
   updateCard(cardId: string, cardJson: string, sequence: number): Promise<void>;
 }
@@ -285,7 +304,9 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
+    opts: FeishuCallOptions = {},
   ): Promise<T> => {
+    const retries = opts.retries ?? RETRIES;
     let refreshedAuth = false;
     for (let attempt = 0; ; ) {
       const token = await tenantToken();
@@ -321,7 +342,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         cached = undefined;
         continue;
       }
-      if ((res.status === 429 || code === RATE_LIMIT_CODE) && attempt < RETRIES) {
+      if ((res.status === 429 || code === RATE_LIMIT_CODE) && attempt < retries) {
         attempt++;
         await wait(attempt * 1000);
         continue;
@@ -511,12 +532,13 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       if (!id) throw new FeishuApiError(kind, "createCard", 200, 0, "response carried no card_id");
       return id;
     },
-    async updateCardElement(cardId, elementId, content, sequence) {
+    async updateCardElement(cardId, elementId, content, sequence, opts) {
       await call(
         "updateCardElement",
         "PUT",
         `/open-apis/cardkit/v1/cards/${encodeURIComponent(cardId)}/elements/${encodeURIComponent(elementId)}/content`,
         { content, sequence },
+        opts,
       );
     },
     async updateCard(cardId, cardJson, sequence) {

@@ -22,6 +22,7 @@ import {
 } from "../kit/preview-kit.ts";
 import {
   type SlackApi,
+  type SlackCallOptions,
   type SlackTarget,
   chunkSlackMarkdown,
   chunkSlackText,
@@ -168,15 +169,17 @@ function streamClassicSlackReply(
       const remaining = lastMutationAt + CLASSIC_UPDATE_INTERVAL_MS - now();
       return remaining > 0 ? Effect.sleep(remaining) : Effect.void;
     });
-    const update = async (ts: string, markdown: string): Promise<void> => {
-      await api.updateMarkdown(target.channelId, ts, markdown);
+    const update = async (ts: string, markdown: string, opts?: SlackCallOptions): Promise<void> => {
+      await api.updateMarkdown(target.channelId, ts, markdown, opts);
       lastMutationAt = now();
     };
     const flushPreview = async (): Promise<void> => {
       const markdown = chunkSlackText(view())[0] ?? THINKING_PLACEHOLDER;
       if (markdown === lastSent) return;
       if (previewTs) {
-        await update(previewTs, markdown);
+        // Droppable: the next frame carries the same snapshot, so a rate-limit wait here would only
+        // delay the answer behind a view that is already stale.
+        await update(previewTs, markdown, { retries: 0 });
       } else {
         if (previewAttempted) return;
         previewAttempted = true;

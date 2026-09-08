@@ -123,7 +123,9 @@ export function telegramReply(
       if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
       lastSent = text;
       if (messageId !== undefined) {
-        await editMessageText(api, botToken, target, messageId, text); // plain — a partial answer may carry unbalanced HTML
+        // plain — a partial answer may carry unbalanced HTML; droppable — the next frame redraws it and
+        // the final write supersedes it, so a flood wait here would park the answer behind a dead view.
+        await editMessageText(api, botToken, target, messageId, text, { retries: 0 });
         return;
       }
       // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
@@ -131,7 +133,7 @@ export function telegramReply(
       // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
       if (previewSent) return;
       previewSent = true;
-      messageId = await sendMessage(api, botToken, target, text, { html: false });
+      messageId = await sendMessage(api, botToken, target, text, { html: false, retries: 0 });
       if (messageId === undefined)
         throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
     };

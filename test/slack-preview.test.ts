@@ -110,6 +110,35 @@ describe("Slack reply rendering", () => {
     expect(api.sendMarkdown).not.toHaveBeenCalled();
   });
 
+  it("marks a live preview frame droppable so a rate limit cannot park the answer", async () => {
+    vi.useFakeTimers();
+    const api = fakeApi();
+    const pending = run(
+      slackReply(
+        stream(
+          (async function* (): AsyncIterable<AgentEvent> {
+            yield { type: "tool_started", id: "t", name: "read", args: {} };
+            // Past the mutation interval, so the pump writes a real frame before the answer settles.
+            await vi.advanceTimersByTimeAsync(3_500);
+            yield { type: "tool_ended", id: "t", isError: false, content: "ok" };
+            await vi.advanceTimersByTimeAsync(3_500);
+            yield { type: "text", delta: "**answer**" };
+            yield { type: "completed" };
+          })(),
+        ),
+        api,
+        { channelId: "D1", threadTs: "1.0" },
+        () => "failed",
+        { rendering: "classic", disclaimer: false },
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+    const frames = vi.mocked(api.updateMarkdown).mock.calls.slice(0, -1);
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.map((call) => call[3])).toEqual(frames.map(() => ({ retries: 0 })));
+  });
+
   it("enforces Slack's three-second chat.update interval across a completed pump", async () => {
     vi.useFakeTimers();
     const api = fakeApi();
@@ -126,7 +155,8 @@ describe("Slack reply rendering", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     await pending;
-    expect(api.updateMarkdown).toHaveBeenCalledWith("D1", "1.0", "**answer**");
+    // The settle write carries no droppable option: the answer is worth a rate-limit retry.
+    expect(api.updateMarkdown).toHaveBeenCalledWith("D1", "1.0", "**answer**", undefined);
     expect(JSON.stringify(vi.mocked(api.postMarkdown).mock.calls)).not.toContain("private reasoning");
   });
 });
