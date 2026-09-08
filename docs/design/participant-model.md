@@ -357,6 +357,7 @@ back (§7). A thread neither learns about later room activity nor reports its ow
 | Answering every bare message in a joined thread | barges into multi-human discussion |
 | Per-entry concurrency inside a session | divergence without convergence; stale reads |
 | Automatic summaries posted to the room | attention has a noise cost, so it needs consent |
+| A `threaded` / `continuous` session-mode pair | couples session identity, placement and the summon rule into one switch; an endpoint-shaped bot uses an explicit `route` (§1) |
 
 ## 10. Mapping to platforms
 
@@ -417,11 +418,3 @@ Two consequences worth stating rather than papering over:
   every message the agent has sent. Neither is worth it while the thread rule covers the same flow: a
   quote-reply to the agent in a group's main timeline is buffered rather than answered, and the user
   either mentions it or opens a thread.
-
-## 12. Why there is no session-mode option
-
-A `threaded` / `continuous` mode pair would couple three independent axes — session identity, reply
-placement, and the summon rule — so a user who wanted room-level sessions would also have to give up
-mention-free thread continuations. The model above sets each axis on its own principle, which leaves
-nothing for such a mode to select. An author who needs endpoint-shaped behaviour supplies an explicit
-`route` (§1) rather than picking a mode.
