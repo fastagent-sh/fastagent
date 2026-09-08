@@ -258,20 +258,21 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         (done) => Effect.sync(done),
       );
       return true;
-    }).pipe(Effect.uninterruptible);
+    }).pipe(
+      // Log storage faults before a pending stop can replace the typed failure with interruption.
+      Effect.catchTag("ScheduleFailure", (error) =>
+        Effect.sync(() => {
+          log.error(`[schedule] wake-up poll failed (continuing next poll): ${String(error.cause)}`);
+          return false;
+        }),
+      ),
+      Effect.uninterruptible,
+    );
     const wakeLoop = Effect.gen(function* () {
       for (;;) {
-        yield* Effect.gen(function* () {
-          while (yield* wakeOnce) {
-            /* Claim only after the preceding occurrence settles. */
-          }
-        }).pipe(
-          Effect.catchTag("ScheduleFailure", (error) =>
-            Effect.sync(() => {
-              log.error(`[schedule] wake-up poll failed (continuing next poll): ${String(error.cause)}`);
-            }),
-          ),
-        );
+        while (yield* wakeOnce) {
+          /* Claim only after the preceding occurrence settles. */
+        }
         yield* Effect.sleep(WAKEUP_POLL_MS);
       }
     });

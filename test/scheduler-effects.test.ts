@@ -3,7 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -280,6 +280,64 @@ it.each([false, true])("an iterator throw stays terminal even after a busy event
   } finally {
     s.stop();
   }
+});
+
+it.each([false, true])("reports a wake deferral write failure before restoring stop (stopped=%s)", async (stopped) => {
+  const stateRoot = await freshRoot();
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+  const calls: string[] = [];
+  const agent: Agent = {
+    async *invoke(scope) {
+      calls.push(scope.session);
+      if (scope.session === "busy") {
+        entered.resolve();
+        await finish.promise;
+        yield { type: "failed", code: "session_busy", retryable: true, details: "busy" };
+      } else yield { type: "completed" };
+    },
+  };
+  const path = scheduleFile(stateRoot, "wakeups");
+  writeScheduleFile(path, [
+    { id: "first", session: "busy", prompt: "go", fireAt: NOW.toISOString() },
+    { id: "next", session: "next", prompt: "later", fireAt: NOW.toISOString() },
+  ]);
+  const base = activeWork();
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW.getTime());
+      const s = yield* createScheduler({ agent, stateRoot, schedules: [] });
+      try {
+        s.start();
+        yield* Effect.promise(() => entered.promise);
+        yield* Effect.promise(() => mkdir(`${path}.tmp`));
+        if (stopped) s.stop();
+        expect(activeWork()).toBe(base + 1);
+        finish.resolve();
+        yield* Effect.promise(() =>
+          vi.waitFor(() =>
+            expect(errors).toHaveBeenCalledWith(
+              expect.stringMatching(/wake-up poll failed.*EISDIR.*wakeups\.json\.tmp/),
+            ),
+          ),
+        );
+        expect(activeWork()).toBe(base);
+        expect(calls).toEqual(["busy"]);
+        expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);
+        expect(readRuns(stateRoot)).toEqual([]);
+        yield* Effect.promise(() => rm(`${path}.tmp`, { recursive: true }));
+        yield* TestClock.adjust(30_000);
+        expect(calls).toEqual(stopped ? ["busy"] : ["busy", "next"]);
+        expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(stopped ? ["next"] : []);
+        expect(readRuns(stateRoot)).toHaveLength(stopped ? 0 : 1);
+        expect(errors.mock.calls.filter(([message]) => message.includes("wake-up poll failed"))).toHaveLength(1);
+      } finally {
+        s.stop();
+        finish.resolve();
+      }
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });
 
 it("keeps claim IO failures typed and never invokes before a successful durable claim", async () => {
