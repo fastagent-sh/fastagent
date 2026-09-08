@@ -9,7 +9,10 @@
  * mounted and taken over, what the prompt looks like, how attachments resolve, what a dropped turn
  * says and where. Those arrive as hooks; the ORDER they run in is this module's.
  */
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { log } from "../../log.ts";
+import { type TaskFailure, taskEffect, taskFailure } from "./tasks.ts";
 import type { ContextBuffer } from "./context-buffer.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
@@ -62,62 +65,89 @@ export interface TurnRunner<R, S> {
   idle(): Promise<void>;
 }
 
+/** Execute a dequeued turn. Business settlement removes intent; resource cleanup never does. */
+export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E>(
+  options: TurnRunnerOptions<R, S, E>,
+  rec: R,
+): Effect.Effect<void, TaskFailure> {
+  return Effect.gen(function* () {
+    const { label, store, buffer, beforeRun } = options;
+    if (beforeRun && !(yield* taskEffect(() => beforeRun(rec)))) return;
+    const decision = store.startAttempt(rec.id);
+    if (decision === "exceeded") {
+      options.notifyDropped(rec);
+      return;
+    }
+    if (decision === "defer") {
+      options.onDeferred(rec);
+      return;
+    }
+    const startedAt = Date.now();
+    log.info(`${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}`);
+    const bufferKey = options.bufferKey(rec);
+    const discussion = buffer.peek(bufferKey);
+    yield* taskEffect(() =>
+      options.execute(rec, discussion, () =>
+        commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey, consumed: discussion.consumed }),
+      ),
+    ).pipe(
+      Effect.matchEffect({
+        onSuccess: () =>
+          Effect.sync(() =>
+            log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`),
+          ),
+        onFailure: (error) =>
+          Effect.sync(() =>
+            log.error(
+              `${label} turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
+            ),
+          ),
+      }),
+    );
+    // Caught execution/delivery failures are not replay-safe. Interruption never reaches this removal.
+    store.remove(rec.id);
+  });
+}
+
 export function createTurnRunner<
   R extends PendingBase<S> & { id: string; session: string },
   S extends TurnRecordBase,
   E,
 >(options: TurnRunnerOptions<R, S, E>): TurnRunner<R, S> {
-  const { label, store, buffer, seen, onQueuedBehind } = options;
-  const notices = new Map<string, { done: Promise<void>; cancel?: () => void }>();
+  const { label, store, seen, onQueuedBehind } = options;
+  const notices = new Map<string, { done: Fiber.Fiber<void>; cancel?: () => void }>();
   const queue = createTurnQueue<R>({
     label,
-    onQueuedBehind: onQueuedBehind && ((rec) => notices.set(rec.id, onQueuedBehind(rec))),
-    run: async (rec) => {
-      // Runs at DEQUEUE time (serialized). The queue wait is over: cancel a notice that has not
-      // fired, then settle so the turn's preview handle is final — in the common path this await is
-      // instant. BEFORE the ceiling check so a dropped or deferred turn can take the notice over too.
-      const notice = notices.get(rec.id);
-      notice?.cancel?.();
-      // The notice is the PLATFORM's feedback, not the turn: a failed post must not throw out of the
-      // run, which would leak the persisted intent (removed only below) into a replay that burns an
-      // attempt against the ceiling. Logged, then the turn proceeds without its handle.
-      await notice?.done.catch((error) =>
-        log.warn(`${label} queue notice failed: turn=${rec.id} session=${rec.session}: ${String(error)}`),
-      );
-      notices.delete(rec.id);
-      if (options.beforeRun && !(await options.beforeRun(rec))) return;
-      const decision = store.startAttempt(rec.id);
-      if (decision === "exceeded") {
-        options.notifyDropped(rec);
-        return;
-      }
-      if (decision === "defer") {
-        options.onDeferred(rec);
-        return;
-      }
-      const startedAt = Date.now();
-      log.info(`${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}`);
-      // Snapshot the discussion at dequeue; commit only this snapshot on `completed`, so a message
-      // arriving while the turn runs stays buffered for the next answered turn.
-      const bufferKey = options.bufferKey(rec);
-      const discussion = buffer.peek(bufferKey);
-      try {
-        await options.execute(rec, discussion, () =>
-          commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey, consumed: discussion.consumed }),
+    onQueuedBehind:
+      onQueuedBehind &&
+      ((rec) => {
+        const notice = onQueuedBehind(rec);
+        // Observe rejection at acceptance, even if dequeue is minutes away.
+        const done = Effect.runFork(
+          taskEffect(() => notice.done).pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() =>
+                log.warn(
+                  `${label} queue notice failed: turn=${rec.id} session=${rec.session}: ${String(taskFailure(cause))}`,
+                ),
+              ),
+            ),
+          ),
         );
-        log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
-      } catch (error) {
-        log.error(
-          `${label} turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error)}`,
-        );
-      } finally {
-        // Fallback removal for the caught-error paths (a `failed` event or a transport throw): those
-        // never reach the completed hook. Idempotent. Only an INTERRUPTED run (this finally never
-        // runs — a crash or SIGTERM deploy) leaves the record for replay; a transport throw is
-        // dropped, not retried (safe retry needs an L2 delivery key).
-        store.remove(rec.id);
-      }
-    },
+        notices.set(rec.id, { done, cancel: notice.cancel });
+      }),
+    run: (rec) =>
+      Effect.gen(function* () {
+        const notice = notices.get(rec.id);
+        notices.delete(rec.id);
+        if (notice) {
+          // A broken cancel hook must still join any post already in flight.
+          yield* Effect.addFinalizer(() => Fiber.await(notice.done));
+          notice.cancel?.();
+          yield* Fiber.await(notice.done);
+        }
+        yield* runQueuedTurn(options, rec);
+      }),
   });
   const submit = (rec: R, persist: boolean): void => {
     if (persist) {

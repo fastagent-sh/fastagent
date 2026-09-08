@@ -18,6 +18,7 @@ import {
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { collect, AgentFailure } from "../src/collect.ts";
+import { streamTurnWithBusyRetry } from "../src/channels/kit/invoke-turn-kit.ts";
 import { describe, expect, it } from "vitest";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
@@ -181,9 +182,14 @@ describe("AgentSession L0: pi's auto-retry vs. append-only deltas", () => {
   });
 });
 
-it.each(["return", "throw"] as const)(
-  "quiet consumer %s aborts the actual tool and joins its cleanup before releasing",
-  async (method) => {
+it.each([
+  ["return", "direct"],
+  ["throw", "direct"],
+  ["return", "channel"],
+  ["throw", "channel"],
+] as const)(
+  "quiet consumer %s through %s aborts the actual tool and joins cleanup before releasing",
+  async (method, entry) => {
     const entered = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
     const finishCleanup = Promise.withResolvers<void>();
@@ -217,7 +223,11 @@ it.each(["return", "throw"] as const)(
         return session;
       },
     });
-    const iterator = agent.invoke({ session: "quiet" }, { text: "go" })[Symbol.asyncIterator]();
+    const events =
+      entry === "channel"
+        ? streamTurnWithBusyRetry(agent, { session: "quiet" }, { text: "go" }, { label: "[test]" })
+        : agent.invoke({ session: "quiet" }, { text: "go" });
+    const iterator = events[Symbol.asyncIterator]();
     expect((await iterator.next()).value).toMatchObject({ type: "tool_started" });
     await entered.promise;
     const pending = iterator.next();

@@ -1,6 +1,9 @@
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { activeWork, onIdle } from "../src/channels/busy.ts";
 import { type TurnQueue, createTurnQueue } from "../src/channels/kit/turn-queue.ts";
 import { log } from "../src/log.ts";
+import { taskEffect } from "../src/channels/kit/tasks.ts";
 
 /** The consumer-side record for these tests: a `session` key plus caller-domain fields. */
 interface Rec {
@@ -18,9 +21,88 @@ const until = async (cond: () => boolean): Promise<void> => {
 };
 
 const makeQueue = (run: (r: Rec) => Promise<void>, onQueuedBehind?: (r: Rec) => void): TurnQueue<Rec> =>
-  createTurnQueue<Rec>({ label: "[test]", run, onQueuedBehind });
+  createTurnQueue<Rec>({ label: "[test]", run: (rec) => taskEffect(() => run(rec)), onQueuedBehind });
 
 describe("turn-queue", () => {
+  it("owns cleanup before the successor runs, counts queued work, and isolates sessions", async () => {
+    const base = activeWork();
+    const releasing = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const other = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const queue = createTurnQueue<Rec>({
+      label: "[test]",
+      run: (r) =>
+        Effect.gen(function* () {
+          order.push(r.id);
+          if (r.id === "1")
+            yield* Effect.addFinalizer(() =>
+              Effect.promise(async () => {
+                releasing.resolve();
+                await released.promise;
+                order.push("cleanup");
+              }),
+            );
+          if (r.id === "3") other.resolve();
+        }),
+    });
+    queue.accept(rec("1"));
+    queue.accept(rec("2"));
+    queue.accept(rec("3", "other"));
+    expect(order).toEqual([]);
+    expect(activeWork()).toBe(base + 3);
+    const idle = queue.idle();
+    try {
+      await Promise.all([releasing.promise, other.promise]);
+      expect(order).toEqual(["1", "3"]);
+      expect(activeWork()).toBe(base + 2);
+    } finally {
+      released.resolve();
+      await idle;
+    }
+    expect(order).toEqual(["1", "3", "cleanup", "2"]);
+    expect(activeWork()).toBe(base);
+  });
+
+  it("an idle listener can enqueue another turn without losing its tail or busy count", async () => {
+    const base = activeWork();
+    const ran: string[] = [];
+    const queue = makeQueue(async (r) => {
+      ran.push(r.id);
+    });
+    const off = onIdle(() => {
+      if (ran.length === 1) queue.accept(rec("2"));
+    });
+    try {
+      queue.accept(rec("1"));
+      await queue.idle();
+      expect(ran).toEqual(["1", "2"]);
+      expect(activeWork()).toBe(base);
+    } finally {
+      off();
+    }
+  });
+
+  it("a scope cleanup defect is diagnosed and the FIFO still advances", async () => {
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    const base = activeWork();
+    const ran: string[] = [];
+    const queue = createTurnQueue<Rec>({
+      label: "[test]",
+      run: (r) =>
+        Effect.gen(function* () {
+          ran.push(r.id);
+          if (r.id === "1") yield* Effect.addFinalizer(() => Effect.die(new Error("cleanup broke")));
+        }),
+    });
+    queue.accept(rec("1"));
+    queue.accept(rec("2"));
+    await queue.idle();
+    expect(ran).toEqual(["1", "2"]);
+    expect(activeWork()).toBe(base);
+    expect(errors.mock.calls.flat().join(" ")).toContain("cleanup broke");
+  });
+
   it("accept runs the turn", async () => {
     const ran: string[] = [];
     const queue = makeQueue(async (r) => {

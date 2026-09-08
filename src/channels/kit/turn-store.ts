@@ -1,18 +1,19 @@
 /**
  * Durable turn intent: the L1 half of durable execution (the L2 exactly-once / deterministic
  * step-replay layer is the K-axis backend — docs/design/core.md §11). Persists an accepted turn BEFORE
- * the webhook 200 (pre-ACK, like the telegram context-buffer) and removes it when the turn ENDS — the
- * runner's `finally`: a completed turn OR any caught error both remove it. Precisely, a completed turn's
+ * the webhook 200 (pre-ACK, like the telegram context-buffer) and removes it at business settlement:
+ * a completed turn OR a caught execution error both remove it. Precisely, a completed turn's
  * removal fires at the `completed` event (the session is committed), which is BEFORE the reply reaches
  * the chat platform: so L1 recovers the ACKed-but-un-COMPLETED window, not un-DELIVERED. A crash in
  * that narrow tail (completed, session-committed, but the message not yet sent) leaves the answer in the
  * session history undelivered and is deliberately NOT replayed — replaying a session-committed turn
  * would double-append it; the asker re-asks (and sees the prior answer in history). L1's scope is the
- * INTERRUPTED-run window (the `finally` never runs); a caught error is NOT retried here — a `failed`
+ * interrupted-run window (business settlement is not reached); a caught error is NOT retried here — a `failed`
  * event already told the user, and a transport throw is dropped exactly like the pre-L1 in-memory queue
  * did (replaying it could double-send). Only an interrupted run leaves the record on disk — and
  * "interrupted" is not just a rare crash: `runStart` has no graceful drain (cli.ts), so a SIGTERM exits
  * mid-turn too, i.e. EVERY rolling deploy that catches an in-flight turn. Recovery re-enqueues it next start.
+ * Effect interruption also preserves unfinished intent; resource finalizers never remove it.
  *
  * This recovers the ACKed-but-unfinished window the in-memory turn-queue drops (turn-queue.ts). Weigh
  * the trade before trusting it: the alternative (dropping the turn) fails VISIBLY and self-corrects

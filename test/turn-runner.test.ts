@@ -1,7 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ContextBuffer } from "../src/channels/kit/context-buffer.ts";
-import { createTurnRunner } from "../src/channels/kit/turn-runner.ts";
-import type { TurnRecordBase, TurnStore } from "../src/channels/kit/turn-store.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
+import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
+import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
+import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
+import { activeWork } from "../src/channels/busy.ts";
+import * as atomic from "../src/atomic-write.ts";
 import { log } from "../src/log.ts";
 
 interface Stored extends TurnRecordBase {
@@ -44,12 +54,12 @@ function fakeBuffer(calls: string[]): ContextBuffer<string> {
   };
 }
 
-function runner(
+function runnerOptions(
   store: TurnStore<Stored>,
   calls: string[],
-  overrides: Partial<Parameters<typeof createTurnRunner<Pending, Stored, string>>[0]> = {},
-) {
-  return createTurnRunner<Pending, Stored, string>({
+  overrides: Partial<TurnRunnerOptions<Pending, Stored, string>> = {},
+): TurnRunnerOptions<Pending, Stored, string> {
+  return {
     label: "[t]",
     store,
     buffer: fakeBuffer(calls),
@@ -65,10 +75,240 @@ function runner(
       onCompleted();
     },
     ...overrides,
-  });
+  };
+}
+const runner = (
+  store: TurnStore<Stored>,
+  calls: string[],
+  overrides: Partial<TurnRunnerOptions<Pending, Stored, string>> = {},
+) => createTurnRunner(runnerOptions(store, calls, overrides));
+
+const dirs: string[] = [];
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function durable() {
+  const dir = mkdtempSync(join(tmpdir(), "turn-runner-"));
+  dirs.push(dir);
+  const storePath = join(dir, "turns.json");
+  const openStore = () =>
+    createTurnStore<Stored>(storePath, {
+      label: "[t]",
+      isRecord: (r): r is Stored => typeof r === "object" && r !== null && "attempts" in r,
+      order: (a, b) => a.id.localeCompare(b.id),
+    });
+  const openBuffer = () =>
+    createContextBuffer<string>({
+      path: join(dir, "buffer.json"),
+      label: "[t]",
+      isEntry: (entry): entry is string => typeof entry === "string",
+      line: (entry) => entry,
+    });
+  return { dir, storePath, openStore, openBuffer, store: openStore(), buffer: openBuffer() };
 }
 
 describe("turn runner: the lifecycle order every chat channel shares", () => {
+  it.each(["running", "committed"])("SIGTERM preserves the durable %s state", async (phase) => {
+    const { dir, openStore, openBuffer } = durable();
+    const source = new URL("../src/channels/kit/", import.meta.url).href;
+    const child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
+      import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
+      import { createContextBuffer } from ${JSON.stringify(`${source}context-buffer.ts`)};
+      const root = ${JSON.stringify(dir)};
+      const store = createTurnStore(root + '/turns.json', { label: '[child]', isRecord: () => true, order: () => 0 });
+      const buffer = createContextBuffer({ path: root + '/buffer.json', label: '[child]', isEntry: () => true, line: x => x });
+      buffer.push('place:s', 'earlier');
+      const runner = createTurnRunner({
+        label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
+        bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
+        execute: async (_rec, _discussion, onCompleted) => {
+          process.on('message', () => {
+            onCompleted();
+            buffer.push('place:s', 'later');
+            process.send('committed');
+          });
+          process.send('running');
+          await new Promise(() => {});
+        },
+      });
+      runner.submit({ id: 'a', session: 's', text: '' }, true);
+    `,
+      ],
+      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+    );
+    let stderr = "";
+    child.stderr?.on("data", (data) => {
+      stderr += data;
+    });
+    const exited = once(child, "exit");
+    const message = () =>
+      Promise.race([
+        once(child, "message").then(([value]) => value),
+        exited.then(() => {
+          throw new Error(`child exited before the expected message: ${stderr}`);
+        }),
+      ]);
+    try {
+      expect(await message()).toBe("running");
+      if (phase === "committed") {
+        const committed = message();
+        child.send("complete");
+        expect(await committed).toBe("committed");
+      }
+    } finally {
+      child.kill("SIGTERM");
+      await exited;
+    }
+    expect(openStore().recover()).toEqual(
+      phase === "running" ? [{ id: "a", session: "s", text: "", attempts: 1 }] : [],
+    );
+    expect(openBuffer().peek("place:s").consumed).toEqual(phase === "running" ? ["earlier"] : ["later"]);
+  });
+
+  it("observes a rejected queue notice while its predecessor is still running", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const head = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const { store, calls } = fakeStore();
+    const r = runner(store, calls, {
+      onQueuedBehind: () => ({ done: Promise.reject(new Error("notice rejected before dequeue")) }),
+      execute: async (rec) => {
+        if (rec.id === "a") {
+          entered.resolve();
+          await head.promise;
+        }
+      },
+    });
+    r.submit({ id: "a", session: "s", text: "" }, true);
+    r.submit({ id: "b", session: "s", text: "" }, true);
+    try {
+      await entered.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(warn.mock.calls.flat().join(" ")).toContain("notice rejected before dequeue");
+      expect(calls).not.toContain("attempt b");
+    } finally {
+      head.resolve();
+      await r.idle();
+    }
+    expect(calls).toContain("attempt b");
+  });
+
+  it("joins the notice even when its cancel hook throws, leaving the turn for recovery", async () => {
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    const posted = Promise.withResolvers<void>();
+    const cancelled = Promise.withResolvers<void>();
+    const base = activeWork();
+    const { store, calls } = fakeStore();
+    const r = runner(store, calls, {
+      onQueuedBehind: () => ({
+        done: posted.promise,
+        cancel: () => {
+          cancelled.resolve();
+          throw new Error("cancel broke");
+        },
+      }),
+    });
+    r.submit({ id: "a", session: "s", text: "" }, true);
+    r.submit({ id: "b", session: "s", text: "" }, true);
+    try {
+      await cancelled.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(activeWork()).toBe(base + 1);
+      expect(calls).not.toContain("attempt b");
+    } finally {
+      posted.resolve();
+      await r.idle();
+    }
+    expect(calls).not.toContain("remove b");
+    expect(errors.mock.calls.flat().join(" ")).toContain("cancel broke");
+    expect(activeWork()).toBe(base);
+  });
+
+  it.each([false, true])(
+    "interruption joins work and preserves the actual commit decision (completed=%s)",
+    async (completed) => {
+      const { store, buffer, openStore, openBuffer } = durable();
+      buffer.push("place:s", "earlier");
+      store.add({ id: "a", session: "s", text: "", attempts: 0 });
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      let running!: Fiber.Fiber<unknown, unknown>;
+      const opts = runnerOptions(store, [], {
+        buffer,
+        execute: async (_rec, discussion, onCompleted) => {
+          expect(discussion.consumed).toEqual(["earlier"]);
+          if (completed) onCompleted();
+          entered.resolve();
+          await finish.promise;
+        },
+      });
+      const base = activeWork();
+      const queue = createTurnQueue<Pending>({
+        label: "[t]",
+        run: (rec) =>
+          Effect.gen(function* () {
+            running = yield* Effect.withFiber(Effect.succeed);
+            yield* runQueuedTurn(opts, rec);
+          }),
+      });
+      queue.accept({ id: "a", session: "s", text: "" });
+      await entered.promise;
+      buffer.push("place:s", "later");
+      const interrupted = Effect.runPromise(Fiber.interrupt(running));
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(activeWork()).toBe(base + 1);
+      } finally {
+        finish.resolve();
+        await interrupted;
+        await queue.idle();
+      }
+      expect(activeWork()).toBe(base);
+      expect(openStore().recover()).toEqual(completed ? [] : [{ id: "a", session: "s", text: "", attempts: 1 }]);
+      expect(openBuffer().peek("place:s").consumed).toEqual(completed ? ["later"] : ["earlier", "later"]);
+      if (!completed) {
+        const replay = runner(openStore(), [], { buffer: openBuffer() });
+        expect(replay.recover()).toHaveLength(1);
+        await replay.idle();
+        expect(openStore().recover()).toEqual([]);
+        expect(openBuffer().peek("place:s").consumed).toEqual([]);
+      }
+    },
+  );
+
+  it("pre-ACK persistence and attempt failures preserve dedup, busy accounting and restart recovery", async () => {
+    const { store, buffer, storePath, openStore } = durable();
+    const calls: string[] = [];
+    const base = activeWork();
+    const r = runner(store, calls, { buffer });
+    const write = vi.spyOn(atomic, "writeFileAtomic").mockImplementation(() => {
+      throw new Error("disk failed");
+    });
+    const rec = { id: "a", session: "s", text: "" };
+    expect(() => r.submit(rec, true)).toThrow("disk failed");
+    expect(calls).toEqual([]);
+    expect(activeWork()).toBe(base);
+    write.mockRestore();
+    r.submit(rec, true);
+    expect(openStore().recover()).toMatchObject([{ id: "a", attempts: 0 }]);
+    const original = atomic.writeFileAtomic;
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...args) => {
+      if (path === storePath) throw new Error("attempt write failed");
+      return original(path, ...args);
+    });
+    await r.idle();
+    expect(calls).toEqual(["seen a", "deferred a"]);
+    expect(openStore().recover()).toMatchObject([{ id: "a", attempts: 0 }]);
+    expect(activeWork()).toBe(base);
+  });
+
   it("accepts, settles the queue notice, counts the attempt, folds, executes, commits, and drops the intent", async () => {
     const { store, calls } = fakeStore();
     const r = runner(store, calls, {

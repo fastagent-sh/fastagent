@@ -146,18 +146,16 @@ src/
 │   │   │                     # consumers only under channels/<platform>/, and serve/http/control/
 │   │   │                     # discover have none there. Neither side may reach for the other.
 │   │   ├── preview-kit.ts   # turn-view reducer (event → view state + line renderers) + preview policies
-│   │   ├── invoke-turn-kit.ts # busy-retry stream loop around agent.invoke (onCompleted commit point)
-│   │   ├── turn-runner.ts   # THE durable-turn lifecycle (accept → dequeue → execute → end) over the
-│   │   │                     # queue + store + buffer; a channel supplies only what names a platform
-│   │   │                     # object (notice, prompt, attachments, the dropped-turn line). Three
-│   │   │                     # channels wrote it out and drifted in ways that were not decisions
-│   │   ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; the runner's)
+│   │   ├── invoke-turn-kit.ts # demand-driven Effect stream: scoped attempts, cancellable busy wait, completed-event commit
+│   │   ├── turn-runner.ts   # accept → dequeue → execute → settle over the queue + store + buffer;
+│   │   │                     # business settlement removes intent, resource finalizers never do
+│   │   ├── turn-queue.ts    # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts    # generic durable turn intent (L1) — record shape/validator/order injected
 │   │   ├── context-buffer.ts# generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
 │   │   ├── signature.ts     # replay window for a signed webhook ingress (the LENGTH is the platform's)
-│   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
+│   │   ├── tasks.ts         # typed Promise ownership (join on interruption) + side-task tracking; drain is observation only
 │   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
 │   │   ├── attachment-path.ts # where an attachment lands: the conversation id is ENCODED into a
 │   │   │                     # directory (like piSessionId — an id belongs to the caller, so it is
