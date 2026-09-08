@@ -2,11 +2,8 @@
  * Channel-neutral live-preview pieces shared by every messaging channel's preview renderer
  * (telegram/preview.ts, feishu/preview.ts, slack/preview.ts): the turn-view REDUCER (the one
  * event → view-state machine every renderer consumes), its line renderers, the terminal-failure
- * shape a channel hands to its `onError`, the customer-facing wording for it, and the serialized
- * single-writer pump. DELIVERY stays per-platform — message edits vs streaming cards vs chat.update,
- * pacing constants, reveal timing, and terminal-write policies are real platform differences — but
- * everything platform-independent lives here, so a new event type or a wording change lands in ONE
- * place instead of one hunk per channel.
+ * shape a channel hands to its `onError`, and the customer-facing wording for it.
+ * Scoped execution lives in delivery.ts; platform modules own formatting and delivery policies.
  */
 import type { AgentEvent, Json } from "../../agent.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
@@ -70,13 +67,13 @@ export function createTurnView(): TurnView {
  * summary, and any progress event closes an open retry notice (a stale "retrying" line must never
  * outlive actual progress). Terminal events only close the notice — they are the caller's business.
  */
-export function applyTurnEvent(view: TurnView, e: AgentEvent): boolean {
+export function applyTurnEvent(view: TurnView, e: AgentEvent, now = Date.now()): boolean {
   const closedRetry = view.retrying && e.type !== "retrying";
   if (closedRetry) view.retrying = false;
   switch (e.type) {
     case "text":
       view.answer += e.delta;
-      if (view.answerSince === undefined && view.answer.trim() !== "") view.answerSince = Date.now();
+      if (view.answerSince === undefined && view.answer.trim() !== "") view.answerSince = now;
       return true;
     case "thinking":
       view.thinking += e.delta;
@@ -125,9 +122,9 @@ export function thinkingLine(view: TurnView, maxTail: number): string {
  * clock, and there is deliberately NO timer at the boundary: a young answer surfaces on the next
  * content-driven pass, so a turn completing within the window delivers the final answer only.
  */
-export function revealedAnswer(view: TurnView, ageMs: number): string {
+export function revealedAnswer(view: TurnView, ageMs: number, now = Date.now()): string {
   if (view.answer.trim() === "" || view.answerSince === undefined) return "";
-  return Date.now() - view.answerSince >= ageMs ? view.answer : "";
+  return now - view.answerSince >= ageMs ? view.answer : "";
 }
 
 /** Compose body parts (thinking/tools/retry/answer) into one frame: skip empties, blank-line joins. */
@@ -136,80 +133,6 @@ export function composeTurnBody(parts: readonly string[]): string {
     .filter((s) => s.trim() !== "")
     .join("\n\n")
     .trim();
-}
-
-/**
- * The serialized live-preview writer shared by the edit/snapshot renderers (telegram, feishu).
- * Events mark the view dirty; the pump repaints to the LATEST view with at most ONE write in
- * flight, paced by `throttleMs`. One-in-flight is the whole point: concurrent writes can land out
- * of order — an older frame over a newer one is the "shows 3-4 steps, blanks, re-fills" flicker —
- * so a single writer keeps frames monotonic (and makes feishu's strictly-increasing card `sequence`
- * correct by construction). NOT used by slack-classic: its pacing lives inside the flush (the 3s
- * chat.update rate slot), not at the frame boundary.
- */
-export interface PreviewPump {
-  /** Mark the view dirty and ensure the single writer runs (an in-flight write picks the new state
-   *  up on its next loop). Synchronous — callers never await a network write. */
-  touch(): void;
-  /** Stop the pump, cut an in-flight throttle short, and await any in-flight write — so the
-   *  caller's terminal write is strictly the LAST one (no stale frame landing after the answer). */
-  finish(): Promise<void>;
-}
-
-export function createPreviewPump(opts: {
-  /** Write the LATEST view. Best-effort — the terminal write is authoritative. */
-  flush: () => Promise<void>;
-  /** Pace + coalesce a burst into one write; finish() interrupts a throttle in progress. */
-  throttleMs: number;
-  /** Called for the FIRST failing flush only (the pump keeps running): a never-rendering preview
-   *  must be diagnosable, not silent — and not a log flood. */
-  onError: (error: unknown) => void;
-}): PreviewPump {
-  let dirty = false;
-  let pumping = false;
-  let stopped = false;
-  let errored = false;
-  let pumpDone: Promise<void> | undefined;
-  let wakeThrottle: (() => void) | undefined; // set while mid-throttle; finish() cuts it short
-  const runPump = async (): Promise<void> => {
-    pumping = true;
-    try {
-      while (dirty && !stopped) {
-        dirty = false;
-        try {
-          await opts.flush();
-        } catch (error) {
-          if (!errored) {
-            errored = true;
-            opts.onError(error);
-          }
-        }
-        if (dirty && !stopped) {
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, opts.throttleMs);
-            wakeThrottle = () => {
-              clearTimeout(t);
-              resolve();
-            };
-          });
-          wakeThrottle = undefined;
-        }
-      }
-    } finally {
-      pumping = false;
-    }
-  };
-  return {
-    touch() {
-      dirty = true;
-      if (!pumping) pumpDone = runPump();
-    },
-    async finish() {
-      stopped = true;
-      wakeThrottle?.();
-      await pumpDone?.catch(() => {});
-    },
-  };
 }
 
 /** Max length (code points) of a tool's arg preview. Slack's native stream cannot be retracted, so

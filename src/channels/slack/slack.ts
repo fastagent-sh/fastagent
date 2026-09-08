@@ -9,7 +9,9 @@ import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { createThreadParticipants } from "../kit/thread-participants.ts";
-import { createTaskTracker } from "../kit/tasks.ts";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import { createTaskTracker, taskEffect } from "../kit/tasks.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
@@ -17,7 +19,7 @@ import { createTurnRunner } from "../kit/turn-runner.ts";
 import { createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { type SlackBufferEntry, collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
-import { invokeSlackTurn } from "./invoke-turn.ts";
+import { slackTurnStream } from "./invoke-turn.ts";
 import {
   type SlackEventEnvelope,
   type SlackFile,
@@ -44,7 +46,7 @@ import {
   type SlackRendering,
   defaultErrorMessage,
   settleSlackPreview,
-  streamSlackReply,
+  slackReply,
 } from "./preview.ts";
 import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
 import { registerSlackApi } from "./shared-api.ts";
@@ -311,47 +313,52 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         }
       },
       notifyDropped,
-      execute: async (turn, discussion, onCompleted) => {
+      execute: (turn, discussion, onCompleted) => {
         const messageRef = messageRefOf(turn.id);
-        const reaction =
-          reactionEmojis && messageRef
-            ? await startSlackReaction({
+        return Effect.acquireUseRelease(
+          taskEffect(async () =>
+            reactionEmojis && messageRef
+              ? startSlackReaction({
+                  api,
+                  channelId: messageRef.channelId,
+                  ts: messageRef.ts,
+                  emojis: reactionEmojis,
+                  label,
+                })
+              : undefined,
+          ),
+          () =>
+            Effect.scoped(
+              slackReply(
+                slackTurnStream(
+                  agent,
+                  turn.session,
+                  `${discussionBlock(discussion.text)}${turn.baseText}`,
+                  { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label },
+                  {
+                    primaryFileIds: turn.fileIds,
+                    buffered: collectSlackBufferedFiles(discussion.consumed, new Set(turn.fileIds)),
+                  },
+                  onCompleted,
+                ),
                 api,
-                channelId: messageRef.channelId,
-                ts: messageRef.ts,
-                emojis: reactionEmojis,
-                label,
-              })
-            : undefined;
-        try {
-          await streamSlackReply(
-            invokeSlackTurn(
-              agent,
-              turn.session,
-              `${discussionBlock(discussion.text)}${turn.baseText}`,
-              { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label },
-              {
-                primaryFileIds: turn.fileIds,
-                buffered: collectSlackBufferedFiles(discussion.consumed, new Set(turn.fileIds)),
-              },
-              onCompleted,
+                targetOf(turn),
+                formatError,
+                {
+                  rendering,
+                  initialPreviewTs: turn.previewTs,
+                  threadTitle: turn.threadTitle,
+                  disclaimer: aiDisclaimer,
+                  label,
+                },
+              ),
             ),
-            api,
-            targetOf(turn),
-            formatError,
-            {
-              rendering,
-              initialPreviewTs: turn.previewTs,
-              threadTitle: turn.threadTitle,
-              disclaimer: aiDisclaimer,
-              label,
-            },
-          );
-        } catch (error) {
-          await reaction?.remove();
-          throw error;
-        }
-        await reaction?.complete();
+          (reaction, exit) =>
+            taskEffect(async () => {
+              if (Exit.isSuccess(exit)) await reaction?.complete();
+              else await reaction?.remove();
+            }).pipe(Effect.orDie),
+        );
       },
     });
     let seq = runner.recover().reduce((maximum, turn) => Math.max(maximum, turn.seq), 0);

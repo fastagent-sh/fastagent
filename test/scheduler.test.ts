@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
-import { createScheduler, fireScheduleOnce, scheduleSession } from "../src/schedule/scheduler.ts";
+import * as Effect from "effect/Effect";
+import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSession } from "../src/schedule/scheduler.ts";
+
+const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
+const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { readRuns } from "../src/schedule/audit.ts";
 
@@ -37,7 +41,10 @@ function seedFires(root: string, fires: Record<string, string>): void {
 const readFires = async (root: string): Promise<Record<string, string>> =>
   JSON.parse(await readFile(join(root, "schedule", "fires.json"), "utf8"));
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("schedule/scheduler: fire algorithm", () => {
   it("a brand-new schedule does NOT back-fire on first start (no fires.json)", async () => {

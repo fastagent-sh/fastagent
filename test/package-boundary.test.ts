@@ -58,6 +58,22 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     expect(pkgs).not.toContain("@octokit/webhooks-methods");
   });
 
+  it.each(["telegram.ts", "slack.ts", "feishu.ts", "lark.ts"])(
+    "%s pays the explicit channel execution dependency budget",
+    (entry) => {
+      expect([...staticPackageGraph(entry)].filter((p) => p.startsWith("effect/")).sort()).toEqual([
+        "effect/Cause",
+        "effect/Clock",
+        "effect/Effect",
+        "effect/Exit",
+        "effect/Fiber",
+        "effect/Queue",
+        "effect/Stream",
+      ]);
+      expect([...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
+    },
+  );
+
   it("the CLI entry is a thin shell: NO static package loads at all (everything is lazy)", () => {
     // `fastagent <cmd>` pays only for the executed command's module graph — the entry itself must not
     // pull anything eagerly (startup responsiveness, clig).
@@ -281,6 +297,7 @@ describe("the contracts depend on nothing", () => {
       "@hono/node-server",
       "croner",
       "effect/Cause",
+      "effect/Clock",
       "effect/Effect",
       "effect/Exit",
       "effect/Fiber",

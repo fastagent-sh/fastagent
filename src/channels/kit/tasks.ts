@@ -1,39 +1,58 @@
-/**
- * SHARED fire-and-forget side-task tracking. Channels launch work off the request path (stop
- * feedback, DM welcomes) that must not block the transport ACK but MUST be drained on shutdown
- * (`turnsIdle`) — otherwise a reply in flight when the process exits is silently dropped. Error
- * handling stays with the caller: track() only guarantees the drain sees the task SETTLE, and settle
- * includes reject. A caller that handles its error on a separate branch (`p.catch(log); track(p)`)
- * still hands us a promise that rejects, and a drain that propagated it would fail the channel's whole
- * `turnsIdle` over one side task. A rejection that reaches us is logged — we
- * cannot tell a missing `.catch` from one on a separate branch, so the line is a visibility floor
- * rather than a diagnosis, and without it a dropped side task leaves no trace anywhere.
- */
+/** Promise ownership and ACK-independent side-task tracking. Drains are observation hooks, not service shutdown. */
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { beginWork } from "../busy.ts";
 import { log } from "../../log.ts";
 
+export class TaskFailure extends Error {
+  readonly _tag = "TaskFailure";
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+export function taskFailure(cause: Cause.Cause<unknown>): unknown {
+  const error = Cause.squash(cause);
+  return error instanceof TaskFailure ? error.cause : error;
+}
+
+/** These ports expose no abort hook. Interruption must join their actual work before releasing ownership. */
+export function taskEffect<A>(run: () => Promise<A>): Effect.Effect<A, TaskFailure> {
+  const wait = (pending: Promise<A>) =>
+    Effect.tryPromise({ try: () => pending, catch: (cause) => new TaskFailure(cause) });
+  return Effect.acquireUseRelease(
+    Effect.try({ try: run, catch: (cause) => new TaskFailure(cause) }),
+    wait,
+    (pending, exit) => (Exit.hasInterrupts(exit) ? Effect.exit(wait(pending)) : Effect.void),
+  );
+}
+
 export interface TaskTracker {
-  /** Track one task. The caller keeps its own `.catch` — rejections must already be handled. */
+  /** Track already-started work. Rejections are logged without failing the drain. */
   track(task: Promise<unknown>): void;
   /** Resolves when every currently-tracked task has settled. */
   drain(): Promise<void>;
 }
 
 export function createTaskTracker(label: string): TaskTracker {
-  const tasks = new Set<Promise<unknown>>();
+  const tasks = new Set<Fiber.Fiber<void>>();
   return {
     track(task) {
-      tasks.add(task);
-      // Tracked side tasks count as process-wide in-flight work (busy.ts) — same signal the turn
-      // queue reports, read by serving surfaces that must not idle while background work runs.
       const workDone = beginWork();
-      void task
-        .finally(() => {
-          workDone();
-          tasks.delete(task);
-        })
-        .catch((error) => log.warn(`${label} side task rejected: ${String(error)}`));
+      const fiber = Effect.runFork(
+        taskEffect(() => task).pipe(
+          Effect.asVoid,
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.warn(`${label} side task rejected: ${String(taskFailure(cause))}`)),
+          ),
+          Effect.ensuring(Effect.sync(workDone)),
+        ),
+      );
+      tasks.add(fiber);
+      fiber.addObserver(() => tasks.delete(fiber));
     },
-    drain: () => Promise.allSettled(tasks).then(() => undefined),
+    drain: () => Effect.runPromise(Effect.asVoid(Fiber.awaitAll([...tasks]))),
   };
 }

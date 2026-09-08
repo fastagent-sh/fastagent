@@ -13,6 +13,9 @@
  * or hide its still-readable siblings.
  */
 import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -21,7 +24,7 @@ import {
   attributedFileName,
   backgroundImagesManifest,
   missingAttachmentsNote,
-  streamTurnWithBusyRetry,
+  busyRetryStream,
 } from "../kit/invoke-turn-kit.ts";
 import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
@@ -343,10 +346,10 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
 
 /**
  * Run one turn: resolve its inputs, then stream agent.invoke with the shared busy-wait
- * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
+ * (invoke-turn-kit — `onCompleted` is the durable-commit point; see busyRetryStream). A
  * primary-input failure surfaces as a `failed` event (never a silent drop).
  */
-export async function* invokeFeishuTurn(
+export function feishuTurnStream(
   agent: Agent,
   session: string,
   text: string,
@@ -354,21 +357,27 @@ export async function* invokeFeishuTurn(
   attachments: FeishuTurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): AsyncIterable<AgentEvent> {
-  let resolved: ResolvedInputs;
-  try {
-    resolved = await resolveTurnInputs(transport, attachments);
-  } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
-    return;
-  }
-  const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };
-  // A thread turn names its lineage: parent place + the message ids that can locate the branch point
-  // (the referent and its chain — nearest first). The engine reads them ONCE, when the thread's
-  // session does not exist yet; on every later turn they ride along inertly.
-  const scope: Scope =
-    transport.parentSession === undefined
-      ? { session }
-      : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds };
-  yield* streamTurnWithBusyRetry(agent, scope, prompt, { label: transport.label, onCompleted, busyRetry });
+): Stream.Stream<AgentEvent, TaskFailure> {
+  return Stream.unwrap(
+    taskEffect(() => resolveTurnInputs(transport, attachments)).pipe(
+      Effect.map((resolved) => {
+        const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };
+        // Lineage is resolved per turn; the engine reads it only when creating a new session.
+        const scope: Scope =
+          transport.parentSession === undefined
+            ? { session }
+            : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds };
+        return busyRetryStream(agent, scope, prompt, { label: transport.label, onCompleted, busyRetry });
+      }),
+      Effect.catchTag("TaskFailure", (error) =>
+        Effect.succeed(
+          Stream.succeed<AgentEvent>({
+            type: "failed",
+            details: `could not load attachment: ${String(error.cause)}`,
+            retryable: true,
+          }),
+        ),
+      ),
+    ),
+  );
 }

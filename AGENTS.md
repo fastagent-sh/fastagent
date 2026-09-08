@@ -141,19 +141,19 @@ src/
 │   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
 │   │   │                     # consumers only under channels/<platform>/, and serve/http/control/
 │   │   │                     # discover have none there. Neither side may reach for the other.
-│   │   ├── preview-kit.ts   # turn-view reducer (event → view state + line renderers) + preview policies
-│   │   ├── invoke-turn-kit.ts # busy-retry stream loop around agent.invoke (onCompleted commit point)
-│   │   ├── turn-runner.ts   # THE durable-turn lifecycle (accept → dequeue → execute → end) over the
-│   │   │                     # queue + store + buffer; a channel supplies only what names a platform
-│   │   │                     # object (notice, prompt, attachments, the dropped-turn line). Three
-│   │   │                     # channels wrote it out and drifted in ways that were not decisions
-│   │   ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; the runner's)
+│   │   ├── preview-kit.ts   # pure turn-view reducer, line renderers, and preview policies
+│   │   ├── delivery.ts      # scoped coalescing previews, ordered native writes, and snapshot terminal settlement
+│   │   ├── event-stream.ts  # typed, demand-driven Agent iterator acquisition and scoped cleanup
+│   │   ├── invoke-turn-kit.ts # demand-driven Effect stream: scoped attempts, cancellable busy wait, completed-event commit
+│   │   ├── turn-runner.ts   # accept → dequeue → execute → settle over the queue + store + buffer;
+│   │   │                     # business settlement removes intent, resource finalizers never do
+│   │   ├── turn-queue.ts    # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts    # generic durable turn intent (L1) — record shape/validator/order injected
 │   │   ├── context-buffer.ts# generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
 │   │   ├── signature.ts     # replay window for a signed webhook ingress (the LENGTH is the platform's)
-│   │   ├── tasks.ts         # fire-and-forget side-task tracking — channels drain it in turnsIdle
+│   │   ├── tasks.ts         # typed Promise ownership (join on interruption) + side-task tracking; drain is observation only
 │   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
 │   │   ├── attachment-path.ts # where an attachment lands: the conversation id is ENCODED into a
 │   │   │                     # directory (like piSessionId — an id belongs to the caller, so it is
@@ -241,7 +241,8 @@ src/
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
 │   ├── discover.ts         # schedules/ filesystem discovery (loadSchedules/discoverScheduleFiles), isolates a bad file (G2)
-│   ├── scheduler.ts        # lifecycle + fire algorithm (overdue catch-up ONCE, claim-before-invoke) + stable per-schedule session + wake-up poll
+│   ├── scheduler.ts        # Effect clock loops + typed claim/run/audit; stop cancels waits, claimed turns finish;
+│   │                      # overdue catch-up ONCE, stable schedule sessions, wake busy ownership through durable settlement
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups, one-shot + recurring (2nd producer): engine-neutral store + guardrails (min delay/gap, cap, claim/defer)
 │   ├── audit.ts            # runs.jsonl append-only run audit (full reply) + `schedule history` reader — "did last night's run silently fail?"
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: on a scale-to-zero host nothing is resident to

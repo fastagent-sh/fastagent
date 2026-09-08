@@ -2,7 +2,7 @@
  * Shared pieces of the channels' invoke-turn modules (telegram/feishu/slack `invoke-turn.ts`) — the
  * halves that are channel-independent, so a retry-policy or prompt-wording change lands ONCE:
  *
- *   - {@link streamTurnWithBusyRetry}: the busy-retry loop around `agent.invoke`, with the
+ *   - {@link busyRetryStream}: the busy-retry loop around `agent.invoke`, with the
  *     `onCompleted` durable-commit point;
  *   - the prompt-suffix wording: {@link attachedFilesManifest}, {@link backgroundImagesManifest},
  *     {@link missingAttachmentsNote}, {@link attributedFileName}.
@@ -14,7 +14,12 @@
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.
  */
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
+import { eventStream } from "./event-stream.ts";
+import { TaskFailure } from "./tasks.ts";
 import { log } from "../../log.ts";
 
 /** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
@@ -34,11 +39,10 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
 
 /**
  * Stream one Agent turn with the shared busy-wait. `onCompleted` (if given) fires on the turn's
- * `completed` event — the durable-commit point: only then does the turn provably live in the session,
- * so a failure or crash at ANY earlier point leaves the caller's pre-ACK state (turn intent, context
- * buffer) intact for replay/the next summon. The caller uses it to remove the turn intent AND commit
- * the context buffer, in that order, so a crash between the two clears cannot replay a
- * context-stripped turn.
+ * `completed` event — the durable-commit point: the turn now lives in the session. The callback
+ * removes its intent before committing the consumed context snapshot. Other endings retain context;
+ * the runner separately decides whether an intent is removed (caught execution failure) or retained
+ * (interruption). Source pulls remain demand-driven, including while final platform delivery runs.
  *
  * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn holds this session's
  * lease and OUR turn never started — replay-safe. Retry (bounded) instead of yielding it: the user
@@ -47,33 +51,69 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
  * busy retries — a fail-fast reject is the only shape the engine emits it in, so nothing that started
  * is ever re-run.
  */
-export async function* streamTurnWithBusyRetry(
+export function busyRetryStream(
   agent: Agent,
-  /** The full scope, not a session string — channels that set extension fields (lineage) pass them
-   *  through here; channels that don't pass `{ session }` and nothing changes. */
   scope: Scope,
   prompt: Prompt,
-  options: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
-): AsyncIterable<AgentEvent> {
-  const { label, onCompleted, busyRetry = DEFAULT_BUSY_RETRY } = options;
-  const session = scope.session;
-  const deadline = Date.now() + busyRetry.maxWaitMs;
-  for (;;) {
-    let retryBusy = false;
-    let first = true;
-    for await (const e of agent.invoke(scope, prompt)) {
-      if (first && e.type === "failed" && e.code === SESSION_BUSY_CODE && Date.now() + busyRetry.delayMs < deadline) {
-        retryBusy = true; // fail-fast reject — the stream ends after this event; wait and re-invoke
-        break;
-      }
-      first = false;
-      if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
-      yield e;
-    }
-    if (!retryBusy) return;
-    log.info(`${label} session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`);
-    await new Promise((r) => setTimeout(r, busyRetry.delayMs));
-  }
+  {
+    label,
+    onCompleted,
+    busyRetry = DEFAULT_BUSY_RETRY,
+  }: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
+): Stream.Stream<AgentEvent, TaskFailure> {
+  return Stream.unwrap(
+    Effect.map(Clock.currentTimeMillis, (started) => {
+      const deadline = started + busyRetry.maxWaitMs;
+      const attempt = (): Stream.Stream<AgentEvent, TaskFailure> =>
+        Stream.suspend(() => {
+          let retryBusy = false;
+          let first = true;
+          return eventStream(() => agent.invoke(scope, prompt), `${label} (session=${scope.session})`).pipe(
+            Stream.takeWhileEffect((event) =>
+              Effect.gen(function* () {
+                if (
+                  first &&
+                  event.type === "failed" &&
+                  event.code === SESSION_BUSY_CODE &&
+                  (yield* Clock.currentTimeMillis) + busyRetry.delayMs < deadline
+                ) {
+                  retryBusy = true;
+                  return false;
+                }
+                first = false;
+                return true;
+              }),
+            ),
+            Stream.tap((event) =>
+              Effect.try({
+                try: () => {
+                  if (event.type === "completed") onCompleted?.();
+                },
+                catch: (cause) => new TaskFailure(cause),
+              }),
+            ),
+            Stream.scoped,
+            // concat closes the attempt's scope (and its iterator) before the wait or next invoke.
+            Stream.concat(
+              Stream.suspend(() =>
+                retryBusy
+                  ? Stream.unwrap(
+                      Effect.gen(function* () {
+                        log.info(
+                          `${label} session ${scope.session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`,
+                        );
+                        yield* Effect.sleep(busyRetry.delayMs);
+                        return attempt();
+                      }),
+                    )
+                  : Stream.empty,
+              ),
+            ),
+          );
+        });
+      return attempt();
+    }),
+  );
 }
 
 /** What the attached-files manifest renders per file: display name, byte size, absolute local path. */

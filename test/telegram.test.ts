@@ -314,7 +314,7 @@ describe("durable turn intent (crash recovery)", () => {
   it("replays a crash-surviving turn on the next start, then removes it", async () => {
     vi.stubGlobal("fetch", okFetch());
     const state = freshStateDir();
-    // Simulate a crash: a record persisted pre-ACK but never removed (the runner's finally never ran).
+    // Simulate a crash before business settlement: the pre-ACK intent remains for recovery.
     writeFileSync(
       join(state, "turns.json"),
       JSON.stringify({

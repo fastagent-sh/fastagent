@@ -390,14 +390,55 @@ concurrent and repeated `close()` calls wait for the same completion or failure.
 uses that same shutdown, logging cleanup errors while preserving the startup failure. The public
 `ready` waiter stays outside the scope it may close; channel authors still return ordinary Promises
 and consume an `AbortSignal`. Agent turns and durable replay state remain outside this scope.
-Effect is internal to `/node` service assembly and `/pi` execution/control. The contracts, `/core`,
-and `/session` remain dependency-free; public APIs expose no Effect runtime or types.
+Effect is internal to `/node` service assembly, `/pi` execution/control, and the stateful chat channels'
+execution and delivery. The contracts, `/core`, and `/session` remain dependency-free; public APIs expose
+no Effect runtime or types.
 
 `channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
 eager subscription, heartbeat, serialization and iterator cleanup. The callers own their event shapes.
 Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
 during body streaming close the source and heartbeat and propagate through the response body.
 The remote invoke client stops at the first terminal event; malformed control envelopes fail visibly.
+
+### Shared chat execution
+
+Telegram, Slack, and Feishu/Lark use the same execution lifecycle. Acceptance persists intent before
+ACK and counts queued work as busy immediately. Each turn runs in an independent Effect root fiber;
+per-session successors wait for the preceding scope to close, while other sessions run concurrently.
+Request completion does not close these fibers, and service shutdown still does not drain them.
+
+`tasks.ts` translates Promise rejection into `TaskFailure` and joins already-started work on
+interruption. Platform hooks expose no abort operation, so releasing ownership while their Promises
+still run would permit overlapping work and premature idle snapshots. Side-task drains observe only
+the tasks tracked when called. Queue notices are observed from acceptance and joined at dequeue,
+including when a notice's cancellation hook fails.
+
+`runQueuedTurn` separates business settlement from resource cleanup. The `completed` callback removes
+intent before committing the exact context snapshot consumed; later discussion remains buffered.
+Caught execution/delivery failures retain the existing intent-removal policy. Effect interruption and
+process termination preserve unfinished intent for recovery. Store formats, poison-attempt limits,
+post-ACK write policies, and at-least-once replay are unchanged.
+
+The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
+first-event `session_busy` rejection closes that iterator before waiting on the Effect clock. Other
+failures never reopen the retry window. Interrupting consumption closes the actual Agent iterator
+during a quiet read and cancels the timer during backoff. Natural source exhaustion needs no
+additional `return()` call.
+
+The runner's internal `execute` hook returns an Effect, so input loading, source consumption, previews,
+terminal delivery, and Slack reaction cleanup remain children of the turn. Platform API clients retain
+ordinary Promises and their existing retry/fallback policies. Already-issued operations are joined;
+interrupting input loading does not start a model after the input resolves.
+
+`delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
+its first write synchronously, cancels pending pacing at finish, and joins an issued write before the
+terminal update. Slack's mutation slot and append timer use the turn's clock. Its native stream is
+closed after accepted appends, even if error formatting fails; an attempted stop is never retried by
+scope cleanup. Status clearing follows stream cleanup. Preview callbacks capture the turn context
+when crossing a synchronous API boundary, preserving its clock without introducing a global runtime.
+Snapshot renderers share terminal ownership; formatting, continuation, and capability fallback stay
+platform-specific. Failed error notices are diagnosed without replacing the primary failure, and a
+failed final delivery does not trigger a second abnormal-turn delivery.
 
 ### GitHub
 
@@ -592,6 +633,19 @@ Static schedules are `schedules/<name>.ts` files exporting `{ cron, tz?, prompt 
 - catches up one overdue occurrence after downtime, not every missed slot;
 - records each run in `<stateRoot>/schedule/runs.jsonl`;
 - leaves delivery to agent tools.
+
+The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use
+the captured Effect clock; Croner still computes calendar instants, with capped waits rechecking wall
+time. Internal scheduler construction and the shared fire operation compose Effects directly; service
+and AgentCore callbacks retain ordinary TypeScript/Promise APIs. Cron claim IO failures are typed: the
+resident loop logs and audits a skipped fire, while external slot delivery receives the original error.
+
+`stop()` interrupts pending waits synchronously without draining or canceling a claimed occurrence.
+That occurrence finishes execution and settlement handling before its loop exits; no next wake is
+claimed. Waiting loops do not count as business work. Wake execution keeps its busy ownership through
+one-shot deferral and audit, so the idle notification observes settled state. Boot-time cron-state
+read failures still fail startup synchronously. Wake claim/deferral errors end the current poll and
+are logged before pending stop interruption resumes.
 
 With `selfSchedule: true`, the serving path mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
 minimum delay/frequency and per-session count, and fired back into the originating session. A one-shot

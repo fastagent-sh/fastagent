@@ -31,7 +31,7 @@ import {
   feishuBufferText,
 } from "./context-buffer.ts";
 import { decryptEvent, verifySignature } from "./crypto.ts";
-import { invokeFeishuTurn } from "./invoke-turn.ts";
+import { feishuTurnStream } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
@@ -59,7 +59,7 @@ import {
   defaultErrorMessage,
   mountFeishuPreview,
   settleFeishuPreview,
-  streamFeishuReply,
+  feishuReply,
 } from "./preview.ts";
 import { connectFeishuWs } from "./ws-ingress.ts";
 import { registerFeishuApi } from "./shared-api.ts";
@@ -460,8 +460,8 @@ function createFeishuRuntimeFactory(
         // Recorded at ingress (see submit) — never re-derived from the session key, which may be a
         // routed OPAQUE id that only looks like a place key.
         const parentSession = rec.parentSession;
-        return streamFeishuReply(
-          invokeFeishuTurn(
+        return feishuReply(
+          feishuTurnStream(
             agent,
             rec.session,
             prompt,
