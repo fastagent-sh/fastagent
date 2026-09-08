@@ -23,6 +23,14 @@
  * wasted wake-up of the box, traded for never needing list/delete choreography.
  */
 import { readFileSync } from "node:fs";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import {
+  AgentcoreFailure,
+  agentcoreFailure,
+  agentcoreOperation,
+  agentcoreRequest,
+} from "../channels/agentcore-effects.ts";
 import { RESERVED_PATHS, type WakeAlarm, type WakeAlarmRequest } from "../channels/agentcore-protocol.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
@@ -46,9 +54,11 @@ export function rememberWakeAlarmUrl(stateRoot: string, url: string): void {
 export function readWakeAlarmUrl(stateRoot: string): string | undefined {
   try {
     const v = JSON.parse(readFileSync(scheduleFile(stateRoot, URL_FILE), "utf8")) as { url?: unknown };
-    return typeof v.url === "string" ? v.url : undefined;
-  } catch {
-    return undefined; // absent/corrupt — the next envelope rewrites it
+    if (typeof v?.url !== "string" || v.url === "") throw new Error("expected a nonempty url string");
+    return v.url;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`wake-alarm URL ${scheduleFile(stateRoot, URL_FILE)} is unreadable: ${String(cause)}`, { cause });
   }
 }
 
@@ -94,92 +104,118 @@ export function createWakeAlarmSink(options: {
   now?: () => Date;
   /** Injectable retry pause (tests); defaults to exponential-ish backoff off RETRY_BASE_MS. */
   delay?: (ms: number) => Promise<void>;
-}): (stateRoot: string) => void {
-  const { secret, fetchImpl = fetch, now = () => new Date() } = options;
-  const delay = options.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let running = false;
-  let dirty = false;
+}): Effect.Effect<(stateRoot: string) => void> {
+  return Effect.gen(function* () {
+    const clock = yield* Clock.Clock;
+    const fork = Effect.runForkWith(yield* Effect.context<never>());
+    const { secret, fetchImpl = fetch, now = () => new Date(clock.currentTimeMillisUnsafe()), delay: pause } = options;
+    const delay = (ms: number) => (pause ? agentcoreOperation(() => pause(ms)) : Effect.sleep(ms));
+    let running = false;
+    let dirty = false;
 
-  /** One POST of the CURRENT desired set. Returns false to retry, true when there is nothing left
-   *  to do (converged, or nothing this loop can act on). */
-  async function attemptOnce(stateRoot: string, attempt: number): Promise<boolean> {
-    const alarms = toAlarms(listWakeups(stateRoot), now());
-    // Nothing future to mirror: converged. Deletion is lazy by design — alarms already mirrored for
-    // cancelled wake-ups fire, find nothing, self-delete — so an empty set is never POSTed.
-    if (alarms.length === 0) return true;
-    const url = readWakeAlarmUrl(stateRoot);
-    if (!url) {
-      // Before the first envelope, or an unreadable state mount (readWakeAlarmUrl folds both into
-      // undefined). The wake itself is stored; the next store mutation or boot re-mirrors it.
-      log.warn("[schedule] wake alarm skipped — forwarder URL unavailable (not seen yet, or unreadable)");
-      return true;
-    }
-    const body: WakeAlarmRequest = { secret, alarms };
-    try {
-      const res = await fetchImpl(`${url.replace(/\/$/, "")}${RESERVED_PATHS.wakeAlarm}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
-      });
-      if (res.ok) return true;
-      log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: HTTP ${res.status}`);
-    } catch (e) {
-      log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: ${String(e)}`);
-    }
-    return false;
-  }
-
-  async function reconcile(stateRoot: string): Promise<void> {
-    // Counted as in-flight work: the retry loop is exactly the window where the box must not be
-    // reclaimed — idle away mid-retry and a pending wake has no alarm until the next boot.
-    const workDone = beginWork();
-    // Consecutive failures ACROSS passes, not within one. A mid-retry mutation restarts the attempt
-    // sequence (the backoff and the log's `n/N` are about the new desired set), but it must not renew
-    // the budget: a store mutating faster than the backoff would keep the loop alive forever, and the
-    // one loud line saying the forwarder is down — the per-attempt warns are filterable — would never
-    // be reached. This counter is the thing that survives to reach it.
-    let failures = 0;
-    try {
-      while (dirty && failures < MAX_SYNC_ATTEMPTS) {
-        dirty = false;
-        for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
-          if (await attemptOnce(stateRoot, attempt)) {
-            failures = 0;
-            break;
-          }
-          failures++;
-          if (attempt === MAX_SYNC_ATTEMPTS || failures >= MAX_SYNC_ATTEMPTS) break;
-          await delay(RETRY_BASE_MS * attempt);
-          // A mutation landed mid-retry: the desired state moved, so this budget is spent on a set
-          // that no longer exists. Restart the attempt count against the new one.
-          if (dirty) break;
+    /** One POST of the CURRENT desired set. Returns false to retry, true when there is nothing left
+     *  to do (converged, or nothing this loop can act on). */
+    const attemptOnce = (stateRoot: string, attempt: number) =>
+      Effect.gen(function* () {
+        const alarms = yield* Effect.try({
+          try: () => toAlarms(listWakeups(stateRoot), now()),
+          catch: (cause) => new AgentcoreFailure(cause),
+        });
+        // Nothing future to mirror: converged. Deletion is lazy by design — alarms already mirrored for
+        // cancelled wake-ups fire, find nothing, self-delete — so an empty set is never POSTed.
+        if (alarms.length === 0) return true;
+        const url = yield* Effect.try({
+          try: () => readWakeAlarmUrl(stateRoot),
+          catch: (cause) => new AgentcoreFailure(cause),
+        });
+        if (!url) {
+          log.warn("[schedule] wake alarm skipped — forwarder URL not seen yet");
+          return true;
         }
-      }
-      if (failures >= MAX_SYNC_ATTEMPTS) {
-        log.error(
-          `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
-            `external alarm until the next store change or boot re-mirrors them`,
+        const body: WakeAlarmRequest = { secret, alarms };
+        return yield* agentcoreRequest(async (signal) => {
+          const res = await fetchImpl(`${url.replace(/\/$/, "")}${RESERVED_PATHS.wakeAlarm}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal,
+          });
+          return res;
+        }, SYNC_TIMEOUT_MS).pipe(
+          Effect.match({
+            onSuccess: (res) => {
+              if (res.ok) return true;
+              log.warn(`[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: HTTP ${res.status}`);
+              return false;
+            },
+            onFailure: (error) => {
+              log.warn(
+                `[schedule] wake alarm sync attempt ${attempt}/${MAX_SYNC_ATTEMPTS} failed: ${String(error.cause)}`,
+              );
+              return false;
+            },
+          }),
         );
-      }
-    } catch (e) {
-      // The END of the error path: nothing awaits this loop, so an escape is an unhandled rejection
-      // that kills the container. `listWakeups` throws by design on an unreadable store (state.ts),
-      // exactly the fault a wake alarm cannot fix — report it and leave the store write untouched,
-      // which is this sink's whole contract. The next mutation or boot re-runs the mirror.
-      log.error(`[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(e)}`);
-    } finally {
-      running = false;
-      workDone();
-    }
-  }
+      });
 
-  // Single-flight: a save arriving while the loop runs only marks it dirty, so a burst coalesces
-  // into one more pass instead of one concurrent loop each.
-  return (stateRoot) => {
-    dirty = true;
-    if (running) return;
-    running = true;
-    void reconcile(stateRoot);
-  };
+    const reconcile = (stateRoot: string) =>
+      Effect.gen(function* () {
+        // Consecutive failures ACROSS passes, not within one. A mid-retry mutation restarts the attempt
+        // sequence (the backoff and the log's `n/N` are about the new desired set), but it must not renew
+        // the budget: a store mutating faster than the backoff would keep the loop alive forever, and the
+        // one loud line saying the forwarder is down — the per-attempt warns are filterable — would never
+        // be reached. This counter is the thing that survives to reach it.
+        let failures = 0;
+        while (dirty && failures < MAX_SYNC_ATTEMPTS) {
+          dirty = false;
+          for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
+            if (yield* attemptOnce(stateRoot, attempt)) {
+              failures = 0;
+              break;
+            }
+            failures++;
+            if (attempt === MAX_SYNC_ATTEMPTS || failures >= MAX_SYNC_ATTEMPTS) break;
+            yield* delay(RETRY_BASE_MS * attempt);
+            // A mutation landed mid-retry: the desired state moved, so this budget is spent on a set
+            // that no longer exists. Restart the attempt count against the new one.
+            if (dirty) break;
+          }
+        }
+        if (failures >= MAX_SYNC_ATTEMPTS) {
+          log.error(
+            `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
+              `external alarm until the next store change or boot re-mirrors them`,
+          );
+        }
+      });
+
+    // Single-flight: a save arriving while the loop runs only marks it dirty, so a burst coalesces
+    // into one more pass instead of one concurrent loop each.
+    return (stateRoot) => {
+      dirty = true;
+      if (running) return;
+      running = true;
+      fork(
+        Effect.acquireUseRelease(
+          Effect.sync(beginWork),
+          () =>
+            reconcile(stateRoot).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => {
+                  // Store/clock faults cannot be repaired by another POST. A new mutation may retry the mirror.
+                  log.error(
+                    `[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(agentcoreFailure(cause))}`,
+                  );
+                }),
+              ),
+            ),
+          (done) =>
+            Effect.sync(() => {
+              running = false;
+              done();
+            }),
+        ),
+      );
+    };
+  });
 }

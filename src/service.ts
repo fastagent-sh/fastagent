@@ -209,31 +209,42 @@ export function mountSessionControl(
  * ONE load instead of re-discovering. `externalClock` (AgentCore) arms no resident cron timers.
  */
 export async function startSchedules(
+  ...args: Parameters<typeof prepareSchedules>
+): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
+  const scheduled = await prepareSchedules(...args);
+  scheduled.start();
+  return { schedules: scheduled.schedules, stop: scheduled.stop };
+}
+
+/** Load definitions without reading execution state; AgentCore starts polling only after restore. */
+export async function prepareSchedules(
   agentDir: string,
   agent: Agent,
   stateRoot: string,
   selfSchedule: boolean,
   options: { externalClock?: boolean } = {},
-): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
+): Promise<{ schedules: LoadedSchedule[]; start: () => void; stop: () => void }> {
   // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library
   // that calls process.exit takes a decision (degrade? retry? stop?) that belongs to its host. The
   // CLI catches at its own boundary.
   const { schedules, failures } = await loadSchedules(agentDir);
   reportModuleLoadFailures(failures);
-  if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
+  if (schedules.length === 0 && !selfSchedule) return { schedules, start: () => {}, stop: () => {} };
   const scheduler = Effect.runSync(
     createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
   );
-  scheduler.start();
-  if (schedules.length > 0) {
-    log.info(
-      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
-    );
-  }
-  // Returned rather than bound to process signals here: this runs inside an embedder's app as well
-  // as the CLI, and a library that installs SIGINT handlers is deciding something that is not its
-  // to decide. `runStart`/`runDev` wire it to their own shutdown.
-  return { schedules, stop: () => scheduler.stop() };
+  return {
+    schedules,
+    start() {
+      scheduler.start();
+      if (schedules.length > 0) {
+        log.info(
+          `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
+        );
+      }
+    },
+    stop: () => scheduler.stop(),
+  };
 }
 
 export interface AgentService {

@@ -746,6 +746,22 @@ forwarder topology; schedule-only URLs refuse ordinary public traffic), which re
 transport-200 because the ordinary webhook relay folds a non-200 into an opaque 502, which would
 strip exactly these diagnostics.
 
+Restore and post-restore/channel activation outcomes are cached Effects, including failures. Static
+schedule definitions load at mount time; local wake polling starts only after restore and stays stopped
+if the service closes while restore is pending. `StateSync` keeps its ordinary Promise methods. Its
+upload fiber owns busy accounting across URL refresh, filesystem packing, and PUT; background saves
+coalesce, while each checkpoint joins prior work and starts a fresh upload. An older refresh response
+cannot replace a newer envelope's URL pair. The upload's own idle edge never queues another snapshot.
+
+AgentCore IO has a typed failure channel with separate boundary policies: restore/checkpoint reject,
+background save reports failure, and alarm reconciliation retains its bounded retry policy. PUT and
+alarm deadlines use the captured Effect clock, abort the actual request, and join its settlement before
+releasing ownership or retrying. Non-abortable filesystem/activation ports are joined. A transport
+ignoring abort may delay release; a timeout does not make unfinished IO safe to abandon. Service close
+still stops polling and detaches listeners without draining accepted turns, uploads, or the process-owned
+alarm sink. Snapshot structure and persisted alarm URLs are validated; malformed data is diagnosed,
+with only a missing URL file treated as not yet configured.
+
 **Credentials ride that snapshot, so the secrets dir is INSIDE the state root** (`/mnt/state/.secrets`,
 `deploy/agentcore/plan.ts` `SECRETS_DIR`) — the one place AgentCore departs from the sibling layout the
 volume-backed hosts use (`/data/.state` + `/data/.secrets`). There the persistence boundary is the mount

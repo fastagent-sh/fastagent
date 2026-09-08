@@ -228,6 +228,21 @@ describe("agentcore adapter: lazy channel construction", () => {
   });
 });
 
+it("does not subscribe to idle edges with an already-aborted owner", async () => {
+  const { beginWork } = await import("../src/channels/busy.ts");
+  const sync = fakeStateSync();
+  agentcoreRoutes({
+    channels: () => ({ routes: {} }),
+    agent: scriptedAgent(),
+    stateRoot,
+    isBusy: () => false,
+    stateSync: sync,
+    signal: AbortSignal.abort(),
+  });
+  beginWork()();
+  expect(sync.saves()).toBe(0);
+});
+
 describe("agentcore adapter: /ping", () => {
   it("reports Healthy when idle and HealthyBusy while background work is in flight", async () => {
     let busy = false;
@@ -618,6 +633,42 @@ describe("agentcore adapter: the authentication boundary", () => {
 });
 
 describe("agentcore adapter: post-restore hooks", () => {
+  it("caches a failed post-restore hook instead of serving on the next envelope", async () => {
+    const error = new Error("activation failed");
+    const onStateReady = vi.fn(() => {
+      throw error;
+    });
+    const channels = vi.fn(() => ({ routes: {} }));
+    const routes = adapter({ onStateReady, channels });
+    for (let i = 0; i < 2; i++) {
+      const res = await postEnvelope(routes, { kind: "probe" });
+      expect(await res.json()).toEqual({ ok: false, error: `state restore failed: ${String(error)}` });
+    }
+    expect(onStateReady).toHaveBeenCalledOnce();
+    expect(channels).not.toHaveBeenCalled();
+  });
+
+  it("joins concurrent activation callers and caches their shared failure", async () => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const channels = vi.fn(async () => {
+      entered.resolve();
+      await finish.promise;
+      throw new Error("partial construction failed");
+    });
+    const routes = adapter({ channels });
+    const first = postEnvelope(routes, { kind: "probe" });
+    await entered.promise;
+    const second = postEnvelope(routes, { kind: "probe" });
+    finish.resolve();
+    for (const response of await Promise.all([first, second])) {
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "channel construction failed: Error: partial construction failed",
+      });
+    }
+    expect(channels).toHaveBeenCalledOnce();
+  });
   it("runs onStateReady ONCE, after the restore — a boot-time reconcile would see the wiped mount", async () => {
     const order: string[] = [];
     const sync = fakeStateSync({

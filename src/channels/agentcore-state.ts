@@ -15,8 +15,8 @@
  * a live deployment) and stays AWS-SDK-free: a snapshot is one `fetch` GET and one `fetch` PUT.
  *
  * Format: gzip(JSON `{ v, files: { relPath: base64 } }`). Deliberately NOT tar — the state root is a
- * handful of small JSON/JSONL files, and a single self-describing object makes restore ATOMIC: a
- * half-applied state root is far worse than a slightly stale one.
+ * handful of small JSON/JSONL files. Activation stays blocked until the whole object is restored;
+ * a partial restore must never be served or uploaded.
  */
 import { Buffer } from "node:buffer";
 import type { Dirent } from "node:fs";
@@ -26,6 +26,9 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { log } from "../log.ts";
 import type { StateUrls } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { type AgentcoreFailure, agentcoreFailure, agentcoreOperation, agentcoreRequest } from "./agentcore-effects.ts";
 
 /** Snapshot envelope version — an unknown version fails the restore loudly (never a silent skip). */
 export const SNAPSHOT_VERSION = 1;
@@ -36,7 +39,7 @@ export const MAX_SNAPSHOT_BYTES = 64 << 20;
 /** Warn past this — the operator should know the snapshot is getting expensive to round-trip. */
 const WARN_SNAPSHOT_BYTES = 16 << 20;
 
-/** Upload deadline. Generous (a large snapshot on a cold network) but finite. */
+/** Request abort deadline; ownership is retained until the request settles. */
 const PUT_TIMEOUT_MS = 60_000;
 
 /**
@@ -112,7 +115,12 @@ export async function unpackIntoStateRoot(stateRoot: string, packed: Buffer): Pr
   } catch (e) {
     throw new Error(`state snapshot is unreadable (${String(e)})`);
   }
-  if (snapshot?.v !== SNAPSHOT_VERSION || typeof snapshot.files !== "object" || snapshot.files === null) {
+  if (
+    snapshot?.v !== SNAPSHOT_VERSION ||
+    typeof snapshot.files !== "object" ||
+    snapshot.files === null ||
+    Array.isArray(snapshot.files)
+  ) {
     throw new Error(`state snapshot has an unsupported shape (v=${String(snapshot?.v)})`);
   }
   let written = 0;
@@ -123,6 +131,7 @@ export async function unpackIntoStateRoot(stateRoot: string, packed: Buffer): Pr
       throw new Error(`state snapshot contains an unsafe path (${rel})`);
     }
     if (EXCLUDED.has(rel)) continue; // never write a per-boot artifact from an older boot
+    if (typeof b64 !== "string") throw new Error(`state snapshot contains invalid file content (${rel})`);
     const target = join(stateRoot, rel);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, Buffer.from(b64, "base64"));
@@ -173,154 +182,174 @@ export interface StateSync {
   checkpoint(): Promise<{ written: boolean; reason?: string }>;
 }
 
-export function createStateSync(options: StateSyncOptions): StateSync {
-  const { stateRoot } = options;
-  const doFetch = options.fetchImpl ?? fetch;
-  let urls: StateUrls | undefined;
-  let restore: Promise<void> | undefined;
-  let restored = false;
-  let saving: Promise<void> | undefined;
-  let queued = false;
-  // Whether the upload loop is still able to pick up another round. Counting the upload as in-flight
-  // work (below) means ITS completion is itself a 0-in-flight edge, which re-enters save() — without
-  // this the snapshot would queue a redundant follow-up after every single upload.
-  let looping = false;
+export function createStateSync(options: StateSyncOptions): Effect.Effect<StateSync> {
+  return Effect.gen(function* () {
+    const context = yield* Effect.context<never>();
+    const run = Effect.runPromiseWith(context);
+    const fork = Effect.runForkWith(context);
+    const { stateRoot } = options;
+    const doFetch = options.fetchImpl ?? fetch;
+    let urls: StateUrls | undefined;
+    let restore: Effect.Effect<void, AgentcoreFailure> | undefined;
+    let restored = false;
+    let saving: Fiber.Fiber<unknown, unknown> | undefined;
+    let queued = false;
+    // Whether the upload loop is still able to pick up another round. Counting the upload as in-flight
+    // work (below) means ITS completion is itself a 0-in-flight edge, which re-enters save() — without
+    // this the snapshot would queue a redundant follow-up after every single upload.
+    let looping = false;
 
-  const runRestore = async (urls: StateUrls): Promise<void> => {
-    const res = await doFetch(urls.getUrl, { method: "GET" });
-    // ONLY a proven 404 is "first deploy". A missing key answers 404 only because the generated
-    // template grants the signer s3:ListBucket on the snapshot prefix — without it S3 folds "absent"
-    // into 403 (anti-enumeration). A 403 therefore means an expired or malformed signature, a
-    // revoked permission, or a template from before that grant — i.e. the snapshot may well exist.
-    // Reading 403 as "absent" would serve an empty agent and then overwrite the real snapshot with
-    // that emptiness.
-    if (res.status === 404) {
-      log.info("[agentcore] no state snapshot yet — starting from an empty state root (first deploy)");
+    const runRestore = async (urls: StateUrls): Promise<void> => {
+      const res = await doFetch(urls.getUrl, { method: "GET" });
+      // ONLY a proven 404 is "first deploy". A missing key answers 404 only because the generated
+      // template grants the signer s3:ListBucket on the snapshot prefix — without it S3 folds "absent"
+      // into 403 (anti-enumeration). A 403 therefore means an expired or malformed signature, a
+      // revoked permission, or a template from before that grant — i.e. the snapshot may well exist.
+      // Reading 403 as "absent" would serve an empty agent and then overwrite the real snapshot with
+      // that emptiness.
+      if (res.status === 404) {
+        log.info("[agentcore] no state snapshot yet — starting from an empty state root (first deploy)");
+        restored = true;
+        return;
+      }
+      if (!res.ok) {
+        const hint =
+          res.status === 403
+            ? " (an expired presigned URL, a revoked permission, or a template generated before the " +
+              "ForwarderRole granted s3:ListBucket — S3 answers 403 even for a MISSING first-deploy " +
+              "snapshot without it; regenerate with `fastagent deploy agentcore --force` and redeploy)"
+            : "";
+        throw new Error(`state snapshot GET failed: ${res.status}${hint}`);
+      }
+      const written = await unpackIntoStateRoot(stateRoot, Buffer.from(await res.arrayBuffer()));
+      log.info(`[agentcore] restored ${written} state file(s) from the snapshot`);
       restored = true;
-      return;
-    }
-    if (!res.ok) {
-      const hint =
-        res.status === 403
-          ? " (an expired presigned URL, a revoked permission, or a template generated before the " +
-            "ForwarderRole granted s3:ListBucket — S3 answers 403 even for a MISSING first-deploy " +
-            "snapshot without it; regenerate with `fastagent deploy agentcore --force` and redeploy)"
-          : "";
-      throw new Error(`state snapshot GET failed: ${res.status}${hint}`);
-    }
-    const written = await unpackIntoStateRoot(stateRoot, Buffer.from(await res.arrayBuffer()));
-    log.info(`[agentcore] restored ${written} state file(s) from the snapshot`);
-    restored = true;
-  };
+    };
 
-  const refreshUrls = async (): Promise<void> => {
-    if (!urls?.refresh) return;
-    const res = await doFetch(urls.refresh.url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ auth: urls.refresh.auth }),
-      signal: AbortSignal.timeout(PUT_TIMEOUT_MS),
+    const refreshUrls = Effect.suspend(() => {
+      const current = urls;
+      const refresh = current?.refresh;
+      if (!refresh) return Effect.void;
+      return agentcoreRequest(async (signal) => {
+        const res = await doFetch(refresh.url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ auth: refresh.auth }),
+          signal,
+        });
+        if (!res.ok) throw new Error(`state snapshot URL refresh failed: ${res.status}`);
+        const fresh = (await res.json()) as { getUrl?: unknown; putUrl?: unknown };
+        if (typeof fresh.getUrl !== "string" || typeof fresh.putUrl !== "string") {
+          throw new Error("state snapshot URL refresh returned an invalid response");
+        }
+        // An envelope received during the refresh owns the newer URL pair.
+        if (urls === current) urls = { ...current, getUrl: fresh.getUrl, putUrl: fresh.putUrl };
+      }, PUT_TIMEOUT_MS);
     });
-    if (!res.ok) throw new Error(`state snapshot URL refresh failed: ${res.status}`);
-    const fresh = (await res.json()) as { getUrl?: unknown; putUrl?: unknown };
-    if (typeof fresh.getUrl !== "string" || typeof fresh.putUrl !== "string") {
-      throw new Error("state snapshot URL refresh returned an invalid response");
-    }
-    urls = { ...urls, getUrl: fresh.getUrl, putUrl: fresh.putUrl };
-  };
 
-  const runSave = async (): Promise<void> => {
-    // Counted as in-flight work for its whole duration: `save()` fires on the 0-in-flight edge, the
-    // exact moment /ping starts answering Healthy — without this the platform may reclaim the microVM
-    // mid-upload and the turn that just finished is lost with only a log line. Bounded too: a hung
-    // PUT would otherwise pin `saving` forever and block every later snapshot.
-    const workDone = beginWork();
-    looping = true;
-    try {
+    const upload = Effect.gen(function* () {
       do {
         queued = false;
         if (!restored || !urls) return;
         // A webhook turn may settle hours after its envelope. Re-mint immediately before every PUT
         // instead of assuming the Lambda credentials that signed the envelope outlive the turn.
-        await refreshUrls();
-        const body = await packStateRoot(stateRoot);
-        const res = await doFetch(urls.putUrl, {
-          method: "PUT",
-          body: new Uint8Array(body),
-          signal: AbortSignal.timeout(PUT_TIMEOUT_MS),
-        });
-        if (!res.ok) {
-          const hint =
-            res.status === 403 ? " (presigned URL or its temporary signing credentials may have expired)" : "";
-          throw new Error(`state snapshot PUT failed: ${res.status}${hint}`);
-        }
+        yield* refreshUrls;
+        const body = yield* agentcoreOperation(() => packStateRoot(stateRoot));
+        const putUrl = urls.putUrl;
+        yield* agentcoreRequest(async (signal) => {
+          const res = await doFetch(putUrl, {
+            method: "PUT",
+            body: new Uint8Array(body),
+            signal,
+          });
+          if (!res.ok) {
+            const hint =
+              res.status === 403 ? " (presigned URL or its temporary signing credentials may have expired)" : "";
+            throw new Error(`state snapshot PUT failed: ${res.status}${hint}`);
+          }
+        }, PUT_TIMEOUT_MS);
       } while (queued);
-    } finally {
-      looping = false;
-      workDone();
-    }
-  };
+    });
 
-  return {
-    use(next) {
-      urls = next;
-    },
-    configured() {
-      return urls !== undefined;
-    },
-    ready() {
-      // No URLs = not an ingress envelope (a direct invoke has its own isolated storage): nothing to
-      // restore, and deliberately NOT cached, so the first envelope that does carry them still runs
-      // the restore.
-      if (!urls) return Promise.resolve();
-      // One attempt per process otherwise: a rejected restore stays rejected so every subsequent
-      // envelope fails the same visible way instead of quietly serving an empty agent.
-      restore ??= runRestore(urls);
-      return restore;
-    },
-    save() {
-      if (!restored) return; // never overwrite a good snapshot with a state root we failed to fill
-      if (saving) {
-        if (looping) queued = true; // otherwise this is the upload's own completion edge, not new work
-        return;
-      }
-      saving = runSave()
-        .catch((e) => {
-          log.error(`[agentcore] could not save the state snapshot: ${String(e)} — retrying when work next settles`);
-        })
-        .finally(() => {
-          saving = undefined;
-        });
-    },
-    async flush() {
-      while (saving) await saving;
-    },
-    async checkpoint() {
-      if (!urls) {
-        return { written: false, reason: "this session has never served a forwarder envelope" };
-      }
-      if (!restored) {
-        return { written: false, reason: "the state root is not authoritative here (nothing restored)" };
-      }
-      // Never overlap an in-flight upload, then run a FRESH one: joining the running round could
-      // return before the bytes written moments ago (the interrupted turn's intent) are included.
-      while (saving) await saving;
-      const run = runSave();
-      // Stored form never rejects (an unawaited rejection would be an unhandled crash); the caller
-      // awaits `run` itself and gets the error.
-      saving = run.then(
-        () => {},
-        () => {},
+    const startSave = (work: Effect.Effect<void, AgentcoreFailure>) =>
+      fork(
+        Effect.withFiber((fiber) => {
+          saving = fiber;
+          looping = true;
+          return Effect.acquireUseRelease(
+            Effect.sync(beginWork),
+            () => work,
+            (done) =>
+              Effect.sync(() => {
+                looping = false;
+                done();
+              }),
+          ).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                saving = undefined;
+              }),
+            ),
+          );
+        }),
       );
-      const settle = saving.finally(() => {
-        saving = undefined;
-      });
-      try {
-        await run;
-      } finally {
-        await settle;
-      }
-      return { written: true };
-    },
-  };
+    const flush = Effect.gen(function* () {
+      while (saving) yield* Fiber.await(saving);
+    });
+
+    return {
+      use(next) {
+        urls = next;
+      },
+      configured() {
+        return urls !== undefined;
+      },
+      ready() {
+        // No URLs = not an ingress envelope (a direct invoke has its own isolated storage): nothing to
+        // restore, and deliberately NOT cached, so the first envelope that does carry them still runs
+        // the restore.
+        if (!urls) return Promise.resolve();
+        // One attempt per process otherwise: a rejected restore stays rejected so every subsequent
+        // envelope fails the same visible way instead of quietly serving an empty agent.
+        const current = urls;
+        restore ??= Effect.runSync(Effect.cached(agentcoreOperation(() => runRestore(current))));
+        return run(restore.pipe(Effect.mapError((error) => error.cause)));
+      },
+      save() {
+        if (!restored) return; // never overwrite a good snapshot with a state root we failed to fill
+        if (saving) {
+          if (looping) queued = true; // otherwise this is the upload's own completion edge, not new work
+          return;
+        }
+        startSave(
+          upload.pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                log.error(
+                  `[agentcore] could not save the state snapshot: ${String(agentcoreFailure(cause))} — retrying when work next settles`,
+                );
+              }),
+            ),
+          ),
+        );
+      },
+      flush: () => run(flush),
+      checkpoint: () =>
+        run(
+          Effect.gen(function* () {
+            if (!urls) {
+              return { written: false, reason: "this session has never served a forwarder envelope" };
+            }
+            if (!restored) {
+              return { written: false, reason: "the state root is not authoritative here (nothing restored)" };
+            }
+            // Never overlap an in-flight upload, then run a FRESH one: joining the running round could
+            // return before the bytes written moments ago (the interrupted turn's intent) are included.
+            yield* flush;
+            yield* Fiber.join(startSave(upload));
+            return { written: true };
+          }).pipe(Effect.mapError((error) => error.cause)),
+        ),
+    } satisfies StateSync;
+  });
 }

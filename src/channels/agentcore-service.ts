@@ -3,7 +3,7 @@
  * because the host is.
  *
  * Two facts drive every difference. There is no public URL (the adapter's `POST /invocations` is the
- * only ingress, and cron slots arrive through it from an external clock, so no resident timers), and
+ * only ingress, and cron slots arrive through it from an external clock, so no resident cron timers), and
  * **the state mount at boot is PRE-RESTORE** — empty after every version update. Discovering channels
  * eagerly would therefore cache that emptiness (thread participation, delivery dedup, pending turns)
  * and then clobber the restored files with it, so channels are constructed lazily on the first
@@ -26,7 +26,7 @@ import {
   assertNoControlPlaneCollision,
   mountSessionControl,
   routesFor,
-  startSchedules,
+  prepareSchedules,
 } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, UnknownScheduleError, agentcoreRoutes } from "./agentcore.ts";
 import { createStateSync } from "./agentcore-state.ts";
@@ -57,7 +57,7 @@ export async function mountAgentcoreService(
   // collision rule runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, { agent });
 
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
+  const scheduled = await prepareSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
     externalClock: true,
   });
 
@@ -82,7 +82,11 @@ export async function mountAgentcoreService(
     agent,
     stateRoot,
     schedules: scheduled.schedules,
-    onStateReady: options.onStateReady,
+    onStateReady: () => {
+      options.onStateReady?.();
+      // An envelope may finish restoring after service closure; it must not re-arm the clock.
+      if (!closed.signal.aborted) scheduled.start();
+    },
     channels: lazyChannels,
   });
   const handler = router(adapterRoutes, withControl.mounts);
@@ -102,9 +106,6 @@ export async function mountAgentcoreService(
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     ...(withControl.control ? { control: withControl.control } : {}),
     async close() {
-      // UNTESTED, deliberately noted: no test observes these timers being cleared. Installing fake
-      // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
-      // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
       closed.abort();
     },
@@ -141,7 +142,7 @@ export function mountAgentcore(options: {
     // the state root is restored from (and pushed to) an S3 snapshot through presigned URLs the
     // forwarder mints per envelope. Always wired on this path — the platform gives no other way to
     // keep an agent's memory across a deploy.
-    stateSync: createStateSync({ stateRoot }),
+    stateSync: Effect.runSync(createStateSync({ stateRoot })),
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call. Absent =
     // no forwarder in this topology, so only the public `invoke` kind is servable.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
