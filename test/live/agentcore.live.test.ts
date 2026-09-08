@@ -5,9 +5,13 @@
  *
  * READ-ONLY, and unlike the fly/railway pair this one carries real weight on its own: the CloudFormation
  * template is YAML this repo emits line by line, and `validate-template` is CloudFormation's own parser
- * saying whether it would accept it — for free, in a second, without creating anything. The deploy probe
- * next door proves the stack CONVERGES; this proves the template is well-formed even when nobody wants
- * to wait eight minutes.
+ * reading it — for free, in a second, without creating anything.
+ *
+ * WHAT IT DOES NOT CHECK: resource PROPERTIES. `validate-template` parses the document, its parameters
+ * and its intrinsic functions; a resource carrying an invented property name validates clean (checked
+ * by hand against `AWS::BedrockAgentCore::Runtime` with a nonsense property, which it accepted). So a
+ * wrong `FilesystemConfigurations` variant or a mistyped `LifecycleConfiguration` passes HERE and fails
+ * at create-stack. Only agentcore-deploy.live.test.ts, which really converges a stack, covers that.
  *
  * Needs the `aws` CLI able to authenticate — an exported key or a logged-in profile, the driver takes
  * either. Nothing here creates a resource: STS identity, a template validation, and two describes
@@ -60,11 +64,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // `AWS::Scheduler::Schedule`. This fixture emits all of them and still creates nothing.
     await writeFile(
       join(agentDir, "fastagent.config.mjs"),
-      `export default { model: "openai-codex/gpt-5.5", selfSchedule: true, deploy: { agentcore: {
-        efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
-        subnetIds: ["subnet-0123456789abcdef0"], securityGroupIds: ["sg-0123456789abcdef0"]
-      } } };\n`,
-      // validate-template parses the resource definition; these placeholders do not test an EFS mount.
+      `export default { model: "openai-codex/gpt-5.5", selfSchedule: true };\n`,
     );
     // A plain default export, not `defineSchedule(...)`: loadSchedules validates the SHAPE, and this
     // fixture has no node_modules to import the package's helper from.
