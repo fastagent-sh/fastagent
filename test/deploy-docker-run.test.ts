@@ -61,6 +61,34 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(healthUrls).toEqual(["http://127.0.0.1:9876/health"]);
   });
 
+  it("tells the health probe when the agent container is gone (a crashed boot must not spend the budget)", async () => {
+    // The budget absorbs a first boot that seeds the whole workspace onto the volume, so it is also
+    // how long a container that EXITED would be waited for. It cannot come back; the probe is told.
+    let running = true;
+    const { docker, commands } = fakeDocker((args) => {
+      if (args.includes("--status")) return { stdout: running ? "agent\n" : "" };
+      if (args.includes("--services")) return { stdout: "agent\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const answers: boolean[] = [];
+    const out = await deployDockerRun(
+      plan(),
+      docker,
+      () => {},
+      async (_url, stillStarting) => {
+        answers.push(await stillStarting()); // throttled: the first call inside the window says "yes"
+        await new Promise((r) => setTimeout(r, 5_050));
+        running = false;
+        answers.push(await stillStarting());
+        return false;
+      },
+    );
+    expect(answers).toEqual([true, false]);
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("did not become healthy") });
+    expect(commands().filter((c) => c.includes("--status running"))).toHaveLength(2);
+  }, 10_000);
+
   it("detects the Compose tunnel service, waits for its URL, and makes --tunnel a topology gate", async () => {
     const { docker, commands } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };

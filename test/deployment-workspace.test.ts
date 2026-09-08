@@ -77,7 +77,7 @@ describe.runIf(process.platform === "linux")("deployment lease", () => {
       owner.kill("SIGSTOP");
       await expect(
         (async () => {
-          unexpectedLease = await leaseDeployment(metadata);
+          unexpectedLease = await leaseDeployment(metadata, 1);
         })(),
       ).rejects.toThrow("could not acquire workspace lease");
       expect(await openFiles()).not.toContain(join(metadata, "lock"));
@@ -89,7 +89,7 @@ describe.runIf(process.platform === "linux")("deployment lease", () => {
     const release = await leaseDeployment(metadata);
     await release();
     await (await leaseDeployment(metadata))();
-  }, 45_000);
+  }, 20_000);
 
   it("reports a missing flock binary without leaking its file descriptor", async () => {
     const { root } = await fixture();
@@ -97,7 +97,7 @@ describe.runIf(process.platform === "linux")("deployment lease", () => {
     await mkdir(metadata, { recursive: true });
     vi.stubEnv("PATH", "");
     try {
-      await expect(leaseDeployment(metadata)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(leaseDeployment(metadata)).rejects.toThrow(/needs the `flock` binary/);
       expect(await openFiles()).not.toContain(join(metadata, "lock"));
     } finally {
       vi.unstubAllEnvs();

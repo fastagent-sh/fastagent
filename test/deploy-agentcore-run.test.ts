@@ -375,6 +375,41 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(cmds().some((c) => c.includes("stop-runtime-session"))).toBe(true);
   });
 
+  it("a stop failure does NOT gate a pure-invoke deployment — it has no probe to protect", async () => {
+    // The gate exists because the probe reaches the same fixed session id. Without a forwarder there
+    // is no probe, so the only cost is immediacy (the platform reclaims the session anyway) and
+    // failing an already-applied deploy would be a false failure a re-run reproduces.
+    const logs: string[] = [];
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
+        ? { code: 254, stderr: "An error occurred (AccessDeniedException): not authorized" }
+        : a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
+          ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+          : happyAws(a),
+    );
+    const out = await deployAgentcoreRun(plan(), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
+      telegram: async () => "registered",
+    });
+    expect(out).toMatchObject({ ok: true, runtimeArn: "arn:x" });
+    expect(logs.join("\n")).toContain("AccessDeniedException");
+
+    // The WORDING follows the answer, not the topology: a first deploy has no session to stop, so
+    // "the previous image may keep serving" would name a container that never existed.
+    const first: string[] = [];
+    const { cli: awsFirst } = fakeCli((a) =>
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
+        ? { code: 254, stderr: "An error occurred (ResourceNotFoundException): session does not exist" }
+        : a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
+          ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+          : happyAws(a),
+    );
+    await deployAgentcoreRun(plan(), awsFirst, fakeCli().cli, (m) => first.push(m), writeParams, writeZip, {
+      telegram: async () => "registered",
+    });
+    expect(first.join("\n")).toContain("no ingress session to stop");
+    expect(first.join("\n")).not.toContain("previous image");
+  });
+
   it("a failed telegram registration gates AFTER the deploy (the app itself deployed)", async () => {
     const { cli: aws } = fakeCli(happyAws);
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "failed");

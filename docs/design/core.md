@@ -744,9 +744,14 @@ The caveat is OAuth's, not ours: a refresh token is single-use and shared with t
 the box can lose model access between deploys and the fix is another deploy.
 
 Runtime filesystems are available on invocation, so `deferAgentcoreService` exposes `/ping` before any
-persistent definition or credentials are opened. The first invocation initializes storage and the
-whole service through one shared promise. Success and failure are cached because partially activated
-channels may already have replayed work. Mount or initialization failures cannot start an empty agent.
+persistent definition or credentials are opened. Initialization runs in two stages, split by what a
+retry would cost. Taking the workspace (`prepareStartWorkspace`: storage check, release, machinery
+paths) starts nothing and releases its lease before failing, so a failed attempt is retried by the
+next envelope: an unmounted volume and a lease the outgoing session still holds clear on their own,
+and caching them would make a healthy microVM refuse every envelope until it is reclaimed. Assembling
+the service (`openPreparedWorkspace`) mounts channels and starts the scheduler, so both its outcomes
+are cached; a second attempt would run two schedulers over one claim state. Concurrent envelopes share
+one attempt at each stage. Mount or initialization failures cannot start an empty agent.
 The process retains its workspace lease until exit, including failed activation and shutdown, since
 service close does not drain every background writer. Only the OPEN is caught there — a failure inside
 the opened service's handler is its own, and reporting it as an initialization failure would also read

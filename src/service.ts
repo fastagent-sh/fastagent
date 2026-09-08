@@ -10,9 +10,8 @@
  * order right, and getting it wrong is silent: a plane that 404s while advertising itself, a
  * schedule that never fires.
  *
- * So the assembly lives here, and `dev`/`start` are callers. AgentCore is the one exception, and a
- * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
- * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
+ * `dev`/`start` call this assembly. AgentCore uses channels/agentcore-service.ts: runtime storage
+ * appears on invocation, channels activate on trusted ingress, and scheduling uses an external clock.
  */
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";

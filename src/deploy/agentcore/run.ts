@@ -59,8 +59,10 @@ export interface AgentcoreRunPlan {
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
-/** Budget for image pull, storage initialization and channel construction. */
-const PROBE_TIMEOUT_MS = 120_000;
+/** Budget for image pull, storage initialization and channel construction — this one envelope is
+ *  where a first boot seeds the whole workspace (the image's `node_modules` included) onto
+ *  `/mnt/data`, the same copy docker's health probe budgets 180s for, plus the pull before it. */
+const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
 
 /**
@@ -397,8 +399,17 @@ export async function deployAgentcoreRun(
       // Classify, don't guess: "no session yet" (first deploy — expected, quiet note) vs a REAL stop
       // failure (permissions/CLI/network), which must stop verification against the previous image.
       const stderr = stopped.stderr ?? "";
-      if (/ResourceNotFound|not\s*found|does not exist/i.test(stderr)) {
-        log("note: no ingress session to stop (first deploy, or already reclaimed)");
+      // The message follows the ANSWER (no session to stop vs a real failure); the gate below follows
+      // the TOPOLOGY, since only a forwarder deployment has a probe whose verdict a stale session
+      // could forge. Without one a failed stop costs immediacy alone — the platform's reclaim
+      // converges — and gating an applied deploy over it would be a failure a re-run reproduces.
+      const noSession = /ResourceNotFound|not\s*found|does not exist/i.test(stderr);
+      if (noSession || !plan.topology.forwarder) {
+        log(
+          noSession
+            ? "note: no ingress session to stop (first deploy, or already reclaimed)"
+            : `note: could not stop the ingress session (${stderr.trim().split("\n")[0]}) — the previous image may keep serving until it is reclaimed`,
+        );
       } else {
         // A GATE, not a warning: the probe below reaches the SAME fixed session id, so a session
         // still running the previous image would answer it and the deploy would claim to have

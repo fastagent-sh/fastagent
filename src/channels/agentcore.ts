@@ -85,14 +85,9 @@ function createActivation(deps: {
   let dispatchP: Promise<ChannelHandler> | undefined;
   return {
     async prepare(envelope) {
-      // Use the current callback URL rather than the one persisted by an earlier deployment.
-      if (typeof envelope.wake?.url === "string") {
-        try {
-          rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
-        } catch (e) {
-          log.error(`[agentcore] could not persist the wake-alarm URL: ${String(e)}`);
-        }
-      }
+      // Use the current callback URL rather than the one persisted by an earlier deployment. A write
+      // failure propagates: alarms would keep calling the previous deployment's forwarder.
+      if (typeof envelope.wake?.url === "string") rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
       if (onStateReady && !stateReadyFired) {
         stateReadyFired = true;
         onStateReady();

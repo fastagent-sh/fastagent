@@ -64,15 +64,27 @@ describe("deploy/container: shared Docker context", () => {
     const manifest = containerArtifacts(input).find((a) => a.path.endsWith("fastagent.release.json"))!;
     expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "fastagent" });
     const before = process.env.FASTAGENT_RELEASE_FILE;
+    const beforeAgentcore = process.env.FASTAGENT_AGENTCORE;
     try {
       delete process.env.FASTAGENT_RELEASE_FILE;
-      expect(piBasePrompt()).not.toContain("Your workspace survives restarts");
+      delete process.env.FASTAGENT_AGENTCORE;
+      expect(piBasePrompt()).not.toContain("Your workspace survives");
       process.env.FASTAGENT_RELEASE_FILE = values[0];
-      expect(piBasePrompt()).toContain("Your workspace survives restarts, including uncommitted work");
+      expect(piBasePrompt()).toContain("Your workspace survives restarts and deployments");
       expect(piBasePrompt()).toContain("replaces your definition directory");
+      // The host whose storage a deploy RESETS must not be told that work outside the definition
+      // survives one — that would name a location its next deploy erases.
+      process.env.FASTAGENT_AGENTCORE = "1";
+      expect(piBasePrompt()).not.toContain("survives restarts and deployments");
+      expect(piBasePrompt()).toContain("resets this host's storage entirely");
     } finally {
-      if (before === undefined) delete process.env.FASTAGENT_RELEASE_FILE;
-      else process.env.FASTAGENT_RELEASE_FILE = before;
+      for (const [key, value] of [
+        ["FASTAGENT_RELEASE_FILE", before],
+        ["FASTAGENT_AGENTCORE", beforeAgentcore],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

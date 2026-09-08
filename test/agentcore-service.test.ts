@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
+import { openPreparedStartService } from "../src/cli/commands/start.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -19,12 +20,38 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 
 const open = async (dir: string) => createPiAgentFromDir(dir, { serving: true });
 
+/** A deferred service whose stages are scripted: `prepare` takes the workspace, `assemble` runs in it. */
+const deferred = (assemble: () => Promise<AgentService>, prepare: () => Promise<void> = async () => {}) =>
+  deferAgentcoreService({ prepare, assemble: () => assemble() });
+const invocation = () => new Request("http://h/invocations", { method: "POST", body: "{}" });
+
 describe("deferred AgentCore initialization", () => {
+  it("the assemble stage REJECTS instead of exiting — every 503/probe verdict above depends on it", async () => {
+    // On this host `openPreparedStartService` runs inside an envelope, so a `failStartup` there would
+    // kill the container mid-request and the deploy driver would gate on a generic timeout instead of
+    // the runtime's own error text.
+    const dir = await agentDir({ "channels/bad.mjs": "throw new Error('broken channel');\n" });
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("process.exit called");
+    }) as never);
+    try {
+      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/channel setup is invalid/);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
   it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
     vi.stubEnv("FASTAGENT_INGRESS_SECRET", "trusted-probe");
     try {
-      const deferred = deferAgentcoreService(async () => {
-        throw new Error("EFS mount unavailable");
+      const deferred = deferAgentcoreService({
+        prepare: async () => {
+          throw new Error("EFS mount unavailable");
+        },
+        assemble: async () => {
+          throw new Error("must not assemble");
+        },
       });
       for (const auth of ["trusted-probe", "wrong"]) {
         const r = await deferred.handler(
@@ -44,27 +71,61 @@ describe("deferred AgentCore initialization", () => {
   it("opens only on invocation and shares one initialization across concurrent requests", async () => {
     const close = vi.fn(async () => {});
     const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
-    const deferred = deferAgentcoreService(open);
-    expect((await deferred.handler(new Request("http://h/ping"))).status).toBe(200);
+    const service = deferred(open);
+    expect((await service.handler(new Request("http://h/ping"))).status).toBe(200);
     expect(open).not.toHaveBeenCalled();
-    const request = () => new Request("http://h/invocations", { method: "POST", body: "{}" });
-    const responses = await Promise.all([deferred.handler(request()), deferred.handler(request())]);
+    const responses = await Promise.all([service.handler(invocation()), service.handler(invocation())]);
     expect(await Promise.all(responses.map((r) => r.text()))).toEqual(["ready", "ready"]);
     expect(open).toHaveBeenCalledOnce();
-    await deferred.close();
-    await deferred.close();
+    await service.close();
+    await service.close();
     expect(close).toHaveBeenCalledOnce();
   });
-  it("reports and caches initialization failures rather than reading an empty workspace", async () => {
+  it("caches an assembly failure rather than reading an empty workspace or starting a second scheduler", async () => {
     const open = vi.fn(async (): Promise<AgentService> => {
-      throw new Error("EFS mount unavailable");
+      throw new Error("channels/lark.ts is broken");
     });
-    const deferred = deferAgentcoreService(open);
+    const service = deferred(open);
     for (let i = 0; i < 2; i++) {
-      const r = await deferred.handler(new Request("http://h/invocations", { method: "POST", body: "{}" }));
+      const r = await service.handler(invocation());
       expect(r.status).toBe(503);
-      expect(await r.text()).toContain("EFS mount unavailable");
+      expect(await r.text()).toContain("channels/lark.ts is broken");
     }
+    expect(open).toHaveBeenCalledOnce();
+  });
+  it("does not assemble a service after close() — nothing would ever stop its scheduler", async () => {
+    // Shutdown can land while the workspace is still being taken (a first boot copies it onto the
+    // volume). close() has already run by the time prepare settles, so assembling here would start
+    // channels and a scheduler with no one left to close them.
+    const open = vi.fn(
+      async () => ({ handler: () => new Response("ready"), close: async () => {} }) as unknown as AgentService,
+    );
+    let release = (): void => {};
+    const service = deferred(open, () => new Promise<void>((r) => (release = r)));
+    const pending = service.handler(invocation());
+    await service.close();
+    release();
+    expect((await pending).status).toBe(503);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed prepare on the next envelope — it took no lease and started no timers", async () => {
+    const close = vi.fn(async () => {});
+    const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
+    let attempts = 0;
+    const service = deferred(open, async () => {
+      if (++attempts < 3) throw new Error("could not acquire workspace lease at /mnt/data/.deployment");
+    });
+    for (let i = 0; i < 2; i++) {
+      const r = await service.handler(invocation());
+      expect(r.status).toBe(503);
+      expect(await r.text()).toContain("could not acquire workspace lease");
+    }
+    expect(open).not.toHaveBeenCalled(); // nothing assembles over a workspace this process never took
+    expect(await (await service.handler(invocation())).text()).toBe("ready");
+    // Concurrent envelopes share one attempt, and a taken workspace is never taken twice.
+    await Promise.all([service.handler(invocation()), service.handler(invocation())]);
+    expect(attempts).toBe(3);
     expect(open).toHaveBeenCalledOnce();
   });
 });

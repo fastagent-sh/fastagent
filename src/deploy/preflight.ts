@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
+import { isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists, readTextIfExists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
@@ -131,6 +132,18 @@ export async function preflightDeploy(input: {
     return {
       ok: false,
       gate: "deploy requires a nested agent directory; point deploy at the workspace containing fastagent/",
+    };
+  }
+  // The release manifest carries this name into the container, where it is joined onto the storage
+  // root — so `init`'s "one path segment" is not enough here. Asked before any artifact is written:
+  // the manifest's own refusal would name a file the author never wrote.
+  if (!isReleaseAgentName(basename(agentDir))) {
+    return {
+      ok: false,
+      gate:
+        `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
+        `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.* inside is what ` +
+        `makes it an agent, never its name)`,
     };
   }
   const agentPrefix = `${basename(agentDir)}/`;

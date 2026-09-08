@@ -6,6 +6,7 @@ import { closeSync, openSync } from "node:fs";
 import { once } from "node:events";
 import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
+import { log } from "../log.ts";
 import { exists } from "../paths.ts";
 
 export const RELEASE_FILE = "fastagent.release.json";
@@ -16,6 +17,13 @@ export interface DeploymentRelease {
   agent: string;
 }
 
+/** The manifest names a directory the container joins onto the workspace root, so the spelling is
+ *  constrained. `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects
+ *  is the author's directory name, not a corrupt manifest. */
+export function isReleaseAgentName(name: string): boolean {
+  return /^[a-zA-Z0-9_-]+$/.test(name);
+}
+
 export function parseDeploymentRelease(raw: string): DeploymentRelease {
   const r = JSON.parse(raw) as DeploymentRelease;
   if (
@@ -23,7 +31,7 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
     typeof r.id !== "string" ||
     !r.id ||
     typeof r.agent !== "string" ||
-    !/^[a-zA-Z0-9_-]+$/.test(r.agent)
+    !isReleaseAgentName(r.agent)
   ) {
     throw new Error("invalid deployment release manifest");
   }
@@ -77,12 +85,23 @@ export async function applyDeploymentRelease(
   if (applied?.agent !== undefined && applied.agent !== release.agent) {
     throw new Error(`deployment selects ${release.agent}, but this workspace belongs to ${applied.agent}`);
   }
-  if (applied?.id === release.id) return workspace;
+  // Logged on BOTH paths: rebuilding an image without regenerating the manifest keeps the id, and a
+  // deployment that silently kept the old definition looks identical to one that took the new one.
+  if (applied?.id === release.id) {
+    log.info(`[fastagent] release ${release.id} is already applied — keeping the workspace's definition`);
+    return workspace;
+  }
   const initial = applied === undefined;
   if (initial && (await exists(workspace)))
     throw new Error(`refusing to initialize over an existing unowned workspace: ${workspace}`);
-  if (!(await lstat(join(source, release.agent))).isDirectory())
-    throw new Error("the release must contain a nested agent directory");
+  const definition = join(source, release.agent);
+  if (!(await exists(definition)) || !(await lstat(definition)).isDirectory())
+    throw new Error(`the release must contain a nested agent directory: ${definition}`);
+  log.info(
+    initial
+      ? `[fastagent] seeding the workspace from release ${release.id}`
+      : `[fastagent] publishing release ${release.id} over base/${release.agent}`,
+  );
   await rm(staged, { recursive: true, force: true });
   await cp(initial ? source : join(source, release.agent), staged, { recursive: true, verbatimSymlinks: true });
   const pending: PendingRelease = { release, initial };
@@ -109,12 +128,16 @@ export async function assertStorageMounted(root: string, paths?: string[]): Prom
     throw new Error(`persistent storage is not mounted at ${root}`);
 }
 
-export async function leaseDeployment(metadata: string): Promise<() => Promise<void>> {
+/** `waitSeconds` covers a restart overlapping the old process's exit; a test that wants the refusal
+ *  passes a short one rather than waiting out the deployment default. */
+export async function leaseDeployment(metadata: string, waitSeconds = 35): Promise<() => Promise<void>> {
   // flock locks the shared open-file description. The parent's raw fd survives GC and closes at exit.
   // Never unlink this inode: another starter may already have it open.
   const fd = openSync(join(metadata, "lock"), "a", 0o600);
   try {
-    const child = spawn("flock", ["--exclusive", "--wait", "35", "3"], { stdio: ["ignore", "ignore", "pipe", fd] });
+    const child = spawn("flock", ["--exclusive", "--wait", String(waitSeconds), "3"], {
+      stdio: ["ignore", "ignore", "pipe", fd],
+    });
     let stderr = "";
     (child.stderr as Readable).setEncoding("utf8").on("data", (chunk: string) => {
       stderr += chunk;
@@ -127,22 +150,27 @@ export async function leaseDeployment(metadata: string): Promise<() => Promise<v
     };
   } catch (error) {
     closeSync(fd);
+    // A custom base image without util-linux fails every boot; the bare spawn error names neither
+    // the binary nor why a lease needs one.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new Error(`the deployed workspace lease needs the \`flock\` binary (util-linux): ${String(error)}`);
     throw error;
   }
 }
 
-/** The returned lease stays held for the process lifetime, including invocation and definition reads. */
-export async function prepareDeployment(
-  source: string,
-  root: string,
-  release: DeploymentRelease,
-): Promise<{ workspace: string; release: () => Promise<void> }> {
+/**
+ * Prepare the deployed workspace and return its path.
+ *
+ * The lease is NOT returned: it stays held for the process lifetime, because channel activation can
+ * start background writers that `close()` does not drain. The kernel drops it when the process exits.
+ */
+export async function prepareDeployment(source: string, root: string, release: DeploymentRelease): Promise<string> {
   await assertStorageMounted(root);
   const meta = join(root, ".deployment");
   await mkdir(meta, { recursive: true });
   const unlock = await leaseDeployment(meta);
   try {
-    return { workspace: await applyDeploymentRelease(source, root, release), release: unlock };
+    return await applyDeploymentRelease(source, root, release);
   } catch (error) {
     await unlock();
     throw error;

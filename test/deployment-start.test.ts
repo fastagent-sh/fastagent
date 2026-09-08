@@ -80,7 +80,7 @@ it("retries interrupted installs, opens the workspace's runtime and preserves to
 export default defineTool({ name: "context", description: "Read invocation context", input: z.object({}), execute: (_, ctx) => ({ session: ctx.sessionManager?.getSessionId() ?? "missing", cwd: ctx.cwd }) });`,
     );
     const manifest = join(dir, "release.json");
-    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "fastagent", temporaryDirectories: [] }));
+    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "fastagent" }));
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -120,17 +120,13 @@ fi
     const script = `
 import { mock } from "node:test";
 import { strict as assert } from "node:assert";
-let released = false;
 const storage = await import(${JSON.stringify(`${workspaceUrl}?actual`)});
 mock.module(${JSON.stringify(workspaceUrl)}, { namedExports: { ...storage,
-  prepareDeployment: async (source, root, release) => {
-    return { workspace: await storage.applyDeploymentRelease(source, root, release), release: async () => { released = true; } };
-  }
+  prepareDeployment: (source, root, release) => storage.applyDeploymentRelease(source, root, release)
 } });
 const { openStartService } = await import(${JSON.stringify(startUrl)});
 if (process.argv[1] === "fail") {
   await assert.rejects(openStartService(${JSON.stringify(image)}, { input: false }), /dependency install failed/);
-  assert.equal(released, false);
 } else {
 const service = await openStartService(${JSON.stringify(image)}, { input: false });
 try {
@@ -139,7 +135,6 @@ try {
   console.log(JSON.stringify(events));
 } finally {
   await service.close();
-  assert.equal(released, false);
 }
 }
 `;

@@ -39,16 +39,51 @@ import { readBodyCapped } from "./body.ts";
 import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
 import { secretEquals } from "./secret.ts";
 
-/** Runtime filesystems appear on invocation, so even opening the definition must be deferred. */
-export function deferAgentcoreService(open: () => Promise<AgentService>): {
+/**
+ * Runtime filesystems appear on invocation, so even opening the definition must be deferred — in the
+ * TWO stages that differ in what a retry would cost.
+ *
+ * `prepare` takes the workspace and starts nothing: a rejection means it holds nothing either (no
+ * lease, no timers), so the NEXT envelope tries again. The failures it carries are the platform's
+ * own transients — storage not mounted yet, a lease the outgoing session has not yet dropped — and
+ * caching them would keep a healthy microVM refusing every envelope until it is reclaimed, three
+ * minutes of a deploy probe hammering the same fixed session for an answer that cannot change.
+ *
+ * `assemble` mounts channels and starts the scheduler, so BOTH its outcomes are cached: a second
+ * attempt in this process would run two schedulers over one claim state and replay durable turn
+ * intent twice.
+ */
+export function deferAgentcoreService<T>(stages: {
+  prepare: () => Promise<T>;
+  assemble: (prepared: T) => Promise<AgentService>;
+}): {
   handler: ChannelHandler;
   close: () => Promise<void>;
 } {
   let service: AgentService | undefined;
-  let opening: Promise<AgentService> | undefined;
+  let prepared: Promise<T> | undefined;
+  let assembling: Promise<AgentService> | undefined;
   let closed = false;
   let closing: Promise<void> | undefined;
   const ping = agentcorePing(() => activeWork() > 0);
+  const initialize = async (): Promise<AgentService> => {
+    const done = beginWork();
+    try {
+      prepared ??= stages.prepare().catch((error: unknown) => {
+        prepared = undefined; // nothing was taken, so the next envelope may ask again
+        throw error;
+      });
+      const taken = await prepared;
+      // Shutdown may have arrived while the workspace was being taken. Assembling now would start a
+      // scheduler and channels that `close()` has already come and gone for.
+      if (closed) throw new Error("service closed during initialization");
+      assembling ??= stages.assemble(taken);
+      service = await assembling;
+      return service;
+    } finally {
+      done();
+    }
+  };
   return {
     handler: async (request) => {
       if (closed) return new Response("service closed\n", { status: 503 });
@@ -56,20 +91,11 @@ export function deferAgentcoreService(open: () => Promise<AgentService>): {
       const path = new URL(request.url).pathname;
       if (path === "/ping" && request.method === "GET") return ping(request);
       if (path !== "/invocations" || request.method !== "POST") return new Response("not found\n", { status: 404 });
-      opening ??= (async () => {
-        const done = beginWork();
-        try {
-          service = await open();
-          return service;
-        } finally {
-          done();
-        }
-      })();
       let ready: AgentService;
-      // Only the OPEN is caught here. A failure inside the service's own handler is its business and
-      // must not be reported as an initialization failure against an unread body.
+      // Only the INITIALIZATION is caught here. A failure inside the service's own handler is its
+      // business and must not be reported as an initialization failure against an unread body.
       try {
-        ready = await opening;
+        ready = await initialize();
       } catch (error) {
         const message = `initialization failed: ${String(error)}`;
         log.error(`[agentcore] ${message}`);
@@ -93,7 +119,9 @@ export function deferAgentcoreService(open: () => Promise<AgentService>): {
     close() {
       closed = true;
       closing ??= (async () => {
-        if (opening) await (await opening).close();
+        // A failed assembly already reached its caller. Re-raising it here would report a shutdown
+        // failure (exit 1) for a container that has nothing to close.
+        await (await assembling?.catch(() => undefined))?.close();
       })();
       return closing;
     },
@@ -105,11 +133,6 @@ export interface MountAgentcoreServiceOptions {
   wrapAgent?: (agent: Agent) => Agent;
   /** The process entry owns the global wake-alarm sink; activation reconciles it once. */
   onStateReady?: () => void;
-}
-
-/** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */
-export function isAgentcoreRuntime(): boolean {
-  return process.env.FASTAGENT_AGENTCORE === "1";
 }
 
 export async function mountAgentcoreService(

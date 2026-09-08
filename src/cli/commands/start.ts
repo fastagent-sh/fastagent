@@ -10,12 +10,19 @@ import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import { SECRET_FILE_MODE, ensureSecretsDir, resolveSecretsDir, isUnderDir, exists } from "../../paths.ts";
+import {
+  SECRET_FILE_MODE,
+  ensureSecretsDir,
+  resolveSecretsDir,
+  isAgentcoreRuntime,
+  isUnderDir,
+  exists,
+} from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService, type AgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
-import { isAgentcoreRuntime, mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
+import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup } from "../fail.ts";
@@ -39,21 +46,21 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const bindFlag = parseBind(opts.bind);
   setLogLevel("info");
   if (isAgentcoreRuntime()) {
+    // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.
+    const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;
     let unannounce = (): void => {};
-    const deferred = deferAgentcoreService(async () => {
-      const service = await openStartService(dirArg, opts);
-      await service.ready;
-      unannounce = announceControl(
-        service.control,
-        service.stateRoot,
-        { host: bindFlag, tunnel: false },
-        portFlag ?? 8080,
-      );
-      return service;
+    const deferred = deferAgentcoreService({
+      prepare: () => prepareStartWorkspace(dirArg),
+      assemble: async (prepared) => {
+        const service = await openPreparedWorkspace(prepared, opts);
+        await service.ready;
+        unannounce = announceControl(service.control, service.stateRoot, { host: bindFlag, tunnel: false }, port);
+        return service;
+      },
     });
     serve(
       deferred.handler,
-      { port: portFlag ?? 8080, host: bindFlag },
+      { port, host: bindFlag },
       {
         // The assembly report waits for the first envelope, so this line is the only sign of life a
         // booted container gives — an empty log otherwise reads the same as a container that died.
@@ -69,7 +76,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     );
     return;
   }
-  const service = await openStartService(dirArg, opts);
+  // Deployed storage refusals (no mount, a held lease, a missing `flock`, a failed install) are the
+  // operator's only clue in a crash-looping container; they must not arrive as a Node stack trace.
+  const service = await openStartService(dirArg, opts).catch(failStartup);
   const tunnel = opts.tunnel ?? false;
   const host = resolveBindHost(bindFlag, service.bindHost, tunnel);
   serveService(
@@ -79,25 +88,49 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   );
 }
 
-export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  let open = openPreparedStartService;
+/** What the storage stage hands the opening stage. */
+export interface PreparedWorkspace {
+  /** The workspace to open — the volume's `base/` when a release manifest selected one. */
+  dir: string;
+  /** Set when this process took a deployed workspace. */
+  deployed?: { root: string; agent: string };
+}
+
+/**
+ * Stage one — TAKE the workspace: verify the storage is mounted, apply the release, and point the
+ * machinery at the volume.
+ *
+ * It starts nothing, and on failure it holds nothing (`prepareDeployment` releases its lease before
+ * it throws), so a caller may retry it. AgentCore does, per envelope: an unmounted volume and a
+ * lease the outgoing session still holds are exactly the failures that clear on their own.
+ */
+export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWorkspace> {
   const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
-  if (manifestPath) {
-    const storage = process.env.FASTAGENT_STORAGE_DIR;
-    if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployed workspace");
-    const root = resolve(storage);
-    const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
-    const prepared = await prepareDeployment(resolve(dirArg), root, manifest);
-    // Channel activation may start background work before failing; close() does not drain it.
-    // The kernel closes the lease's fd at process exit, after this process's writers are gone.
-    dirArg = prepared.workspace;
-    // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and
-    // silently relocating their state is the one failure they could not diagnose from the logs.
-    process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
-    process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
-    process.env.FASTAGENT_AGENT = manifest.agent;
-    process.chdir(dirArg);
-    const agentDir = join(dirArg, manifest.agent);
+  if (!manifestPath) return { dir: dirArg };
+  const storage = process.env.FASTAGENT_STORAGE_DIR;
+  if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployed workspace");
+  const root = resolve(storage);
+  const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
+  const dir = await prepareDeployment(resolve(dirArg), root, manifest);
+  // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and
+  // silently relocating their state is the one failure they could not diagnose from the logs.
+  process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
+  process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
+  process.env.FASTAGENT_AGENT = manifest.agent;
+  process.chdir(dir);
+  return { dir, deployed: { root, agent: manifest.agent } };
+}
+
+/**
+ * Stage two — RUN in the prepared workspace: install the agent's dependencies, then open through the
+ * workspace's own FastAgent install. Mounts channels and starts the scheduler, so it runs at most
+ * once per process.
+ */
+export async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: StartOptions): Promise<StartedService> {
+  let open = openPreparedStartService;
+  if (prepared.deployed) {
+    const { root, agent } = prepared.deployed;
+    const agentDir = join(prepared.dir, agent);
     if (await exists(join(agentDir, "package.json"))) {
       const installing = join(root, ".deployment", "installing");
       // A failed install can leave the CLI link in place before its dependencies are complete.
@@ -133,10 +166,20 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
       open = local.openPreparedStartService;
     }
   }
-  return open(dirArg, opts);
+  return open(prepared.dir, opts);
 }
 
-/** Internal entry loaded from the active workspace's installed package after storage initialization. */
+export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
+  return openPreparedWorkspace(await prepareStartWorkspace(dirArg), opts);
+}
+
+/**
+ * Internal entry loaded from the active workspace's installed package after storage initialization.
+ *
+ * REJECTS rather than exiting: on AgentCore this runs as the `assemble` stage of an envelope already
+ * in flight, where the deferred service turns a failure into the probe's structured verdict. The
+ * CLI's own `.catch(failStartup)` sits at `runStart`, so a local `start` still prints one line.
+ */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
   await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
@@ -145,7 +188,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
     authPath: opts.authPath,
     serving: true,
-  }).catch(failStartup);
+  });
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
   await reportAssembly(opened, {
     afterTools: [
@@ -170,8 +213,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     : mountAgentService(
         opened,
         cliMountOptions(() => traced),
-      )
-  ).catch(failStartup);
+      ));
   return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
 }
 

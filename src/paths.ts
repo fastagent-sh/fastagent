@@ -359,6 +359,17 @@ export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.
   return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(resolve(dir), SECRETS_DIRNAME);
 }
 
+/** Is this process the deployed container the generated artifacts describe? ONE reading of the
+ *  environment fact the image states, so a second spelling cannot drift from it. */
+export function isDeployedWorkspace(): boolean {
+  return Boolean(process.env.FASTAGENT_RELEASE_FILE);
+}
+
+/** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */
+export function isAgentcoreRuntime(): boolean {
+  return process.env.FASTAGENT_AGENTCORE === "1";
+}
+
 /** What a file under {@link resolveSecretsDir} is written with (auth.json, .env). */
 export const SECRET_FILE_MODE = 0o600;
 /** What the secrets directory itself is created with. */

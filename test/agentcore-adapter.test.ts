@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Buffer } from "node:buffer";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
@@ -164,7 +164,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     expect(fire2).toHaveBeenCalledTimes(1);
   });
 
-  it("a wake-poke resolves construction too (the deploy probe; alarm wakes replay checkpointed turns)", async () => {
+  it("a wake-poke constructs channels and surfaces construction failures", async () => {
     let built = 0;
     const routes = adapter({
       channels: () => {
@@ -514,5 +514,25 @@ describe("agentcore adapter: activation hooks", () => {
     await postEnvelope(routes, envelope);
     await postEnvelope(routes, envelope);
     expect(onStateReady).toHaveBeenCalledOnce();
+  });
+
+  it("fails the envelope when the callback URL cannot be persisted (alarms would call the old deployment)", async () => {
+    const notADir = join(await mkdtemp(join(tmpdir(), "fa-agentcore-activation-")), "state");
+    await writeFile(notADir, "");
+    const routes = agentcoreRoutes({
+      channels: () => ({ routes: {} }),
+      agent: scriptedAgent(),
+      stateRoot: notADir,
+      isBusy: () => false,
+      ingressSecret: SECRET,
+    });
+    const wake = { url: "https://current.lambda-url.on.aws/" };
+    const res = await postEnvelope(routes, { kind: "wake-poke", wake });
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("activation failed");
+    // The deploy driver reads its verdict through the forwarder, which folds any non-200 into a 502.
+    const probe = await postEnvelope(routes, { kind: "probe", wake });
+    expect(probe.status).toBe(200);
+    expect(await probe.json()).toMatchObject({ ok: false });
   });
 });
