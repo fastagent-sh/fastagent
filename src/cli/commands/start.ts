@@ -3,8 +3,8 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile, rm } from "node:fs/promises";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
@@ -18,7 +18,8 @@ import { logAgentLoop } from "../../observe.ts";
 import { isAgentcoreRuntime, mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
-import { announceControl, cliMountOptions, resolveBindHost, serveService, serve } from "../serve.ts";
+import { failStartup } from "../fail.ts";
+import { announceControl, cliMountOptions, readyAddressLines, resolveBindHost, serveService, serve } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -54,6 +55,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       deferred.handler,
       { port: portFlag ?? 8080, host: bindFlag },
       {
+        // The assembly report waits for the first envelope, so this line is the only sign of life a
+        // booted container gives — an empty log otherwise reads the same as a container that died.
+        onListening: (port) => {
+          for (const line of readyAddressLines(bindFlag, port, false)) log.info(line);
+          log.info("[fastagent] agentcore: the definition opens on the first invocation");
+        },
         onShutdown: async () => {
           unannounce();
           await deferred.close();
@@ -84,8 +91,10 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
     // Channel activation may start background work before failing; close() does not drain it.
     // The kernel closes the lease's fd at process exit, after this process's writers are gone.
     dirArg = prepared.workspace;
-    process.env.FASTAGENT_STATE_DIR = join(root, ".state");
-    process.env.FASTAGENT_SECRETS_DIR = join(root, ".secrets");
+    // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and
+    // silently relocating their state is the one failure they could not diagnose from the logs.
+    process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
+    process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
     process.env.FASTAGENT_AGENT = manifest.agent;
     process.chdir(dirArg);
     const agentDir = join(dirArg, manifest.agent);
@@ -99,7 +108,14 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
             ? ["install", ...(hasLockfile ? ["--frozen-lockfile"] : [])]
             : [hasLockfile ? "ci" : "install"];
         writeFileAtomic(installing, "");
-        await promisify(execFile)(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, timeout: 300_000 });
+        log.info(`[fastagent] installing the agent's dependencies (${runtime} ${args.join(" ")})…`);
+        // stdio inherited: a five-minute install with no output reads as a hang, and the default
+        // 1 MB capture would kill a noisy one outright.
+        const [code, signal] = (await once(
+          spawn(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, stdio: "inherit" }),
+          "exit",
+        )) as [number | null, NodeJS.Signals | null];
+        if (code !== 0) throw new Error(`dependency install failed (${signal ?? `exit ${code}`})`);
         await rm(installing);
       }
       // Tools and their session context must share the workspace's runtime module instance.
@@ -107,6 +123,13 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
       const local = (await import(
         new URL("./cli/commands/start.js", pathToFileURL(entry)).href
       )) as typeof import("./start.ts");
+      // A version-skewed dependency resolves and imports fine, then fails as "open is not a function"
+      // with nothing naming the two versions.
+      if (typeof local.openPreparedStartService !== "function") {
+        throw new Error(
+          `${entry} does not export openPreparedStartService — align the agent's @fastagent-sh/fastagent version with the deploy CLI`,
+        );
+      }
       open = local.openPreparedStartService;
     }
   }
@@ -122,7 +145,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
     authPath: opts.authPath,
     serving: true,
-  });
+  }).catch(failStartup);
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
   await reportAssembly(opened, {
     afterTools: [
@@ -147,7 +170,8 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     : mountAgentService(
         opened,
         cliMountOptions(() => traced),
-      ));
+      )
+  ).catch(failStartup);
   return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
 }
 

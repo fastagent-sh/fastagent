@@ -7,12 +7,9 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyDeploymentRelease,
-  leaseDeployment,
-  unmountWorkspace,
-  mountTemporaryDirectories,
-  parseDeploymentRelease,
-  validateTemporaryDirectories,
   assertStorageMounted,
+  leaseDeployment,
+  parseDeploymentRelease,
   type DeploymentRelease,
 } from "../src/deploy/workspace.ts";
 
@@ -20,7 +17,7 @@ const dirs: string[] = [];
 afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
-const release = (id: string): DeploymentRelease => ({ version: 1, id, agent: "fastagent", temporaryDirectories: [] });
+const release = (id: string): DeploymentRelease => ({ version: 1, id, agent: "fastagent" });
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "fa-deployed-workspace-"));
   dirs.push(dir);
@@ -169,89 +166,12 @@ describe("deployed workspace lifecycle", () => {
     );
     await writeFile(join(root, ".deployment/applied.json"), "broken");
     await expect(applyDeploymentRelease(source, root, release("two"))).rejects.toThrow();
+    // The manifest names a directory the container joins onto the workspace root.
+    expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
   });
 });
 
-describe("temporary directories", () => {
-  it("detaches child mounts before their parents and never detaches storage", async () => {
-    const unmount = vi.fn(async (_path: string) => {});
-    const paths = [
-      "/data",
-      "/data/base/node_modules",
-      "/data/base/node_modules/nested",
-      "/data/base-other/node_modules",
-    ];
-    await unmountWorkspace("/data/base", paths, unmount);
-    expect(unmount.mock.calls.map(([path]) => path)).toEqual([
-      "/data/base/node_modules/nested",
-      "/data/base/node_modules",
-    ]);
-    unmount.mockRejectedValueOnce(new Error("device busy"));
-    await expect(unmountWorkspace("/data/base", paths, unmount)).rejects.toThrow("device busy");
-  });
-
-  it("keeps existing temporary dependencies on a process restart", async () => {
-    const { dir, source, root } = await fixture();
-    const base = await applyDeploymentRelease(source, root, release("one"));
-    const temporary = join(dir, "tmp");
-    await mkdir(join(temporary, "node_modules"), { recursive: true });
-    await writeFile(join(temporary, "node_modules/keep"), "installed");
-    await mountTemporaryDirectories(base, ["node_modules"], temporary, vi.fn());
-    expect(await readFile(join(temporary, "node_modules/keep"), "utf8")).toBe("installed");
-  });
-  it.each(["../outside", "/absolute", ".", ".git", "x/.secrets", "a/../b", "fastagent/", "node_modules/", "x\0y"])(
-    "rejects unsafe declaration %s",
-    (path) => {
-      expect(() => validateTemporaryDirectories([path])).toThrow("invalid temporary directory");
-    },
-  );
-  it("rejects overlapping mounts and invalid manifests", () => {
-    expect(() => validateTemporaryDirectories(["node_modules", "node_modules/cache"])).toThrow("overlapping");
-    expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
-    expect(() =>
-      parseDeploymentRelease(JSON.stringify({ ...release("one"), temporaryDirectories: ["fastagent"] })),
-    ).toThrow();
-  });
-  it("copies disposable contents before mounting and reports mount errors", async () => {
-    const { dir, source, root } = await fixture();
-    const base = await applyDeploymentRelease(source, root, release("one"));
-    await mkdir(join(base, "node_modules"));
-    await writeFile(join(base, "node_modules/installed"), "dependency");
-    const temporary = join(dir, "tmp");
-    const mount = vi.fn(async (from: string, to: string) => {
-      expect(await readFile(join(from, "installed"), "utf8")).toBe("dependency");
-      expect(await readdir(to)).toEqual([]);
-      throw new Error("mount: permission denied");
-    });
-    await expect(mountTemporaryDirectories(base, ["node_modules"], temporary, mount)).rejects.toThrow(
-      "permission denied",
-    );
-    expect(mount).toHaveBeenCalledOnce();
-  });
-  it("rejects symlink destinations without modifying their contents", async () => {
-    const { dir, source, root } = await fixture();
-    const base = await applyDeploymentRelease(source, root, release("one"));
-    const outside = join(dir, "outside");
-    await mkdir(outside);
-    await writeFile(join(outside, "keep"), "keep");
-    await symlink(outside, join(base, "node_modules"));
-    const mount = vi.fn();
-    await expect(mountTemporaryDirectories(base, ["node_modules"], join(dir, "tmp"), mount)).rejects.toThrow("symlink");
-    expect(await readdir(outside)).toEqual(["keep"]);
-    expect(mount).not.toHaveBeenCalled();
-  });
-  it("rejects a symlink ancestor before creating anything outside the workspace", async () => {
-    const { dir, source, root } = await fixture();
-    const base = await applyDeploymentRelease(source, root, release("one"));
-    const outside = join(dir, "outside");
-    await mkdir(outside);
-    await symlink(outside, join(base, "project"));
-    await expect(
-      mountTemporaryDirectories(base, ["project/new/node_modules"], join(dir, "tmp"), vi.fn()),
-    ).rejects.toThrow();
-    expect(await readdir(outside)).toEqual([]);
-  });
-
+describe("storage boundary", () => {
   it("does not mistake a directory for a mounted volume", async () => {
     const { root } = await fixture();
     await mkdir(root);

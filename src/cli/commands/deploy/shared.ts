@@ -12,6 +12,7 @@ import { registerSlackWebhook } from "../../../channels/slack/register-webhook.t
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars } from "../../../deploy/channel-ingress.ts";
 import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
+import { RELEASE_FILE } from "../../../deploy/workspace.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import type { FastagentConfig } from "../../../engines/pi/config.ts";
@@ -148,7 +149,7 @@ export async function writeArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (a.path.endsWith("/fastagent.release.json") || options.alwaysWrite?.includes(a.path)) {
+    if (a.path.endsWith(`/${RELEASE_FILE}`) || options.alwaysWrite?.includes(a.path)) {
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, a.content);
       console.error(`[fastagent] wrote ${a.path}`);

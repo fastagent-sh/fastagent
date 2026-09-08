@@ -204,7 +204,7 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
       : "";
   const deploymentNote = process.env.FASTAGENT_RELEASE_FILE
-    ? `\n\nYour workspace is persistent, including uncommitted work. Your definition survives restarts; a new deployment replaces the definition directory with the author's release. Keep ongoing project work outside that directory. Only explicitly configured temporary directories and /tmp are disposable. Markdown definitions are read each turn; changes to tools, channels or configuration require restarting the service.`
+    ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts.`
     : "";
   return `${identity}
 

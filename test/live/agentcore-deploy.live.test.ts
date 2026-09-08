@@ -13,8 +13,6 @@
  * This host shares nothing with the fly/railway probes but the intent. There is NO public URL to curl:
  * AgentCore exposes `POST /invocations` behind `InvokeAgentRuntime`, an IAM-signed AWS API. So the
  * check goes through the public `invoke` envelope and exercises a real model turn.
- * FASTAGENT_LIVE_AGENTCORE_NETWORK supplies subnetIds and securityGroupIds as JSON. The groups must
- * allow NFS traffic from themselves; the subnets need model/API egress. Each probe creates its own EFS.
  *
  * TEARDOWN, which the product offers none of, is {@link destroyAgentcoreDeployment} — shared with the
  * wake probe, and shared deliberately: it is cleanup code, so a second copy drifts unnoticed until it
@@ -33,8 +31,6 @@
  *   repository  `fastagent/live-probe-*`      (a SLASH, not a hyphen)
  *   runtime     `live_probe_*`                (toRuntimeName: underscores, no prefix at all)
  *
- * The storage stack also needs EFS create/delete/tag permissions and ec2:DescribeSubnets.
- *
  * The directory name carries no `fastagent-` prefix of its own: the driver adds one.
  */
 import { randomUUID } from "node:crypto";
@@ -44,7 +40,6 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { createAgentcoreStorage } from "./agentcore-storage.ts";
 import {
   CLI,
   aws,
@@ -75,18 +70,12 @@ beforeAll(async () => {
   // IAM policy forbids account-wide listing, which is what makes a written name the only way.
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
-  const storage = await createAgentcoreStorage(
-    NAME,
-    JSON.parse(requireEnv("FASTAGENT_LIVE_AGENTCORE_NETWORK", "probe subnetIds and securityGroupIds as JSON")),
-  );
   workspace = join(tmpdir(), NAME);
+  // Nested, because `deploy` requires a workspace that CONTAINS the agent (preflight.ts).
   const agentDir = join(workspace, "fastagent");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-  await writeFile(
-    join(agentDir, "fastagent.config.mjs"),
-    `export default ${JSON.stringify({ model: MODEL, deploy: { agentcore: storage } })};\n`,
-  );
+  await writeFile(join(agentDir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(

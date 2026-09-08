@@ -107,7 +107,7 @@ services:
     build:
       context: ${context}
       dockerfile: ${dockerfile}
-${input.temporaryDirectories?.length ? "    cap_add: [SYS_ADMIN]\n    security_opt: [apparmor=unconfined]\n" : ""}    ports:
+    ports:
       - "127.0.0.1:${input.port}:${input.port}"
     environment:
       PORT: "${input.port}"

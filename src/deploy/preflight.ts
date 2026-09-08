@@ -133,7 +133,6 @@ export async function preflightDeploy(input: {
       gate: "deploy requires a nested agent directory; point deploy at the workspace containing fastagent/",
     };
   }
-  const nested = true;
   const agentPrefix = `${basename(agentDir)}/`;
   const messages: DeployMessage[] = [];
 
@@ -242,18 +241,17 @@ export async function preflightDeploy(input: {
   // After the facts: the deps sentence must match the agent's actual shape (a markdown-only agent has
   // no package.json and installs nothing — the note must not point at a file that doesn't exist).
   const deps = hasPackageJson
-    ? `only the agent's deps (${agentPrefix}package.json) are installed${
-        nested ? " — the workspace's own deps are the agent's runtime concern" : ""
-      }`
+    ? `only the agent's deps (${agentPrefix}package.json) are installed — the workspace's own deps are the agent's runtime concern`
     : `the agent has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
-  const durability =
-    `The workspace seeds the persistent volume once. Redeploys replace only ${agentPrefix}; ` +
-    `working files, Git history, state and refreshed credentials remain on the volume`;
+  // What a RELEASE does — host-neutral, because how long the storage under it lives is the host's own
+  // answer and its runbook gives it (a Fly volume outlives every deploy; AgentCore's mount does not).
   messages.push({
     level: "note",
     text:
       `the whole directory is baked as the agent's workspace (WYSIWYG — what you see is what ships, ` +
-      `git or not, clean or not); ${deps}. ${durability}.`,
+      `git or not, clean or not); ${deps}. The image seeds the storage once; a later release replaces ` +
+      `only ${agentPrefix} and leaves the rest of the workspace, state and credentials in place — for ` +
+      `how long, see this host's storage note below`,
   });
   // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not
   // reproducible. A pnpm/yarn user gets an accurate message (their lockfile is ignored by the npm Dockerfile).
@@ -399,7 +397,7 @@ export async function preflightDeploy(input: {
     // second test could never change the answer. What it was aimed at — an allowlist (`*` +
     // `!fastagent` + `!fastagent/**`) that re-includes the agent — is handled by the first test alone,
     // which reads `false` there, as it should.
-    if (nested && excluded(`${basename(agentDir)}/`)) {
+    if (excluded(`${basename(agentDir)}/`)) {
       const text =
         `your ${rel} (kept) excludes \`${basename(agentDir)}\` — the build context would ship WITHOUT the ` +
         `agent entirely (the deployed box has no persona/config and crash-loops). Remove that rule ` +
@@ -456,7 +454,6 @@ export async function preflightDeploy(input: {
   const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     releaseId: randomUUID(),
-    temporaryDirectories: config.deploy?.temporaryDirectories,
     agentPrefix,
     machineryPaths,
     hasPackageJson,

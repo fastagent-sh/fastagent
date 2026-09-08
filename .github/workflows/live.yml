@@ -200,9 +200,6 @@ jobs:
           # (iam:CreateRole / PassRole / AttachRolePolicy / DetachRolePolicy) and the forwarder
           # artifact bucket exist in no other probe.
           # The policy itself lives in AWS and cannot be verified from this repo.
-          # Operator-owned network; each probe's separate storage stack owns its disposable EFS.
-          # Needs EFS create/delete/tag permissions and ec2:DescribeSubnets as well.
-          FASTAGENT_LIVE_AGENTCORE_NETWORK: ${{ vars.FASTAGENT_LIVE_AGENTCORE_NETWORK }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -251,8 +248,8 @@ jobs:
             | tee /dev/stderr \
             | xargs -r -n1 -I{} railway service delete --service {} --yes
 
-      # The bucket and repository are created outside the runtime stack. This sweep removes probe
-      # artifacts; operator-owned EFS workspaces and networking remain outside its deletion scope.
+      # Same reasoning as the sweeps above, with AgentCore's twist: the bucket and the repository are
+      # deliberately created OUTSIDE the stack, so `delete-stack` leaves both behind.
       #
       # Fail-loud like the two sweeps above, and for a sharper reason: this step is the net under a
       # probe that was KILLED, so the run it reports into is already red or cancelled and nobody will
@@ -315,8 +312,6 @@ jobs:
             done
             attempt "delete-stack $name" aws cloudformation delete-stack --stack-name "fastagent-$name"
             attempt "wait stack-delete $name" aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name"
-            attempt "delete storage $name" aws cloudformation delete-stack --stack-name "fastagent-$name-storage"
-            attempt "wait storage $name" aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name-storage"
             attempt "s3 rb $bucket" aws s3 rb "s3://$bucket" --force
             attempt "delete-repository $name" aws ecr delete-repository --repository-name "fastagent/$name" --force
           done < "$RUNNER_TEMP/agentcore-sweep"

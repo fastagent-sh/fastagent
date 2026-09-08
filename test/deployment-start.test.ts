@@ -129,7 +129,7 @@ mock.module(${JSON.stringify(workspaceUrl)}, { namedExports: { ...storage,
 } });
 const { openStartService } = await import(${JSON.stringify(startUrl)});
 if (process.argv[1] === "fail") {
-  await assert.rejects(openStartService(${JSON.stringify(image)}, { input: false }), /injected install failure/);
+  await assert.rejects(openStartService(${JSON.stringify(image)}, { input: false }), /dependency install failed/);
   assert.equal(released, false);
 } else {
 const service = await openStartService(${JSON.stringify(image)}, { input: false });

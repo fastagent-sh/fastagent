@@ -18,7 +18,6 @@ import { expect } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
 import { ingressSessionId, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
 import { fastagentVersion } from "../../src/version.ts";
-import { storageStackName } from "./agentcore-storage.ts";
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`live probes need ${name} (${hint})`);
@@ -146,8 +145,9 @@ export const answerOf = (events: AgentEvent[]): string =>
  * fixture, not only the one that asks for wake-ups: one line (`selfSchedule`, a channel, a schedule)
  * turns the forwarder on, and a teardown that had to be extended first would leak before it was.
  *
- * The artifact bucket, repository and test storage stack are separate resources. Networking remains
- * operator-owned. Every deletion is attempted even after an earlier failure; "already gone" is the goal state.
+ * The artifact bucket and the repository are created OUTSIDE the stack (like the ECR repo), which
+ * makes them a probe's own job. Every deletion is ATTEMPTED even after an earlier one fails, and every
+ * failure is collected into one throw: "already gone" is the goal state, not a failure.
  */
 export async function destroyAgentcoreDeployment(name: string, account: string): Promise<void> {
   const stack = `fastagent-${name}`;
@@ -182,9 +182,6 @@ export async function destroyAgentcoreDeployment(name: string, account: string):
     "--stack-name",
     stack,
   ]);
-  const storage = storageStackName(name);
-  await attempt("delete storage stack", ["cloudformation", "delete-stack", "--stack-name", storage]);
-  await attempt("wait storage deletion", ["cloudformation", "wait", "stack-delete-complete", "--stack-name", storage]);
   if (account) {
     const bucket = deploymentBucketName(name, account);
     await attempt("s3 rb", ["s3", "rb", `s3://${bucket}`, "--force"]);
@@ -192,10 +189,7 @@ export async function destroyAgentcoreDeployment(name: string, account: string):
   await attempt("ecr delete-repository", ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
 
   if (errors.length > 0) {
-    throw new AggregateError(
-      errors,
-      `teardown failed — check stacks ${stack} and ${storage}, bucket fa-${name}-*, repo ${repo}`,
-    );
+    throw new AggregateError(errors, `teardown failed — check stack ${stack}, bucket fa-${name}-*, repo ${repo}`);
   }
 }
 

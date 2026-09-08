@@ -28,11 +28,6 @@ import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
   releaseId: "release-one",
-  storage: {
-    efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
-    subnetIds: ["subnet-0123456789abcdef0"],
-    securityGroupIds: ["sg-0123456789abcdef0"],
-  },
   name: "my-agent",
   modelAuth: "OPENAI_API_KEY",
   channels: [],
@@ -138,9 +133,8 @@ describe("deploy agentcore: the plan", () => {
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::BedrockAgentCore::Runtime");
     expect(template).toContain("AgentRuntimeName: my_agent");
-    expect(template).toContain("EfsAccessPoint:");
-    expect(template).toContain(`MountPath: ${MOUNT}`);
-    expect(template).not.toContain("SessionStorage:");
+    expect(template).toContain(`SessionStorage: { MountPath: ${MOUNT} }`);
+    expect(template).not.toContain("EfsAccessPoint");
     expect(template).toContain('FASTAGENT_AGENTCORE: "1"');
     expect(template).toContain('PORT: "8080"');
     expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
@@ -381,13 +375,14 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("  ForwarderS3Key:");
   });
 
-  it("grants access-point-constrained EFS access without snapshot permissions", () => {
+  it("mounts managed session storage and grants no storage permissions of its own", () => {
     const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
-    expect(template).toContain("elasticfilesystem:ClientMount");
-    expect(template).toContain(`elasticfilesystem:AccessPointArn: '${baseInput().storage.efsAccessPointArn}'`);
+    expect(template).toContain(`- SessionStorage: { MountPath: ${MOUNT} }`);
+    // The state snapshot is gone with the S3 durability it served; so is the EFS topology.
     expect(template).not.toContain("s3:PutObject");
     expect(template).not.toContain("s3:ListBucket");
     expect(template).not.toContain("STATE_BUCKET:");
+    expect(template).not.toContain("elasticfilesystem");
   });
 
   it("an invoke-only deployment (no forwarder) carries no bucket wiring at all", () => {
@@ -409,11 +404,12 @@ describe("deploy agentcore: the plan", () => {
     );
   });
 
-  it("documents workspace durability and the fixed runtime session", () => {
+  it("states the reset a deploy performs rather than promising durability it does not have", () => {
     const runbook = planAgentcoreDeploy(baseInput()).runbook.join("\n");
-    expect(runbook).toContain("across idle and redeploy");
+    expect(runbook).toContain("across compute stop/resume");
+    expect(runbook).toContain("RESETS it on every runtime version update");
+    expect(runbook).toContain("Deploying IS re-authenticating");
     expect(runbook).toContain(ingressSessionId("my-agent"));
-    expect(runbook).toContain("replaces only base/fastagent/");
   });
 
   describe("the forwarder deployment package", () => {

@@ -59,7 +59,7 @@ fastagent info
 
 **Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. A `fastagent.config.*` file identifies the agent; `fastagent/` is only the default directory name.
 
-**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.*` inside is what makes a directory an agent, never its name.
+**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. Note that `fastagent deploy` needs a workspace that CONTAINS the agent, so a flat agent has to move into one before it can be deployed. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.*` inside is what makes a directory an agent, never its name.
 
 A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a

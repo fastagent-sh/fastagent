@@ -111,11 +111,6 @@ describe("every host's runbook reads the same answer", () => {
   const agentcore = (channels: ReturnType<typeof webhook>) =>
     planAgentcoreDeploy({
       releaseId: "release-one",
-      storage: {
-        efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
-        subnetIds: ["subnet-0123456789abcdef0"],
-        securityGroupIds: ["sg-0123456789abcdef0"],
-      },
       name: "bot",
       modelAuth: undefined,
       channels,

@@ -97,8 +97,8 @@ src/
 │   │                     # to swap. The types stay pure Fetch.
 │   ├── agentcore-service.ts # the AgentCore SERVING assembly — same product as service.ts, built
 │   │                     # differently because the host is: the adapter is the surface, channels are
-│   │                     # discovered on trusted ingress. The process opener waits for the native EFS
-│   │                     # mount on the first invocation before reading definitions or state. The clock
+│   │                     # discovered on trusted ingress. Runtime filesystems appear ON INVOCATION, so the
+│   │                     # process opener defers the WHOLE definition until the first envelope. The clock
 │   │                     # is external, resident connections cannot survive scale-to-zero. Returns an
 │   │                     # AgentService, so `start` picks an assembly once and everything after is
 │   │                     # common. Owns nothing process-global: the wake sink stays with the entry.
@@ -221,11 +221,11 @@ src/
 │   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
 │   ├── container.ts         # portable image + ignore files + release manifest (host-neutral)
-│   ├── workspace.ts         # shared deployed lifecycle: mounted storage, process lease, seed once,
-│   │                        # recoverable definition replacement and explicit temporary bind mounts.
-│   │                        # base/ is cwd; .state/ and .secrets/ remain outside the definition.
-│   │                        # start loads the service from the workspace's package so tools and engine
-│   │                        # share one runtime module instance.
+│   ├── workspace.ts         # shared deployed lifecycle: assert the storage is MOUNTED (an unmounted dir
+│   │                        # must never look like a new disk), one process lease, recoverable definition
+│   │                        # replacement. base/ is cwd; .state/ and .secrets/ stay outside the definition.
+│   │                        # start loads the service from the workspace's OWN package so tools and engine
+│   │                        # share one runtime module instance (one AsyncLocalStorage).
 │   ├── secrets.ts           # BOTH directions of the credential carry: required-secret NAMES (runbook),
 │   │                     # assembleSecrets VALUES (--run), and the boot-side authSeedBytes/collectAuthSeed
 │   │                     # the container reads them back with. The read side lived in fly/run.ts, which
@@ -236,7 +236,8 @@ src/
 │   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
 │   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js }  # AWS Bedrock AgentCore: ONE CloudFormation stack (runtime +
 │                         # forwarder Lambda for webhooks + EventBridge rules for schedules). No public URL and no
-│                         # resident process. Native EFS and VPC resources are operator-owned and survive the stack.
+│                         # resident process — and no volume: managed SessionStorage is wiped on every deploy,
+│                         # which this host STATES rather than engineers around (docs/design/core.md).
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
@@ -322,11 +323,12 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # CloudFormation ACCEPTING the YAML this repo emits by hand, forwarder and
                              # schedule branches included (agentcore — read-only, free, and the only
                              # check that the template parses)
-                             # plus a REAL runtime stack + ECR repo + disposable EFS storage stack
-                             # provisioned and destroyed (agentcore-deploy tests InvokeAgentRuntime).
-                             # test/live/agentcore-storage.ts gives each probe fresh storage in an
-                             # operator-owned network. test/live/env.ts also cleans the artifact bucket
-                             # and runtime-created wake alarms when that topology creates them, and an agent
+                             # plus a REAL stack + ECR repo + S3 bucket provisioned and destroyed
+                             # (agentcore-deploy — no public URL exists, so it proves the deployment
+                             # works through InvokeAgentRuntime; teardown is THREE places because the
+                             # bucket, repo and runtime-created wake alarms all live outside the stack
+                             # on purpose, and it is ONE shared function in test/live/env.ts because a
+                             # second copy of cleanup code drifts where nobody looks), and an agent
                              # SCHEDULING ITSELF on a host with no resident process (agentcore-wake —
                              # the wake tool's write becomes a POST to the forwarder becomes an
                              # EventBridge one-shot, three systems that must be simultaneously right

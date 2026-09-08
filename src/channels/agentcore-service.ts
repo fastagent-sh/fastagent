@@ -65,10 +65,11 @@ export function deferAgentcoreService(open: () => Promise<AgentService>): {
           done();
         }
       })();
+      let ready: AgentService;
+      // Only the OPEN is caught here. A failure inside the service's own handler is its business and
+      // must not be reported as an initialization failure against an unread body.
       try {
-        const ready = await opening;
-        if (closed) return new Response("service closed\n", { status: 503 });
-        return ready.handler(request);
+        ready = await opening;
       } catch (error) {
         const message = `initialization failed: ${String(error)}`;
         log.error(`[agentcore] ${message}`);
@@ -86,6 +87,8 @@ export function deferAgentcoreService(open: () => Promise<AgentService>): {
         }
         return new Response(`${message}\n`, { status: 503 });
       }
+      if (closed) return new Response("service closed\n", { status: 503 });
+      return ready.handler(request);
     },
     close() {
       closed = true;

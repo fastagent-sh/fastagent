@@ -31,7 +31,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 |---|---|---|
 | **Model is in `fastagent.config.*`** | A `--model` flag, `FASTAGENT_MODEL`, or `.env` value is builder-local and does **not** travel (`.env` is dockerignored). Only the config file ships. | `model: "provider/id"` in `fastagent.config.mjs`. `deploy` warns (or, under `--run`, gates) if it's missing. |
 | **Secrets are declared** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). |
-| **Workspace, state and secrets are durable** | Local directories remain where you created them. | All targets keep `base/`, `.state/`, and `.secrets/` on persistent storage. Docker, Fly and Railway mount `/data`; AgentCore mounts an existing EFS access point at `/mnt/data`. New releases replace only the nested definition. |
+| **Workspace, state and secrets are durable** | Local directories remain where you created them. | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`, and a new release replaces only the nested definition. AgentCore uses managed SessionStorage at `/mnt/data`, which the platform resets on every deploy. |
 
 Model auth: if your local auth is an **env key** (e.g. `OPENAI_API_KEY`), `deploy` lists it as a host secret automatically. In a runbook-only deploy, an OAuth/stored login still needs a provider API key or an `auth.json` placed on the volume. Under `--run`, FastAgent carries the local auth file as an absent-only `FASTAGENT_AUTH_SEED`, so a credential already refreshed on the volume is never overwritten.
 
@@ -145,21 +145,7 @@ fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries yo
 
 ## AWS Bedrock AgentCore
 
-Prereqs: AWS CLI v2, Docker with buildx, and an existing EFS access point in a VPC in a [supported region](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html). The image builds locally for linux/arm64. Configure a dedicated access-point root for this workspace:
-
-```ts
-export default defineConfig({
-  deploy: {
-    agentcore: {
-      efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
-      subnetIds: ["subnet-0123456789abcdef0"],
-      securityGroupIds: ["sg-0123456789abcdef0"],
-    },
-  },
-});
-```
-
-EFS mount targets must cover the runtime subnets' Availability Zones. Allow TCP 2049 between the runtime and mount-target security groups. Match the access point's POSIX identity to the container user. External model/channel APIs require private subnets with NAT egress; public subnets alone do not provide internet access. EFS and networking have their own charges and remain operator-owned. See [AWS filesystem configuration](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-filesystem-configurations.html) and [VPC requirements](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html).
+Prereqs: AWS CLI v2 with credentials in a [region where AgentCore is available](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html), and Docker with buildx — this is the one target whose image builds **on your machine** (the platform requires a linux/arm64 image in your account's ECR and has no remote builder). No VPC, no filesystem and no other AWS resource has to exist first.
 
 ```bash
 fastagent deploy agentcore
@@ -190,11 +176,12 @@ AgentCore differs from the resident-box hosts in kind — the platform has **no 
 
 What to know before choosing it:
 
-- **EFS preserves unfinished work, state and credentials across idle and redeploy.** The stack references the existing access point; it never creates or deletes the filesystem. The S3 bucket holds only the forwarder deployment package.
-- **Startup waits for the native mount.** `/ping` is available immediately. The first invocation verifies storage, acquires the workspace lease, initializes or updates the definition, and opens the service. Failures remain visible; startup never proceeds against an unmounted directory.
-- **Redeploys stop the fixed runtime session** so the next call uses the new image. In-flight work is interrupted. Channels with durable turn intent can replay it; channels without replay lose that turn. Workspace files already written to EFS remain.
+- **A deploy resets the state.** Storage is the platform's managed SessionStorage at `/mnt/data`. It keeps the workspace, `.state` and `.secrets` across compute stop/resume — an idle-reclaimed agent resumes with its memory — and AWS **wipes it on every runtime version update, i.e. on every deploy**, and after 14 idle days. So sessions, channel state and pending wake-ups start blank after each deploy. Cross-deploy memory would need EFS or S3 Files, both VPC-only and therefore a NAT gateway for model/channel egress (~$33/mo standing); if you need it, use `deploy fly` or `deploy railway` and their real volumes. The S3 bucket here holds only the forwarder deployment package.
+- **Deploying is re-authenticating.** The credential seed is absent-only, so a restart keeps an `auth.json` the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Caveat for OAuth: a refresh token is single-use and shared with your machine, so the box can lose model access between deploys — deploy again, or use a provider API key.
+- **Nothing opens before the first invocation.** Runtime filesystems appear on invoke, so `/ping` answers immediately while the definition, credentials and channels wait for the first envelope. `deploy --run` probes exactly that path, so a bad credential or a broken `channels/` module fails at deploy time with the runtime's own error text.
+- **Redeploys stop the fixed runtime session** so the next call uses the new image. In-flight work is interrupted, and its state is wiped with the mount — replay does not survive a deploy here.
 - **Long-connection channels cannot run here** — the connection is the ingress and nothing wakes a reclaimed session; switch the channel to webhook mode (`--run` gates on this).
-- **Programmatic invokes reuse the deployment's fixed `runtimeSessionId`**, printed in the runbook. The envelope's `session` still selects an independent conversation. Every entry point sees the same EFS workspace. The workspace lease rejects competing writers. A trusted forwarder probe initializes wake-alarm callbacks.
+- **Programmatic invokes reuse the deployment's fixed `runtimeSessionId`**, printed in the runbook. The envelope's `session` still selects an independent conversation. The workspace lease rejects competing writers.
 - **The webhook body limit is the host's, not the channel's.** A Lambda Function URL request caps at 6 MB, so a webhook body over roughly 4 MiB cannot reach the container at all — the GitHub channel's own 25 MiB contract is not achievable here, and `deploy agentcore` says so when that channel is present.
 - **The template is the topology.** If a kept `agentcore.template.yaml` no longer matches the definition (you added a schedule, a channel, or `selfSchedule`), `--run` stops until you regenerate with `--force` (hand-written templates — marker removed — are always kept and never gated).
 
@@ -215,29 +202,15 @@ Deploy requires a nested definition. Point it at the workspace containing `fasta
 
 `fastagent deploy <host>` issues `fastagent/fastagent.release.json`. Regenerate it before manually building a new release. Restarting the same release preserves definition edits. A different release replaces only `base/fastagent/`, including deleting obsolete definition files. Other workspace files, uncommitted/untracked work, Git history and refreshed credentials remain. Author-side project-code updates outside the definition require explicit synchronization. Definition replacement may leave a dirty Git tree.
 
-Startup stages updates before publishing them and completes an interrupted update before opening the agent. A kernel file lock excludes competing starters until the owner exits. Keep `.deployment/lock` in place even when the service is stopped; removing the inode would bypass another starter's lock. Custom images need `flock`, `mount` and `umount`. Credentials seed only when absent.
+Startup stages updates before publishing them and completes an interrupted update before opening the agent. A kernel file lock excludes competing starters until the owner exits. Keep `.deployment/lock` in place even when the service is stopped; removing the inode would bypass another starter's lock. Custom images need `flock`. Credentials seed only when absent. Download caches live under `/tmp/fastagent/`, off the volume.
+
+On AgentCore the same layout sits on managed SessionStorage, which the platform wipes on every deploy — see [above](#aws-bedrock-agentcore).
 
 - **Artifacts land in the agent dir** — `fastagent/Dockerfile`, `fastagent/Dockerfile.dockerignore`, and `fastagent/fastagent.compose.yml` / `fastagent/fly.toml` / `fastagent/railway.json` — so they never collide with Docker/deploy files the workspace already owns. **One write outside the agent dir**: a `.dockerignore` at the workspace root (context-packers only read that form; it excludes `.secrets` contents (except tracked `.env.example` + `.gitignore`) and `**/.state`, plus `**/node_modules`, `**/.cache` and `**/.env*`, and does *not* exclude `.git`). **Ownership decides what deploy may overwrite, not `--force` and not the path.** Every generated artifact opens with a marker line: `--force` regenerates ONES WE WROTE, and a file without the marker is never touched (delete it to hand the path back). So a hand-written `Dockerfile`, a `.dockerignore` the repo already had, or a `fly.toml` you tuned all survive `--force`. For a kept `.dockerignore`, preflight then asks it about the paths that matter: if it would drop the agent dir (the context ships without the agent) or would NOT exclude `fastagent/.secrets/auth.json` (the packer bakes credentials into the image), that **gates `--run`** and warns generate-only; an unexcluded `.state`/`node_modules` warns, and a `.git` exclude gets a note (kills the agent's pull/push loop). Note that dockerignore patterns are root-anchored: a bare `.secrets` line covers only the workspace root, not the agent's own `fastagent/.secrets` — use `**/.secrets/**`, then re-include the two tracked scaffolds when `.git` ships. Docker Compose builds from the workspace root through the namespaced file; the Fly runbook passes explicit flags (`fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile`); on Railway the build entry rides the `RAILWAY_DOCKERFILE_PATH` service variable (set with the machinery variables — fully scriptable), and pointing the service at `fastagent/railway.json` (Settings → Config-as-code — dashboard-only) is an *optional* enhancement: it adds the `/health` deploy gate, while Railway's default restart policy already matches the file's `ON_FAILURE`.
 - **The image initializes the whole workspace.** Only the agent's dependencies (`fastagent/package.json`) are installed at build time. Keep the deploy CLI and the agent's FastAgent dependency on the same version. Other project dependencies are installed when needed.
 - **Git collaboration follows the agent's policy**: when the workspace is a git repo, `git` is baked in and `.git` ships in the image, so the agent can `git pull` to freshen content and `commit`/`push` its work back; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
 - **Git is optional collaboration, not a persistence requirement.** Non-Git workspaces retain ongoing work too.
 - **Definition edits survive restarts.** Markdown is live-read each turn; tools, channels and configuration need a service restart. A new release can replace those edits. The deployed system prompt explains this boundary.
-
-### Temporary directories
-
-Download caches use `/tmp/fastagent/`. Rebuildable directories can opt into temporary bind mounts:
-
-```ts
-deploy: {
-  temporaryDirectories: ["fastagent/node_modules", "projects/site/node_modules"],
-}
-```
-
-These paths are relative to `base/`. They behave as ordinary directories, preserving package-manager and workspace-link behavior. Mounts are reattached at startup and detached before definition replacement. Missing agent dependencies are installed before loading the active runtime. An interrupted installation is retried at the next startup. Other projects reinstall dependencies when needed.
-
-Use workspace-relative directory paths without trailing slashes. Only explicitly selected directories and `/tmp` are disposable; `.gitignore` does not determine durability. Keep source, lockfiles and dependency patches outside temporary directories. Removing a mount point with `rm -rf` can delete its contents before returning `EBUSY`; unmount before removing the directory itself.
-
-Docker enables `SYS_ADMIN` and disables its AppArmor profile for these mounts, so configure them only for trusted agents. Fly runs the image in a [root-capable virtual machine](https://community.fly.io/t/why-are-fly-machines-running-as-firecracker-microvms-configured-with-privileged-true/26380). Railway rejects this setting because its containers cannot mount filesystems; its workspace and dependencies remain on the volume, with download caches under `/tmp`.
 
 ## Other Docker hosts
 
@@ -251,7 +224,7 @@ The generated `Dockerfile` runs the directory on any container platform; `fastag
 
 Resident recipes require **one active replica** with durable storage. Multiple replicas need shared storage and coordination for sessions, channel state, and scheduled work; separate volumes split those records. The `PiSessionRecordStore` / `Lease` seams cover engine sessions (see [Embedding](embedding.md)), not every channel's state.
 
-AgentCore uses one EFS workspace and one fixed runtime session for every entry point. Configure a dedicated access-point root per workspace; separate conversations still use separate envelope session ids.
+AgentCore uses one SessionStorage workspace and one fixed runtime session for every entry point; separate conversations still use separate envelope session ids. That storage does not survive a deploy.
 
 ## Where next
 

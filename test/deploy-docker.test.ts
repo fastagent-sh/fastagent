@@ -26,12 +26,10 @@ const base = {
 } as const;
 
 describe("deploy/docker: planDockerDeploy", () => {
-  it("grants mount permissions only when temporary directories are explicitly configured", () => {
-    const input = { ...base, modelAuth: undefined, channels: [] };
-    expect(compose(planDockerDeploy(input))).not.toContain("SYS_ADMIN");
-    const configured = compose(planDockerDeploy({ ...input, temporaryDirectories: ["fastagent/node_modules"] }));
-    expect(configured).toContain("cap_add: [SYS_ADMIN]");
-    expect(configured).toContain("security_opt: [apparmor=unconfined]");
+  it("asks for no container privilege: the volume is a local disk, nothing needs mounting", () => {
+    const yaml = compose(planDockerDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(yaml).not.toContain("SYS_ADMIN");
+    expect(yaml).not.toContain("apparmor");
   });
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram"]) });

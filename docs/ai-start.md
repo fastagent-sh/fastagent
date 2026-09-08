@@ -64,7 +64,7 @@ directories or the same directory.
 | Situation | Placement |
 |---|---|
 | New agent or an agent for an existing project | `fastagent init [workspace]` creates `workspace/fastagent/`; existing workspace files stay untouched. |
-| A standalone agent repository or an existing package that is itself the agent | `fastagent init . --flat` puts the definition in the current directory and keeps existing files. Review retained package and ignore files. |
+| A standalone agent repository or an existing package that is itself the agent | `fastagent init . --flat` puts the definition in the current directory and keeps existing files. Review retained package and ignore files. Not deployable as-is: `deploy` requires the agent to sit inside a workspace. |
 | An existing application embeds the agent | Keep the application's layout. A nested definition is convenient; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Check the workspace itself and its direct

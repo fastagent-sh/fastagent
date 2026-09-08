@@ -13,12 +13,9 @@ const input = {
 } as const;
 
 describe("deploy/container: shared Docker context", () => {
-  it("requires a safe nested definition and rejects making it temporary", () => {
+  it("requires a safe nested definition", () => {
     expect(() => containerArtifacts({ ...input, agentPrefix: "" })).toThrow("nested agent");
     expect(() => containerArtifacts({ ...input, agentPrefix: "../agent/" })).toThrow("manifest");
-    expect(() => containerArtifacts({ ...input, temporaryDirectories: ["fastagent"] })).toThrow(
-      "definition cannot be temporary",
-    );
   });
   it("keeps tracked secrets scaffolds without shipping credentials or state", () => {
     const artifacts = containerArtifacts(input);
@@ -65,19 +62,14 @@ describe("deploy/container: shared Docker context", () => {
       .map((content) => /^ENV FASTAGENT_RELEASE_FILE=(\S+)$/m.exec(content)?.[1]);
     expect(values).toEqual(Array(3).fill("/app/fastagent/fastagent.release.json"));
     const manifest = containerArtifacts(input).find((a) => a.path.endsWith("fastagent.release.json"))!;
-    expect(JSON.parse(manifest.content)).toEqual({
-      version: 1,
-      id: "release-one",
-      agent: "fastagent",
-      temporaryDirectories: [],
-    });
+    expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "fastagent" });
     const before = process.env.FASTAGENT_RELEASE_FILE;
     try {
       delete process.env.FASTAGENT_RELEASE_FILE;
-      expect(piBasePrompt()).not.toContain("Your workspace is persistent");
+      expect(piBasePrompt()).not.toContain("Your workspace survives restarts");
       process.env.FASTAGENT_RELEASE_FILE = values[0];
-      expect(piBasePrompt()).toContain("Your workspace is persistent, including uncommitted work");
-      expect(piBasePrompt()).toContain("a new deployment replaces the definition directory");
+      expect(piBasePrompt()).toContain("Your workspace survives restarts, including uncommitted work");
+      expect(piBasePrompt()).toContain("replaces your definition directory");
     } finally {
       if (before === undefined) delete process.env.FASTAGENT_RELEASE_FILE;
       else process.env.FASTAGENT_RELEASE_FILE = before;

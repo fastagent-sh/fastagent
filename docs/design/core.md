@@ -688,12 +688,12 @@ the host packer permits it, and the image installs Git when the workspace contai
 optional collaboration mechanism; storage preserves unfinished work without commits or pushes.
 
 `deploy/workspace.ts` owns the shared lifecycle. Storage contains `base/` (cwd), `.state/`, `.secrets/`
-and `.deployment/`. A generated release manifest selects the definition and explicitly disposable
-directories. A process-lifetime lease precedes initialization; staged trees and a pending journal make
-definition replacement recoverable. The same release preserves agent edits; a new one removes obsolete
-definition files while keeping everything outside the definition. Credentials seed only when absent.
-Temporary bind mounts attach after replacement and detach before it. Railway rejects temporary mount
-configuration, while retaining its workspace and dependencies on the volume.
+and `.deployment/`. A generated release manifest selects the definition. A process-lifetime lease
+precedes initialization; staged trees and a pending journal make definition replacement recoverable.
+The same release preserves agent edits; a new one removes obsolete definition files while keeping
+everything outside the definition. Credentials seed only when absent. Nothing is mounted or unmounted
+by fastagent: the host's volume is the only storage, and download caches go to `/tmp` through the
+image's package-manager environment.
 
 `start` loads the actual service from the persistent definition's installed package. Its tools and
 session context must use the same runtime module instance. The image's runtime only bootstraps storage;
@@ -727,17 +727,30 @@ the Lambda group. It applies no stream filter: AgentCore names streams `YYYY/MM/
 so the marker is an infix after the UTC date path and a `--log-stream-name-prefix` match is always empty. It changes neither
 log content nor `FASTAGENT_LOG_LEVEL` — it is discovery plus `aws logs tail`, not another logger.
 
-**AgentCore uses native EFS at `/mnt/data`.** `deploy.agentcore` supplies the access point, subnets
-and security groups. The runtime stack owns neither EFS nor the VPC. Their identity and lifetime remain
-independent of compute replacement and redeployment; private subnets need appropriate model/channel
-egress. The same `base/`, `.state/` and `.secrets/` layout applies to every host.
+**AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `base/`,
+`.state/`, `.secrets/` layout applies, on the platform's own mount: it survives compute stop/resume
+(so an idle-reclaimed agent resumes with its memory) and AWS wipes it on every runtime version update
+— i.e. every deploy — and after 14 idle days. That is this host's stated semantics, not a gap: AWS's
+only cross-deploy filesystems are EFS and S3 Files, both VPC-only, and VPC mode costs a NAT gateway
+for model/channel egress (~$33/mo standing) plus operator-owned network resources. The previous design
+bought cross-deploy state with an S3 snapshot of the state root instead, and paid for it in a presign
+path in the forwarder, a refresh endpoint, a `checkpoint` envelope and a save-on-idle edge — roughly
+700 lines whose failure modes were invisible until a deploy. A host without a volume promises no
+volume; Fly and Railway are where cross-deploy memory lives.
 
-Native filesystems are available on invocation, so `deferAgentcoreService` exposes `/ping` before any
+Credentials need no extra rule: `maybeSeedAuth` is absent-only, so a restart within a release keeps
+what the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Deploying IS re-authenticating.
+The caveat is OAuth's, not ours: a refresh token is single-use and shared with the builder machine, so
+the box can lose model access between deploys and the fix is another deploy.
+
+Runtime filesystems are available on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. The first invocation initializes storage and the
 whole service through one shared promise. Success and failure are cached because partially activated
 channels may already have replayed work. Mount or initialization failures cannot start an empty agent.
 The process retains its workspace lease until exit, including failed activation and shutdown, since
-service close does not drain every background writer. `flock` acquires the parent's open-file-description
+service close does not drain every background writer. Only the OPEN is caught there — a failure inside
+the opened service's handler is its own, and reporting it as an initialization failure would also read
+a body the handler already consumed. `flock` acquires the parent's open-file-description
 lock through an inherited fd. The kernel retains it through process pauses and releases it on exit;
 startup never infers a dead writer from a missing JavaScript heartbeat.
 

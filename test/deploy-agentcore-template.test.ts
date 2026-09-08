@@ -43,11 +43,6 @@ interface Template {
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
   releaseId: "release-one",
-  storage: {
-    efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
-    subnetIds: ["subnet-0123456789abcdef0"],
-    securityGroupIds: ["sg-0123456789abcdef0"],
-  },
   name: "my-agent",
   modelAuth: "OPENAI_API_KEY",
   channels: [],
@@ -141,16 +136,8 @@ describe("the agentcore template (parsed)", () => {
     expect(forwarder[1].Properties).toHaveProperty("Code");
     expect(forwarder[1].Properties).not.toHaveProperty("FilesystemConfigurations");
     expect(runtime[1].Properties).not.toHaveProperty("Code");
-    expect(runtime[1].Properties?.FilesystemConfigurations).toEqual([
-      { EfsAccessPoint: { MountPath: MOUNT, AccessPointArn: baseInput().storage.efsAccessPointArn } },
-    ]);
-    expect(runtime[1].Properties?.NetworkConfiguration).toEqual({
-      NetworkMode: "VPC",
-      NetworkModeConfig: {
-        Subnets: baseInput().storage.subnetIds,
-        SecurityGroups: baseInput().storage.securityGroupIds,
-      },
-    });
+    expect(runtime[1].Properties?.FilesystemConfigurations).toEqual([{ SessionStorage: { MountPath: MOUNT } }]);
+    expect(runtime[1].Properties?.NetworkConfiguration).toEqual({ NetworkMode: "PUBLIC" });
 
     const env = (forwarder[1].Properties as { Environment: { Variables: Record<string, unknown> } }).Environment
       .Variables;
@@ -158,29 +145,12 @@ describe("the agentcore template (parsed)", () => {
     expect(env).toHaveProperty("INGRESS_SESSION_ID");
   });
 
-  it("grants filesystem discovery separately from access-point-constrained NFS access", () => {
-    const arn = baseInput().storage.efsAccessPointArn;
-    const filesystem = arn.replace(/:access-point\/.*/, ":file-system/*");
-    expect(parseTemplate().Resources.ExecutionRole?.Properties).toHaveProperty(
-      "Policies.0.PolicyDocument.Statement",
-      expect.arrayContaining([
-        {
-          Effect: "Allow",
-          Action: ["elasticfilesystem:DescribeAccessPoints", "elasticfilesystem:DescribeMountTargets"],
-          Resource: [arn, filesystem],
-        },
-        {
-          Effect: "Allow",
-          Action: [
-            "elasticfilesystem:ClientMount",
-            "elasticfilesystem:ClientWrite",
-            "elasticfilesystem:ClientRootAccess",
-          ],
-          Resource: filesystem,
-          Condition: { StringEquals: { "elasticfilesystem:AccessPointArn": arn } },
-        },
-      ]),
-    );
+  it("asks for no network or filesystem permission beyond the managed mount", () => {
+    // Managed SessionStorage is mounted BY the platform: an execution-role statement for a filesystem,
+    // or a VPC network mode, would mean the EFS topology (and its NAT bill) came back unnoticed.
+    const template = parseTemplate();
+    expect(JSON.stringify(template.Resources.ExecutionRole)).not.toContain("elasticfilesystem");
+    expect(JSON.stringify(template)).not.toContain("NetworkModeConfig");
   });
 
   it("gives every schedule its own rule targeting the forwarder", () => {

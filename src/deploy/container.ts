@@ -43,7 +43,6 @@ export function isGeneratedDockerignore(content: string): boolean {
 export interface ContainerInput {
   /** Stable for one release; generated once by the deploy preflight, never on container restart. */
   releaseId: string;
-  temporaryDirectories?: string[];
   /** Whether the agent has a package.json (a code agent); else a pure markdown/skills agent. */
   hasPackageJson: boolean;
   /** The package manager the generated image targets: `bun` (packageManager: bun / a bun lockfile) gets an
@@ -114,6 +113,7 @@ function dockerfile(input: ContainerInput): string {
   // workspace, single agent or not — the value is a fact of this image, and asserting it means a build
   // context that dropped the agent fails loudly rather than serving a sibling.
   const pin = prefix ? `ENV FASTAGENT_AGENT=${prefix.replace(/\/$/, "")}\n` : "";
+  // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=/app/${into(RELEASE_FILE)}\nENV FASTAGENT_STORAGE_DIR=/data\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent`
   // from PATH. That needs npm + a global bin, which live on node:22-slim, NOT on oven/bun — so this path
@@ -235,7 +235,6 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     version: 1,
     id: input.releaseId,
     agent: input.agentPrefix.replace(/\/$/, ""),
-    temporaryDirectories: input.temporaryDirectories ?? [],
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [

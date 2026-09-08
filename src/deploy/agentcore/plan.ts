@@ -12,10 +12,11 @@
  *  2. **One template is the whole topology.** CloudFormation (`AWS::BedrockAgentCore::Runtime` is a
  *     first-class resource type) declares Runtime + roles + forwarder + schedules in one stack —
  *     unlike Railway, identity DOES live in a committed file; the stack name pins it.
- *  3. **One fixed runtime session writes one EFS workspace.** The EFS access point and VPC are
- *     operator-owned, so their lifetime is independent of the runtime stack. All entry points use
+ *  3. **One fixed runtime session writes one SessionStorage workspace.** All entry points use
  *     ingressSessionId; conversation ids remain separate. Startup acquires a workspace lease before
- *     initializing storage, applying a release or opening the agent.
+ *     initializing storage, applying a release or opening the agent. SessionStorage survives
+ *     stop/resume but is RESET on every runtime version update (i.e. every deploy) and after 14 idle
+ *     days, so this host promises no cross-deploy memory — see {@link MOUNT}.
  *
  *  The image is the SAME portable container every host ships (containerArtifacts) — AgentCore's
  *  extras (PORT=8080, FASTAGENT_AGENTCORE=1, the state dir) ride the Runtime resource's environment,
@@ -39,14 +40,7 @@ export interface ScheduleFact {
   tz?: string;
 }
 
-export interface AgentcoreStorage {
-  efsAccessPointArn: string;
-  subnetIds: string[];
-  securityGroupIds: string[];
-}
-
 export interface AgentcorePlanInput extends ContainerInput {
-  storage: AgentcoreStorage;
   /** Base name (dir basename) — shapes the runtime name, stack name, ECR repo, session id. */
   name: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
@@ -102,10 +96,22 @@ function agentcoreTopology(
   };
 }
 
-/** Native EFS mount. Workspace, state and credentials are independent children. */
+/**
+ * The platform's managed SessionStorage mount (AgentCore requires exactly `/mnt/<one-level>`). It
+ * holds the whole workspace — `base/`, `.state/`, `.secrets/` — and survives compute stop/resume, so
+ * an idle-reclaimed session resumes with its memory intact. It is RESET on every runtime version
+ * update (i.e. every deploy) and after 14 idle days.
+ *
+ * That reset is this host's stated semantics, not a gap to engineer around: cross-deploy persistence
+ * on AgentCore requires EFS or S3 Files, both of which need VPC mode and therefore a NAT gateway for
+ * model/channel egress (~$33/mo standing) plus operator-owned network resources. A deploy replaces
+ * the image, and here it replaces the state with it. Credentials follow the same rule for free —
+ * `maybeSeedAuth` is absent-only, so a restart keeps what the box rotated and a deploy re-seeds from
+ * FASTAGENT_AUTH_SEED. Hosts with a real volume (Fly, Railway, Docker) keep everything.
+ */
 export const MOUNT = "/mnt/data";
 
-/** Refreshed credentials must outlive both the compute and definition replacements. */
+/** Beside the state root on the one mount, as every volume-backed host does. */
 export const SECRETS_DIR = `${MOUNT}/${SECRETS_DIRNAME}`;
 
 /**
@@ -319,7 +325,6 @@ function template(
   topology: AgentcoreTopology,
 ): string {
   const runtimeName = toRuntimeName(input.name);
-  const filesystemArn = input.storage.efsAccessPointArn.replace(/:access-point\/.*/, ":file-system/*");
   const needsForwarder = topology.forwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
@@ -429,17 +434,6 @@ function template(
     `              - Effect: Allow`,
     `                Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, cloudwatch:PutMetricData]`,
     `                Resource: "*"`,
-    `              - Effect: Allow # mount discovery uses APIs, not the NFS access-point condition`,
-    `                Action: [elasticfilesystem:DescribeAccessPoints, elasticfilesystem:DescribeMountTargets]`,
-    `                Resource:`,
-    `                  - ${yamlSingleQuote(input.storage.efsAccessPointArn)}`,
-    `                  - ${yamlSingleQuote(filesystemArn)}`,
-    `              - Effect: Allow # access only the configured persistent workspace`,
-    `                Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite, elasticfilesystem:ClientRootAccess]`,
-    `                Resource: ${yamlSingleQuote(filesystemArn)}`,
-    `                Condition:`,
-    `                  StringEquals:`,
-    `                    elasticfilesystem:AccessPointArn: ${yamlSingleQuote(input.storage.efsAccessPointArn)}`,
     `              - Effect: Allow # AgentCore workload identity (the platform mints one per runtime)`,
     `                Action: [bedrock-agentcore:GetWorkloadAccessToken]`,
     `                Resource: "*"`,
@@ -453,15 +447,13 @@ function template(
     `        ContainerConfiguration: { ContainerUri: !Ref ImageUri }`,
     `      RoleArn: !GetAtt ExecutionRole.Arn`,
     `      ProtocolConfiguration: HTTP`,
-    `      NetworkConfiguration:`,
-    `        NetworkMode: VPC`,
-    `        NetworkModeConfig:`,
-    `          Subnets: ${JSON.stringify(input.storage.subnetIds)}`,
-    `          SecurityGroups: ${JSON.stringify(input.storage.securityGroupIds)}`,
+    `      NetworkConfiguration: { NetworkMode: PUBLIC }`,
+    `      # Managed SessionStorage: no VPC, no NAT, no operator-owned filesystem. It survives compute`,
+    `      # stop/resume, and AWS RESETS it on every runtime version update (= every deploy) and after`,
+    `      # 14 idle days — so a deploy replaces the state along with the image. Cross-deploy memory`,
+    `      # would need EFS or S3 Files, both VPC-only and therefore a standing NAT bill.`,
     `      FilesystemConfigurations:`,
-    `        - EfsAccessPoint:`,
-    `            AccessPointArn: ${yamlSingleQuote(input.storage.efsAccessPointArn)}`,
-    `            MountPath: ${MOUNT}`,
+    `        - SessionStorage: { MountPath: ${MOUNT} }`,
     `      # Idle ${IDLE_TIMEOUT_SECONDS}s (the ping's HealthyBusy + time_of_last_update keeps BUSY sessions alive), max compute`,
     `      # lifetime ${MAX_LIFETIME_SECONDS}s — the platform ceiling; the session id stays valid, so the next invoke`,
     `      # just gets fresh compute with the same storage. Memory bills per second for the whole`,
@@ -719,8 +711,6 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
     ``,
-    `# EFS access point: ${input.storage.efsAccessPointArn}. Storage and VPC resources are operator-owned.`,
-    `# Private subnets need NAT egress for model/channel APIs. Allow NFS TCP 2049 to EFS mount targets.`,
     `# 1. ECR repository + the forwarder artifact bucket (one-time; skip what exists).`,
     `aws ecr create-repository --repository-name ${repo}`,
     `aws s3api create-bucket --bucket ${bucketHint} --region us-east-1   # us-east-1 ONLY`,
@@ -741,9 +731,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
-    prefix
-      ? `docker buildx build --platform linux/arm64 -f ${prefix}Dockerfile -t ${image} --push .`
-      : `docker buildx build --platform linux/arm64 -t ${image} --push .`,
+    `docker buildx build --platform linux/arm64 -f ${prefix}Dockerfile -t ${image} --push .`,
     ``,
     `# 3. Deploy the stack (runtime + ingress + schedules in one template). Secrets ride NoEcho parameters:`,
   ];
@@ -857,11 +845,17 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
     `  --runtime-session-id "${ingressSessionId(name)}"`,
     ``,
-    `# First run \`fastagent deploy agentcore\` for a fresh release manifest; then repeat step 1b`,
-    `# (new forwarder key, if changed), step 2 with a NEW tag, step 3 and the session stop above.`,
-    `# EFS at ${MOUNT} keeps base/ (including unfinished work), .state/ and .secrets/ across idle and redeploy.`,
-    `# Each release replaces only base/${input.agentPrefix}; restarting the same release preserves agent edits.`,
-    `# The stack never deletes or recreates the EFS access point. Delete storage only as an explicit data operation.`,
+    `# Redeploy = \`fastagent deploy agentcore\` (a new definition needs a fresh release manifest) + step 1b`,
+    `# (new forwarder key, if its code changed) + step 2 with a NEW tag + step 3.`,
+    `# STATE: ${MOUNT} is managed SessionStorage. It keeps base/ (including unfinished work), .state/`,
+    `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
+    `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
+    `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank,`,
+    `# and the model credential is re-seeded from FASTAGENT_AUTH_SEED. Deploying IS re-authenticating.`,
+    `# An OAuth refresh token is single-use and shared with your machine, so the box can lose model`,
+    `# access between deploys — deploy again to refresh it, or use a provider API key.`,
+    `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
+    `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
     `# Keep one runtime writer per workspace; use the fixed runtime session id printed above for every entry point.`,
   );
 

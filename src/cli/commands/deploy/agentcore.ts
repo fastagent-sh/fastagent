@@ -68,15 +68,7 @@ export const agentcoreHost: HostDeploy = {
         ),
       );
     }
-    const storage = config.deploy?.agentcore;
-    if (!storage)
-      failStartup(
-        new Error(
-          "deploy agentcore requires deploy.agentcore with efsAccessPointArn, subnetIds and securityGroupIds; configure an EFS access point and private VPC subnets with internet egress",
-        ),
-      );
     const plan = planAgentcoreDeploy({
-      storage,
       name: acName,
       modelAuth,
       channels,

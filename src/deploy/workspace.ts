@@ -1,13 +1,12 @@
 /** Deployment-owned initialization; the workspace itself belongs to the running agent. */
-import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
-import { join, resolve, posix } from "node:path";
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import { cp, lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { once } from "node:events";
 import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
-import { exists, isUnderDir } from "../paths.ts";
+import { exists } from "../paths.ts";
 
 export const RELEASE_FILE = "fastagent.release.json";
 
@@ -15,32 +14,6 @@ export interface DeploymentRelease {
   version: 1;
   id: string;
   agent: string;
-  temporaryDirectories: string[];
-}
-
-export function validateTemporaryDirectories(value: unknown): asserts value is string[] {
-  if (!Array.isArray(value)) throw new Error("deploy.temporaryDirectories must be an array of relative directories");
-  for (const path of value) {
-    if (
-      typeof path !== "string" ||
-      path === "" ||
-      path === "." ||
-      path.startsWith("/") ||
-      path.endsWith("/") ||
-      path.includes("\0") ||
-      path.includes("\\") ||
-      posix.normalize(path) !== path ||
-      path.split("/").some((part) => ["..", ".git", ".state", ".secrets", ".deployment"].includes(part))
-    )
-      throw new Error(`invalid temporary directory: ${JSON.stringify(path)}`);
-  }
-  for (const [i, path] of value.entries()) {
-    if (
-      value.slice(i + 1).some((other) => path === other || path.startsWith(`${other}/`) || other.startsWith(`${path}/`))
-    ) {
-      throw new Error(`overlapping temporary directory: ${path}`);
-    }
-  }
 }
 
 export function parseDeploymentRelease(raw: string): DeploymentRelease {
@@ -54,9 +27,6 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
   ) {
     throw new Error("invalid deployment release manifest");
   }
-  validateTemporaryDirectories(r.temporaryDirectories);
-  if (r.temporaryDirectories.some((path) => path === r.agent))
-    throw new Error("the agent definition cannot be temporary");
   return r;
 }
 
@@ -121,40 +91,6 @@ export async function applyDeploymentRelease(
   return workspace;
 }
 
-const execute = promisify(execFile);
-
-/** Mount only explicitly disposable directories. A failed mount never falls back to durable writes. */
-export async function mountTemporaryDirectories(
-  workspace: string,
-  directories: string[],
-  temporaryRoot: string,
-  mount: (source: string, target: string) => Promise<void> = async (source, target) => {
-    await execute("mount", ["--bind", source, target]);
-  },
-): Promise<void> {
-  validateTemporaryDirectories(directories);
-  for (const path of directories) {
-    const source = join(temporaryRoot, path);
-    let target = workspace;
-    for (const part of path.split("/")) {
-      target = join(target, part);
-      await mkdir(target, { recursive: true });
-      if ((await lstat(target)).isSymbolicLink() || !isUnderDir(await realpath(target), await realpath(workspace))) {
-        throw new Error(`temporary directory escapes the workspace or is a symlink: ${target}`);
-      }
-    }
-    const entries = await readdir(target);
-    if (entries.length > 0) {
-      await rm(source, { recursive: true, force: true });
-      await cp(target, source, { recursive: true, verbatimSymlinks: true });
-      for (const entry of entries) await rm(join(target, entry), { recursive: true, force: true });
-    } else {
-      await mkdir(source, { recursive: true });
-    }
-    await mount(source, target);
-  }
-}
-
 async function mountedPaths(): Promise<string[]> {
   const mounts = await readFile("/proc/self/mountinfo", "utf8");
   return mounts
@@ -171,20 +107,6 @@ async function mountedPaths(): Promise<string[]> {
 export async function assertStorageMounted(root: string, paths?: string[]): Promise<void> {
   if (!(paths ?? (await mountedPaths())).includes(resolve(root)))
     throw new Error(`persistent storage is not mounted at ${root}`);
-}
-
-export async function unmountWorkspace(
-  workspace: string,
-  paths: string[],
-  unmount: (path: string) => Promise<void> = async (path) => {
-    await execute("umount", [path]);
-  },
-): Promise<void> {
-  for (const path of paths
-    .filter((path) => path !== workspace && isUnderDir(path, workspace))
-    .sort((a, b) => b.length - a.length)) {
-    await unmount(path);
-  }
 }
 
 export async function leaseDeployment(metadata: string): Promise<() => Promise<void>> {
@@ -220,11 +142,7 @@ export async function prepareDeployment(
   await mkdir(meta, { recursive: true });
   const unlock = await leaseDeployment(meta);
   try {
-    // Another starter can attach mounts while this process waits for the lease.
-    await unmountWorkspace(join(root, "base"), await mountedPaths());
-    const workspace = await applyDeploymentRelease(source, root, release);
-    await mountTemporaryDirectories(workspace, release.temporaryDirectories, "/tmp/fastagent/directories");
-    return { workspace, release: unlock };
+    return { workspace: await applyDeploymentRelease(source, root, release), release: unlock };
   } catch (error) {
     await unlock();
     throw error;
