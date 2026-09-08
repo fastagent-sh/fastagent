@@ -297,6 +297,7 @@ describe("the contracts depend on nothing", () => {
       "@hono/node-server",
       "croner",
       "effect/Cause",
+      "effect/Clock",
       "effect/Effect",
       "effect/Exit",
       "effect/Fiber",

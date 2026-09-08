@@ -14,7 +14,7 @@
  *    envelope is the only way the forwarder can re-emit it verbatim (a Feishu URL-verification
  *    challenge needs the exact body + content-type back).
  *  - `{ kind: "schedule-fire", name, slot }` — one cron instant from the external clock. Dispatched
- *    to {@link fireScheduleOnce}-shaped `fire` with the slot as the idempotency key (EventBridge
+ *    to the bound `fire` callback with the slot as the idempotency key (EventBridge
  *    delivery is at-least-once; a duplicate slot must not double-fire).
  *  - `{ kind: "invoke", session, text }` — the programmatic data plane; streams the invoke back as
  *    SSE (AgentCore's streaming response form), reusing the HTTP channel's handler wholesale.
@@ -62,7 +62,7 @@ export interface AgentcoreAdapterOptions {
   stateRoot: string;
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
   isBusy: () => boolean;
-  /** Slot-idempotent schedule fire ({@link fireScheduleOnce} bound to this workspace's schedules);
+  /** Slot-idempotent schedule fire, bound to this workspace's schedules;
    *  undefined when the workspace has none — a schedule-fire envelope then 404s (deploy drift: an
    *  external clock still firing for a schedule this definition no longer has). */
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;

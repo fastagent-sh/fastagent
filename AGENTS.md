@@ -240,7 +240,8 @@ src/
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
 │   ├── discover.ts         # schedules/ filesystem discovery (loadSchedules/discoverScheduleFiles), isolates a bad file (G2)
-│   ├── scheduler.ts        # lifecycle + fire algorithm (overdue catch-up ONCE, claim-before-invoke) + stable per-schedule session + wake-up poll
+│   ├── scheduler.ts        # Effect clock loops + typed claim/run/audit; stop cancels waits, claimed turns finish;
+│   │                      # overdue catch-up ONCE, stable schedule sessions, wake busy ownership through durable settlement
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups, one-shot + recurring (2nd producer): engine-neutral store + guardrails (min delay/gap, cap, claim/defer)
 │   ├── audit.ts            # runs.jsonl append-only run audit (full reply) + `schedule history` reader — "did last night's run silently fail?"
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: on a scale-to-zero host nothing is resident to

@@ -14,6 +14,7 @@
  * it returns the same {@link AgentService}, so `start` picks an assembly once and everything after
  * that point is common.
  */
+import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
@@ -152,7 +153,9 @@ export function mountAgentcore(options: {
         : (name, slot) => {
             const schedule = schedules.find((s) => s.name === name);
             if (!schedule) throw new UnknownScheduleError(name);
-            return fireScheduleOnce({ agent, stateRoot, schedule, slot });
+            return Effect.runPromise(
+              fireScheduleOnce({ agent, stateRoot, schedule, slot }).pipe(Effect.mapError((error) => error.cause)),
+            );
           },
   });
 }
