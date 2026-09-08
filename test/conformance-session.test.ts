@@ -29,6 +29,10 @@ import { runQueuedTurn } from "../src/channels/kit/turn-runner.ts";
 import type { TurnRecordBase } from "../src/channels/kit/turn-store.ts";
 import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
 import { telegramReply } from "../src/channels/telegram/preview.ts";
+import { createScheduler } from "../src/schedule/scheduler.ts";
+import { saveFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import { listWakeups } from "../src/schedule/wakeups.ts";
+import { readRuns } from "../src/schedule/audit.ts";
 
 afterEach(() => vi.restoreAllMocks());
 import { makeFaux } from "./faux.ts";
@@ -317,5 +321,72 @@ it.each([
     const release = lease.tryAcquire("quiet");
     expect(release).toBeTypeOf("function");
     release?.();
+  },
+);
+
+it.each(["cron", "wake"] as const)(
+  "scheduler stop lets a claimed %s finish its actual SDK tool and audit",
+  async (kind) => {
+    const stateRoot = await mkdtemp(join(tmpdir(), "fa-scheduled-sdk-"));
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const abort = vi.fn();
+    const lease = inProcessLease();
+    const sessionId = kind === "cron" ? "schedule:job" : "conversation";
+    const factory = await sessionFactory(
+      [fauxAssistantMessage(fauxToolCall("wait", {}, { id: "scheduled-tool" })), fauxAssistantMessage("done")],
+      {
+        customTools: [
+          {
+            name: "wait",
+            label: "wait",
+            description: "Wait for completion",
+            parameters: Type.Object({}),
+            execute: async (_id, _args, signal) => {
+              signal!.addEventListener("abort", abort, { once: true });
+              entered.resolve();
+              await finish.promise;
+              return { content: [{ type: "text", text: "finished" }], details: {} };
+            },
+          } as ToolDefinition,
+        ],
+      },
+    );
+    const bound = vi.fn(factory);
+    const agent = createPiAgentFromSession({ lease, sessionFactory: bound });
+    if (kind === "cron") saveFires(stateRoot, { job: "2026-07-07T08:00:00Z" });
+    else
+      writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
+        { id: "first", session: sessionId, prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
+        { id: "next", session: "other", prompt: "later", fireAt: "2026-07-07T09:00:00Z" },
+      ]);
+    const s = Effect.runSync(
+      createScheduler({
+        agent,
+        stateRoot,
+        schedules: kind === "cron" ? [{ name: "job", cron: "0 * * * *", prompt: "go" }] : [],
+        now: () => new Date("2026-07-07T10:30:00Z"),
+      }),
+    );
+    try {
+      s.start();
+      await entered.promise;
+      expect(s.stop()).toBeUndefined();
+      expect(abort).not.toHaveBeenCalled();
+      expect(lease.tryAcquire(sessionId)).toBeNull();
+      expect(readRuns(stateRoot)).toEqual([]);
+      finish.resolve();
+      await vi.waitFor(() => expect(readRuns(stateRoot)).toHaveLength(1));
+      expect(readRuns(stateRoot)[0]).toMatchObject({ outcome: "completed", reply: "done" });
+      expect(abort).not.toHaveBeenCalled();
+      expect(bound).toHaveBeenCalledOnce();
+      if (kind === "wake") expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);
+      const release = lease.tryAcquire(sessionId);
+      expect(release).toBeTypeOf("function");
+      release?.();
+    } finally {
+      s.stop();
+      finish.resolve();
+    }
   },
 );

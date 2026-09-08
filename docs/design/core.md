@@ -634,6 +634,19 @@ Static schedules are `schedules/<name>.ts` files exporting `{ cron, tz?, prompt 
 - records each run in `<stateRoot>/schedule/runs.jsonl`;
 - leaves delivery to agent tools.
 
+The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use
+the captured Effect clock; Croner still computes calendar instants, with capped waits rechecking wall
+time. Internal scheduler construction and the shared fire operation compose Effects directly; service
+and AgentCore callbacks retain ordinary TypeScript/Promise APIs. Cron claim IO failures are typed: the
+resident loop logs and audits a skipped fire, while external slot delivery receives the original error.
+
+`stop()` interrupts pending waits synchronously without draining or canceling a claimed occurrence.
+That occurrence finishes execution and settlement handling before its loop exits; no next wake is
+claimed. Waiting loops do not count as business work. Wake execution keeps its busy ownership through
+one-shot deferral and audit, so the idle notification observes settled state. Boot-time cron-state
+read failures still fail startup synchronously. Wake claim/deferral errors end the current poll and
+are logged before pending stop interruption resumes.
+
 With `selfSchedule: true`, the serving path mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
 minimum delay/frequency and per-session count, and fired back into the originating session. A one-shot
 wake that hits `session_busy` is deferred because the turn never started; other failures are not replayed

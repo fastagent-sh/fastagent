@@ -221,7 +221,9 @@ export async function startSchedules(
   const { schedules, failures } = await loadSchedules(agentDir);
   reportModuleLoadFailures(failures);
   if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
-  const scheduler = createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock });
+  const scheduler = Effect.runSync(
+    createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
+  );
   scheduler.start();
   if (schedules.length > 0) {
     log.info(
