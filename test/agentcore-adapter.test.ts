@@ -502,6 +502,43 @@ describe("agentcore adapter: the authentication boundary", () => {
 });
 
 describe("agentcore adapter: activation hooks", () => {
+  it("caches a failed activation instead of serving on the next envelope", async () => {
+    const error = new Error("activation failed");
+    const onStateReady = vi.fn(() => {
+      throw error;
+    });
+    const channels = vi.fn(() => ({ routes: {} }));
+    const routes = adapter({ onStateReady, channels });
+    for (let i = 0; i < 2; i++) {
+      const res = await postEnvelope(routes, { kind: "probe" });
+      expect(await res.json()).toEqual({ ok: false, error: `activation failed: ${String(error)}` });
+    }
+    expect(onStateReady).toHaveBeenCalledOnce();
+    expect(channels).not.toHaveBeenCalled();
+  });
+
+  it("joins concurrent activation callers and caches their shared failure", async () => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const channels = vi.fn(async () => {
+      entered.resolve();
+      await finish.promise;
+      throw new Error("partial construction failed");
+    });
+    const routes = adapter({ channels });
+    const first = postEnvelope(routes, { kind: "probe" });
+    await entered.promise;
+    const second = postEnvelope(routes, { kind: "probe" });
+    finish.resolve();
+    for (const response of await Promise.all([first, second])) {
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "channel construction failed: Error: partial construction failed",
+      });
+    }
+    expect(channels).toHaveBeenCalledOnce();
+  });
+
   it("reconciles once with the current callback URL", async () => {
     rememberWakeAlarmUrl(stateRoot, "https://old-deployment.lambda-url.on.aws/");
     const onStateReady = vi.fn(() => {

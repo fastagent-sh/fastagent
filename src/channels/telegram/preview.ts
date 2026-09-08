@@ -123,12 +123,18 @@ export function telegramReply(
       if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
       lastSent = text;
       if (messageId !== undefined) {
-        await editMessageText(api, botToken, target, messageId, text); // plain — a partial answer may carry unbalanced HTML
+        // plain — a partial answer may carry unbalanced HTML; droppable — the next frame redraws it and
+        // the final write supersedes it, so a flood wait here would park the answer behind a dead view.
+        await editMessageText(api, botToken, target, messageId, text, { retries: 0 });
         return;
       }
       // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
       // frame). If Telegram returns ok WITHOUT a message_id (proxy / odd API base / unparseable body) we
       // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
+      //
+      // NOT droppable, unlike the frames above: this send happens once and every later frame depends on
+      // its id, so dropping it costs the whole turn's live preview rather than one redrawable view. The
+      // asymmetry is Telegram's own — it rate-limits edits to a single message far tighter than sends.
       if (previewSent) return;
       previewSent = true;
       messageId = await sendMessage(api, botToken, target, text, { html: false });

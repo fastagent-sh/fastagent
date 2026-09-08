@@ -1,4 +1,7 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
+import { activeWork } from "../src/channels/busy.ts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +11,14 @@ import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { RESERVED_PATHS, type WakeAlarmRequest } from "../src/channels/agentcore-protocol.ts";
 import {
   MAX_SYNC_ATTEMPTS,
-  createWakeAlarmSink,
+  createWakeAlarmSink as alarmSink,
   readWakeAlarmUrl,
   rememberWakeAlarmUrl,
   toAlarms,
 } from "../src/schedule/wake-alarm.ts";
 import { type Wakeup, addWakeup, removeWakeup, setWakeupsSink, takeFirstDueWakeup } from "../src/schedule/wakeups.ts";
+
+const createWakeAlarmSink = (options: Parameters<typeof alarmSink>[0]) => Effect.runSync(alarmSink(options));
 
 const freshRoot = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-wake-alarm-"));
 
@@ -66,6 +71,25 @@ function fakeFetch(status = 200) {
 }
 
 describe("schedule/wake-alarm: the URL store", () => {
+  it.each(["{broken", "{}", "null", '{"url":""}'])("rejects a corrupt or malformed URL record: %s", async (content) => {
+    const root = await freshRoot();
+    rememberWakeAlarmUrl(root, "https://fn.on.aws");
+    writeFileSync(scheduleFile(root, "wake-alarm-url"), content);
+    expect(() => readWakeAlarmUrl(root)).toThrow(/wake-alarm URL.*unreadable/);
+  });
+
+  it("reports URL read IO failure at the sink boundary without issuing a POST", async () => {
+    const root = await freshRoot();
+    seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2099-01-01T00:00:00Z" }]);
+    mkdirSync(scheduleFile(root, "wake-alarm-url"));
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    const { impl, calls } = fakeFetch();
+    createWakeAlarmSink({ secret: "s", fetchImpl: impl })(root);
+    await vi.waitFor(() =>
+      expect(errors).toHaveBeenCalledWith(expect.stringMatching(/reconcile failed.*wake-alarm URL.*EISDIR/)),
+    );
+    expect(calls).toEqual([]);
+  });
   it("remembers the forwarder URL (write-if-changed) and reads it back", async () => {
     const root = await freshRoot();
     expect(readWakeAlarmUrl(root)).toBeUndefined();
@@ -77,6 +101,29 @@ describe("schedule/wake-alarm: the URL store", () => {
 });
 
 describe("schedule/wake-alarm: the sink", () => {
+  it("uses its captured clock for retry pacing and expires alarms during backoff", async () => {
+    const root = await freshRoot();
+    const now = new Date("2026-07-28T09:00:00Z");
+    rememberWakeAlarmUrl(root, "https://fn.on.aws");
+    seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: new Date(now.getTime() + 8_000).toISOString() }]);
+    const { impl, calls } = fakeFetch(500);
+    const base = activeWork();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(now.getTime());
+        const sink = yield* alarmSink({ secret: "s", fetchImpl: impl });
+        sink(root);
+        yield* TestClock.adjust(0);
+        expect(calls).toHaveLength(1);
+        expect(activeWork()).toBe(base + 1);
+        yield* TestClock.adjust(2_000);
+        expect(calls).toHaveLength(2);
+        yield* TestClock.adjust(4_000);
+        expect(calls).toHaveLength(2);
+        expect(activeWork()).toBe(base);
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+  });
   it("POSTs the pending set (declarative reconcile) to the reserved path with the secret", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws/");

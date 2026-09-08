@@ -7,7 +7,8 @@
  *     connection cannot hang a turn, its session queue, or webhook registration.
  *  2. Only a 429 is retried (bounded attempts, honouring `retry_after` up to FLOOD_WAIT_MAX_S per
  *     wait); a longer flood ban or exhausted retries fail visibly. No other failure class is retried:
- *     the request may have been processed, and a retried sendMessage would double-deliver.
+ *     the request may have been processed, and a retried sendMessage would double-deliver. A caller
+ *     whose write is DROPPABLE passes `retries: 0` — see {@link CallOptions}.
  *  3. Success requires the body's own `ok:true` — an intermediary's HTTP 200 is not a sent message.
  *  4. Every failure is a {@link TelegramApiError} naming the method: self-description is a property of
  *     the error type, not per-call-site string assembly.
@@ -37,6 +38,20 @@ const FLOOD_WAIT_MAX_S = 30;
 
 /** How many 429s one call absorbs before giving up. */
 const RETRIES = 3;
+
+/**
+ * Per-call transport options.
+ *
+ * `retries` exists for ONE distinction the pipeline cannot make for itself: whether this write is
+ * worth waiting for. Telegram rate-limits edits to a single message far tighter than sends, and its
+ * `retry_after` is routinely tens of seconds — so a live-preview FRAME, whose content the next frame
+ * redraws and the final write supersedes, would park the turn (and everything queued behind it) for up
+ * to 3 × (FLOOD_WAIT_MAX_S + 1) seconds waiting to deliver a view nobody needs. A droppable write
+ * passes 0: the frame is lost, the answer is not.
+ */
+export interface CallOptions {
+  retries?: number;
+}
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
@@ -107,7 +122,9 @@ export async function callApi<M extends keyof Api>(
   botToken: string,
   method: M,
   params: Record<string, unknown>,
+  opts: CallOptions = {},
 ): Promise<Api[M]> {
+  const retries = opts.retries ?? RETRIES;
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     let raw: string;
@@ -129,7 +146,7 @@ export async function callApi<M extends keyof Api>(
       data = {}; // only the parse is forgiven — the ok-gate below turns it into a named failure
     }
     if (res.ok && data.ok === true) return data.result as Api[M];
-    if (res.status === 429 && attempt < RETRIES) {
+    if (res.status === 429 && attempt < retries) {
       const floodWait = data.parameters?.retry_after ?? attempt + 1; // no retry_after → short linear backoff
       if (floodWait <= FLOOD_WAIT_MAX_S) {
         await wait((floodWait + 1) * 1000);
@@ -253,7 +270,7 @@ export async function sendMessage(
   botToken: string,
   t: Target,
   body: string,
-  opts: { html?: boolean } = {},
+  opts: { html?: boolean } & CallOptions = {},
 ): Promise<number | undefined> {
   let mode = opts.html ?? true;
   let chunks = chunkText(body, { html: mode });
@@ -271,7 +288,7 @@ export async function sendMessage(
     }
     let result: Api["sendMessage"];
     try {
-      result = await callApi(api, botToken, "sendMessage", mode ? { ...base, parse_mode: "HTML" } : base);
+      result = await callApi(api, botToken, "sendMessage", mode ? { ...base, parse_mode: "HTML" } : base, opts);
     } catch (e) {
       if (!(mode && e instanceof TelegramApiError && PARSE_ERROR.test(e.description))) throw e;
       if (first) {
@@ -282,7 +299,7 @@ export async function sendMessage(
         continue;
       }
       // A later chunk failed after the first parsed cleanly (rare) — best-effort plain resend of this chunk.
-      result = await callApi(api, botToken, "sendMessage", base);
+      result = await callApi(api, botToken, "sendMessage", base, opts);
     }
     if (first) firstId = result.message_id;
     first = false;
@@ -302,7 +319,7 @@ export async function editMessageText(
   t: Target,
   messageId: number,
   body: string,
-  opts: { html?: boolean } = {},
+  opts: { html?: boolean } & CallOptions = {},
 ): Promise<void> {
   const base: Record<string, unknown> = {
     chat_id: t.chatId,
@@ -312,12 +329,12 @@ export async function editMessageText(
   const notModified = (e: unknown): boolean =>
     e instanceof TelegramApiError && /message is not modified/i.test(e.description);
   try {
-    await callApi(api, botToken, "editMessageText", opts.html ? { ...base, parse_mode: "HTML" } : base);
+    await callApi(api, botToken, "editMessageText", opts.html ? { ...base, parse_mode: "HTML" } : base, opts);
   } catch (e) {
     if (notModified(e)) return;
     if (!(opts.html && e instanceof TelegramApiError && PARSE_ERROR.test(e.description))) throw e;
     try {
-      await callApi(api, botToken, "editMessageText", base); // plain fallback for rejected markup
+      await callApi(api, botToken, "editMessageText", base, opts); // plain fallback for rejected markup
     } catch (e2) {
       if (!notModified(e2)) throw e2;
     }

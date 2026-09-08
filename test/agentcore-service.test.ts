@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
@@ -130,6 +130,12 @@ describe("deferred AgentCore initialization", () => {
   });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
 describe("mountAgentcoreService", () => {
   it("serves the adapter surface, not the channel routes", async () => {
     // The channel exists, but on this host it is reachable only THROUGH an envelope — the platform
@@ -191,7 +197,7 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("owns the schedules, and close() is safe to call twice", async () => {
+  it("reports loaded schedules, and close() is safe to call twice", async () => {
     const dir = await agentDir(
       { "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
       `{ model: "openai-codex/gpt-5.5" }`,
@@ -202,8 +208,5 @@ describe("mountAgentcoreService", () => {
     await service.close();
     // Both the shutdown hook and an explicit close can run.
     await expect(service.close()).resolves.toBeUndefined();
-    // NOT asserted: that the scheduler's timers are gone. Fake timers would have to be installed
-    // before the assembly, which deadlocks its filesystem IO, so the stop is unobservable from here
-    // — see the note on close() in agentcore-service.ts.
   });
 });

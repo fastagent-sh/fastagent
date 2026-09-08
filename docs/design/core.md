@@ -765,6 +765,15 @@ verdicts `{ ok, error? }`, preserving their diagnostics through the forwarder. A
 same runtime session id; the envelope session id selects the conversation. The S3 bucket contains only
 the content-hashed forwarder deployment package.
 
+AgentCore IO has a typed failure channel (`channels/agentcore-effects.ts`): activation and channel
+construction are cached Effects, failures included, and the alarm sink's deadlines use the captured
+Effect clock, abort the actual request and join its settlement before releasing ownership or retrying.
+Non-abortable filesystem ports are joined rather than abandoned; a transport ignoring abort may delay
+release, and a timeout does not make unfinished IO safe to leave running. The sink counts admission
+synchronously and yields before reconciling, so an empty alarm set cannot emit idle between a wake's
+claim notification and the scheduler's execution admission. A persisted alarm URL is validated: only a
+missing file reads as "not configured yet".
+
 A live session keeps its
 old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
 successful deploy, making the new image serve immediately (an in-flight turn is cut; channels with

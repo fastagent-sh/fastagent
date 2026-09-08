@@ -23,7 +23,6 @@ export interface FeishuMention {
   key: string;
   id?: { open_id?: string; user_id?: string; union_id?: string };
   name?: string;
-  mentioned_type?: string;
   tenant_key?: string;
   [k: string]: unknown;
 }
@@ -41,8 +40,6 @@ export interface FeishuMessage {
   message_type: string;
   content: string;
   mentions?: FeishuMention[];
-  user_agent?: string;
-  lark_agent_context?: { active_chat_id?: string; [k: string]: unknown };
   [k: string]: unknown;
 }
 

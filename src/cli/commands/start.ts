@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { readFile, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import * as Effect from "effect/Effect";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
@@ -225,13 +226,18 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 
+/**
+ * Install the wake-ALARM sink before the scheduler starts: the first wake poll may advance a
+ * recurring entry, and that save must already re-arm its alarm. Returns the reconcile the adapter
+ * runs on activation, once an envelope has named the forwarder this deployment answers through.
+ */
 function armWakeAlarms(stateRoot: string): (() => void) | undefined {
   const secret = process.env.FASTAGENT_WAKE_SECRET;
   if (!secret) {
     log.warn("[fastagent] FASTAGENT_WAKE_SECRET is missing; external wake alarms cannot be registered");
     return undefined;
   }
-  const sink = createWakeAlarmSink({ secret });
+  const sink = Effect.runSync(createWakeAlarmSink({ secret }));
   setWakeupsSink(sink);
   return () => sink(stateRoot);
 }

@@ -132,6 +132,20 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(4); // 1 + 3 bounded retries
   });
 
+  it("a droppable card frame fails on the first rate-limit reject instead of waiting", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    stubFetch(() => {
+      calls++;
+      return new Response(JSON.stringify({ code: 99991400, msg: "frequency limit" }), { status: 429 });
+    });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const failed = api.updateCardElement("c1", "e1", "frame", 2, { retries: 0 }).catch((e: Error) => e);
+    // No timer advance: the next frame carries the same snapshot under a higher sequence.
+    expect(String(await failed)).toContain("frequency limit");
+    expect(calls).toBe(1); // one attempt, no backoff
+  });
+
   it("getMessage pins user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });

@@ -26,6 +26,8 @@
  * the platform reclaim the microVM (that idle-to-zero IS the point of this deployment).
  */
 import { Buffer } from "node:buffer";
+import * as Effect from "effect/Effect";
+import { AgentcoreFailure, agentcoreOperation } from "./agentcore-effects.ts";
 import type { Agent } from "../agent.ts";
 import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
@@ -76,34 +78,41 @@ function createActivation(deps: {
   onStateReady: (() => void) | undefined;
   channels: AgentcoreAdapterOptions["channels"];
 }): {
-  prepare(envelope: AgentcoreEnvelope): Promise<void>;
+  prepare(envelope: AgentcoreEnvelope): Effect.Effect<void, AgentcoreFailure>;
   /** The channel surface; the construction outcome is cached either way. */
-  channels(): Promise<ChannelHandler>;
+  channels: Effect.Effect<ChannelHandler, AgentcoreFailure>;
 } {
   const { stateRoot, onStateReady } = deps;
-  let stateReadyFired = false;
-  let dispatchP: Promise<ChannelHandler> | undefined;
+  const stateReady = Effect.runSync(
+    Effect.cached(
+      agentcoreOperation(async () => {
+        onStateReady?.();
+      }),
+    ),
+  );
+  const channels = Effect.runSync(
+    Effect.cached(
+      agentcoreOperation(async () => {
+        const surface = await deps.channels();
+        return router(surface.routes, surface.mounts);
+      }),
+    ),
+  );
   return {
-    async prepare(envelope) {
-      // Use the current callback URL rather than the one persisted by an earlier deployment. A write
-      // failure propagates: alarms would keep calling the previous deployment's forwarder.
-      if (typeof envelope.wake?.url === "string") rememberWakeAlarmUrl(stateRoot, envelope.wake.url);
-      if (onStateReady && !stateReadyFired) {
-        stateReadyFired = true;
-        onStateReady();
-      }
-    },
-    channels() {
-      if (!dispatchP) {
-        // The factory runs INSIDE the chain: a synchronous throw must land in the cached rejection,
-        // not escape before `dispatchP` is assigned (which would silently re-run the activation).
-        dispatchP = Promise.resolve()
-          .then(deps.channels)
-          .then((surface) => router(surface.routes, surface.mounts));
-        dispatchP.catch(() => {}); // observed here so the CACHED rejection is never "unhandled"
-      }
-      return dispatchP;
-    },
+    prepare: (envelope) =>
+      Effect.gen(function* () {
+        // Use the current callback URL rather than the one persisted by an earlier deployment. A write
+        // failure propagates: alarms would keep calling the previous deployment's forwarder.
+        if (typeof envelope.wake?.url === "string") {
+          const url = envelope.wake.url;
+          yield* Effect.try({
+            try: () => rememberWakeAlarmUrl(stateRoot, url),
+            catch: (cause) => new AgentcoreFailure(cause),
+          });
+        }
+        yield* stateReady;
+      }),
+    channels,
   };
 }
 
@@ -138,7 +147,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       envelope.wake = undefined;
     }
     try {
-      if (trusted) await activation.prepare(envelope);
+      if (trusted) await Effect.runPromise(activation.prepare(envelope).pipe(Effect.mapError((e) => e.cause)));
     } catch (e) {
       log.error(`[agentcore] activation failed: ${String(e)}`);
       // The probe is the deploy driver's verification channel: its diagnostics must survive the
@@ -153,7 +162,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     let dispatch: ChannelHandler | undefined;
     if (trusted && envelope.kind !== "invoke") {
       try {
-        dispatch = await activation.channels();
+        dispatch = await Effect.runPromise(activation.channels.pipe(Effect.mapError((error) => error.cause)));
       } catch (e) {
         constructionError = String(e);
         log.error(`[agentcore] channel construction failed: ${constructionError}`);

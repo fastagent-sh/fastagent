@@ -2,9 +2,10 @@
  * The AgentCore serving assembly — the same product as `mountAgentService`, built differently
  * because the host is.
  *
- * There is no public URL, and cron slots arrive through `POST /invocations` from an external clock.
- * Native filesystems become available on invocation, so the process entry defers storage preparation
- * and the entire agent opener. The adapter initializes channels on the first trusted envelope.
+ * There is no public URL, and cron slots arrive through `POST /invocations` from an external clock,
+ * so no resident cron timers. Native filesystems become available on invocation, so the process entry
+ * defers storage preparation and the entire agent opener. The adapter initializes channels on the
+ * first trusted envelope.
  *
  * That is a different assembly, not a flag on the shared one: handler shape, discovery timing, clock
  * source, long-connection support and shutdown all differ. What it is NOT is a different product —
@@ -146,6 +147,8 @@ export async function mountAgentcoreService(
   // collision rule runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, { agent });
 
+  // Started here, not deferred to an envelope: the workspace this reads its claim state from was
+  // taken before the opener ran (cli/commands/start.ts), so there is no later moment that is truer.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
     externalClock: true,
   });
@@ -188,9 +191,6 @@ export async function mountAgentcoreService(
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     ...(withControl.control ? { control: withControl.control } : {}),
     async close() {
-      // UNTESTED, deliberately noted: no test observes these timers being cleared. Installing fake
-      // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
-      // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
     },
   };

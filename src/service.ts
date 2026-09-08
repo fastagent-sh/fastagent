@@ -229,9 +229,6 @@ export async function startSchedules(
       `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
     );
   }
-  // Returned rather than bound to process signals here: this runs inside an embedder's app as well
-  // as the CLI, and a library that installs SIGINT handlers is deciding something that is not its
-  // to decide. `runStart`/`runDev` wire it to their own shutdown.
   return { schedules, stop: () => scheduler.stop() };
 }
 
