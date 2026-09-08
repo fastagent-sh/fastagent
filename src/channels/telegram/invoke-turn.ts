@@ -1,11 +1,13 @@
 /**
  * Run one turn (the IO half of Telegram→Agent translation): assemble its inputs — resolve attachments
  * (download files to disk, load vision images) — and stream `agent.invoke` with the assembled prompt.
- * `invokeTurn` is the export; attachment resolution is an internal step. Split from parse.ts (which is
- * pure) because this half touches the Bot API + disk; split from telegram.ts so the factory keeps only
- * wiring and the per-turn lifecycle.
+ * Split from parse.ts because this half touches the Bot API + disk; split from telegram.ts so the
+ * factory keeps only wiring and the per-turn lifecycle.
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -13,7 +15,7 @@ import {
   attachedFilesManifest,
   attributedFileName,
   missingAttachmentsNote,
-  streamTurnWithBusyRetry,
+  busyRetryStream,
 } from "../kit/invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
@@ -104,10 +106,10 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
 
 /**
  * Run one turn: resolve its attachments, then stream agent.invoke with the shared busy-wait
- * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
+ * (invoke-turn-kit — `onCompleted` is the durable-commit point; see busyRetryStream). A
  * primary-attachment failure surfaces as a `failed` event (never a silent drop).
  */
-export async function* invokeTurn(
+export function telegramTurnStream(
   agent: Agent,
   session: string,
   text: string,
@@ -115,14 +117,29 @@ export async function* invokeTurn(
   attachments: TurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): AsyncIterable<AgentEvent> {
-  let resolved: ResolvedAttachments;
-  try {
-    resolved = await resolveTurnAttachments(transport, attachments);
-  } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
-    return;
-  }
-  const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };
-  yield* streamTurnWithBusyRetry(agent, { session }, prompt, { label: "[telegram]", onCompleted, busyRetry });
+): Stream.Stream<AgentEvent, TaskFailure> {
+  return Stream.unwrap(
+    taskEffect(() => resolveTurnAttachments(transport, attachments)).pipe(
+      Effect.map((resolved) =>
+        busyRetryStream(
+          agent,
+          { session },
+          {
+            text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`,
+            images: resolved.images,
+          },
+          { label: "[telegram]", onCompleted, busyRetry },
+        ),
+      ),
+      Effect.catchTag("TaskFailure", (error) =>
+        Effect.succeed(
+          Stream.succeed<AgentEvent>({
+            type: "failed",
+            details: `could not load attachment: ${String(error.cause)}`,
+            retryable: true,
+          }),
+        ),
+      ),
+    ),
+  );
 }

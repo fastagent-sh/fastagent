@@ -28,7 +28,7 @@ import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
-import { invokeTurn } from "./invoke-turn.ts";
+import { telegramTurnStream } from "./invoke-turn.ts";
 import { type BufferEntry, collectAttachments, createContextBuffer } from "./context-buffer.ts";
 import {
   type TelegramMessage,
@@ -46,7 +46,7 @@ import {
   telegramEnvelope,
   telegramStop,
 } from "./parse.ts";
-import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
+import { type TelegramFailure, defaultErrorMessage, telegramReply } from "./preview.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
@@ -228,8 +228,8 @@ export function telegramChannel({
       },
       notifyDropped,
       execute: (rec, discussion, onCompleted) =>
-        streamReply(
-          invokeTurn(
+        telegramReply(
+          telegramTurnStream(
             agent,
             rec.session,
             `${discussionBlock(discussion.text)}${rec.baseText}`,

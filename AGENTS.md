@@ -145,7 +145,9 @@ src/
 │   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
 │   │   │                     # consumers only under channels/<platform>/, and serve/http/control/
 │   │   │                     # discover have none there. Neither side may reach for the other.
-│   │   ├── preview-kit.ts   # turn-view reducer (event → view state + line renderers) + preview policies
+│   │   ├── preview-kit.ts   # pure turn-view reducer, line renderers, and preview policies
+│   │   ├── delivery.ts      # scoped coalescing previews, ordered native writes, and snapshot terminal settlement
+│   │   ├── event-stream.ts  # typed, demand-driven Agent iterator acquisition and scoped cleanup
 │   │   ├── invoke-turn-kit.ts # demand-driven Effect stream: scoped attempts, cancellable busy wait, completed-event commit
 │   │   ├── turn-runner.ts   # accept → dequeue → execute → settle over the queue + store + buffer;
 │   │   │                     # business settlement removes intent, resource finalizers never do

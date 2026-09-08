@@ -391,7 +391,7 @@ uses that same shutdown, logging cleanup errors while preserving the startup fai
 `ready` waiter stays outside the scope it may close; channel authors still return ordinary Promises
 and consume an `AbortSignal`. Agent turns and durable replay state remain outside this scope.
 Effect is internal to `/node` service assembly, `/pi` execution/control, and the stateful chat channels'
-shared execution kit. The contracts, `/core`, and `/session` remain dependency-free; public APIs expose
+execution and delivery. The contracts, `/core`, and `/session` remain dependency-free; public APIs expose
 no Effect runtime or types.
 
 `channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
@@ -421,9 +421,24 @@ post-ACK write policies, and at-least-once replay are unchanged.
 
 The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
 first-event `session_busy` rejection closes that iterator before waiting on the Effect clock. Other
-failures never reopen the retry window. The AsyncIterable adapter reuses abort-first cancellation,
-so returning during a quiet read aborts the actual Agent iterator and returning during backoff cancels
-the timer. Natural source exhaustion needs no additional `return()` call.
+failures never reopen the retry window. Interrupting consumption closes the actual Agent iterator
+during a quiet read and cancels the timer during backoff. Natural source exhaustion needs no
+additional `return()` call.
+
+The runner's internal `execute` hook returns an Effect, so input loading, source consumption, previews,
+terminal delivery, and Slack reaction cleanup remain children of the turn. Platform API clients retain
+ordinary Promises and their existing retry/fallback policies. Already-issued operations are joined;
+interrupting input loading does not start a model after the input resolves.
+
+`delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
+its first write synchronously, cancels pending pacing at finish, and joins an issued write before the
+terminal update. Slack's mutation slot and append timer use the turn's clock. Its native stream is
+closed after accepted appends, even if error formatting fails; an attempted stop is never retried by
+scope cleanup. Status clearing follows stream cleanup. Preview callbacks capture the turn context
+when crossing a synchronous API boundary, preserving its clock without introducing a global runtime.
+Snapshot renderers share terminal ownership; formatting, continuation, and capability fallback stay
+platform-specific. Failed error notices are diagnosed without replacing the primary failure, and a
+failed final delivery does not trigger a second abnormal-turn delivery.
 
 ### GitHub
 
