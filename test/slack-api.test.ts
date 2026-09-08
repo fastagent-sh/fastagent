@@ -129,6 +129,20 @@ describe("Slack Web API transport", () => {
     expect(calls).toBe(2);
   });
 
+  it("a droppable write fails on the first 429 instead of absorbing Retry-After", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls++;
+      return Response.json({ ok: false, error: "ratelimited" }, { status: 429, headers: { "retry-after": "30" } });
+    });
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+    const failed = api.updateMarkdown("C1", "1.0", "frame", { retries: 0 }).catch((e: Error) => e);
+    // No timer advance: a preview frame must not park the turn behind a view the next frame redraws.
+    expect(String(await failed)).toContain("ratelimited");
+    expect(calls).toBe(1);
+  });
+
   it("downloads authenticated Slack-hosted bytes, creates vision refs, and writes ordinary files", async () => {
     const calls: { url: string; authorization?: string }[] = [];
     vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {

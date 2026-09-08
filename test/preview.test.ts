@@ -67,6 +67,8 @@ async function* events(...list: AgentEvent[]): AsyncIterable<AgentEvent> {
 
 const neutral = (): string => "⚠️ neutral";
 
+const okSend = () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+
 describe("telegramReply single-writer pump (direct)", () => {
   it("one edit in flight; frames coalesce to the LATEST view — no stale or out-of-order frame", async () => {
     vi.useFakeTimers();
@@ -275,5 +277,83 @@ describe("telegramReply terminal writes (direct)", () => {
     );
     expect(sends.length).toBe(0); // no second placeholder
     expect(edits.at(-1)).toBe("answer"); // the notice morphed into the answer
+  });
+});
+
+describe("telegramReply preview frames are droppable (direct)", () => {
+  it("absorbs a rate limit on the placeholder send — losing it would cost the whole turn's preview", async () => {
+    vi.useFakeTimers();
+    let sends = 0;
+    const edits: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as { text?: string }) : {};
+        if (String(url).endsWith("/sendMessage")) {
+          sends++;
+          if (sends === 1) {
+            return new Response(JSON.stringify({ ok: false, parameters: { retry_after: 1 } }), { status: 429 });
+          }
+          return okSend();
+        }
+        if (String(url).endsWith("/editMessageText")) edits.push(body.text ?? "");
+        return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+      }),
+    );
+    const src = eventSource();
+    const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
+    await vi.advanceTimersByTimeAsync(2_100); // the placeholder retries past Telegram's 1s flood wait
+    expect(sends).toBe(2);
+    src.push({ type: "text", delta: "hello" });
+    src.push({ type: "completed" });
+    src.end();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await turn;
+    expect(edits.at(-1)).toBe("hello"); // the preview survived, so the answer edits it in place
+  });
+
+  it("a rate-limited preview frame does not park the turn on its flood wait", async () => {
+    vi.useFakeTimers();
+    const edits: string[] = [];
+    let frames = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as { text?: string }) : {};
+        if (String(url).endsWith("/editMessageText")) {
+          frames++;
+          // Telegram rate-limits edits far tighter than sends; a preview frame is the common victim.
+          if (frames === 1) {
+            return new Response(JSON.stringify({ ok: false, parameters: { retry_after: 25 } }), { status: 429 });
+          }
+          edits.push(body.text ?? "");
+        }
+        if (String(url).endsWith("/sendMessage")) return okSend();
+        return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+      }),
+    );
+    const src = eventSource();
+    const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
+    await vi.advanceTimersByTimeAsync(0); // placeholder sent
+    src.push({ type: "text", delta: "hel" });
+    await vi.advanceTimersByTimeAsync(1600); // the partial answer ages into view…
+    src.push({ type: "text", delta: "lo" }); // …and this frame carries it, rate-limited below
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames).toBe(1);
+    src.push({ type: "completed" });
+    src.end();
+    // The answer must land without waiting out Telegram's 25s flood wait for a frame nobody needs:
+    // the next frame redraws the same view, and the final write is authoritative.
+    const started = Date.now();
+    let elapsed = -1;
+    void turn.then(() => {
+      elapsed = Date.now() - started;
+    });
+    // Well past any flood wait: the question is not WHETHER the answer lands, but whether it waited.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(elapsed).toBeGreaterThanOrEqual(0);
+    expect(elapsed).toBeLessThan(5_000);
+    expect(edits.at(-1)).toBe("hello");
+    await turn;
   });
 });
