@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as Exit from "effect/Exit";
+import * as Cause from "effect/Cause";
 import type { Agent, AgentEvent, Prompt } from "../src/agent.ts";
-import { invokeSlackTurn } from "../src/channels/slack/invoke-turn.ts";
+import { invokeSlackTurn, slackTurnStream } from "../src/channels/slack/invoke-turn.ts";
 import { type SlackApi, SlackApiError } from "../src/channels/slack/slack-api.ts";
 
 function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
@@ -39,6 +43,49 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 }
 
 describe("Slack turn attachment resolution", () => {
+  it.each([false, true])("cancellation joins input loading without starting the model (reject=%s)", async (reject) => {
+    const entered = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    const invoke = vi.fn();
+    const api = fakeApi({
+      fileInfo: async (id) => {
+        entered.resolve();
+        await loaded.promise;
+        return { id, mimetype: "text/plain", name: "file.txt" };
+      },
+    });
+    let released = false;
+    const done = Effect.runPromiseExit(
+      Stream.runDrain(
+        slackTurnStream(
+          { invoke },
+          "s",
+          "read it",
+          { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
+          { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
+        ),
+      ).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            released = true;
+          }),
+        ),
+      ),
+      { signal: abort.signal },
+    );
+    await entered.promise;
+    abort.abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(released).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+    if (reject) loaded.reject(new Error("late attachment failure"));
+    else loaded.resolve();
+    const exit = await done;
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    expect(released).toBe(true);
+    expect(invoke).not.toHaveBeenCalled();
+  });
   it("turns primary images into vision input and ordinary files into an absolute-path manifest", async () => {
     let prompt: Prompt | undefined;
     const agent: Agent = {

@@ -23,6 +23,12 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AgentEvent } from "../../agent.ts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as Clock from "effect/Clock";
+import { eventStream } from "../kit/event-stream.ts";
+import { previewPump, renderReply } from "../kit/delivery.ts";
+import { type TaskFailure, runTask, taskEffect } from "../kit/tasks.ts";
 import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
@@ -39,7 +45,6 @@ import {
   type ChannelFailure,
   applyTurnEvent,
   composeTurnBody,
-  createPreviewPump,
   createTurnView,
   defaultErrorMessage,
   revealedAnswer,
@@ -229,7 +234,7 @@ export async function settleFeishuPreview(
  * turn's already-mounted card/text message: the pump and terminal write mutate that same message rather
  * than recalling it and posting another reply.
  */
-export async function streamFeishuReply(
+export function streamFeishuReply(
   events: AsyncIterable<AgentEvent>,
   api: FeishuApi,
   target: FeishuTarget,
@@ -237,149 +242,120 @@ export async function streamFeishuReply(
   initialPreview?: MountedFeishuPreview,
   label = "[feishu]",
 ): Promise<void> {
-  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
-  // policy, the card-budget caps, and delivery below. The card is TWO elements (card.ts): the process
-  // block's head changes every frame (sliding thinking tail, `…`→`✓` flips), so it must never share
-  // an element with the answer — the client would re-type the whole card from the divergence point
-  // once a second. Each view feeds its own element; only the changed one is written.
-  const turn = createTurnView();
-  const processView = (): string => {
-    const v = composeTurnBody([
-      thinkingLine(turn, THINKING_PREVIEW),
-      toolLines(turn),
-      turn.retrying ? RETRY_NOTICE : "",
-    ]);
-    if (v !== "") return tailLines(v, PROCESS_MAX_POINTS);
-    // No process content: the placeholder covers only the silence BEFORE the answer reveals — once
-    // the answer is streaming, an empty block goes (stays) empty; "Thinking…" pinned above a live
-    // answer would misstate the phase. The empty frame is a real write: it clears a mounted
-    // placeholder. (The block cannot otherwise flicker: thinking and tools only grow — only the
-    // retry notice toggles, and its empty state resolves through this same rule.)
-    return revealedAnswer(turn, STREAM_THROTTLE_MS).trim() === "" ? THINKING_PLACEHOLDER : "";
-  };
-  const answerView = (): string => capBytes(revealedAnswer(turn, STREAM_THROTTLE_MS), CARD_MARKDOWN_MAX_BYTES);
+  return runTask(
+    Effect.scoped(
+      feishuReply(
+        eventStream(() => events, label).pipe(Stream.scoped),
+        api,
+        target,
+        formatError,
+        initialPreview,
+        label,
+      ),
+    ),
+  );
+}
 
-  // The live preview is ONE message: either the queue card/text handed in by the wiring, or a preview
-  // mounted lazily on this turn's first flush. `sequence` must increase strictly per card — the single-
-  // writer pump guarantees it by construction. A queue card has had no updates yet, so sequence starts
-  // at zero in both paths.
-  let preview: Preview = initialPreview ?? { kind: "none" };
-  let setupAttempted = initialPreview !== undefined;
-  let sequence = 0;
-  const nextSeq = (): number => ++sequence;
-  let streamDead = false; // the platform closed streaming (idle timeout) — freeze the live view
-  let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
-  let lastProcess = "";
-  let lastAnswer = "";
+export function feishuReply(
+  events: Stream.Stream<AgentEvent, TaskFailure>,
+  api: FeishuApi,
+  target: FeishuTarget,
+  formatError: (failed: FeishuFailure) => string | undefined,
+  initialPreview?: MountedFeishuPreview,
+  label = "[feishu]",
+) {
+  return Effect.gen(function* () {
+    const clock = yield* Clock.Clock;
+    const now = () => clock.currentTimeMillisUnsafe();
+    // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
+    // policy, the card-budget caps, and delivery below. The card is TWO elements (card.ts): the process
+    // block's head changes every frame (sliding thinking tail, `…`→`✓` flips), so it must never share
+    // an element with the answer — the client would re-type the whole card from the divergence point
+    // once a second. Each view feeds its own element; only the changed one is written.
+    const turn = createTurnView();
+    const processView = (): string => {
+      const v = composeTurnBody([
+        thinkingLine(turn, THINKING_PREVIEW),
+        toolLines(turn),
+        turn.retrying ? RETRY_NOTICE : "",
+      ]);
+      if (v !== "") return tailLines(v, PROCESS_MAX_POINTS);
+      // No process content: the placeholder covers only the silence BEFORE the answer reveals — once
+      // the answer is streaming, an empty block goes (stays) empty; "Thinking…" pinned above a live
+      // answer would misstate the phase. The empty frame is a real write: it clears a mounted
+      // placeholder. (The block cannot otherwise flicker: thinking and tools only grow — only the
+      // retry notice toggles, and its empty state resolves through this same rule.)
+      return revealedAnswer(turn, STREAM_THROTTLE_MS, now()).trim() === "" ? THINKING_PLACEHOLDER : "";
+    };
+    const answerView = (): string => capBytes(revealedAnswer(turn, STREAM_THROTTLE_MS, now()), CARD_MARKDOWN_MAX_BYTES);
 
-  const flushPreview = async (): Promise<void> => {
-    const process = processView();
-    if (!setupAttempted) {
-      setupAttempted = true;
-      // The mount seeds the process element with the current view; the answer element starts empty
-      // (card.ts), so the first answer snapshot is a clean prefix extension.
-      preview = await mountFeishuPreview(api, target, process, label);
-      lastProcess = process;
-      return;
-    }
-    if (preview.kind !== "card" || streamDead) return; // text tier / dead stream: frozen until the terminal write
-    try {
-      // `last*` advances BEFORE each write: a frame that fails for a non-streaming reason is logged
-      // once (the pump's onError) and not re-sent until its content actually changes. An EMPTY
-      // process frame is written like any other — it is the placeholder being cleared (processView).
-      if (process !== lastProcess) {
+    // The live preview is ONE message: either the queue card/text handed in by the wiring, or a preview
+    // mounted lazily on this turn's first flush. `sequence` must increase strictly per card — the single-
+    // writer pump guarantees it by construction. A queue card has had no updates yet, so sequence starts
+    // at zero in both paths.
+    let preview: Preview = initialPreview ?? { kind: "none" };
+    let setupAttempted = initialPreview !== undefined;
+    let sequence = 0;
+    const nextSeq = (): number => ++sequence;
+    let streamDead = false; // the platform closed streaming (idle timeout) — freeze the live view
+    let lastProcess = "";
+    let lastAnswer = "";
+
+    const flushPreview = async (): Promise<void> => {
+      const process = processView();
+      if (!setupAttempted) {
+        setupAttempted = true;
+        // The mount seeds the process element with the current view; the answer element starts empty
+        // (card.ts), so the first answer snapshot is a clean prefix extension.
+        preview = await mountFeishuPreview(api, target, process, label);
         lastProcess = process;
-        await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq());
-      }
-      const answer = answerView();
-      // Never write an empty answer snapshot — the element is born empty and the answer only grows.
-      if (answer !== "" && answer !== lastAnswer) {
-        lastAnswer = answer;
-        await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq());
-      }
-    } catch (e) {
-      if (isCardStreamingClosed(e)) {
-        // The platform closed streaming (idle timeout). Freeze the live view; the settle write replaces
-        // the whole entity (streaming off) and still lands.
-        streamDead = true;
-        log.warn(`${label} card streaming closed mid-turn — preview frozen; the final answer still lands`);
         return;
       }
-      throw e;
-    }
-  };
-
-  // The shared single-writer pump (preview-kit) serializes snapshots to the one preview — which also
-  // guarantees the card's strictly-increasing `sequence` lands in order (no concurrent frames).
-  const { touch, finish } = createPreviewPump({
-    flush: flushPreview,
-    throttleMs: STREAM_THROTTLE_MS,
-    onError: (e) => log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`),
-  });
-
-  touch(); // mount the "💭 Thinking…" preview immediately
-
-  /** Terminal write, whatever tier the preview reached. */
-  const settle = async (text: string): Promise<void> => {
-    await finalize(api, target, preview, text, nextSeq);
-  };
-
-  try {
-    for await (const e of events) {
-      if (e.type === "completed") {
-        await finish();
-        // Settle the preview into the final answer; the persisted card is the answer alone — the
-        // process (thinking/tools) was preview-only. Mark finalized BEFORE delivering: the terminal was
-        // reached, so a delivery failure here is a plain failure, not an "abnormal exit" (which would
-        // wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
-        finalized = true;
-        await settle(turn.answer.trim() !== "" ? turn.answer : "(no reply)");
-        return;
-      }
-      if (e.type === "failed") {
-        await finish();
-        // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
-        // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
-        // write as completed; an empty notice deletes the preview (suppress = no residue). Best-effort —
-        // we throw below regardless.
-        finalized = true;
-        {
-          const msg =
-            formatError({
-              details: e.details,
-              retryable: e.retryable,
-              ...(e.code !== undefined ? { code: e.code } : {}),
-            }) ?? "";
-          try {
-            await settle(msg);
-          } catch (deliveryError) {
-            // Preserve the Agent failure as the primary error below, but keep the broken final hop in
-            // the operator-visible chain — otherwise the log falsely implies the user saw the notice.
-            log.error(`${label} failed to deliver the agent-failure notice: ${String(deliveryError)}`);
-          }
-        }
-        throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
-      }
-      if (applyTurnEvent(turn, e)) touch();
-    }
-    throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
-  } finally {
-    await finish();
-    // Abnormal exit (stream ended without a terminal, the generator threw, or the consumer abandoned):
-    // no terminal write ran. Show the SAME neutral notice a `failed` event would — the preview may show
-    // real partial work, so don't delete it silently, and don't leave the user in silence. A suppressing
-    // onError still collapses to a delete (finalize on empty text).
-    if (!finalized) {
-      // retryable:false — an abnormal end (no terminal / a throw) is of UNKNOWN retryability, so use the
-      // neutral "something went wrong" default rather than promising "try again" that may not help.
-      const notice = formatError({ details: "the turn ended without completing", retryable: false }) ?? "";
+      if (preview.kind !== "card" || streamDead) return; // text tier / dead stream: frozen until the terminal write
       try {
-        await settle(notice);
-      } catch (deliveryError) {
-        // The stream's original throw remains primary; this explicit line records that the user-facing
-        // terminal notice failed too instead of silently breaking the responsibility chain.
-        log.error(`${label} failed to deliver the abnormal-turn notice: ${String(deliveryError)}`);
+        // `last*` advances BEFORE each write: a frame that fails for a non-streaming reason is logged
+        // once (the pump's onError) and not re-sent until its content actually changes. An EMPTY
+        // process frame is written like any other — it is the placeholder being cleared (processView).
+        if (process !== lastProcess) {
+          lastProcess = process;
+          await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq());
+        }
+        const answer = answerView();
+        // Never write an empty answer snapshot — the element is born empty and the answer only grows.
+        if (answer !== "" && answer !== lastAnswer) {
+          lastAnswer = answer;
+          await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq());
+        }
+      } catch (e) {
+        if (isCardStreamingClosed(e)) {
+          // The platform closed streaming (idle timeout). Freeze the live view; the settle write replaces
+          // the whole entity (streaming off) and still lands.
+          streamDead = true;
+          log.warn(`${label} card streaming closed mid-turn — preview frozen; the final answer still lands`);
+          return;
+        }
+        throw e;
       }
-    }
-  }
+    };
+
+    // The scoped single writer keeps card sequences ordered through the terminal update.
+    const { touch, finish } = yield* previewPump({
+      flush: flushPreview,
+      throttleMs: STREAM_THROTTLE_MS,
+      onError: (e) => log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`),
+    });
+
+    touch(); // mount the "💭 Thinking…" preview immediately
+
+    yield* renderReply(events, {
+      label,
+      finish,
+      formatError,
+      onEvent: (event) => {
+        if (applyTurnEvent(turn, event, now())) touch();
+      },
+      answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
+      settle: (text) => taskEffect(() => finalize(api, target, preview, text, nextSeq)),
+    });
+  });
 }

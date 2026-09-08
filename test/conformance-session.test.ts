@@ -19,7 +19,15 @@ import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/eng
 import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { collect, AgentFailure } from "../src/collect.ts";
 import { streamTurnWithBusyRetry } from "../src/channels/kit/invoke-turn-kit.ts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Stream from "effect/Stream";
+import { runQueuedTurn } from "../src/channels/kit/turn-runner.ts";
+import type { TurnRecordBase } from "../src/channels/kit/turn-store.ts";
+import { toEvents } from "../src/channels/kit/event-stream.ts";
+import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
+import { telegramReply } from "../src/channels/telegram/preview.ts";
+
+afterEach(() => vi.restoreAllMocks());
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
@@ -187,6 +195,8 @@ it.each([
   ["throw", "direct"],
   ["return", "channel"],
   ["throw", "channel"],
+  ["return", "delivery"],
+  ["throw", "delivery"],
 ] as const)(
   "quiet consumer %s through %s aborts the actual tool and joins cleanup before releasing",
   async (method, entry) => {
@@ -223,14 +233,54 @@ it.each([
         return session;
       },
     });
+    if (entry === "delivery") {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        Response.json({ ok: true, result: { message_id: 1 } }),
+      );
+    }
+    const removed = vi.fn();
     const events =
-      entry === "channel"
-        ? streamTurnWithBusyRetry(agent, { session: "quiet" }, { text: "go" }, { label: "[test]" })
-        : agent.invoke({ session: "quiet" }, { text: "go" });
+      entry === "delivery"
+        ? toEvents(
+            Stream.fromEffectDrain(
+              runQueuedTurn<TurnRecordBase, TurnRecordBase, never>(
+                {
+                  label: "[test]",
+                  store: { add: () => {}, remove: removed, recover: () => [], startAttempt: () => "run" },
+                  buffer: { push: () => {}, peek: () => ({ text: "", consumed: [] }), commit: () => {} },
+                  toStored: (rec) => ({ ...rec, attempts: 0 }),
+                  fromStored: (rec) => rec,
+                  bufferKey: () => "quiet",
+                  where: () => "test",
+                  onDeferred: () => {},
+                  notifyDropped: () => {},
+                  execute: () =>
+                    telegramReply(
+                      telegramTurnStream(
+                        agent,
+                        "quiet",
+                        "go",
+                        { api: "https://api.telegram.org", botToken: "token", chatId: 1, filesDir: "/tmp" },
+                        { primary: { imageFileIds: [], fileIds: [] }, buffered: { images: [], files: [], skipped: 0 } },
+                      ),
+                      "https://api.telegram.org",
+                      "token",
+                      { chatId: 1 },
+                      () => "neutral notice",
+                    ),
+                },
+                { id: "turn", session: "quiet", attempts: 0 },
+              ),
+            ),
+          )
+        : entry === "channel"
+          ? streamTurnWithBusyRetry(agent, { session: "quiet" }, { text: "go" }, { label: "[test]" })
+          : agent.invoke({ session: "quiet" }, { text: "go" });
     const iterator = events[Symbol.asyncIterator]();
-    expect((await iterator.next()).value).toMatchObject({ type: "tool_started" });
+    const first = iterator.next();
+    if (entry !== "delivery") expect((await first).value).toMatchObject({ type: "tool_started" });
     await entered.promise;
-    const pending = iterator.next();
+    const pending = entry === "delivery" ? first : iterator.next();
     const error = new Error("consumer stopped");
     const closing = method === "return" ? iterator.return?.() : iterator.throw?.(error);
     const checked = method === "return" ? closing : expect(closing).rejects.toBe(error);
@@ -244,6 +294,7 @@ it.each([
     }
     expect(await pending).toEqual({ done: true, value: undefined });
     expect(disposed).toBe(true);
+    expect(removed).not.toHaveBeenCalled();
     const release = lease.tryAcquire("quiet");
     expect(release).toBeTypeOf("function");
     release?.();

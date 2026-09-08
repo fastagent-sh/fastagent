@@ -11,6 +11,7 @@
  */
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import type * as Scope from "effect/Scope";
 import { log } from "../../log.ts";
 import { type TaskFailure, taskEffect, taskFailure } from "./tasks.ts";
 import type { ContextBuffer } from "./context-buffer.ts";
@@ -49,9 +50,13 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   /** The turn started the ceiling's worth of times without finishing: tell the asker. */
   notifyDropped(rec: R): void;
   /** Run the turn. `onCompleted` is the durable-commit point (the turn's `completed` event): it drops
-   *  the intent and commits the folded discussion, in that order. A throw is logged as the turn's
-   *  failure; the intent is dropped either way. */
-  execute(rec: R, discussion: { text: string; consumed: E[] }, onCompleted: () => void): Promise<void>;
+   *  the intent and commits the folded discussion, in that order. Typed failures are logged and
+   *  settled; interruption and defects retain unfinished intent. */
+  execute(
+    rec: R,
+    discussion: { text: string; consumed: E[] },
+    onCompleted: () => void,
+  ): Effect.Effect<void, TaskFailure, Scope.Scope>;
 }
 
 export interface TurnRunner<R, S> {
@@ -86,9 +91,11 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     log.info(`${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}`);
     const bufferKey = options.bufferKey(rec);
     const discussion = buffer.peek(bufferKey);
-    yield* taskEffect(() =>
-      options.execute(rec, discussion, () =>
-        commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey, consumed: discussion.consumed }),
+    yield* Effect.scoped(
+      Effect.suspend(() =>
+        options.execute(rec, discussion, () =>
+          commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey, consumed: discussion.consumed }),
+        ),
       ),
     ).pipe(
       Effect.matchEffect({

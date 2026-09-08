@@ -6,6 +6,10 @@
  * wiring and the per-turn lifecycle.
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
+import { toEvents } from "../kit/event-stream.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -13,7 +17,7 @@ import {
   attachedFilesManifest,
   attributedFileName,
   missingAttachmentsNote,
-  streamTurnWithBusyRetry,
+  busyRetryStream,
 } from "../kit/invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
@@ -107,7 +111,11 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
  * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
  * primary-attachment failure surfaces as a `failed` event (never a silent drop).
  */
-export async function* invokeTurn(
+export function invokeTurn(...args: Parameters<typeof telegramTurnStream>): AsyncIterable<AgentEvent> {
+  return toEvents(telegramTurnStream(...args));
+}
+
+export function telegramTurnStream(
   agent: Agent,
   session: string,
   text: string,
@@ -115,14 +123,29 @@ export async function* invokeTurn(
   attachments: TurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): AsyncIterable<AgentEvent> {
-  let resolved: ResolvedAttachments;
-  try {
-    resolved = await resolveTurnAttachments(transport, attachments);
-  } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
-    return;
-  }
-  const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };
-  yield* streamTurnWithBusyRetry(agent, { session }, prompt, { label: "[telegram]", onCompleted, busyRetry });
+): Stream.Stream<AgentEvent, TaskFailure> {
+  return Stream.unwrap(
+    taskEffect(() => resolveTurnAttachments(transport, attachments)).pipe(
+      Effect.map((resolved) =>
+        busyRetryStream(
+          agent,
+          { session },
+          {
+            text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`,
+            images: resolved.images,
+          },
+          { label: "[telegram]", onCompleted, busyRetry },
+        ),
+      ),
+      Effect.catchTag("TaskFailure", (error) =>
+        Effect.succeed(
+          Stream.succeed<AgentEvent>({
+            type: "failed",
+            details: `could not load attachment: ${String(error.cause)}`,
+            retryable: true,
+          }),
+        ),
+      ),
+    ),
+  );
 }

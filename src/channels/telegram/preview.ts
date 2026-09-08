@@ -6,13 +6,18 @@
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
 import type { AgentEvent } from "../../agent.ts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as Clock from "effect/Clock";
+import { eventStream } from "../kit/event-stream.ts";
+import { previewPump, renderReply } from "../kit/delivery.ts";
+import { type TaskFailure, runTask, taskEffect } from "../kit/tasks.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
   type ChannelFailure,
   applyTurnEvent,
   composeTurnBody,
-  createPreviewPump,
   createTurnView,
   defaultErrorMessage,
   revealedAnswer,
@@ -82,7 +87,7 @@ async function finalize(
  * model). Preview edits are best-effort (logged once if they fail); the final write is authoritative
  * and surfaces a real failure (bad token, etc.).
  */
-export async function streamReply(
+export function streamReply(
   events: AsyncIterable<AgentEvent>,
   api: string,
   botToken: string,
@@ -90,104 +95,87 @@ export async function streamReply(
   formatError: (failed: TelegramFailure) => string | undefined,
   previewId?: number,
 ): Promise<void> {
-  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
-  // policy, formatting, and delivery below.
-  const turn = createTurnView();
-  const view = (): string => {
-    const v = composeTurnBody([
-      thinkingLine(turn, THINKING_PREVIEW),
-      toolLines(turn),
-      turn.retrying ? RETRY_NOTICE : "",
-      revealedAnswer(turn, EDIT_THROTTLE_MS),
-    ]);
-    // Before any reasoning/tool/text arrives, show an explicit placeholder rather than an empty edit.
-    return v === "" ? THINKING_PLACEHOLDER : v;
-  };
+  return runTask(
+    Effect.scoped(
+      telegramReply(
+        eventStream(() => events, "[telegram]").pipe(Stream.scoped),
+        api,
+        botToken,
+        target,
+        formatError,
+        previewId,
+      ),
+    ),
+  );
+}
 
-  // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
-  // then edited in place. messageId/lastSent are shared with the final write on completion.
-  // `previewId`: an already-sent message to take over as the preview (the "⏳ queued" notice) — the
-  // pump edits it in place, so the queue notice morphs into the live view instead of leaving an orphan.
-  let messageId: number | undefined = previewId;
-  let previewSent = messageId !== undefined; // a placeholder send was attempted — guards against re-sending when no id came back
-  let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
-  let lastSent = "";
-  const flushPreview = async (): Promise<void> => {
-    const text = view();
-    if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
-    lastSent = text;
-    if (messageId !== undefined) {
-      await editMessageText(api, botToken, target, messageId, text); // plain — a partial answer may carry unbalanced HTML
-      return;
-    }
-    // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
-    // frame). If Telegram returns ok WITHOUT a message_id (proxy / odd API base / unparseable body) we
-    // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
-    if (previewSent) return;
-    previewSent = true;
-    messageId = await sendMessage(api, botToken, target, text, { html: false });
-    if (messageId === undefined)
-      throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
-  };
+export function telegramReply(
+  events: Stream.Stream<AgentEvent, TaskFailure>,
+  api: string,
+  botToken: string,
+  target: Target,
+  formatError: (failed: TelegramFailure) => string | undefined,
+  previewId?: number,
+) {
+  return Effect.gen(function* () {
+    const clock = yield* Clock.Clock;
+    const now = () => clock.currentTimeMillisUnsafe();
+    // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
+    // policy, formatting, and delivery below.
+    const turn = createTurnView();
+    const view = (): string => {
+      const v = composeTurnBody([
+        thinkingLine(turn, THINKING_PREVIEW),
+        toolLines(turn),
+        turn.retrying ? RETRY_NOTICE : "",
+        revealedAnswer(turn, EDIT_THROTTLE_MS, now()),
+      ]);
+      // Before any reasoning/tool/text arrives, show an explicit placeholder rather than an empty edit.
+      return v === "" ? THINKING_PLACEHOLDER : v;
+    };
 
-  // The shared single-writer pump (preview-kit) serializes edits to the one preview message. (No
-  // keepalive: a real message does not expire, unlike a Bot API `sendMessageDraft` (30s window).)
-  const { touch, finish } = createPreviewPump({
-    flush: flushPreview,
-    throttleMs: EDIT_THROTTLE_MS,
-    onError: (e) => log.warn(`[telegram] live preview failed (final reply still sends): ${String(e)}`),
-  });
-
-  touch(); // send the "💭 Thinking…" placeholder immediately
-
-  try {
-    for await (const e of events) {
-      if (e.type === "completed") {
-        await finish();
-        // Edit the preview into the final answer (HTML, plain fallback); the persisted message is the
-        // answer alone — the process (thinking/tools) was preview-only. Mark finalized BEFORE delivering:
-        // the terminal was reached, so a delivery failure here is a plain failure, not an "abnormal exit"
-        // (which would wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
-        finalized = true;
-        await finalize(api, botToken, target, messageId, turn.answer.trim() !== "" ? turn.answer : "(no reply)");
+    // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
+    // then edited in place. messageId/lastSent are shared with the final write on completion.
+    // `previewId`: an already-sent message to take over as the preview (the "⏳ queued" notice) — the
+    // pump edits it in place, so the queue notice morphs into the live view instead of leaving an orphan.
+    let messageId: number | undefined = previewId;
+    let previewSent = messageId !== undefined; // a placeholder send was attempted — guards against re-sending when no id came back
+    let lastSent = "";
+    const flushPreview = async (): Promise<void> => {
+      const text = view();
+      if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
+      lastSent = text;
+      if (messageId !== undefined) {
+        await editMessageText(api, botToken, target, messageId, text); // plain — a partial answer may carry unbalanced HTML
         return;
       }
-      if (e.type === "failed") {
-        await finish();
-        // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
-        // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
-        // write as completed: edit → fresh-send if the preview is gone; an empty notice deletes the
-        // placeholder (suppress = no residue). HTML like the answer — symmetric, and finalize already
-        // falls back to plain if a custom onError returns markup Telegram rejects. Best-effort — we throw
-        // below regardless.
-        finalized = true;
-        {
-          const msg =
-            formatError({
-              details: e.details,
-              retryable: e.retryable,
-              ...(e.code !== undefined ? { code: e.code } : {}),
-            }) ?? "";
-          await finalize(api, botToken, target, messageId, msg).catch(() => {});
-        }
-        throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
-      }
-      if (applyTurnEvent(turn, e)) touch();
-    }
-    throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
-  } finally {
-    await finish();
-    // Abnormal exit (stream ended without a terminal, the generator threw, or the consumer abandoned): no
-    // terminal write ran. Show the SAME neutral notice a `failed` event would — the preview may show real
-    // partial work, so don't delete it silently, and don't leave the user in silence. A suppressing
-    // onError still collapses to a delete (finalize on empty text).
-    if (!finalized) {
-      // retryable:false — an abnormal end (no terminal / a throw) is of UNKNOWN retryability, so use the
-      // neutral "something went wrong" default rather than promising "try again" that may not help.
-      const notice = formatError({ details: "the turn ended without completing", retryable: false }) ?? "";
-      // finalize handles messageId===undefined (no preview reached) with a fresh send — so the user is
-      // told even when the turn died before any message.
-      await finalize(api, botToken, target, messageId, notice).catch(() => {});
-    }
-  }
+      // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
+      // frame). If Telegram returns ok WITHOUT a message_id (proxy / odd API base / unparseable body) we
+      // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
+      if (previewSent) return;
+      previewSent = true;
+      messageId = await sendMessage(api, botToken, target, text, { html: false });
+      if (messageId === undefined)
+        throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
+    };
+
+    const { touch, finish } = yield* previewPump({
+      flush: flushPreview,
+      throttleMs: EDIT_THROTTLE_MS,
+      onError: (e) => log.warn(`[telegram] live preview failed (final reply still sends): ${String(e)}`),
+    });
+
+    touch(); // send the "💭 Thinking…" placeholder immediately
+
+    yield* renderReply(events, {
+      label: "[telegram]",
+      finish,
+      formatError,
+      onEvent: (event) => {
+        if (applyTurnEvent(turn, event, now())) touch();
+      },
+      answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
+      settle: (text) => taskEffect(() => finalize(api, botToken, target, messageId, text)),
+    });
+  });
 }

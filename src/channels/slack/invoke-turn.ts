@@ -1,5 +1,9 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
+import { toEvents } from "../kit/event-stream.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -8,7 +12,7 @@ import {
   attributedFileName,
   backgroundImagesManifest,
   missingAttachmentsNote,
-  streamTurnWithBusyRetry,
+  busyRetryStream,
 } from "../kit/invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
@@ -93,7 +97,11 @@ async function resolveInputs(
   };
 }
 
-export async function* invokeSlackTurn(
+export function invokeSlackTurn(...args: Parameters<typeof slackTurnStream>): AsyncIterable<AgentEvent> {
+  return toEvents(slackTurnStream(...args));
+}
+
+export function slackTurnStream(
   agent: Agent,
   session: string,
   text: string,
@@ -101,18 +109,31 @@ export async function* invokeSlackTurn(
   attachments: SlackTurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): AsyncIterable<AgentEvent> {
-  let resolved: ResolvedInputs;
-  try {
-    resolved = await resolveInputs(transport, attachments);
-  } catch (error) {
-    // transient (network, exhausted 429 retries, Slack 5xx) is worth re-sending; an access or shape
-    // error reads the same every time, and "try again in a moment" is the wrong thing to tell the user
-    const retryable =
-      error instanceof SlackApiError && (error.status === 0 || error.status === 429 || error.status >= 500);
-    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable };
-    return;
-  }
-  const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
-  yield* streamTurnWithBusyRetry(agent, { session }, prompt, { label: transport.label, onCompleted, busyRetry });
+): Stream.Stream<AgentEvent, TaskFailure> {
+  return Stream.unwrap(
+    taskEffect(() => resolveInputs(transport, attachments)).pipe(
+      Effect.map((resolved) =>
+        busyRetryStream(
+          agent,
+          { session },
+          {
+            text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`,
+            images: resolved.images,
+          },
+          { label: transport.label, onCompleted, busyRetry },
+        ),
+      ),
+      Effect.catchTag("TaskFailure", ({ cause: error }) => {
+        const retryable =
+          error instanceof SlackApiError && (error.status === 0 || error.status === 429 || error.status >= 500);
+        return Effect.succeed(
+          Stream.succeed<AgentEvent>({
+            type: "failed",
+            details: `could not load Slack attachment: ${String(error)}`,
+            retryable,
+          }),
+        );
+      }),
+    ),
+  );
 }

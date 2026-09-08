@@ -14,12 +14,12 @@
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.
  */
-import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
-import { cancellableStream } from "../../collect.ts";
+import { eventStream, toEvents } from "./event-stream.ts";
+import { TaskFailure } from "./tasks.ts";
 import { log } from "../../log.ts";
 
 /** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
@@ -57,26 +57,7 @@ export function streamTurnWithBusyRetry(
   prompt: Prompt,
   options: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
 ): AsyncIterable<AgentEvent> {
-  return cancellableStream(async function* ({ onCancelReady }) {
-    // Effect implements return/throw; AsyncIterator makes them optional for arbitrary iterables.
-    const iterator = Stream.toAsyncIterable(busyRetryStream(agent, scope, prompt, options))[
-      Symbol.asyncIterator
-    ]() as Required<AsyncIterator<AgentEvent>>;
-    let closing: Promise<IteratorResult<AgentEvent>> | undefined;
-    // Stream.return interrupts a pending pull; the shared wrapper also silences an already-pulled event.
-    onCancelReady(() => {
-      closing = iterator.return();
-    });
-    try {
-      for (;;) {
-        const result = await iterator.next();
-        if (result.done) return;
-        yield result.value;
-      }
-    } finally {
-      await (closing ?? iterator.return());
-    }
-  });
+  return toEvents(busyRetryStream(agent, scope, prompt, options));
 }
 
 /** Pull-based execution keeps commit and source cleanup under downstream backpressure. */
@@ -89,42 +70,17 @@ export function busyRetryStream(
     onCompleted,
     busyRetry = DEFAULT_BUSY_RETRY,
   }: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
-): Stream.Stream<AgentEvent, unknown> {
+): Stream.Stream<AgentEvent, TaskFailure> {
   return Stream.unwrap(
     Effect.map(Clock.currentTimeMillis, (started) => {
       const deadline = started + busyRetry.maxWaitMs;
-      const attempt = (): Stream.Stream<AgentEvent, unknown> =>
+      const attempt = (): Stream.Stream<AgentEvent, TaskFailure> =>
         Stream.suspend(() => {
           let retryBusy = false;
-          return Stream.fromPull(
-            Effect.gen(function* () {
-              let exhausted = false;
-              let first = true;
-              const iterator = yield* Effect.acquireRelease(
-                Effect.sync(() => agent.invoke(scope, prompt)[Symbol.asyncIterator]()),
-                (iterator) => {
-                  const close = iterator.return?.bind(iterator);
-                  // Match for-await: natural exhaustion already closed the source.
-                  if (!close || exhausted) return Effect.void;
-                  // Diagnose every exit, including cancellation. Keep Cause intact for the caller boundary.
-                  return Effect.promise(close).pipe(
-                    Effect.onError((cause) =>
-                      Effect.sync(() =>
-                        log.warn(
-                          `${label} source cleanup failed (session=${scope.session}): ${String(Cause.squash(cause))}`,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              );
-              return Effect.gen(function* () {
-                const result = yield* Effect.tryPromise({ try: () => iterator.next(), catch: (error) => error });
-                if (result.done) {
-                  exhausted = true;
-                  return yield* Cause.done();
-                }
-                const event = result.value;
+          let first = true;
+          return eventStream(() => agent.invoke(scope, prompt), `${label} (session=${scope.session})`).pipe(
+            Stream.takeWhileEffect((event) =>
+              Effect.gen(function* () {
                 if (
                   first &&
                   event.type === "failed" &&
@@ -132,14 +88,20 @@ export function busyRetryStream(
                   (yield* Clock.currentTimeMillis) + busyRetry.delayMs < deadline
                 ) {
                   retryBusy = true;
-                  return yield* Cause.done();
+                  return false;
                 }
                 first = false;
-                if (event.type === "completed") onCompleted?.();
-                return [event] as const;
-              });
-            }),
-          ).pipe(
+                return true;
+              }),
+            ),
+            Stream.tap((event) =>
+              Effect.try({
+                try: () => {
+                  if (event.type === "completed") onCompleted?.();
+                },
+                catch: (cause) => new TaskFailure(cause),
+              }),
+            ),
             Stream.scoped,
             // concat closes the attempt's scope (and its iterator) before the wait or next invoke.
             Stream.concat(

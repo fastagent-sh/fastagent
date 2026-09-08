@@ -67,6 +67,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
         "effect/Effect",
         "effect/Exit",
         "effect/Fiber",
+        "effect/Queue",
         "effect/Stream",
       ]);
       expect([...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);

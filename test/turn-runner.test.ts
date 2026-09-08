@@ -10,6 +10,7 @@ import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/con
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
+import { taskEffect } from "../src/channels/kit/tasks.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import * as atomic from "../src/atomic-write.ts";
 import { log } from "../src/log.ts";
@@ -70,10 +71,11 @@ function runnerOptions(
     where: (rec) => `session=${rec.session}`,
     onDeferred: (rec) => calls.push(`deferred ${rec.id}`),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
-    execute: async (rec, discussion, onCompleted) => {
-      calls.push(`execute ${rec.id} notice=${rec.notice ?? "-"} text=${discussion.text}`);
-      onCompleted();
-    },
+    execute: (rec, discussion, onCompleted) =>
+      taskEffect(async () => {
+        calls.push(`execute ${rec.id} notice=${rec.notice ?? "-"} text=${discussion.text}`);
+        onCompleted();
+      }),
     ...overrides,
   };
 }
@@ -119,6 +121,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         "-e",
         `
       import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
+      import { taskEffect } from ${JSON.stringify(`${source}tasks.ts`)};
       import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
       import { createContextBuffer } from ${JSON.stringify(`${source}context-buffer.ts`)};
       const root = ${JSON.stringify(dir)};
@@ -128,7 +131,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       const runner = createTurnRunner({
         label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
         bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
-        execute: async (_rec, _discussion, onCompleted) => {
+        execute: (_rec, _discussion, onCompleted) => taskEffect(async () => {
           process.on('message', () => {
             onCompleted();
             buffer.push('place:s', 'later');
@@ -136,7 +139,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
           });
           process.send('running');
           await new Promise(() => {});
-        },
+        }),
       });
       runner.submit({ id: 'a', session: 's', text: '' }, true);
     `,
@@ -179,12 +182,13 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     const { store, calls } = fakeStore();
     const r = runner(store, calls, {
       onQueuedBehind: () => ({ done: Promise.reject(new Error("notice rejected before dequeue")) }),
-      execute: async (rec) => {
-        if (rec.id === "a") {
-          entered.resolve();
-          await head.promise;
-        }
-      },
+      execute: (rec) =>
+        taskEffect(async () => {
+          if (rec.id === "a") {
+            entered.resolve();
+            await head.promise;
+          }
+        }),
     });
     r.submit({ id: "a", session: "s", text: "" }, true);
     r.submit({ id: "b", session: "s", text: "" }, true);
@@ -242,12 +246,13 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       let running!: Fiber.Fiber<unknown, unknown>;
       const opts = runnerOptions(store, [], {
         buffer,
-        execute: async (_rec, discussion, onCompleted) => {
-          expect(discussion.consumed).toEqual(["earlier"]);
-          if (completed) onCompleted();
-          entered.resolve();
-          await finish.promise;
-        },
+        execute: (_rec, discussion, onCompleted) =>
+          taskEffect(async () => {
+            expect(discussion.consumed).toEqual(["earlier"]);
+            if (completed) onCompleted();
+            entered.resolve();
+            await finish.promise;
+          }),
       });
       const base = activeWork();
       const queue = createTurnQueue<Pending>({
@@ -386,10 +391,11 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     const { store, calls, recovered } = fakeStore();
     recovered.push({ id: "r", session: "s", text: "again", attempts: 1 });
     const r = runner(store, calls, {
-      execute: async (rec) => {
-        calls.push(`execute ${rec.id}`);
-        throw new Error("transport down");
-      },
+      execute: (rec) =>
+        taskEffect(async () => {
+          calls.push(`execute ${rec.id}`);
+          throw new Error("transport down");
+        }),
     });
     expect(r.recover()).toHaveLength(1);
     await r.idle();
