@@ -17,13 +17,6 @@ const { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } = require("@aws-sdk/
 const client = new BedrockAgentCoreClient({});
 let ownUrl; // self-resolved once per cold start; rides on every envelope for the wake-alarm callback
 
-// Presigned S3 URLs for the container's state snapshot. AgentCore wipes the /mnt/state mount on
-// every runtime version update (= every deploy), so the durable copy lives in S3 — but the
-// container is given NO AWS credentials by the platform, so the only reachable form is a URL that
-// carries its own authorization. SigV4 query signing, node:crypto only (no SDK, nothing to install).
-const enc = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-const hmac = (key, data) => crypto.createHmac("sha256", key).update(data).digest();
-
 // Every shared-secret gate on this public URL goes through here. Constant-time, and an unset
 // expected secret NEVER matches — otherwise a topology that did not configure one would accept a
 // request that sent none. Non-string input is coerced to "" first: Buffer.from(8) allocates eight
@@ -34,39 +27,8 @@ const secretEq = (given, expected) => {
   return b.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-function presign(method, seconds) {
-  const bucket = process.env.STATE_BUCKET,
-    key = process.env.STATE_KEY,
-    region = process.env.AWS_REGION;
-  const host = `${bucket}.s3.${region}.amazonaws.com`;
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
-  const scope = `${stamp.slice(0, 8)}/${region}/s3/aws4_request`;
-  const pairs = [
-    ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
-    ["X-Amz-Credential", `${process.env.AWS_ACCESS_KEY_ID}/${scope}`],
-    ["X-Amz-Date", stamp],
-    ["X-Amz-Expires", String(seconds)],
-    ["X-Amz-SignedHeaders", "host"],
-  ];
-  if (process.env.AWS_SESSION_TOKEN) pairs.push(["X-Amz-Security-Token", process.env.AWS_SESSION_TOKEN]);
-  // The canonical query must be byte-identical to the one on the wire — build it ONCE, reuse below.
-  const query = pairs
-    .map(([k, v]) => [enc(k), enc(v)])
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map((p) => p.join("="))
-    .join("&");
-  const path = `/${key.split("/").map(enc).join("/")}`;
-  const canonical = [method, path, query, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
-  const sts = ["AWS4-HMAC-SHA256", stamp, scope, crypto.createHash("sha256").update(canonical).digest("hex")].join(
-    "\n",
-  );
-  let k = hmac(`AWS4${process.env.AWS_SECRET_ACCESS_KEY}`, stamp.slice(0, 8));
-  for (const part of [region, "s3", "aws4_request"]) k = hmac(k, part);
-  return `https://${host}${path}?${query}&X-Amz-Signature=${hmac(k, sts).toString("hex")}`;
-}
-
 async function invoke(envelope) {
-  if ((process.env.WAKE_SECRET || process.env.STATE_REFRESH_SECRET) && !ownUrl) {
+  if (process.env.WAKE_SECRET && !ownUrl) {
     const { LambdaClient, GetFunctionUrlConfigCommand } = require("@aws-sdk/client-lambda");
     ownUrl = (
       await new LambdaClient({}).send(
@@ -77,22 +39,6 @@ async function invoke(envelope) {
   if (ownUrl) envelope.wake = { url: ownUrl };
   // Authenticates this envelope as coming from the forwarder (see the template's FastagentIngressSecret).
   envelope.auth = process.env.INGRESS_SECRET;
-  // Keep each capability short-lived. Function-URL deployments also carry an authenticated refresh
-  // endpoint, so a background turn settling hours after its webhook never depends on the temporary
-  // Lambda credentials that signed the original pair still being alive.
-  if (process.env.STATE_BUCKET)
-    envelope.state = {
-      getUrl: presign("GET", 3600),
-      putUrl: presign("PUT", 3600),
-      ...(ownUrl && process.env.STATE_REFRESH_SECRET
-        ? {
-            refresh: {
-              url: `${ownUrl.replace(/\/$/, "")}/__fastagent/state-urls`,
-              auth: process.env.STATE_REFRESH_SECRET,
-            },
-          }
-        : {}),
-    };
   const res = await client.send(
     new InvokeAgentRuntimeCommand({
       agentRuntimeArn: process.env.RUNTIME_ARN,
@@ -169,17 +115,6 @@ exports.handler = async (event, ctx) => {
   }
   const http = event?.requestContext?.http;
   if (!http) throw new Error("unrecognized event shape");
-  // Refresh the snapshot capabilities with THIS Lambda invocation's current temporary credentials.
-  // The container may settle long after the webhook Lambda (and its credentials) expired.
-  if (event.rawPath === "/__fastagent/state-urls") {
-    const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
-    if (!secretEq(req.auth, process.env.STATE_REFRESH_SECRET)) return { statusCode: 403, body: "forbidden\n" };
-    return {
-      statusCode: 200,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ getUrl: presign("GET", 3600), putUrl: presign("PUT", 3600) }),
-    };
-  }
   // The container's wake-alarm callback (reserved path, shared secret) — handled HERE, never forwarded.
   if (event.rawPath === "/__fastagent/wake-alarm") {
     const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
@@ -190,13 +125,8 @@ exports.handler = async (event, ctx) => {
     if (failed > 0) return { statusCode: 500, body: `${failed} alarm(s) failed\n` };
     return { statusCode: 200, body: "ok\n" };
   }
-  // The deploy driver's probe (reserved path, ingress secret): wake the runtime through the SAME
-  // trusted envelope pipeline (state URLs included — a direct InvokeAgentRuntime call could not mint
-  // them, and would make the runtime construct against a pre-restore mount) and pass its structured
-  // transport-200 verdict back VERBATIM. The ordinary webhook path below folds a non-200 transport
-  // into an opaque 502, which would strip exactly the diagnostics the probe exists to carry — and it
-  // sits BEFORE the WEBHOOKS_ENABLED gate so schedule-only topologies (whose URLs refuse ordinary
-  // public traffic) are probeable too.
+  // Preserve the trusted probe's structured verdict instead of folding its diagnostics into a 502.
+  // Schedule-only topologies also need this path, before the ordinary webhook gate.
   if (event.rawPath === "/__fastagent/probe") {
     const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
     if (!secretEq(req.auth, process.env.INGRESS_SECRET)) return { statusCode: 403, body: "forbidden\n" };

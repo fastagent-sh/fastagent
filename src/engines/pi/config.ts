@@ -20,6 +20,8 @@ import { THINKING_LEVELS } from "./session-settings.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
+import { validateTemporaryDirectories } from "../../deploy/workspace.ts";
+import type { AgentcoreStorage } from "../../deploy/agentcore/plan.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
@@ -62,6 +64,10 @@ export interface FastagentConfig {
      *  package needing a custom apt repo (e.g. gh) or a different base image, provide your own Dockerfile
      *  — `deploy` keeps an existing one. */
     apt?: string[];
+    /** Workspace-relative disposable directories mounted from /tmp. Railway does not support these mounts. */
+    temporaryDirectories?: string[];
+    /** Existing EFS and VPC resources. Their lifetime is independent of runtime deployments. */
+    agentcore?: AgentcoreStorage;
   };
 }
 
@@ -186,8 +192,40 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "deploy" must be an object`);
   }
   for (const key of Object.keys(c.deploy ?? {})) {
-    if (key !== "secrets" && key !== "apt") {
-      throw new Error(`${path}: unknown key "deploy.${key}" (valid keys: secrets, apt)`);
+    if (!["secrets", "apt", "temporaryDirectories", "agentcore"].includes(key)) {
+      throw new Error(
+        `${path}: unknown key "deploy.${key}" (valid keys: secrets, apt, temporaryDirectories, agentcore)`,
+      );
+    }
+  }
+  if (c.deploy?.temporaryDirectories !== undefined) validateTemporaryDirectories(c.deploy.temporaryDirectories);
+  const ac = c.deploy?.agentcore;
+  if (ac !== undefined) {
+    if (
+      !ac ||
+      typeof ac !== "object" ||
+      Object.keys(ac).some((key) => !["efsAccessPointArn", "subnetIds", "securityGroupIds"].includes(key))
+    ) {
+      throw new Error(`${path}: deploy.agentcore requires efsAccessPointArn, subnetIds, securityGroupIds`);
+    }
+    if (
+      typeof ac.efsAccessPointArn !== "string" ||
+      !/^arn:aws[-a-z]*:elasticfilesystem:[a-z0-9-]+:\d{12}:access-point\/fsap-[a-f0-9]+$/.test(ac.efsAccessPointArn)
+    ) {
+      throw new Error(`${path}: deploy.agentcore.efsAccessPointArn must be an EFS access point ARN`);
+    }
+    for (const [key, prefix] of [
+      ["subnetIds", "subnet"],
+      ["securityGroupIds", "sg"],
+    ] as const) {
+      validateStringList(
+        ac[key],
+        `deploy.agentcore.${key}`,
+        new RegExp(`^${prefix}-[a-f0-9]+$`),
+        `an AWS ${prefix} id`,
+        path,
+      );
+      if (!ac[key]?.length) throw new Error(`${path}: deploy.agentcore.${key} must not be empty`);
     }
   }
   // secrets are UPPER_SNAKE env-var names (deploy reads their VALUES from the local env); apt entries are

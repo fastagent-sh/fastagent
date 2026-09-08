@@ -14,7 +14,8 @@ const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
 const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join("\n");
 
 const base = {
-  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
+  releaseId: "release-one",
+  agentPrefix: "fastagent/",
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,
@@ -25,10 +26,18 @@ const base = {
 } as const;
 
 describe("deploy/docker: planDockerDeploy", () => {
+  it("grants mount permissions only when temporary directories are explicitly configured", () => {
+    const input = { ...base, modelAuth: undefined, channels: [] };
+    expect(compose(planDockerDeploy(input))).not.toContain("SYS_ADMIN");
+    const configured = compose(planDockerDeploy({ ...input, temporaryDirectories: ["fastagent/node_modules"] }));
+    expect(configured).toContain("cap_add: [SYS_ADMIN]");
+    expect(configured).toContain("security_opt: [apparmor=unconfined]");
+  });
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent/fastagent.compose.yml",
+      "fastagent/fastagent.release.json",
       "fastagent/Dockerfile",
       ".dockerignore",
       "fastagent/Dockerfile.dockerignore",
@@ -107,6 +116,7 @@ describe("deploy/docker: planDockerDeploy", () => {
       "fastagent/Dockerfile",
       "fastagent/Dockerfile.dockerignore",
       "fastagent/fastagent.compose.yml",
+      "fastagent/fastagent.release.json",
     ]);
     expect(plan.composePath).toBe("fastagent/fastagent.compose.yml");
     expect(compose(plan)).toContain("context: ..");

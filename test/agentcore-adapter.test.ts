@@ -7,7 +7,6 @@ import type { Agent, AgentEvent } from "../src/agent.ts";
 import { UnknownScheduleError, agentcoreRoutes, type RouteSurface } from "../src/channels/agentcore.ts";
 import type { AgentcoreEnvelope, WebhookReply } from "../src/channels/agentcore-protocol.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
-import type { StateSync } from "../src/channels/agentcore-state.ts";
 import type { Routes } from "../src/channel.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../src/schedule/scheduler.ts";
@@ -31,26 +30,8 @@ interface AdapterOverrides {
   agent?: Agent;
   isBusy?: () => boolean;
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
-  stateSync?: StateSync;
   ingressSecret?: string;
   onStateReady?: () => void;
-}
-
-/** A StateSync double: records the lifecycle without touching S3 or the disk. */
-function fakeStateSync(over: Partial<StateSync> = {}): StateSync & { seen: string[]; saves: () => number } {
-  const seen: string[] = [];
-  let saves = 0;
-  const base: StateSync = {
-    use: (u) => seen.push(u.getUrl),
-    ready: async () => {},
-    save: () => {
-      saves += 1;
-    },
-    configured: () => seen.length > 0,
-    flush: async () => {},
-    checkpoint: async () => ({ written: seen.length > 0 }),
-  };
-  return Object.assign(base, over, { seen, saves: () => saves });
 }
 
 const stateRoot = await mkdtemp(join(tmpdir(), "fa-agentcore-adapter-"));
@@ -66,7 +47,6 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
     fire: over.fire,
-    stateSync: over.stateSync,
     ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
     onStateReady: over.onStateReady,
   });
@@ -84,30 +64,23 @@ const postUntrusted = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Res
 
 describe("agentcore adapter: lazy channel construction", () => {
   const health: Routes = { "GET /health": () => new Response("ok\n") };
-  const stateUrls = { getUrl: "https://s3/get", putUrl: "https://s3/put" };
 
-  it("constructs the channels AFTER the state restore — once — and reuses them across envelopes", async () => {
+  it("constructs channels once and reuses them across envelopes", async () => {
     const order: string[] = [];
-    const sync = fakeStateSync({
-      ready: async () => {
-        order.push("restore");
-      },
-    });
     let built = 0;
     const routes = adapter({
-      stateSync: sync,
       channels: () => {
         order.push("construct");
         built += 1;
         return { routes: health };
       },
     });
-    expect(built).toBe(0); // never at boot — the mount is pre-restore there
-    const env: AgentcoreEnvelope = { kind: "webhook", method: "GET", path: "/health", state: stateUrls };
+    expect(built).toBe(0);
+    const env: AgentcoreEnvelope = { kind: "webhook", method: "GET", path: "/health" };
     const first = await postEnvelope(routes, env);
     expect(first.status).toBe(200);
     expect(((await first.json()) as WebhookReply).status).toBe(200);
-    expect(order).toEqual(["restore", "construct"]); // construction strictly after ready()
+    expect(order).toEqual(["construct"]);
     await postEnvelope(routes, env);
     expect(built).toBe(1); // memoized — the same resident channels a direct host keeps
   });
@@ -155,22 +128,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     expect(verdict.error).toContain("FEISHU_APP_SECRET");
   });
 
-  it("a probe reports a FAILED RESTORE structurally too, and an unauthenticated probe is refused", async () => {
-    const sync = fakeStateSync({
-      ready: async () => {
-        throw new Error("snapshot GET failed: 403");
-      },
-    });
-    const routes = adapter({ stateSync: sync, channels: () => ({ routes: health }) });
-    const res = await postEnvelope(routes, {
-      kind: "probe",
-      state: { getUrl: "https://s3/g", putUrl: "https://s3/p" },
-    });
-    expect(res.status).toBe(200); // structured — not the plain 503 other kinds get
-    const verdict = (await res.json()) as { ok: boolean; error?: string };
-    expect(verdict.ok).toBe(false);
-    expect(verdict.error).toContain("state restore failed");
-
+  it("refuses an unauthenticated probe", async () => {
     expect((await postUntrusted(adapter({ channels: () => ({ routes: health }) }), { kind: "probe" })).status).toBe(
       403,
     );
@@ -495,76 +453,6 @@ describe("agentcore adapter: envelope validation", () => {
   });
 });
 
-describe("agentcore adapter: cross-deploy state", () => {
-  const withState = (envelope: AgentcoreEnvelope): AgentcoreEnvelope => ({
-    ...envelope,
-    state: { getUrl: "https://s3/get", putUrl: "https://s3/put" },
-  });
-
-  it("adopts the envelope's URLs and restores BEFORE the request is served", async () => {
-    const order: string[] = [];
-    const sync = fakeStateSync({
-      ready: async () => {
-        order.push("restore");
-      },
-    });
-    const routes = adapter({
-      stateSync: sync,
-      channels: {
-        routes: {
-          "POST /hook": () => {
-            order.push("dispatch");
-            return new Response("ok");
-          },
-        },
-      },
-    });
-
-    await postEnvelope(routes, withState({ kind: "webhook", method: "POST", path: "/hook" }));
-
-    expect(sync.seen).toEqual(["https://s3/get"]);
-    expect(order).toEqual(["restore", "dispatch"]); // never serve from an unrestored state root
-  });
-
-  it("a failed restore 503s instead of serving an EMPTY agent (which would then snapshot that emptiness)", async () => {
-    const routes = adapter({
-      stateSync: fakeStateSync({
-        ready: async () => {
-          throw new Error("snapshot GET failed: 500");
-        },
-      }),
-      channels: {
-        routes: {
-          "POST /hook": () => new Response("must not run"),
-        },
-      },
-    });
-
-    const res = await postEnvelope(routes, withState({ kind: "webhook", method: "POST", path: "/hook" }));
-
-    expect(res.status).toBe(503);
-    expect(await res.text()).toContain("snapshot GET failed: 500");
-  });
-
-  it("snapshots when the envelope leaves nothing in flight, and defers to the idle edge when it does", async () => {
-    const idle = fakeStateSync();
-    await postEnvelope(adapter({ stateSync: idle, isBusy: () => false }), withState({ kind: "wake-poke" }));
-    expect(idle.saves()).toBe(1);
-
-    // Busy = a background turn is still writing; the 0-in-flight edge (busy.ts onIdle) owns that save.
-    const busy = fakeStateSync();
-    await postEnvelope(adapter({ stateSync: busy, isBusy: () => true }), withState({ kind: "wake-poke" }));
-    expect(busy.saves()).toBe(0);
-  });
-
-  it("a direct invoke carries no URLs — its isolated session must not read or clobber the snapshot", async () => {
-    const sync = fakeStateSync();
-    const res = await postEnvelope(adapter({ stateSync: sync }), { kind: "invoke", session: "cli", text: "hi" });
-    expect(res.status).toBe(200);
-    expect(sync.seen).toEqual([]);
-  });
-});
-
 describe("agentcore adapter: the authentication boundary", () => {
   it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
     const fire = vi.fn(async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome);
@@ -592,21 +480,17 @@ describe("agentcore adapter: the authentication boundary", () => {
     }
   });
 
-  it("public invoke still works, but its internal fields are DROPPED (no snapshot or alarm redirect)", async () => {
-    const sync = fakeStateSync();
-    const routes = adapter({ stateSync: sync });
+  it("public invoke cannot redirect the wake-alarm callback", async () => {
+    const routes = adapter();
 
     const res = await postUntrusted(routes, {
       kind: "invoke",
       session: "cli",
       text: "hi",
-      // An attacker's addresses: exfiltrate the state snapshot / capture the wake secret.
-      state: { getUrl: "https://attacker/get", putUrl: "https://attacker/put" },
       wake: { url: "https://attacker/" },
     } as AgentcoreEnvelope);
 
     expect(res.status).toBe(200); // the public data plane keeps working
-    expect(sync.seen).toEqual([]); // …but never adopted the caller's URLs
     expect(readWakeAlarmUrl(stateRoot)).not.toBe("https://attacker/");
   });
 
@@ -617,74 +501,18 @@ describe("agentcore adapter: the authentication boundary", () => {
   });
 });
 
-describe("agentcore adapter: post-restore hooks", () => {
-  it("runs onStateReady ONCE, after the restore — a boot-time reconcile would see the wiped mount", async () => {
-    const order: string[] = [];
-    const sync = fakeStateSync({
-      ready: async () => {
-        order.push("restore");
-      },
+describe("agentcore adapter: activation hooks", () => {
+  it("reconciles once with the current callback URL", async () => {
+    rememberWakeAlarmUrl(stateRoot, "https://old-deployment.lambda-url.on.aws/");
+    const onStateReady = vi.fn(() => {
+      expect(readWakeAlarmUrl(stateRoot)).toBe("https://current.lambda-url.on.aws/");
     });
-    const onStateReady = () => order.push("reconcile");
-    const routes = adapter({ stateSync: sync, onStateReady });
-
-    await postEnvelope(routes, { kind: "wake-poke", state: { getUrl: "g", putUrl: "p" } });
-    await postEnvelope(routes, { kind: "wake-poke", state: { getUrl: "g", putUrl: "p" } });
-
-    expect(order.filter((step) => step === "reconcile")).toEqual(["reconcile"]); // exactly once
-    expect(order[0]).toBe("restore"); // …and never before the state root is authoritative
-  });
-
-  it("adopts the CURRENT envelope's wake URL after restore — a stale snapshot copy must not win", async () => {
-    const routes = adapter({
-      stateSync: fakeStateSync({
-        ready: async () => {
-          // The snapshot restores an older deployment's URL…
-          rememberWakeAlarmUrl(stateRoot, "https://old-deployment.lambda-url.on.aws/");
-        },
-      }),
-    });
-
-    await postEnvelope(routes, {
-      kind: "wake-poke",
-      state: { getUrl: "g", putUrl: "p" },
-      wake: { url: "https://current.lambda-url.on.aws/" },
-    });
-
-    expect(readWakeAlarmUrl(stateRoot)).toBe("https://current.lambda-url.on.aws/");
-  });
-});
-
-describe("agentcore adapter: the pre-stop checkpoint", () => {
-  it("returns what actually happened, so the deploy log cannot claim a protection it did not give", async () => {
-    const wrote = fakeStateSync({ checkpoint: async () => ({ written: true }) });
-    const res = await postEnvelope(adapter({ stateSync: wrote }), { kind: "checkpoint" });
-    expect(await res.json()).toEqual({ written: true });
-
-    const nothing = fakeStateSync({
-      checkpoint: async () => ({ written: false, reason: "this session has never served a forwarder envelope" }),
-    });
-    const res2 = await postEnvelope(adapter({ stateSync: nothing }), { kind: "checkpoint" });
-    expect(await res2.json()).toMatchObject({ written: false, reason: expect.stringContaining("forwarder") });
-  });
-
-  it("a failed flush is a 500 — the deploy is about to destroy this process", async () => {
-    const res = await postEnvelope(
-      adapter({
-        stateSync: fakeStateSync({
-          checkpoint: async () => {
-            throw new Error("snapshot PUT failed: 403");
-          },
-        }),
-      }),
-      { kind: "checkpoint" },
-    );
-    expect(res.status).toBe(500);
-    expect(await res.text()).toContain("403");
-  });
-
-  it("is an INTERNAL kind — an unauthenticated caller cannot force a snapshot write", async () => {
-    const res = await postUntrusted(adapter({ stateSync: fakeStateSync() }), { kind: "checkpoint" });
-    expect(res.status).toBe(403);
+    const routes = adapter({ onStateReady });
+    expect((await postUntrusted(routes, { kind: "invoke", session: "programmatic", text: "hi" })).status).toBe(200);
+    expect(onStateReady).not.toHaveBeenCalled();
+    const envelope: AgentcoreEnvelope = { kind: "wake-poke", wake: { url: "https://current.lambda-url.on.aws/" } };
+    await postEnvelope(routes, envelope);
+    await postEnvelope(routes, envelope);
+    expect(onStateReady).toHaveBeenCalledOnce();
   });
 });

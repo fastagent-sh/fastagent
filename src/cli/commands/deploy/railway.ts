@@ -21,6 +21,12 @@ export const railwayHost: HostDeploy = {
   async deploy(ctx) {
     const { opts, agentDir, workspace, pre, channels, write } = ctx;
     const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
+    if (container.temporaryDirectories?.length)
+      failStartup(
+        new Error(
+          "Railway does not support bind mounts; keep project directories on its volume and configure download caches under /tmp",
+        ),
+      );
     const serviceName = toRailwayName(basename(workspace));
     const plan = planRailwayDeploy({
       serviceName,

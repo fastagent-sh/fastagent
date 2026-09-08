@@ -2,12 +2,9 @@
  * The AgentCore serving assembly — the same product as `mountAgentService`, built differently
  * because the host is.
  *
- * Two facts drive every difference. There is no public URL (the adapter's `POST /invocations` is the
- * only ingress, and cron slots arrive through it from an external clock, so no resident timers), and
- * **the state mount at boot is PRE-RESTORE** — empty after every version update. Discovering channels
- * eagerly would therefore cache that emptiness (thread participation, delivery dedup, pending turns)
- * and then clobber the restored files with it, so channels are constructed lazily on the first
- * envelope. Everywhere else the state root is durable at boot and a broken channel fails startup.
+ * There is no public URL, and cron slots arrive through `POST /invocations` from an external clock.
+ * Native filesystems become available on invocation, so the process entry defers storage preparation
+ * and the entire agent opener. The adapter initializes channels on the first trusted envelope.
  *
  * That is a different assembly, not a flag on the shared one: handler shape, discovery timing, clock
  * source, long-connection support and shutdown all differ. What it is NOT is a different product —
@@ -27,16 +24,82 @@ import {
   routesFor,
   startSchedules,
 } from "../service.ts";
-import { type AgentcoreAdapterOptions, type RouteSurface, UnknownScheduleError, agentcoreRoutes } from "./agentcore.ts";
-import { createStateSync } from "./agentcore-state.ts";
-import { activeWork } from "./busy.ts";
+import {
+  type AgentcoreAdapterOptions,
+  type RouteSurface,
+  UnknownScheduleError,
+  agentcoreRoutes,
+  agentcorePing,
+} from "./agentcore.ts";
+import { activeWork, beginWork } from "./busy.ts";
+import type { ChannelHandler } from "../channel.ts";
 import { router } from "./serve.ts";
+import { readBodyCapped } from "./body.ts";
+import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
+import { secretEquals } from "./secret.ts";
+
+/** Runtime filesystems appear on invocation, so even opening the definition must be deferred. */
+export function deferAgentcoreService(open: () => Promise<AgentService>): {
+  handler: ChannelHandler;
+  close: () => Promise<void>;
+} {
+  let service: AgentService | undefined;
+  let opening: Promise<AgentService> | undefined;
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const ping = agentcorePing(() => activeWork() > 0);
+  return {
+    handler: async (request) => {
+      if (closed) return new Response("service closed\n", { status: 503 });
+      if (service) return service.handler(request);
+      const path = new URL(request.url).pathname;
+      if (path === "/ping" && request.method === "GET") return ping(request);
+      if (path !== "/invocations" || request.method !== "POST") return new Response("not found\n", { status: 404 });
+      opening ??= (async () => {
+        const done = beginWork();
+        try {
+          service = await open();
+          return service;
+        } finally {
+          done();
+        }
+      })();
+      try {
+        const ready = await opening;
+        if (closed) return new Response("service closed\n", { status: 503 });
+        return ready.handler(request);
+      } catch (error) {
+        const message = `initialization failed: ${String(error)}`;
+        log.error(`[agentcore] ${message}`);
+        const body = await readBodyCapped(request, MAX_ENVELOPE_BYTES);
+        if (!("tooLarge" in body)) {
+          let envelope: { kind?: unknown; auth?: unknown } | undefined;
+          try {
+            envelope = JSON.parse(body.text);
+          } catch {
+            /* Invalid envelopes retain the initialization error. */
+          }
+          if (envelope?.kind === "probe" && secretEquals(envelope.auth, process.env.FASTAGENT_INGRESS_SECRET)) {
+            return Response.json({ ok: false, error: message });
+          }
+        }
+        return new Response(`${message}\n`, { status: 503 });
+      }
+    },
+    close() {
+      closed = true;
+      closing ??= (async () => {
+        if (opening) await (await opening).close();
+      })();
+      return closing;
+    },
+  };
+}
 
 export interface MountAgentcoreServiceOptions {
   /** Wrap the opened agent before anything binds to it (the CLI's turn trace). */
   wrapAgent?: (agent: Agent) => Agent;
-  /** Runs once the state snapshot is restored. The wake-alarm reconcile passes through here because
-   *  its sink is a PROCESS-global: the process entry owns that, not a service that can be closed. */
+  /** The process entry owns the global wake-alarm sink; activation reconciles it once. */
   onStateReady?: () => void;
 }
 
@@ -74,10 +137,7 @@ export async function mountAgentcoreService(
     return { routes: lazy.routes, mounts: withControl.mounts };
   };
 
-  // The adapter registers process-global listeners; this is what takes them down on close.
-  const closed = new AbortController();
   const adapterRoutes = mountAgentcore({
-    signal: closed.signal,
     agent,
     stateRoot,
     schedules: scheduled.schedules,
@@ -95,7 +155,7 @@ export async function mountAgentcoreService(
     routes: adapterRoutes,
     agentDir,
     workspace,
-    // Unknown at boot by design — a channel list here would be the pre-restore emptiness.
+    // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [], builtinInvoke: false },
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
@@ -105,7 +165,6 @@ export async function mountAgentcoreService(
       // timers early enough to count them deadlocks the assembly's own IO. What IS tested is that
       // close() runs and is idempotent; the stop itself rides on scheduler.stop()'s own tests.
       scheduled.stop();
-      closed.abort();
     },
   };
 }
@@ -124,28 +183,19 @@ export function mountAgentcore(options: {
   stateRoot: string;
   schedules: readonly LoadedSchedule[];
   onStateReady?: () => void;
-  /** Cancels the adapter's process-global registrations on close. */
-  signal?: AbortSignal;
-  /** The channel surface, constructed on the first envelope AFTER the state-snapshot restore — never
-   *  at boot, where the mount is pre-restore (channels/agentcore.ts). */
+  /** The channel surface, initialized once by the adapter on trusted ingress. */
   channels: AgentcoreAdapterOptions["channels"];
 }): Routes {
-  const { agent, stateRoot, schedules, onStateReady, channels, signal } = options;
+  const { agent, stateRoot, schedules, onStateReady, channels } = options;
   return agentcoreRoutes({
     channels,
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
-    // Cross-deploy durability: AgentCore wipes the state mount on every runtime version update, so
-    // the state root is restored from (and pushed to) an S3 snapshot through presigned URLs the
-    // forwarder mints per envelope. Always wired on this path — the platform gives no other way to
-    // keep an agent's memory across a deploy.
-    stateSync: createStateSync({ stateRoot }),
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call. Absent =
     // no forwarder in this topology, so only the public `invoke` kind is servable.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
-    ...(signal ? { signal } : {}),
     fire:
       schedules.length === 0
         ? undefined

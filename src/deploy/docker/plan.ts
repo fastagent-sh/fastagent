@@ -107,7 +107,7 @@ services:
     build:
       context: ${context}
       dockerfile: ${dockerfile}
-    ports:
+${input.temporaryDirectories?.length ? "    cap_add: [SYS_ADMIN]\n    security_opt: [apparmor=unconfined]\n" : ""}    ports:
       - "127.0.0.1:${input.port}:${input.port}"
     environment:
       PORT: "${input.port}"
@@ -168,8 +168,8 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   runbook.push(
     ``,
-    `# Build/create/reconcile the service. Re-running this is the complete local redeploy; state stays`,
-    `# in the Compose volume mounted at ${MOUNT}.`,
+    `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
+    `# The Compose volume at ${MOUNT} retains the workspace, state and credentials.`,
     `${compose} up -d --build`,
     `curl --fail http://127.0.0.1:${input.port}/health`,
     ``,
@@ -177,7 +177,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     `${compose} logs -f agent`,
     `${compose} ps`,
     `${compose} down        # stops containers; keeps the state volume`,
-    `# ${compose} down -v   # DESTRUCTIVE: also deletes auth, sessions, and channel state`,
+    `# ${compose} down -v   # DESTRUCTIVE: deletes workspace, credentials and all agent state`,
   );
 
   if (input.tunnel) {

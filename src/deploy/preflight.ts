@@ -10,6 +10,7 @@
  * CLI stops on, distinct from the advisory warnings/notes it prints and proceeds past.
  */
 import { readdir, readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
@@ -126,8 +127,14 @@ export async function preflightDeploy(input: {
   } = input;
   // The ONE derived placement fact every host plan needs: where the agent's files sit relative to the
   // build context (the workspace). Nested → "fastagent/"; flat → "" (the agent IS the workspace root).
-  const nested = agentDir !== workspace;
-  const agentPrefix = nested ? `${basename(agentDir)}/` : "";
+  if (agentDir === workspace) {
+    return {
+      ok: false,
+      gate: "deploy requires a nested agent directory; point deploy at the workspace containing fastagent/",
+    };
+  }
+  const nested = true;
+  const agentPrefix = `${basename(agentDir)}/`;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
@@ -239,11 +246,9 @@ export async function preflightDeploy(input: {
         nested ? " — the workspace's own deps are the agent's runtime concern" : ""
       }`
     : `the agent has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
-  const durability = shipsGit
-    ? `Un-pushed changes on the box do not survive a redeploy; freshness and write-back run through git, ` +
-      `driven by the agent itself (persona owns the policy; GH_TOKEN etc. go in config.deploy.secrets)`
-    : `no .git here, so no history ships and the image does not install git — changes on the box are ` +
-      `ephemeral and do not survive a redeploy`;
+  const durability =
+    `The workspace seeds the persistent volume once. Redeploys replace only ${agentPrefix}; ` +
+    `working files, Git history, state and refreshed credentials remain on the volume`;
   messages.push({
     level: "note",
     text:
@@ -450,6 +455,8 @@ export async function preflightDeploy(input: {
   // (never duplicating) config.deploy.apt.
   const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
+    releaseId: randomUUID(),
+    temporaryDirectories: config.deploy?.temporaryDirectories,
     agentPrefix,
     machineryPaths,
     hasPackageJson,

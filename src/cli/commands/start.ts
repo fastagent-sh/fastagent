@@ -1,21 +1,24 @@
-/**
- * `fastagent start [dir]`: run the agent in production posture — the SAME assembly as dev (your
- * directory is the agent), just no file-watching. No build step: start reads the definition directly.
- */
-import { dirname } from "node:path";
+/** Production serving. Deployed storage is prepared before the active definition is opened. */
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import { readFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
+import { parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
+import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { SECRET_FILE_MODE, ensureSecretsDir, resolveSecretsDir, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { mountAgentService } from "../../service.ts";
+import { mountAgentService, type AgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
-import { isAgentcoreRuntime, mountAgentcoreService } from "../../channels/agentcore-service.ts";
+import { isAgentcoreRuntime, mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
-import { failStartup } from "../fail.ts";
-import { cliMountOptions, resolveBindHost, serveService } from "../serve.ts";
+import { announceControl, cliMountOptions, resolveBindHost, serveService, serve } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -25,132 +28,144 @@ export interface StartOptions {
   sessionsDir?: string;
   authPath?: string;
   tunnel?: boolean;
-  /** false ⇔ `--no-input`. */
   input?: boolean;
 }
 
+type StartedService = AgentService & { stateRoot: string; bindHost?: string; port: number };
+
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
-  // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
-  // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
   const bindFlag = parseBind(opts.bind);
+  setLogLevel("info");
+  if (isAgentcoreRuntime()) {
+    let unannounce = (): void => {};
+    const deferred = deferAgentcoreService(async () => {
+      const service = await openStartService(dirArg, opts);
+      await service.ready;
+      unannounce = announceControl(
+        service.control,
+        service.stateRoot,
+        { host: bindFlag, tunnel: false },
+        portFlag ?? 8080,
+      );
+      return service;
+    });
+    serve(
+      deferred.handler,
+      { port: portFlag ?? 8080, host: bindFlag },
+      {
+        onShutdown: async () => {
+          unannounce();
+          await deferred.close();
+        },
+      },
+    );
+    return;
+  }
+  const service = await openStartService(dirArg, opts);
   const tunnel = opts.tunnel ?? false;
-  setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
+  const host = resolveBindHost(bindFlag, service.bindHost, tunnel);
+  serveService(
+    service,
+    { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host },
+    { tunnel, agentDir: service.agentDir, stateRoot: service.stateRoot },
+  );
+}
+
+export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
+  let open = openPreparedStartService;
+  const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
+  if (manifestPath) {
+    const storage = process.env.FASTAGENT_STORAGE_DIR;
+    if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployed workspace");
+    const root = resolve(storage);
+    const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
+    const prepared = await prepareDeployment(resolve(dirArg), root, manifest);
+    // Channel activation may start background work before failing; close() does not drain it.
+    // The kernel closes the lease's fd at process exit, after this process's writers are gone.
+    dirArg = prepared.workspace;
+    process.env.FASTAGENT_STATE_DIR = join(root, ".state");
+    process.env.FASTAGENT_SECRETS_DIR = join(root, ".secrets");
+    process.env.FASTAGENT_AGENT = manifest.agent;
+    process.chdir(dirArg);
+    const agentDir = join(dirArg, manifest.agent);
+    if (await exists(join(agentDir, "package.json"))) {
+      const installing = join(root, ".deployment", "installing");
+      // A failed install can leave the CLI link in place before its dependencies are complete.
+      if ((await exists(installing)) || !(await exists(join(agentDir, "node_modules/.bin/fastagent")))) {
+        const { runtime, hasLockfile } = detectRuntime(agentDir, await readPackageJson(agentDir));
+        const args =
+          runtime === "bun"
+            ? ["install", ...(hasLockfile ? ["--frozen-lockfile"] : [])]
+            : [hasLockfile ? "ci" : "install"];
+        writeFileAtomic(installing, "");
+        await promisify(execFile)(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, timeout: 300_000 });
+        await rm(installing);
+      }
+      // Tools and their session context must share the workspace's runtime module instance.
+      const entry = createRequire(join(agentDir, "package.json")).resolve("@fastagent-sh/fastagent");
+      const local = (await import(
+        new URL("./cli/commands/start.js", pathToFileURL(entry)).href
+      )) as typeof import("./start.ts");
+      open = local.openPreparedStartService;
+    }
+  }
+  return open(dirArg, opts);
+}
+
+/** Internal entry loaded from the active workspace's installed package after storage initialization. */
+export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
-
-  // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
-  // materialize it into the writable secrets dir BEFORE the opener resolves auth (once, absent-only).
-  // Same resolveAuthPath the opener uses — ONE owner of the flag > env > default chain.
   await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
-
-  // The same opener dev uses (single assembly source), just no watch.
   const opened = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
     authPath: opts.authPath,
-    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
-  }).catch(failStartup);
+    serving: true,
+  });
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
-
-  // The same report `dev` prints; `state:`/`sessions:` are start's own extras, and the persistence
-  // notes below are why (see reportAssembly on the asymmetry).
   await reportAssembly(opened, {
     afterTools: [
       ["state", stateRoot],
       ["sessions", sessionsDir],
     ],
   });
-  // State defaults under the agent dir, which a redeploy may replace wholesale. Gate on where the
-  // state root ACTUALLY resolved (inside the agent dir?), not on the raw env var: an empty
-  // `FASTAGENT_STATE_DIR=""` reads as unset (resolveStateRoot) and still lands in-agent, so a raw
-  // `=== undefined` check would wrongly silence the warning. A sessions override to a volume does not
-  // help — channel state (the telegram turn/context files replay depends on) is still in-agent.
-  // (auth.json is NOT under the state root — it lives in the secrets dir, resolveSecretsDir.)
   if (isUnderDir(stateRoot, agentDir)) {
     log.info(
-      `[fastagent] note: state (sessions, channel state) lives under the definition dir; point ` +
-        `FASTAGENT_STATE_DIR at a persistent volume so a redeploy that replaces the dir does not wipe it.`,
+      "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",
     );
   }
-  // The secrets dir is the SAME trap on a different lifecycle: auth.json is MACHINE-WRITTEN (OAuth
-  // rotation), so the copy under the definition dir is the only valid one — a redeploy that replaces
-  // the dir loses a credential no re-seed can restore. An independent check on purpose: moving ONE
-  // of the two to a volume must not silence the note about the other.
   if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
     log.info(
-      `[fastagent] note: secrets (.env, rotated auth.json) live under the definition dir; point ` +
-        `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
+      "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-
-  // Same debug turn trace as dev; gated out here by the info level.
   const traced = logAgentLoop(agent);
-  const host = resolveBindHost(bindFlag, config.http?.host, tunnel);
-  // ONE branch for the whole posture. AgentCore assembles differently — lazy channels over a
-  // pre-restore state mount, an external clock, no resident connections — but it yields the same
-  // AgentService, so everything below this point is common.
-  // The wake-alarm sink is a PROCESS-global (schedule/wakeups.ts) — this process IS the AgentCore
-  // deployment, so the process entry installs it. A service can be closed; a global cannot be
-  // handed to something that can, without inventing an ownership the singleton does not have.
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
   const service = await (isAgentcoreRuntime()
     ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
     : mountAgentService(
         opened,
         cliMountOptions(() => traced),
-      )
-  ).catch(failStartup);
-  serveService(
-    service,
-    { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
-    { tunnel, agentDir, stateRoot },
-  );
-  // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
-  // in-flight turn is LOST depends on the channel: the Telegram channel persists turn intent pre-ACK
-  // and replays it next start (turn-store.ts, L1 durable execution, at-least-once); HTTP and other
-  // channels have no such layer, so their in-flight turns are still lost (the asker re-invokes).
+      ));
+  return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
 }
 
-/**
- * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy --run`) into the
- * writable secrets dir ONCE — only when the seed is set AND the auth file is absent, so a refreshed
- * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
- * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
- */
 async function maybeSeedAuth(authPath: string): Promise<void> {
-  // collectAuthSeed: the seed may arrive CHUNKED (FASTAGENT_AUTH_SEED + _2…) on hosts with a small
-  // env-value max length (AgentCore); single-var hosts are unchanged.
   const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
   await ensureSecretsDir(dirname(authPath));
-  // Same spelling as the credential store: the mode is applied before the content is reachable, so
-  // the seed can never be published at some other file's looser permissions. It does NOT close the
-  // gap between the `exists` check and the write — the rename would overwrite a file created in
-  // between, against this function's absent-only promise. That window needs two `start` processes on
-  // one secrets dir, which no supported deployment runs (one container, one volume).
   writeFileAtomic(authPath, bytes, SECRET_FILE_MODE);
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 
-/**
- * Install the wake-ALARM sink before the scheduler starts — the boot wake pump may advance a
- * recurring entry, and that save must already re-arm its alarm. Returns the post-restore reconcile:
- * running it at boot would read the pre-restore state mount, see no pending wake-ups, and conclude
- * there is nothing to re-arm.
- */
 function armWakeAlarms(stateRoot: string): (() => void) | undefined {
   const secret = process.env.FASTAGENT_WAKE_SECRET;
   if (!secret) {
-    log.warn(
-      `[fastagent] FASTAGENT_WAKE_SECRET is not set — wake-ups fire only while a session is awake ` +
-        `(redeploy with the current template to fix)`,
-    );
+    log.warn("[fastagent] FASTAGENT_WAKE_SECRET is missing; external wake alarms cannot be registered");
     return undefined;
   }
   const sink = createWakeAlarmSink({ secret });
   setWakeupsSink(sink);
-  log.info(`[fastagent] wake alarms: EventBridge-backed via the forwarder`);
-  // Boot reconcile: pending wake-ups may exist while their alarms were lost (a deploy replaced the
-  // forwarder, a sink call failed). The sink re-reads the store, so a bare notification is enough.
   return () => sink(stateRoot);
 }

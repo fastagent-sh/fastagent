@@ -203,14 +203,9 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
     deferredCount > 0
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
       : "";
-  // On a deployed box the definition lives in the image, outside every durable mount — so a
-  // self-improvement write is live this turn and gone at the next restart. Nothing else in the
-  // container says so: the persona still invites the write, and the agent reports success. The
-  // marker is written by the generated Dockerfile (deploy/container.ts), like FASTAGENT_AGENTCORE.
-  const bakedNote =
-    process.env.FASTAGENT_DEPLOYED === "1"
-      ? `\n\nYour definition (persona.md, skills/, tools/) is BAKED into this deployment's image: an edit takes effect on your next turn and is LOST when this box restarts or is redeployed. To keep one, commit and push it in the same turn; with no git remote to push to, say plainly that the change is temporary and ask your author to edit the definition and redeploy.`
-      : "";
+  const deploymentNote = process.env.FASTAGENT_RELEASE_FILE
+    ? `\n\nYour workspace is persistent, including uncommitted work. Your definition survives restarts; a new deployment replaces the definition directory with the author's release. Keep ongoing project work outside that directory. Only explicitly configured temporary directories and /tmp are disposable. Markdown definitions are read each turn; changes to tools, channels or configuration require restarting the service.`
+    : "";
   return `${identity}
 
 Available tools:
@@ -220,7 +215,7 @@ In addition to the tools above, you may have access to other custom tools depend
 
 Guidelines:
 - Be concise in your responses
-- Show file paths clearly when working with files${bakedNote}`;
+- Show file paths clearly when working with files${deploymentNote}`;
 }
 
 export interface AssembleSystemPromptOptions {

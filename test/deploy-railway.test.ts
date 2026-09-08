@@ -8,7 +8,8 @@ const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n"
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
 const base = {
-  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
+  releaseId: "release-one",
+  agentPrefix: "fastagent/",
   serviceName: "bot",
   hasPackageJson: true,
   runtime: "node",
@@ -42,6 +43,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
       ".dockerignore",
       "fastagent/Dockerfile",
       "fastagent/Dockerfile.dockerignore",
+      "fastagent/fastagent.release.json",
       "fastagent/railway.json",
     ]);
     const cfg = JSON.parse(p.artifacts.find((a) => a.path === "fastagent/railway.json")?.content ?? "{}");
@@ -53,13 +55,14 @@ describe("deploy/railway: planRailwayDeploy", () => {
     );
     // The dashboard config-as-code pointer is stated as OPTIONAL (adds the /health gate only).
     expect(runbook(p)).toMatch(/OPTIONAL[\s\S]*Config-as-code/);
-    expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
+    expect(runbook(p)).toContain("including uncommitted work");
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual([
       "fastagent/railway.json",
+      "fastagent/fastagent.release.json",
       "fastagent/Dockerfile",
       ".dockerignore",
       "fastagent/Dockerfile.dockerignore",
@@ -166,12 +169,10 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).not.toContain("https://<your-domain>/lark");
   });
 
-  it("marks the setup one-time and names `railway up` as the whole redeploy (no dup service/volume)", () => {
+  it("separates one-time setup from release regeneration and upload", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
-    // Re-running the setup silently makes a DUPLICATE service (Railway names aren't unique) + another
-    // volume → split state; the banner must say skip-on-redeploy and that a redeploy is just `railway up`.
     expect(out).toMatch(/one-time setup/i);
-    expect(out).toMatch(/redeploy is[\s\S]*railway up/i);
+    expect(out).toMatch(/fastagent deploy railway[\s\S]*railway up/);
   });
 
   it("mints the domain ONCE and prints every path when all webhook channels are present", () => {

@@ -12,15 +12,10 @@
  *  2. **One template is the whole topology.** CloudFormation (`AWS::BedrockAgentCore::Runtime` is a
  *     first-class resource type) declares Runtime + roles + forwarder + schedules in one stack —
  *     unlike Railway, identity DOES live in a committed file; the stack name pins it.
- *  3. **All ingress traffic shares ONE fixed runtime session** (`ingressSessionId`): fastagent's
- *     channel state is single-writer by design, and one session = at most one microVM at a time.
- *     AgentCore keeps a stopped session's id valid until the Runtime is deleted (a new compute is
- *     provisioned on the next invoke), so the fixed id needs no rotation. State lives on the
- *     platform's SessionStorage mount (`/mnt/state`) — persistent across compute stop/resume, no
- *     VPC/EFS required. Named trade-off: that state is tied to THIS Runtime resource — a stack
- *     replacement (renaming the runtime) starts blank. EFS (VPC mode) is the upgrade path when
- *     state must outlive the runtime; the runbook says so instead of silently shipping a VPC+NAT
- *     bill (~$35/mo) every deployment.
+ *  3. **One fixed runtime session writes one EFS workspace.** The EFS access point and VPC are
+ *     operator-owned, so their lifetime is independent of the runtime stack. All entry points use
+ *     ingressSessionId; conversation ids remain separate. Startup acquires a workspace lease before
+ *     initializing storage, applying a release or opening the agent.
  *
  *  The image is the SAME portable container every host ships (containerArtifacts) — AgentCore's
  *  extras (PORT=8080, FASTAGENT_AGENTCORE=1, the state dir) ride the Runtime resource's environment,
@@ -44,7 +39,14 @@ export interface ScheduleFact {
   tz?: string;
 }
 
+export interface AgentcoreStorage {
+  efsAccessPointArn: string;
+  subnetIds: string[];
+  securityGroupIds: string[];
+}
+
 export interface AgentcorePlanInput extends ContainerInput {
+  storage: AgentcoreStorage;
   /** Base name (dir basename) — shapes the runtime name, stack name, ECR repo, session id. */
   name: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
@@ -56,7 +58,7 @@ export interface AgentcorePlanInput extends ContainerInput {
   extraSecrets?: string[];
   /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
   schedules: ScheduleFact[];
-  /** Wake tool enabled — DEGRADED here (fires only while a session happens to be awake); warned. */
+  /** Mirror the wake tool's pending work into EventBridge alarms. */
   selfSchedule: boolean;
 }
 
@@ -80,10 +82,8 @@ export interface AgentcorePlan {
 export interface AgentcoreTopology {
   /** A webhook channel: the forwarder relays public Function URL traffic to it. */
   webhooks: boolean;
-  /** The forwarder Lambda exists — for webhooks, for EventBridge cron rules, or for wake alarms —
-   *  with its Function URL: every forwarder needs it as the authenticated refresh channel for the
-   *  state snapshot's presigned URLs, since a turn can outlive the Lambda credentials that signed
-   *  them. A schedule-only URL rejects every non-reserved path before invoking AgentCore. */
+  /** The forwarder serves webhooks, scheduled fires or wake alarms. Its URL also exposes an
+   *  authenticated deployment probe; schedule-only deployments reject ordinary public traffic. */
   forwarder: boolean;
   /** The forwarder mirrors the agent's wake-ups into one-shot EventBridge schedules. */
   wakeAlarms: boolean;
@@ -102,38 +102,17 @@ function agentcoreTopology(
   };
 }
 
-/** SessionStorage mount = FASTAGENT_STATE_DIR (AgentCore requires exactly `/mnt/<one-level>`). It is
- *  a fast LOCAL disk only: the platform wipes it on every runtime version update (= every deploy).
- *  Durability across deploys comes from the S3 snapshot (channels/agentcore-state.ts). */
-export const MOUNT = "/mnt/state";
+/** Native EFS mount. Workspace, state and credentials are independent children. */
+export const MOUNT = "/mnt/data";
 
-/**
- * FASTAGENT_SECRETS_DIR — the seeded-then-ROTATED auth.json, deliberately INSIDE the state root
- * rather than beside it.
- *
- * Every other host mounts a real volume and puts the two machinery dirs side by side (`/data/.state`
- * + `/data/.secrets`), because there the persistence boundary is the MOUNT POINT: anything under it
- * survives. AgentCore has no volume. Its persistence boundary is `packStateRoot(stateRoot)` — the one
- * directory tree the S3 snapshot copies out and back (channels/agentcore-state.ts) — while {@link MOUNT}
- * itself is wiped on every runtime version update, i.e. on every deploy.
- *
- * So the sibling layout would put credentials INSIDE the mount but OUTSIDE the snapshot: nothing
- * copies them out, the platform wipes them, and the next microVM re-seeds the deploy-time copy. With
- * single-use OAuth refresh tokens that is a slow-motion outage — the box works until the seeded token
- * is rotated away, then loses model access with only a redeploy to restore it.
- *
- * Nesting is what makes agentcore-state.ts's stated contract ("restores VERBATIM — including
- * auth.json") reachable at all; `packStateRoot` walks the whole tree, so no snapshot code knows about
- * this. Tests assert the containment, not just the two names — the sibling spelling looks tidier and
- * reintroduces the outage silently.
- */
+/** Refreshed credentials must outlive both the compute and definition replacements. */
 export const SECRETS_DIR = `${MOUNT}/${SECRETS_DIRNAME}`;
 
 /**
  * How long an idle session keeps its microVM. Memory is billed per second across the WHOLE session
  * — idle included, at the peak level reached — so this tail is the standing cost of every burst of
  * activity, while CPU stops billing the moment the agent stops working. 3 minutes rather than the
- * platform's 15: the tail shrinks 5×, and the cost is a cold start (image + Node + snapshot restore)
+ * platform's 15: the tail shrinks 5×, and the cost is a cold start (image + storage + Node)
  * for anyone who returns after a longer gap. `/ping` reports HealthyBusy + time_of_last_update while
  * work is in flight (the FIELD is what the platform's idle measurement actually reads — agentcore.ts),
  * so this timer only ever starts once the agent has genuinely settled — a long turn is never cut short.
@@ -145,17 +124,12 @@ export const IDLE_TIMEOUT_SECONDS = 180;
  *  simply gets fresh compute with the same storage. */
 export const MAX_LIFETIME_SECONDS = 28800;
 
-/** The state snapshot's object key in the deployment bucket (one object; see agentcore-state.ts). */
-export const STATE_KEY = "state/snapshot.json.gz";
-
 /** The forwarder artifact. Named `index.js` because it IS the Lambda deployment package's entry:
  *  zipping it as-is produces a valid package (`Handler: index.handler`), with nothing to rename. */
 export const FORWARDER_FILE = "lambda/index.js";
 
-/** The deployment bucket: forwarder code + the state snapshot. Account-suffixed for S3's GLOBAL
- *  namespace, and created OUTSIDE the stack (like the ECR repo) so a `delete-stack` cannot take the
- *  agent's memory with it. Bucket names cap at 63 chars; `name` is already gated to 40. */
-export function stateBucketName(name: string, account: string): string {
+/** Account-suffixed artifact bucket for S3's global namespace. Created before the runtime stack. */
+export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
 /** AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so the seed is
@@ -345,6 +319,7 @@ function template(
   topology: AgentcoreTopology,
 ): string {
   const runtimeName = toRuntimeName(input.name);
+  const filesystemArn = input.storage.efsAccessPointArn.replace(/:access-point\/.*/, ":file-system/*");
   const needsForwarder = topology.forwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
@@ -359,21 +334,19 @@ function template(
   ];
   if (needsForwarder) {
     params.push(
-      `  StateBucket:`,
+      `  ForwarderBucket:`,
       `    Type: String`,
-      `    Description: S3 bucket holding the forwarder deployment package + the agent's state snapshot (created outside this stack)`,
+      `    Description: S3 bucket holding the forwarder deployment package (created outside this stack)`,
       `  ForwarderS3Key:`,
       `    Type: String`,
-      `    Description: key of the forwarder .zip in StateBucket — CONTENT-HASHED, so new code is a new value and CloudFormation rolls the function`,
+      `    Description: content-hashed key of the forwarder .zip in ForwarderBucket`,
     );
   }
   const envLines: string[] = [
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
-    `        FASTAGENT_STATE_DIR: ${MOUNT}`,
-    // Inside the state root on purpose — the snapshot is this host's only durable store, and it copies
-    // exactly one tree. See {@link SECRETS_DIR}: the sibling layout every other host uses would leave a
-    // rotated OAuth credential outside it, i.e. discarded with the microVM.
+    `        FASTAGENT_STORAGE_DIR: ${MOUNT}`,
+    `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
   ];
   // The auth seed is chunked (env values max 2048 chars — see AUTH_SEED_CHUNK_SIZE): N parameters,
@@ -398,12 +371,7 @@ function template(
     envLines.push(`        ${s.name}: !Ref ${p}`);
   }
   if (needsForwarder) {
-    // The INGRESS secret authenticates forwarder→runtime envelopes. Without it the envelope union is
-    // an unauthenticated control plane: `InvokeAgentRuntime` is an ordinary IAM action, so any
-    // principal holding it could forge a `schedule-fire`, or ride `state`/`wake` on a public `invoke`
-    // to redirect the state snapshot (exfiltrating auth.json) or the wake-alarm callback (leaking the
-    // wake secret) to an address of their choosing. Public `invoke` stays unauthenticated by design —
-    // it is the programmatic data plane — but it may not carry internal fields.
+    // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
     params.push(
       `  FastagentIngressSecret:`,
       `    Type: String`,
@@ -461,6 +429,17 @@ function template(
     `              - Effect: Allow`,
     `                Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, cloudwatch:PutMetricData]`,
     `                Resource: "*"`,
+    `              - Effect: Allow # mount discovery uses APIs, not the NFS access-point condition`,
+    `                Action: [elasticfilesystem:DescribeAccessPoints, elasticfilesystem:DescribeMountTargets]`,
+    `                Resource:`,
+    `                  - ${yamlSingleQuote(input.storage.efsAccessPointArn)}`,
+    `                  - ${yamlSingleQuote(filesystemArn)}`,
+    `              - Effect: Allow # access only the configured persistent workspace`,
+    `                Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite, elasticfilesystem:ClientRootAccess]`,
+    `                Resource: ${yamlSingleQuote(filesystemArn)}`,
+    `                Condition:`,
+    `                  StringEquals:`,
+    `                    elasticfilesystem:AccessPointArn: ${yamlSingleQuote(input.storage.efsAccessPointArn)}`,
     `              - Effect: Allow # AgentCore workload identity (the platform mints one per runtime)`,
     `                Action: [bedrock-agentcore:GetWorkloadAccessToken]`,
     `                Resource: "*"`,
@@ -474,15 +453,15 @@ function template(
     `        ContainerConfiguration: { ContainerUri: !Ref ImageUri }`,
     `      RoleArn: !GetAtt ExecutionRole.Arn`,
     `      ProtocolConfiguration: HTTP`,
-    `      NetworkConfiguration: { NetworkMode: PUBLIC }`,
-    `      # SessionStorage is the agent's LOCAL disk: it survives compute stop/resume within a runtime`,
-    `      # version, but AWS wipes it on every VERSION UPDATE (= every deploy) and after 14 idle days.`,
-    `      # Durability therefore comes from the S3 snapshot the container pulls on its first`,
-    `      # invocation and pushes when work settles (presigned by the forwarder — the container holds`,
-    `      # no AWS credentials). A persistent MOUNT instead needs EfsAccessPoint + VPC mode, which`,
-    `      # forces a NAT gateway for model/channel egress (~$33/mo) — deliberately not the default.`,
+    `      NetworkConfiguration:`,
+    `        NetworkMode: VPC`,
+    `        NetworkModeConfig:`,
+    `          Subnets: ${JSON.stringify(input.storage.subnetIds)}`,
+    `          SecurityGroups: ${JSON.stringify(input.storage.securityGroupIds)}`,
     `      FilesystemConfigurations:`,
-    `        - SessionStorage: { MountPath: ${MOUNT} }`,
+    `        - EfsAccessPoint:`,
+    `            AccessPointArn: ${yamlSingleQuote(input.storage.efsAccessPointArn)}`,
+    `            MountPath: ${MOUNT}`,
     `      # Idle ${IDLE_TIMEOUT_SECONDS}s (the ping's HealthyBusy + time_of_last_update keeps BUSY sessions alive), max compute`,
     `      # lifetime ${MAX_LIFETIME_SECONDS}s — the platform ceiling; the session id stays valid, so the next invoke`,
     `      # just gets fresh compute with the same storage. Memory bills per second for the whole`,
@@ -515,19 +494,6 @@ function template(
       `                Resource:`,
       `                  - !GetAtt Runtime.AgentRuntimeArn`,
       `                  - !Sub "\${Runtime.AgentRuntimeArn}/*"`,
-      `              - Effect: Allow # mint the presigned URLs the container uses for its state snapshot`,
-      `                Action: [s3:GetObject, s3:PutObject]`,
-      `                Resource: !Sub arn:aws:s3:::\${StateBucket}/${STATE_KEY}`,
-      `              # Without s3:ListBucket, S3 folds "key absent" into 403 (anti-enumeration), which is`,
-      `              # indistinguishable from a broken signature — so the container's restore contract`,
-      `              # (agentcore-state.ts: ONLY 404 means first deploy) would dead-end every first deploy.`,
-      `              # Scoped to the snapshot prefix: this grants "may know whether the snapshot exists",`,
-      `              # not a listing of the whole deployment bucket.`,
-      `              - Effect: Allow`,
-      `                Action: s3:ListBucket`,
-      `                Resource: !Sub arn:aws:s3:::\${StateBucket}`,
-      `                Condition:`,
-      `                  StringLike: { s3:prefix: state/* }`,
       ...(input.selfSchedule
         ? [
             `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
@@ -562,7 +528,6 @@ function template(
       `        Variables:`,
       `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
       `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
-      ...(needsForwarder ? [`          STATE_REFRESH_SECRET: !Ref FastagentIngressSecret`] : []),
       ...(topology.webhooks ? [`          WEBHOOKS_ENABLED: "1"`] : []),
       ...(input.selfSchedule
         ? [
@@ -572,14 +537,10 @@ function template(
           ]
         : []),
       `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
-      `          STATE_BUCKET: !Ref StateBucket`,
-      `          STATE_KEY: ${STATE_KEY}`,
       `          MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES}"`,
-      `      # From S3, not inline: the forwarder mints SigV4-presigned URLs for the state snapshot and`,
-      `      # no longer fits CloudFormation's 4096-byte inline cap. The key is content-hashed, so a`,
-      `      # code change is a parameter change — CloudFormation cannot miss it.`,
+      `      # A content-hashed key makes code changes visible to CloudFormation.`,
       `      Code:`,
-      `        S3Bucket: !Ref StateBucket`,
+      `        S3Bucket: !Ref ForwarderBucket`,
       `        S3Key: !Ref ForwarderS3Key`,
     );
   }
@@ -752,14 +713,15 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const paramHint = (list: typeof secrets): string => list.map((s) => `${cfnParamName(s.name)}=<value>`).join(" ");
 
   const image = `<account-id>.dkr.ecr.<region>.amazonaws.com/${repo}:<tag>`;
-  const bucketHint = stateBucketName(name, "<account-id>");
+  const bucketHint = deploymentBucketName(name, "<account-id>");
   const runbook: string[] = [
     `# Deploy "${name}" to AWS Bedrock AgentCore. ${prefix}${TEMPLATE_FILE} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
     ``,
-    `# 1. ECR repository + the deployment bucket (one-time; skip what exists). The bucket lives OUTSIDE`,
-    `#    the stack on purpose: it holds the agent's state snapshot, which must survive a delete-stack.`,
+    `# EFS access point: ${input.storage.efsAccessPointArn}. Storage and VPC resources are operator-owned.`,
+    `# Private subnets need NAT egress for model/channel APIs. Allow NFS TCP 2049 to EFS mount targets.`,
+    `# 1. ECR repository + the forwarder artifact bucket (one-time; skip what exists).`,
     `aws ecr create-repository --repository-name ${repo}`,
     `aws s3api create-bucket --bucket ${bucketHint} --region us-east-1   # us-east-1 ONLY`,
     `aws s3api create-bucket --bucket ${bucketHint} --region <region> \\   # every OTHER region`,
@@ -805,7 +767,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws cloudformation deploy --stack-name ${stack} --template-file ${prefix}${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
     `  --parameter-overrides ImageUri=${image}${
-      needsForwarder ? ` StateBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
+      needsForwarder ? ` ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
     }${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
     ``,
     needsForwarder
@@ -876,43 +838,31 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       `# selfSchedule: the agent's wake-ups are EventBridge-backed — each pending wake-up is mirrored`,
       `#   (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
       `#   schedule (fa-${name}-wk-*) that wakes the container at the right instant. Reliable even when`,
-      `#   the compute is reclaimed. Caveat: only for wake-ups set through the INGRESS surface (chat`,
-      `#   channels/schedules); a wake set inside a direct InvokeAgentRuntime session stays in that`,
-      `#   session's own storage and fires only while that session is awake.`,
+      `#   the compute is reclaimed. The forwarder supplies the callback URL; use the deployment's`,
+      `#   fixed runtime session id for programmatic calls too.`,
     );
   }
 
   runbook.push(
     ``,
-    `# Invoke the agent programmatically (any session id ≥ 33 chars; the response streams as SSE):`,
+    `# Invoke the agent programmatically (reuse the deployment session; conversations remain separate):`,
     `aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn <RuntimeArn> \\`,
-    `  --runtime-session-id "my-conversation-000000000000000000" \\`,
+    `  --runtime-session-id "${ingressSessionId(name)}" \\`,
     `  --payload '{"kind":"invoke","session":"cli","text":"hello"}' --cli-binary-format raw-in-base64-out /dev/stdout`,
   );
-  if (needsForwarder) {
-    runbook.push(
-      ``,
-      `# After a REDEPLOY, stop the ingress session so the new image serves immediately — a live session`,
-      `# keeps its old compute (and the OLD image) until ${IDLE_TIMEOUT_SECONDS}s idle / the 8 h compute ceiling`,
-      `# (\`--run\` does this automatically):`,
-      `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
-      `  --runtime-session-id "${ingressSessionId(name)}"`,
-    );
-  }
   runbook.push(
     ``,
-    `# Redeploy = step 1b (new forwarder key, if its code changed) + step 2 with a NEW tag + step 3.`,
-    `# STATE: ${MOUNT} is a LOCAL disk — AWS wipes it on every runtime version update (i.e. every`,
-    `# deploy) and after 14 idle days. What survives is the S3 snapshot under s3://${bucketHint}/${STATE_KEY}:`,
-    `# the container restores it on its first invocation and pushes it whenever work settles. Keep that`,
-    `# bucket and the agent keeps its sessions, channel state and pending wake-ups across deploys;`,
-    `# delete it and the agent starts blank. (A persistent MOUNT would need EFS + VPC mode + a NAT`,
-    `# gateway for model/channel egress — see the template comment.)`,
-    `# CREDENTIALS RIDE THAT SNAPSHOT TOO: FASTAGENT_SECRETS_DIR is ${SECRETS_DIR}, inside the state`,
-    `# root, so an OAuth auth.json ROTATED on the box persists (a refresh token is single-use — without`,
-    `# this the next microVM would re-seed the deploy-time copy and eventually fail to authenticate).`,
-    `# The bucket is therefore credential storage: it is created with public access blocked and`,
-    `# versioning on, and deleting it costs model access until the next deploy re-seeds.`,
+    `# Stop the fixed runtime session after redeploy so the next call uses the new image.`,
+    `# \`--run\` does this automatically. In-flight turns are interrupted.`,
+    `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
+    `  --runtime-session-id "${ingressSessionId(name)}"`,
+    ``,
+    `# First run \`fastagent deploy agentcore\` for a fresh release manifest; then repeat step 1b`,
+    `# (new forwarder key, if changed), step 2 with a NEW tag, step 3 and the session stop above.`,
+    `# EFS at ${MOUNT} keeps base/ (including unfinished work), .state/ and .secrets/ across idle and redeploy.`,
+    `# Each release replaces only base/${input.agentPrefix}; restarting the same release preserves agent edits.`,
+    `# The stack never deletes or recreates the EFS access point. Delete storage only as an explicit data operation.`,
+    `# Keep one runtime writer per workspace; use the fixed runtime session id printed above for every entry point.`,
   );
 
   return { artifacts, runbook, untranslatableSchedules: untranslatable, topology };

@@ -79,6 +79,7 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
 describe("every host's runbook reads the same answer", () => {
   const fly = (channels: ReturnType<typeof webhook>) =>
     planFlyDeploy({
+      releaseId: "release-one",
       agentPrefix: "fastagent/",
       appName: "bot",
       port: 8787,
@@ -95,6 +96,7 @@ describe("every host's runbook reads the same answer", () => {
 
   const railway = (channels: ReturnType<typeof webhook>) =>
     planRailwayDeploy({
+      releaseId: "release-one",
       agentPrefix: "fastagent/",
       serviceName: "bot",
       hasPackageJson: true,
@@ -108,6 +110,12 @@ describe("every host's runbook reads the same answer", () => {
 
   const agentcore = (channels: ReturnType<typeof webhook>) =>
     planAgentcoreDeploy({
+      releaseId: "release-one",
+      storage: {
+        efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
+        subnetIds: ["subnet-0123456789abcdef0"],
+        securityGroupIds: ["sg-0123456789abcdef0"],
+      },
       name: "bot",
       modelAuth: undefined,
       channels,
@@ -117,7 +125,7 @@ describe("every host's runbook reads the same answer", () => {
       runtime: "node",
       hasLockfile: true,
       version: "9.9.9",
-      agentPrefix: "",
+      agentPrefix: "fastagent/",
     }).runbook.join("\n");
 
   it("fly: a long-connection telegram gets no setWebhook step", () => {

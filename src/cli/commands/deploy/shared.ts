@@ -148,7 +148,7 @@ export async function writeArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (options.alwaysWrite?.includes(a.path)) {
+    if (a.path.endsWith("/fastagent.release.json") || options.alwaysWrite?.includes(a.path)) {
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, a.content);
       console.error(`[fastagent] wrote ${a.path}`);

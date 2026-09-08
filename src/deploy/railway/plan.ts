@@ -128,9 +128,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# Deploy to Railway. ${configPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
     ``,
-    `# One-time setup (init → service → volume → variables). SKIP all of it on a redeploy — a redeploy is`,
-    `# just \`railway up\` (below). Re-running these makes a second project, a DUPLICATE service (Railway`,
-    `# service names are project-scoped, NOT unique — no error), and another volume, splitting state.`,
+    `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
+    `# another project/service/volume, splitting the persistent workspace.`,
     ``,
     `# Create + link a project (writes .railway link state in this dir; the project — not a committed`,
     `# file — is Railway's source of truth for identity, variables, and the volume).`,
@@ -186,28 +185,19 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   );
   runbook.push(
     ``,
-    `# Deploy — uploads this dir and builds the Dockerfile on Railway (no local Docker needed). This is`,
-    `# also the ENTIRE redeploy: re-run \`railway up\` alone (the one-time setup above is not repeated).`,
+    `# Before a new definition release, run \`fastagent deploy railway\` to refresh the release manifest.`,
+    `# Upload this workspace and build on Railway (no local Docker needed):`,
     `railway up`,
   );
-  if (input.shipsGit) {
-    runbook.push(
-      ``,
-      `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
-      `# by the agent itself (pull to freshen, commit/push to write back; creds ride config.deploy.secrets;`,
-      `# git is baked into the image). CAVEAT — \`railway up\` is known to strip .git from its upload:`,
-      `# expect NO baked history on the box; the agent should \`git clone\` its repo in the workspace`,
-      `# (same token) before making changes.`,
-      `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
-    );
-  } else {
-    runbook.push(
-      ``,
-      `# The image is a WYSIWYG snapshot of this directory. No .git here, so no history ships and the`,
-      `# generated image does not install git — changes on the box are ephemeral and never survive a`,
-      `# redeploy. If the agent should clone/push repos as part of its work, add deploy: { apt: ["git"] }.`,
-    );
-  }
+  runbook.push(
+    ``,
+    `# The volume keeps /data/base (including uncommitted work), .state and .secrets across restarts and deploys.`,
+    `# Each generated release replaces only /data/base/${input.agentPrefix}; other workspace files are initialized once.`,
+    input.shipsGit
+      ? `# Railway uploads may strip .git. Clone inside the persistent workspace when collaboration needs history.`
+      : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
+    `# Railway supports temporary download caches under /tmp, but cannot bind-mount temporary directories.`,
+  );
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).

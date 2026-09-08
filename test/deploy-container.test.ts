@@ -4,6 +4,7 @@ import { containerArtifacts } from "../src/deploy/container.ts";
 import { piBasePrompt } from "../src/engines/pi/create.ts";
 
 const input = {
+  releaseId: "release-one",
   hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
@@ -12,6 +13,13 @@ const input = {
 } as const;
 
 describe("deploy/container: shared Docker context", () => {
+  it("requires a safe nested definition and rejects making it temporary", () => {
+    expect(() => containerArtifacts({ ...input, agentPrefix: "" })).toThrow("nested agent");
+    expect(() => containerArtifacts({ ...input, agentPrefix: "../agent/" })).toThrow("manifest");
+    expect(() => containerArtifacts({ ...input, temporaryDirectories: ["fastagent"] })).toThrow(
+      "definition cannot be temporary",
+    );
+  });
   it("keeps tracked secrets scaffolds without shipping credentials or state", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
@@ -51,25 +59,28 @@ describe("deploy/container: shared Docker context", () => {
     expect(ships(".git/HEAD")).toBe(true);
   });
 
-  // The two halves live on opposite sides of the deploy/runtime boundary and are joined by a literal
-  // env name (like FASTAGENT_AGENTCORE), so they are asserted together: a marker only one side writes
-  // is a silently missing warning inside a container nobody reads the prompt of.
-  it("marks the image baked, and the base prompt turns that marker into the write-back rule", () => {
+  it("gives each image a stable release and describes its persistent workspace", () => {
     const values = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }]
       .map((i) => containerArtifacts(i).find((artifact) => artifact.path === "fastagent/Dockerfile")!.content)
-      .map((content) => /^ENV FASTAGENT_DEPLOYED=(\S+)$/m.exec(content)?.[1]);
-    expect(values).toEqual(["1", "1", "1"]);
-
-    const before = process.env.FASTAGENT_DEPLOYED;
+      .map((content) => /^ENV FASTAGENT_RELEASE_FILE=(\S+)$/m.exec(content)?.[1]);
+    expect(values).toEqual(Array(3).fill("/app/fastagent/fastagent.release.json"));
+    const manifest = containerArtifacts(input).find((a) => a.path.endsWith("fastagent.release.json"))!;
+    expect(JSON.parse(manifest.content)).toEqual({
+      version: 1,
+      id: "release-one",
+      agent: "fastagent",
+      temporaryDirectories: [],
+    });
+    const before = process.env.FASTAGENT_RELEASE_FILE;
     try {
-      delete process.env.FASTAGENT_DEPLOYED;
-      expect(piBasePrompt()).not.toContain("BAKED");
-      process.env.FASTAGENT_DEPLOYED = values[0];
-      expect(piBasePrompt()).toContain("BAKED into this deployment's image");
-      expect(piBasePrompt()).toContain("commit and push it in the same turn");
+      delete process.env.FASTAGENT_RELEASE_FILE;
+      expect(piBasePrompt()).not.toContain("Your workspace is persistent");
+      process.env.FASTAGENT_RELEASE_FILE = values[0];
+      expect(piBasePrompt()).toContain("Your workspace is persistent, including uncommitted work");
+      expect(piBasePrompt()).toContain("a new deployment replaces the definition directory");
     } finally {
-      if (before === undefined) delete process.env.FASTAGENT_DEPLOYED;
-      else process.env.FASTAGENT_DEPLOYED = before;
+      if (before === undefined) delete process.env.FASTAGENT_RELEASE_FILE;
+      else process.env.FASTAGENT_RELEASE_FILE = before;
     }
   });
 });

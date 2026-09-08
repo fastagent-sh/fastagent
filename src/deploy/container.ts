@@ -10,6 +10,7 @@
  * collides with one the workspace already owns.
  */
 import { SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 
 export interface Artifact {
   path: string;
@@ -40,6 +41,9 @@ export function isGeneratedDockerignore(content: string): boolean {
 }
 
 export interface ContainerInput {
+  /** Stable for one release; generated once by the deploy preflight, never on container restart. */
+  releaseId: string;
+  temporaryDirectories?: string[];
   /** Whether the agent has a package.json (a code agent); else a pure markdown/skills agent. */
   hasPackageJson: boolean;
   /** The package manager the generated image targets: `bun` (packageManager: bun / a bun lockfile) gets an
@@ -110,11 +114,7 @@ function dockerfile(input: ContainerInput): string {
   // workspace, single agent or not — the value is a fact of this image, and asserting it means a build
   // context that dropped the agent fails loudly rather than serving a sibling.
   const pin = prefix ? `ENV FASTAGENT_AGENT=${prefix.replace(/\/$/, "")}\n` : "";
-  // The definition ships INSIDE this image, outside every durable mount, so an edit the agent makes
-  // to it dies with the container. The running agent is the only one who can see that promise break
-  // (its persona invites self-improvement), so the image tells it: the base prompt reads this marker
-  // and adds the write-back rule (engines/pi/create.ts piBasePrompt).
-  const baked = `ENV FASTAGENT_DEPLOYED=1\n`;
+  const deployment = `ENV FASTAGENT_RELEASE_FILE=/app/${into(RELEASE_FILE)}\nENV FASTAGENT_STORAGE_DIR=/data\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent`
   // from PATH. That needs npm + a global bin, which live on node:22-slim, NOT on oven/bun — so this path
   // pins node:22-slim regardless of input.runtime (a stray bun lockfile with no package.json would
@@ -125,7 +125,7 @@ function dockerfile(input: ContainerInput): string {
 # npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
 FROM node:22-slim
 ${apt}WORKDIR /app
-${baked}${pin}RUN npm i -g @fastagent-sh/fastagent@${input.version}
+${deployment}${pin}RUN npm i -g @fastagent-sh/fastagent@${input.version}
 COPY . .
 CMD ["fastagent", "start", "/app"]
 `;
@@ -139,7 +139,7 @@ CMD ["fastagent", "start", "/app"]
 ${note}
 FROM ${base}
 ${apt}WORKDIR /app
-${baked}${pin}`;
+${deployment}${pin}`;
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
   // we can't tell a repo-as-agent from a purpose-built agent, so the safe default keeps everything.
@@ -228,8 +228,18 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
  * only at deploy time — without it the host CLI's packer would bake `.secrets/` into the image.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
+  if (!input.agentPrefix)
+    throw new Error("deploy requires a nested agent: point deploy at the workspace containing fastagent/");
   const ignore = dockerignore(input);
+  const release: DeploymentRelease = {
+    version: 1,
+    id: input.releaseId,
+    agent: input.agentPrefix.replace(/\/$/, ""),
+    temporaryDirectories: input.temporaryDirectories ?? [],
+  };
+  parseDeploymentRelease(JSON.stringify(release));
   return [
+    { path: `${input.agentPrefix}${RELEASE_FILE}`, content: `${JSON.stringify(release, null, 2)}\n` },
     { path: `${input.agentPrefix}Dockerfile`, content: dockerfile(input) },
     { path: ".dockerignore", content: ignore },
     { path: `${input.agentPrefix}Dockerfile.dockerignore`, content: ignore },

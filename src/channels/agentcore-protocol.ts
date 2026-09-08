@@ -1,11 +1,10 @@
 /**
  * The wire between the forwarder Lambda and the container, in ONE place: the envelope every
- * trigger arrives as, the reply a webhook rides back in, the presigned-URL pair the state snapshot
- * uses, the wake-alarm request, and the forwarder's reserved paths. The forwarder itself is JavaScript
+ * trigger arrives as, the webhook reply, the wake-alarm request, and the forwarder's reserved paths. The forwarder itself is JavaScript
  * (`deploy/agentcore/forwarder.js`) and cannot import this, so `agentcore-forwarder.test.ts` pins its
  * literals to these — a rename here fails there, not on a live box.
  *
- * Pure types and constants: the adapter, the state sync, the wake sink and the deploy driver all
+ * Pure types and constants: the adapter, the wake sink and the deploy driver all
  * read it, and none of them may pull the others in for it.
  */
 
@@ -15,21 +14,11 @@ export const RESERVED_PATHS = {
   probe: "/__fastagent/probe",
   /** The container's wake-alarm mirror callback (wake secret). */
   wakeAlarm: "/__fastagent/wake-alarm",
-  /** Re-mint the state snapshot's presigned URLs with current Lambda credentials (ingress secret). */
-  stateUrls: "/__fastagent/state-urls",
 } as const;
-
-/** Presigned S3 URLs for the one snapshot object, minted per envelope by the forwarder. */
-export interface StateUrls {
-  getUrl: string;
-  putUrl: string;
-  /** Authenticated forwarder callback that re-mints URLs with current Lambda credentials. */
-  refresh?: { url: string; auth: string };
-}
 
 /** Every kind the container's `POST /invocations` dispatches on. Listed as a value so the forwarder
  *  pin test can check each one is spelled the same on the other side. */
-export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke", "checkpoint", "probe"] as const;
+export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke", "probe"] as const;
 
 /** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. Every kind may
  *  carry `wake` — the forwarder's self-resolved public URL, which the adapter persists so the wake
@@ -39,7 +28,6 @@ export type AgentcoreEnvelope = {
    *  public `invoke` data plane neither has nor needs it — and may not carry the fields below. */
   auth?: string;
   wake?: { url: string };
-  state?: StateUrls;
 } & (
   | {
       kind: "webhook";
@@ -64,14 +52,9 @@ export type AgentcoreEnvelope = {
   /** An EventBridge wake-up poke: the invocation ITSELF is the payload — it wakes the container,
    *  whose boot drain / 30s wake pump then fires whatever is due. The handler only acks. */
   | { kind: "wake-poke" }
-  /** Pre-stop checkpoint (`--run`, right before stop-runtime-session): push the state snapshot NOW.
-   *  A stop cuts an in-flight turn, and its durable turn intent — written pre-ACK by every replaying
-   *  channel — lives on a mount the version update is about to erase. Flushing first is what makes
-   *  "channels with replay re-run it" true rather than aspirational. */
-  | { kind: "checkpoint" }
   /** The deploy driver's post-deploy verification (relayed by the forwarder's reserved probe path,
    *  which answers on EVERY forwarder topology — schedule-only URLs refuse ordinary public traffic).
-   *  Runs restore + channel construction end to end and answers a TRANSPORT-200 structured verdict
+   *  Runs storage initialization + channel construction and answers a TRANSPORT-200 structured verdict
    *  `{ ok, error? }`: the ordinary webhook path folds a non-200 transport into an opaque 502 at the
    *  forwarder, which would strip exactly the diagnostics this probe exists to carry. */
   | { kind: "probe" }

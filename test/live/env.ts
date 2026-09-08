@@ -16,8 +16,9 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
-import { ingressSessionId, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
+import { ingressSessionId, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
 import { fastagentVersion } from "../../src/version.ts";
+import { storageStackName } from "./agentcore-storage.ts";
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`live probes need ${name} (${hint})`);
@@ -135,7 +136,7 @@ export const answerOf = (events: AgentEvent[]): string =>
  * Everything one AgentCore probe created, destroyed in the order the dependencies demand — ONE copy,
  * shared by every AgentCore probe, because each step is load-bearing in a way that is invisible when
  * it is wrong. What survives a silent teardown is a Bedrock runtime, a Lambda with a public Function
- * URL, an image in ECR and a bucket holding the model credential seed, all of them billing.
+ * URL, an image in ECR and a bucket holding the forwarder package, all of them billing.
  *
  * WAKE ALARMS FIRST, while the stack still stands. The forwarder creates them at RUNTIME with the SDK
  * into the `default` Scheduler group, so they are not stack resources and `delete-stack` does not take
@@ -145,14 +146,8 @@ export const answerOf = (events: AgentEvent[]): string =>
  * fixture, not only the one that asks for wake-ups: one line (`selfSchedule`, a channel, a schedule)
  * turns the forwarder on, and a teardown that had to be extended first would leak before it was.
  *
- * THE BUCKET IS VERSIONED (run.ts enables it), so `s3 rm` does not empty it — it writes a DELETE
- * MARKER per object, and a marker comes back under DeleteMarkers, not Versions. Deleting only Versions
- * leaves the bucket non-empty and `delete-bucket` answers BucketNotEmpty. Both lists, or it leaks.
- *
- * The bucket and the repository are created OUTSIDE the stack on purpose (plan.ts: so a `delete-stack`
- * "cannot take the agent's memory with it") — correct for an operator, which makes them a probe's own
- * job. Every deletion is ATTEMPTED even after an earlier one fails, and every failure is collected
- * into one throw: "already gone" is the goal state, not a failure.
+ * The artifact bucket, repository and test storage stack are separate resources. Networking remains
+ * operator-owned. Every deletion is attempted even after an earlier failure; "already gone" is the goal state.
  */
 export async function destroyAgentcoreDeployment(name: string, account: string): Promise<void> {
   const stack = `fastagent-${name}`;
@@ -187,30 +182,20 @@ export async function destroyAgentcoreDeployment(name: string, account: string):
     "--stack-name",
     stack,
   ]);
+  const storage = storageStackName(name);
+  await attempt("delete storage stack", ["cloudformation", "delete-stack", "--stack-name", storage]);
+  await attempt("wait storage deletion", ["cloudformation", "wait", "stack-delete-complete", "--stack-name", storage]);
   if (account) {
-    const bucket = stateBucketName(name, account);
-    await attempt("s3 rm", ["s3", "rm", `s3://${bucket}`, "--recursive"]);
-    const listed = await aws(["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"]);
-    if (listed.code === 0) {
-      const payload = JSON.parse(listed.stdout) as {
-        Versions?: { Key: string; VersionId: string }[];
-        DeleteMarkers?: { Key: string; VersionId: string }[];
-      };
-      const objects = [...(payload.Versions ?? []), ...(payload.DeleteMarkers ?? [])].map(({ Key, VersionId }) => ({
-        Key,
-        VersionId,
-      }));
-      if (objects.length > 0) {
-        const del = JSON.stringify({ Objects: objects });
-        await attempt("s3api delete-objects", ["s3api", "delete-objects", "--bucket", bucket, "--delete", del]);
-      }
-    }
-    await attempt("s3 rb", ["s3api", "delete-bucket", "--bucket", bucket]);
+    const bucket = deploymentBucketName(name, account);
+    await attempt("s3 rb", ["s3", "rb", `s3://${bucket}`, "--force"]);
   }
   await attempt("ecr delete-repository", ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
 
   if (errors.length > 0) {
-    throw new AggregateError(errors, `teardown failed — check stack ${stack}, bucket fa-${name}-*, repo ${repo}`);
+    throw new AggregateError(
+      errors,
+      `teardown failed — check stacks ${stack} and ${storage}, bucket fa-${name}-*, repo ${repo}`,
+    );
   }
 }
 

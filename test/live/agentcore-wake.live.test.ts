@@ -20,9 +20,8 @@
  * WHERE THE ASSERTIONS STOP, and why. Creating the alarm is checked directly. The FIRE is checked
  * weakly — the schedule carries `ActionAfterCompletion: DELETE`, so its disappearance is evidence it
  * ran, but disappearance has other causes and this probe cannot tell them apart. The last two arrows
- * (poke → container awake → pump fires the turn) are NOT covered: observing them means pulling the
- * state snapshot out of S3 and reading session records, which costs more than it settles here — that
- * half is AWS delivering a schedule it accepted, where the half above is our code and our IAM.
+ * (poke → container awake → pump fires the turn) require inspecting EFS session records and are
+ * outside this probe's assertions.
  *
  * IT ALSO CARRIES THE INGRESS ASSERTIONS, for the reason the fixture list makes unavoidable: this is
  * the only probe whose deployment HAS a forwarder and a Function URL, so the gates on that URL are
@@ -39,8 +38,8 @@
  *
  * And this is the first fixture with `selfSchedule: true`, i.e. the first `topology.forwarder` deployment:
  * the forwarder Lambda, its Function URL, the wake role (iam:CreateRole / PassRole / AttachRolePolicy)
- * and a VERSIONED state bucket (s3:PutBucketVersioning, PutLifecycleConfiguration) are all created
- * here and nowhere else in the suite.
+ * and the forwarder artifact bucket are created here. FASTAGENT_LIVE_AGENTCORE_NETWORK supplies
+ * subnetIds and securityGroupIds as JSON; each probe creates and destroys its own EFS.
  */
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
@@ -51,6 +50,7 @@ import { MAX_WEBHOOK_BODY_BYTES } from "../../src/channels/agentcore-limits.ts";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { MIN_WAKE_MS } from "../../src/schedule/wakeups.ts";
+import { createAgentcoreStorage } from "./agentcore-storage.ts";
 import {
   CLI,
   aws,
@@ -89,18 +89,23 @@ beforeAll(async () => {
 
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
+  const storage = await createAgentcoreStorage(
+    NAME,
+    JSON.parse(requireEnv("FASTAGENT_LIVE_AGENTCORE_NETWORK", "probe subnetIds and securityGroupIds as JSON")),
+  );
   workspace = join(tmpdir(), NAME);
-  await mkdir(workspace, { recursive: true });
-  await writeFile(join(workspace, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  const agentDir = join(workspace, "fastagent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
   // `selfSchedule` is what puts the whole mechanism in the deployment: it mounts the `wake` tool in the
   // container (open.ts, serving + selfSchedule), and it puts the forwarder, its Function URL and the
   // wake/scheduler IAM into the template. Without it there is no chain to test.
   await writeFile(
-    join(workspace, "fastagent.config.mjs"),
-    `export default { model: ${JSON.stringify(MODEL)}, selfSchedule: true };\n`,
+    join(agentDir, "fastagent.config.mjs"),
+    `export default ${JSON.stringify({ model: MODEL, selfSchedule: true, deploy: { agentcore: storage } })};\n`,
   );
   await writeFile(
-    join(workspace, "package.json"),
+    join(agentDir, "package.json"),
     `${JSON.stringify(
       {
         name: "live-agentcore-wake-probe",
@@ -114,10 +119,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // FOUR places, not the three this fixture's resources suggest — the wake alarms are the extra one,
-  // and {@link destroyAgentcoreDeployment} takes all four (it sweeps alarms for every fixture, which
-  // is why this probe adds no teardown of its own). `finally`, not a catch: the AWS failure still
-  // throws, and the temp directory still goes.
   try {
     await destroyAgentcoreDeployment(NAME, account);
   } finally {

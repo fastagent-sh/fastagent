@@ -1,17 +1,10 @@
-/**
- * The AgentCore assembly as a SERVICE — the properties `start` used to get from six inline branches.
- *
- * The point of the extraction is that `start` no longer knows any of this. These tests hold the
- * assembly to what those branches did: the adapter is the surface, the control plane is mounted over
- * it, channels are NOT discovered at boot (the state mount is pre-restore), and one `close()` stops
- * everything the branches wired to separate signal handlers.
- */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
-import { mountAgentcoreService } from "../src/channels/agentcore-service.ts";
+import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -25,6 +18,56 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 }
 
 const open = async (dir: string) => createPiAgentFromDir(dir, { serving: true });
+
+describe("deferred AgentCore initialization", () => {
+  it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
+    vi.stubEnv("FASTAGENT_INGRESS_SECRET", "trusted-probe");
+    try {
+      const deferred = deferAgentcoreService(async () => {
+        throw new Error("EFS mount unavailable");
+      });
+      for (const auth of ["trusted-probe", "wrong"]) {
+        const r = await deferred.handler(
+          new Request("http://h/invocations", {
+            method: "POST",
+            body: JSON.stringify({ kind: "probe", auth }),
+          }),
+        );
+        expect(r.status).toBe(auth === "trusted-probe" ? 200 : 503);
+        if (r.status === 200)
+          expect(await r.json()).toEqual({ ok: false, error: "initialization failed: Error: EFS mount unavailable" });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("opens only on invocation and shares one initialization across concurrent requests", async () => {
+    const close = vi.fn(async () => {});
+    const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
+    const deferred = deferAgentcoreService(open);
+    expect((await deferred.handler(new Request("http://h/ping"))).status).toBe(200);
+    expect(open).not.toHaveBeenCalled();
+    const request = () => new Request("http://h/invocations", { method: "POST", body: "{}" });
+    const responses = await Promise.all([deferred.handler(request()), deferred.handler(request())]);
+    expect(await Promise.all(responses.map((r) => r.text()))).toEqual(["ready", "ready"]);
+    expect(open).toHaveBeenCalledOnce();
+    await deferred.close();
+    await deferred.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+  it("reports and caches initialization failures rather than reading an empty workspace", async () => {
+    const open = vi.fn(async (): Promise<AgentService> => {
+      throw new Error("EFS mount unavailable");
+    });
+    const deferred = deferAgentcoreService(open);
+    for (let i = 0; i < 2; i++) {
+      const r = await deferred.handler(new Request("http://h/invocations", { method: "POST", body: "{}" }));
+      expect(r.status).toBe(503);
+      expect(await r.text()).toContain("EFS mount unavailable");
+    }
+    expect(open).toHaveBeenCalledOnce();
+  });
+});
 
 describe("mountAgentcoreService", () => {
   it("serves the adapter surface, not the channel routes", async () => {
@@ -44,14 +87,13 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("reports no channels at boot — a list here would be the pre-restore emptiness", async () => {
+  it("reports only the adapter's boot surface", async () => {
     const dir = await agentDir({
       "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("x") });`,
     });
     const service = await mountAgentcoreService(await open(dir));
     try {
-      // Discovery is deferred to the first envelope, AFTER the state snapshot is restored. Reporting
-      // the channel here would mean it had been constructed against an empty state mount.
+      // Channels are constructed only after trusted ingress arrives.
       expect(service.channels).toEqual({ routes: [], longConnections: [], builtinInvoke: false });
       expect(service.ready).resolves.toBeUndefined();
     } finally {

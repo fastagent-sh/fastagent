@@ -14,7 +14,6 @@ import {
   FORWARDER_FILE,
   IDLE_TIMEOUT_SECONDS,
   MAX_LIFETIME_SECONDS,
-  STATE_KEY,
   agentcoreName,
   cfnParamName,
   forwarderSource,
@@ -22,13 +21,18 @@ import {
   ingressSessionId,
   planAgentcoreDeploy,
   scheduleResourceName,
-  stateBucketName,
   toEventBridgeCron,
   toRuntimeName,
 } from "../src/deploy/agentcore/plan.ts";
 import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
+  releaseId: "release-one",
+  storage: {
+    efsAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
+    subnetIds: ["subnet-0123456789abcdef0"],
+    securityGroupIds: ["sg-0123456789abcdef0"],
+  },
   name: "my-agent",
   modelAuth: "OPENAI_API_KEY",
   channels: [],
@@ -38,7 +42,7 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   runtime: "node",
   hasLockfile: false,
   version: "0.15.0",
-  agentPrefix: "",
+  agentPrefix: "fastagent/",
   ...over,
 });
 
@@ -125,46 +129,40 @@ describe("deploy agentcore: the plan", () => {
   it("pure-invoke shape: template only (no forwarder, no schedules), lean runbook", () => {
     const plan = planAgentcoreDeploy(baseInput());
     expect(plan.artifacts.map((a) => a.path)).toEqual([
-      TEMPLATE_FILE,
-      "Dockerfile",
+      `fastagent/${TEMPLATE_FILE}`,
+      "fastagent/fastagent.release.json",
+      "fastagent/Dockerfile",
       ".dockerignore",
-      "Dockerfile.dockerignore",
+      "fastagent/Dockerfile.dockerignore",
     ]);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::BedrockAgentCore::Runtime");
     expect(template).toContain("AgentRuntimeName: my_agent");
-    expect(template).toContain(`SessionStorage: { MountPath: ${MOUNT} }`);
+    expect(template).toContain("EfsAccessPoint:");
+    expect(template).toContain(`MountPath: ${MOUNT}`);
+    expect(template).not.toContain("SessionStorage:");
     expect(template).toContain('FASTAGENT_AGENTCORE: "1"');
     expect(template).toContain('PORT: "8080"');
-    expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}`);
+    expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
     expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`);
     expect(template).not.toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(plan.untranslatableSchedules).toEqual([]);
-    expect(plan.runbook.join("\n")).not.toContain("stop-runtime-session"); // no forwarder → no ingress session
+    expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
+    expect(plan.runbook.join("\n")).toContain("fastagent deploy agentcore");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --follow");
     expect(plan.runbook.join("\n")).not.toContain("--source forwarder");
   });
 
-  it("puts the secrets dir INSIDE the state root — the snapshot is this host's only durable store", () => {
-    // The regression this exists for looks like a tidy-up: every volume-backed host spells the two
-    // machinery dirs as siblings (`/data/.state` + `/data/.secrets`), and copying that here reads as
-    // consistency. It is not — AgentCore has no volume. Durability is packStateRoot(stateRoot), which
-    // copies ONE tree, so a sibling secrets dir sits inside the wiped mount and outside the snapshot:
-    // the rotated OAuth credential is discarded with the microVM and the box eventually cannot
-    // authenticate. Assert the CONTAINMENT, not the two spellings — only containment fails on that.
-    expect(SECRETS_DIR.startsWith(`${MOUNT}/`)).toBe(true);
-
+  it("keeps state and credentials as independent siblings on EFS", () => {
     const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-    const stateDir = /FASTAGENT_STATE_DIR: (\S+)/.exec(template)?.[1];
-    const secretsDir = /FASTAGENT_SECRETS_DIR: (\S+)/.exec(template)?.[1];
-    expect(stateDir).toBe(MOUNT);
-    expect(secretsDir?.startsWith(`${stateDir}/`)).toBe(true);
+    expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
+    expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${MOUNT}/.secrets`);
   });
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
-    expect(plan.artifacts.map((a) => a.path)).toContain(FORWARDER_FILE);
+    expect(plan.artifacts.map((a) => a.path)).toContain(`fastagent/${FORWARDER_FILE}`);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::Lambda::Function");
     expect(template).toContain("Type: AWS::Lambda::Url");
@@ -173,7 +171,7 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("Action: lambda:InvokeFunctionUrl");
     expect(template).toContain("Action: lambda:InvokeFunction\n");
     // Background turns refresh short-lived S3 capabilities through this same authenticated URL.
-    expect(template).toContain("STATE_REFRESH_SECRET: !Ref FastagentIngressSecret");
+    expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret");
     expect(template).toContain("Action: lambda:GetFunctionUrlConfig");
     // CommonJS on purpose — CFN inline code lands as index.js where ESM import is a syntax error.
     expect(forwarderSource()).toContain('require("@aws-sdk/client-bedrock-agentcore")');
@@ -188,7 +186,7 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --source forwarder --follow");
     // The shipped artifact IS the forwarder source (it becomes the Lambda package verbatim).
-    const forwarder = plan.artifacts.find((a) => a.path === FORWARDER_FILE)!;
+    const forwarder = plan.artifacts.find((a) => a.path === `fastagent/${FORWARDER_FILE}`)!;
     expect(forwarder.content).toBe(forwarderSource());
     expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
   });
@@ -374,35 +372,27 @@ describe("deploy agentcore: the plan", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
     expect(FORWARDER_FILE).toBe("lambda/index.js");
-    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/index.js");
+    expect(plan.artifacts.map((a) => a.path)).toContain("fastagent/lambda/index.js");
     const template = plan.artifacts[0]!.content;
-    expect(template).not.toContain("ZipFile"); // presigning pushed it past CFN's 4096-byte inline cap
-    expect(template).toContain("S3Bucket: !Ref StateBucket");
+    expect(template).not.toContain("ZipFile");
+    expect(template).toContain("S3Bucket: !Ref ForwarderBucket");
     expect(template).toContain("S3Key: !Ref ForwarderS3Key");
-    expect(template).toContain("  StateBucket:");
+    expect(template).toContain("  ForwarderBucket:");
     expect(template).toContain("  ForwarderS3Key:");
   });
 
-  it("grants the forwarder ONLY the one snapshot object, and hands the container its bucket/key", () => {
+  it("grants access-point-constrained EFS access without snapshot permissions", () => {
     const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
-    expect(template).toContain("Action: [s3:GetObject, s3:PutObject]");
-    expect(template).toContain(`Resource: !Sub arn:aws:s3:::\${StateBucket}/${STATE_KEY}`);
-    expect(template).toContain("STATE_BUCKET: !Ref StateBucket");
-    expect(template).toContain(`STATE_KEY: ${STATE_KEY}`);
-  });
-
-  it("grants s3:ListBucket on the snapshot prefix — without it a MISSING first-deploy snapshot reads 403, not 404", () => {
-    // S3 folds "key absent" into 403 unless the caller may list (anti-enumeration), and the restore
-    // contract accepts ONLY 404 as first deploy — dropping this statement deadlocks every first boot.
-    const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
-    expect(template).toContain("Action: s3:ListBucket");
-    expect(template).toContain(`Resource: !Sub arn:aws:s3:::\${StateBucket}\n`); // the BUCKET arn, not an object
-    expect(template).toContain("StringLike: { s3:prefix: state/* }"); // scoped: existence of the snapshot, not a full listing
+    expect(template).toContain("elasticfilesystem:ClientMount");
+    expect(template).toContain(`elasticfilesystem:AccessPointArn: '${baseInput().storage.efsAccessPointArn}'`);
+    expect(template).not.toContain("s3:PutObject");
+    expect(template).not.toContain("s3:ListBucket");
+    expect(template).not.toContain("STATE_BUCKET:");
   });
 
   it("an invoke-only deployment (no forwarder) carries no bucket wiring at all", () => {
     const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-    expect(template).not.toContain("StateBucket");
+    expect(template).not.toContain("ForwarderBucket");
     expect(template).not.toContain("s3:GetObject");
     expect(template).not.toContain("s3:ListBucket");
   });
@@ -419,15 +409,11 @@ describe("deploy agentcore: the plan", () => {
     );
   });
 
-  it("tells the truth about state: the mount is wiped per deploy, the S3 snapshot is what survives", () => {
-    const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
-    const template = plan.artifacts[0]!.content;
-    expect(template).toContain("wipes it on every VERSION UPDATE");
-    expect(template).not.toMatch(/SessionStorage: platform-persistent/);
-    const runbook = plan.runbook.join("\n");
-    expect(runbook).toContain(stateBucketName("my-agent", "<account-id>"));
-    expect(runbook).toContain(STATE_KEY);
-    expect(runbook).toContain("every runtime version update");
+  it("documents workspace durability and the fixed runtime session", () => {
+    const runbook = planAgentcoreDeploy(baseInput()).runbook.join("\n");
+    expect(runbook).toContain("across idle and redeploy");
+    expect(runbook).toContain(ingressSessionId("my-agent"));
+    expect(runbook).toContain("replaces only base/fastagent/");
   });
 
   describe("the forwarder deployment package", () => {
@@ -460,16 +446,13 @@ describe("deploy agentcore: the plan", () => {
   });
 
   describe("the public attack surface", () => {
-    it("a schedule-only deployment exposes ONLY the authenticated state-URL refresh channel", () => {
-      // Long cron turns can outlive the credentials that signed their initial snapshot URL. The URL
-      // exists to re-mint it, while WEBHOOKS_ENABLED remains absent so arbitrary HTTP never wakes
-      // AgentCore; start also suppresses the builtin /invoke under AgentCore.
+    it("a schedule-only deployment exposes the authenticated probe without public webhooks", () => {
       const template = planAgentcoreDeploy(baseInput({ schedules: [{ name: "digest", cron: "0 9 * * *" }] }))
         .artifacts[0]!.content;
       expect(template).toContain("AWS::Lambda::Function");
       expect(template).toContain("AWS::Scheduler::Schedule");
       expect(template).toContain("AWS::Lambda::Url");
-      expect(template).toContain("STATE_REFRESH_SECRET: !Ref FastagentIngressSecret");
+      expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret");
       expect(template).not.toContain('WEBHOOKS_ENABLED: "1"');
     });
 

@@ -46,6 +46,8 @@ Supported keys:
 | `sessionControl` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, `fastagent attach`. Off by default (it is a remote-control surface). When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; the serve binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it. On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
 | `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |
 | `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
+| `deploy.temporaryDirectories` | Workspace-relative directories backed by disposable bind mounts, e.g. `["fastagent/node_modules"]`. Default: none. Source and lockfiles remain durable. Docker grants mount privileges; Railway rejects this setting. See [temporary directories](deploy.md#temporary-directories). |
+| `deploy.agentcore` | Required for AgentCore: `{ efsAccessPointArn, subnetIds, securityGroupIds }` referencing operator-owned EFS and VPC resources. Use a dedicated access-point root per workspace. See [AgentCore setup](deploy.md#aws-bedrock-agentcore). |
 
 Unknown keys fail at startup. This catches typos such as `modle` instead of silently degrading to defaults.
 
@@ -255,7 +257,11 @@ The agent carries two fastagent-managed machinery dirs, split by deploy lifecycl
   baked into an image. A deployed box gets values through the host's secret store, and its seeded
   (possibly rotated) `auth.json` also lives on the volume so refresh survives restarts.
 
-For deployments, point both at durable storage:
+Generated deployments also retain the workspace at `<persistent-root>/base/`. State and secrets are
+siblings of `base`, outside the release-managed definition. The root is `/data` on Docker, Fly and
+Railway, and `/mnt/data` on AgentCore. The generated image sets these paths automatically.
+
+For a manually configured service, point state and secrets at durable storage:
 
 ```bash
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start

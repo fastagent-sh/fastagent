@@ -12,7 +12,8 @@ const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile, default autostop). */
 const base = {
-  agentPrefix: "fastagent/", // the init default; the flat variant is asserted explicitly below
+  releaseId: "release-one",
+  agentPrefix: "fastagent/",
   appName: "bot",
   port: 8787,
   hasPackageJson: true,
@@ -194,6 +195,7 @@ describe("deploy/fly: planFlyDeploy", () => {
       ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the workspace has one)
       "fastagent/Dockerfile",
       "fastagent/Dockerfile.dockerignore",
+      "fastagent/fastagent.release.json",
       "fastagent/fly.toml",
     ]);
     // Both ignore forms carry the same content (recursive patterns, .git not excluded).
@@ -222,7 +224,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).toContain(
       "fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile --app bot",
     );
-    expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
+    expect(runbook(p)).toContain("including uncommitted work");
   });
 
   it("a bun agent uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
