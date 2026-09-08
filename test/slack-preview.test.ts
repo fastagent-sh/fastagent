@@ -40,6 +40,38 @@ async function* quickClassicTurn(): AsyncIterable<AgentEvent> {
   yield { type: "completed" };
 }
 
+/** A push-based event source, so the TEST BODY advances timers — a generator that advances them
+ *  while the test body is already inside `advanceTimersByTimeAsync` deadlocks. */
+function pushSource() {
+  const queue: AgentEvent[] = [];
+  let notify: (() => void) | undefined;
+  let ended = false;
+  return {
+    iterable: (async function* (): AsyncIterable<AgentEvent> {
+      for (;;) {
+        if (queue.length > 0) {
+          yield queue.shift() as AgentEvent;
+          continue;
+        }
+        if (ended) return;
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+        });
+      }
+    })(),
+    push(event: AgentEvent): void {
+      queue.push(event);
+      notify?.();
+      notify = undefined;
+    },
+    end(): void {
+      ended = true;
+      notify?.();
+      notify = undefined;
+    },
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -108,6 +140,36 @@ describe("Slack reply rendering", () => {
       ),
     ).rejects.toThrow(/connection reset/);
     expect(api.sendMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("a rejected frame still spends its rate-limit slot (no per-token retry storm)", async () => {
+    vi.useFakeTimers();
+    const api = fakeApi();
+    // Slack is rate-limiting every edit; a droppable frame fails instantly instead of waiting it out.
+    vi.mocked(api.updateMarkdown).mockRejectedValue(new SlackApiError("chat.update", 429, "ratelimited"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const src = pushSource();
+    const pending = run(
+      slackReply(stream(src.iterable), api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+        rendering: "classic",
+        disclaimer: false,
+      }),
+    );
+    src.push({ type: "text", delta: "start " });
+    await vi.advanceTimersByTimeAsync(3_500); // the answer ages into view; the first slot opens
+    for (let i = 0; i < 100; i++) {
+      src.push({ type: "text", delta: `t${i} ` });
+      await vi.advanceTimersByTimeAsync(100); // the model's token pace, well inside one 3s slot
+    }
+    // The rejected frames must not reopen the mutation slot: one attempt per slot, not one per token.
+    // ~10s of tokens against a 3s slot: a handful of attempts. Without the slot being spent by the
+    // ATTEMPT, every rejected frame reopens it and the same view is re-sent once per token (72 here).
+    expect(vi.mocked(api.updateMarkdown).mock.calls.length).toBeLessThanOrEqual(5);
+    src.push({ type: "completed" });
+    src.end();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending.catch(() => {}); // the settle write fails too; its diagnostics are asserted elsewhere
+    warning.mockRestore();
   });
 
   it("marks a live preview frame droppable so a rate limit cannot park the answer", async () => {

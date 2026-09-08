@@ -281,6 +281,37 @@ describe("telegramReply terminal writes (direct)", () => {
 });
 
 describe("telegramReply preview frames are droppable (direct)", () => {
+  it("absorbs a rate limit on the placeholder send — losing it would cost the whole turn's preview", async () => {
+    vi.useFakeTimers();
+    let sends = 0;
+    const edits: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as { text?: string }) : {};
+        if (String(url).endsWith("/sendMessage")) {
+          sends++;
+          if (sends === 1) {
+            return new Response(JSON.stringify({ ok: false, parameters: { retry_after: 1 } }), { status: 429 });
+          }
+          return okSend();
+        }
+        if (String(url).endsWith("/editMessageText")) edits.push(body.text ?? "");
+        return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+      }),
+    );
+    const src = eventSource();
+    const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
+    await vi.advanceTimersByTimeAsync(2_100); // the placeholder retries past Telegram's 1s flood wait
+    expect(sends).toBe(2);
+    src.push({ type: "text", delta: "hello" });
+    src.push({ type: "completed" });
+    src.end();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await turn;
+    expect(edits.at(-1)).toBe("hello"); // the preview survived, so the answer edits it in place
+  });
+
   it("a rate-limited preview frame does not park the turn on its flood wait", async () => {
     vi.useFakeTimers();
     const edits: string[] = [];

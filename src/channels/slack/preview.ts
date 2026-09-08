@@ -170,8 +170,15 @@ function streamClassicSlackReply(
       return remaining > 0 ? Effect.sleep(remaining) : Effect.void;
     });
     const update = async (ts: string, markdown: string, opts?: SlackCallOptions): Promise<void> => {
-      await api.updateMarkdown(target.channelId, ts, markdown, opts);
-      lastMutationAt = now();
+      try {
+        await api.updateMarkdown(target.channelId, ts, markdown, opts);
+      } finally {
+        // An ATTEMPT spends the slot, not a success. A droppable frame fails instantly on a 429, so a
+        // success-only timestamp would leave `waitForMutationSlot` open and (with throttleMs 0) re-send
+        // the same rejected view once per token — request amplification aimed at a channel that is
+        // already rate-limiting us. The failure itself still propagates to the pump's onError.
+        lastMutationAt = now();
+      }
     };
     const flushPreview = async (): Promise<void> => {
       const markdown = chunkSlackText(view())[0] ?? THINKING_PLACEHOLDER;

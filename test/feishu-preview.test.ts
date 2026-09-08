@@ -119,6 +119,31 @@ describe("streaming card shape (pure)", () => {
 });
 
 describe("feishuReply two-element streaming (direct)", () => {
+  it("a rate-limited process frame does not withhold the answer element in the same flush", async () => {
+    vi.useFakeTimers();
+    const { api, elementWrites } = fakeApi();
+    // The process block is rate-limited from the first frame on; the answer must still be written.
+    vi.spyOn(api, "updateCardElement").mockImplementation(async (cardId, elementId, content, sequence, opts) => {
+      if (elementId === PROCESS_ELEMENT_ID) throw new Error("frequency limit");
+      elementWrites.push({ cardId, elementId, content, sequence, retries: opts?.retries });
+    });
+    const src = eventSource();
+    const turn = run(feishuReply(stream(src.iterable), api, { chatId: "oc_1" }, neutral));
+    await vi.advanceTimersByTimeAsync(0); // mount flush
+    // The process block keeps changing (a live tool trace), so it is retried on every frame.
+    for (let i = 0; i < 6; i++) {
+      src.push({ type: "tool_started", id: `t${i}`, name: "bash", args: { cmd: `step ${i}` } });
+      src.push({ type: "text", delta: `chunk${i} ` });
+      await vi.advanceTimersByTimeAsync(1100);
+    }
+    // One answer write per chunk: a rejected process write ends the flush it is in, so writing the
+    // decoration first costs the answer change that shared that flush.
+    expect(elementWrites.filter((w) => w.elementId === ANSWER_ELEMENT_ID)).toHaveLength(6);
+    src.push({ type: "completed" });
+    src.end();
+    await turn;
+  });
+
   it("process churn (sliding thinking tail, tool flips) never rewrites the answer element", async () => {
     vi.useFakeTimers();
     const { api, created, elementWrites, cardWrites } = fakeApi();

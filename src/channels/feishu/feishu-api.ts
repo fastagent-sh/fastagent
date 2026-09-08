@@ -39,7 +39,7 @@ const RETRIES = 3;
  * absorbing a rate-limit backoff for it only parks the answer behind a view nobody needs. A droppable
  * write passes 0: the frame is lost, the answer is not.
  */
-interface FeishuCallOptions {
+export interface FeishuCallOptions {
   retries?: number;
 }
 /** Download sanity cap; a larger resource is rejected visibly (the engine resizes vision images

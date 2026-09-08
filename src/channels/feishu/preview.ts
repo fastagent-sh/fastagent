@@ -37,7 +37,16 @@ import {
   finalCardJson,
   streamingCardJson,
 } from "./card.ts";
-import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
+import {
+  type FeishuApi,
+  type FeishuCallOptions,
+  type FeishuTarget,
+  chunkFeishuText,
+  isCardStreamingClosed,
+} from "./feishu-api.ts";
+
+/** Every live card frame is droppable — see {@link FeishuCallOptions}. */
+const DROPPABLE_FRAME: FeishuCallOptions = { retries: 0 };
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -295,15 +304,20 @@ export function feishuReply(
         // process frame is written like any other — it is the placeholder being cleared (processView).
         // Droppable frames: the next one carries the same snapshot under a higher sequence, so a
         // rate-limit backoff here would only delay the answer behind a view that is already stale.
-        if (process !== lastProcess) {
-          lastProcess = process;
-          await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq(), { retries: 0 });
-        }
+        //
+        // ANSWER FIRST. A failing write ends the whole flush, and the two elements are not worth the
+        // same: the answer is the reply being typed out, the process block is decoration. Writing the
+        // process element first meant one rate-limited tool line could keep the answer element unwritten
+        // for the entire streaming phase, leaving the user staring at a card that never fills in.
         const answer = answerView();
         // Never write an empty answer snapshot — the element is born empty and the answer only grows.
         if (answer !== "" && answer !== lastAnswer) {
           lastAnswer = answer;
-          await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq(), { retries: 0 });
+          await api.updateCardElement(preview.cardId, ANSWER_ELEMENT_ID, answer, nextSeq(), DROPPABLE_FRAME);
+        }
+        if (process !== lastProcess) {
+          lastProcess = process;
+          await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq(), DROPPABLE_FRAME);
         }
       } catch (e) {
         if (isCardStreamingClosed(e)) {

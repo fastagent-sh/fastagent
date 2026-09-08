@@ -131,9 +131,13 @@ export function telegramReply(
       // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
       // frame). If Telegram returns ok WITHOUT a message_id (proxy / odd API base / unparseable body) we
       // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
+      //
+      // NOT droppable, unlike the frames above: this send happens once and every later frame depends on
+      // its id, so dropping it costs the whole turn's live preview rather than one redrawable view. The
+      // asymmetry is Telegram's own — it rate-limits edits to a single message far tighter than sends.
       if (previewSent) return;
       previewSent = true;
-      messageId = await sendMessage(api, botToken, target, text, { html: false, retries: 0 });
+      messageId = await sendMessage(api, botToken, target, text, { html: false });
       if (messageId === undefined)
         throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
     };
