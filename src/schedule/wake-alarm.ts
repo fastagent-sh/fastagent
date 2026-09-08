@@ -199,7 +199,9 @@ export function createWakeAlarmSink(options: {
         Effect.acquireUseRelease(
           Effect.sync(beginWork),
           () =>
-            reconcile(stateRoot).pipe(
+            // Claim notification precedes scheduler admission; retain busy ownership through that handoff.
+            Effect.yieldNow.pipe(
+              Effect.andThen(reconcile(stateRoot)),
               Effect.catchCause((cause) =>
                 Effect.sync(() => {
                   // Store/clock faults cannot be repaired by another POST. A new mutation may retry the mirror.

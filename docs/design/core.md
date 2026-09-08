@@ -752,6 +752,8 @@ if the service closes while restore is pending. `StateSync` keeps its ordinary P
 upload fiber owns busy accounting across URL refresh, filesystem packing, and PUT; background saves
 coalesce, while each checkpoint joins prior work and starts a fresh upload. An older refresh response
 cannot replace a newer envelope's URL pair. The upload's own idle edge never queues another snapshot.
+The alarm sink counts admission synchronously and yields before reconciling, so an empty alarm set
+cannot emit idle between a wake's claim notification and the scheduler's execution admission.
 
 AgentCore IO has a typed failure channel with separate boundary policies: restore/checkpoint reject,
 background save reports failure, and alarm reconciliation retains its bounded retry policy. PUT and

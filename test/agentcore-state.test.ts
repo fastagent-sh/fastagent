@@ -13,6 +13,9 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { activeWork, onIdle } from "../src/channels/busy.ts";
 import { log } from "../src/log.ts";
+import { createScheduler } from "../src/schedule/scheduler.ts";
+import { createWakeAlarmSink } from "../src/schedule/wake-alarm.ts";
+import { setWakeupsSink } from "../src/schedule/wakeups.ts";
 import {
   MAX_SNAPSHOT_BYTES,
   SNAPSHOT_VERSION,
@@ -157,6 +160,85 @@ describe("agentcore state snapshot", () => {
   });
 
   describe("sync lifecycle", () => {
+    it.each([false, true])(
+      "snapshots the settled wake after a synchronous alarm pass (future wake=%s)",
+      async (future) => {
+        const now = new Date("2026-07-28T10:00:00Z");
+        const pending = [{ id: "due", session: "s", prompt: "go", fireAt: now.toISOString() }];
+        if (future) pending.push({ id: "future", session: "s", prompt: "later", fireAt: "2026-07-28T11:00:00Z" });
+        const before = '{"role":"user","content":"go"}\n';
+        const after = `${before}{"role":"assistant","content":"done"}\n`;
+        const local = await stateRoot({ "sessions/s.jsonl": before, "schedule/wakeups.json": JSON.stringify(pending) });
+        const entered = Promise.withResolvers<void>();
+        const finishTurn = Promise.withResolvers<void>();
+        const putStarted = Promise.withResolvers<void>();
+        const finishPut = Promise.withResolvers<void>();
+        const { impl, calls } = fakeFetch(async (_url, init) => {
+          if (init?.method === "PUT") {
+            putStarted.resolve();
+            await finishPut.promise;
+            return new Response(null);
+          }
+          return new Response(null, { status: 404 });
+        });
+        const sync = createStateSync({ stateRoot: local, fetchImpl: impl });
+        sync.use(urls);
+        await sync.ready();
+        const alarmFetch = vi.fn<typeof fetch>();
+        setWakeupsSink(Effect.runSync(createWakeAlarmSink({ secret: "s", fetchImpl: alarmFetch, now: () => now })));
+        const idle = vi.fn(() => sync.save());
+        const off = onIdle(idle);
+        const scheduler = Effect.runSync(
+          createScheduler({
+            stateRoot: local,
+            schedules: [],
+            now: () => now,
+            agent: {
+              async *invoke() {
+                entered.resolve();
+                await finishTurn.promise;
+                await writeFile(join(local, "sessions/s.jsonl"), after);
+                yield { type: "text", delta: "done" };
+                yield { type: "completed" };
+              },
+            },
+          }),
+        );
+        try {
+          scheduler.start();
+          await entered.promise;
+          // If admission emitted idle, freeze that already-packed upload until the turn has settled.
+          if (idle.mock.calls.length > 0) await putStarted.promise;
+          scheduler.stop();
+          finishTurn.resolve();
+          const auditPath = join(local, "schedule/runs.jsonl");
+          await vi.waitFor(async () =>
+            expect(JSON.parse(await readFile(auditPath, "utf8"))).toMatchObject({
+              outcome: "completed",
+              reply: "done",
+            }),
+          );
+          await putStarted.promise;
+          finishPut.resolve();
+          await sync.flush();
+          const puts = calls.filter((c) => c.method === "PUT");
+          expect(puts).toHaveLength(1);
+          expect(JSON.parse(gunzipSync(puts[0]!.body!).toString()).files).toMatchObject({
+            "sessions/s.jsonl": Buffer.from(after).toString("base64"),
+            "schedule/runs.jsonl": (await readFile(auditPath)).toString("base64"),
+          });
+          expect(alarmFetch).not.toHaveBeenCalled();
+        } finally {
+          off();
+          setWakeupsSink(undefined);
+          scheduler.stop();
+          finishTurn.resolve();
+          finishPut.resolve();
+          await sync.flush();
+        }
+      },
+    );
+
     it("does not overwrite newer envelope URLs with a late refresh response", async () => {
       const local = await stateRoot();
       const entered = Promise.withResolvers<void>();
