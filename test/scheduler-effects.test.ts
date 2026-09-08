@@ -53,11 +53,14 @@ it.each(["cron", "one-shot", "recurring"] as const)(
         "-e",
         `
     import * as Effect from "effect/Effect";
-    import { createScheduler } from ${JSON.stringify(new URL("../src/schedule/scheduler.ts", import.meta.url).href)};
+    const { createScheduler } = await import(process.argv[1]);
+    const { stateRoot, schedules, now } = JSON.parse(process.argv[2]);
     process.on("message", () => {});
     const agent = { async *invoke() { process.send("running"); await new Promise(() => {}); } };
-    Effect.runSync(createScheduler({ agent, stateRoot: ${JSON.stringify(stateRoot)}, schedules: ${JSON.stringify(schedules)}, now: () => new Date(${JSON.stringify(NOW.toISOString())}) })).start();
+    Effect.runSync(createScheduler({ agent, stateRoot, schedules, now: () => new Date(now) })).start();
   `,
+        new URL("../src/schedule/scheduler.ts", import.meta.url).href,
+        JSON.stringify({ stateRoot, schedules, now: NOW.toISOString() }),
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     );
