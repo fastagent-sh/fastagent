@@ -12,6 +12,7 @@ import {
   FORWARDER_FILE,
   TEMPLATE_FILE,
   agentcoreName,
+  ingressSessionId,
   isGeneratedAgentcoreTemplate,
   planAgentcoreDeploy,
 } from "../../../deploy/agentcore/plan.ts";
@@ -169,7 +170,7 @@ async function runDeployAgentcore(
       {
         name,
         templatePath: `${agentPrefix}${TEMPLATE_FILE}`,
-        dockerfilePath: agentPrefix ? `${agentPrefix}Dockerfile` : undefined,
+        dockerfilePath: `${agentPrefix}Dockerfile`,
         tag: new Date()
           .toISOString()
           .replace(/[-:.TZ]/g, "")
@@ -205,7 +206,7 @@ async function runDeployAgentcore(
     }
     console.error(
       `[fastagent] invoke: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
-        `  --runtime-session-id "my-conversation-000000000000000000" \\\n` +
+        `  --runtime-session-id "${ingressSessionId(name)}" \\\n` +
         `  --payload '{"kind":"invoke","session":"cli","text":"hello"}' --cli-binary-format raw-in-base64-out /dev/stdout`,
     );
   } finally {

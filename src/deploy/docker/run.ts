@@ -39,7 +39,9 @@ export type DockerRunOutcome =
  *  answered. Injected so the driver stays free of channel specifics — and so a test can fail one. */
 type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
 
-export type DockerHealthProbe = (healthUrl: string) => Promise<boolean>;
+/** `stillStarting` answers whether the agent container is still up; a probe that ignores it simply
+ *  waits out its whole budget. */
+export type DockerHealthProbe = (healthUrl: string, stillStarting: () => Promise<boolean>) => Promise<boolean>;
 /** A published Quick Tunnel URL, and whether its tunnel ever reported an edge connection. Both, because
  *  a URL that never connected still gets served (retrying meets the same network) and the operator has
  *  to be told which of the two they are looking at. */
@@ -63,7 +65,12 @@ export function localUrlFromComposePort(stdout: string): string | undefined {
   return port ? `http://127.0.0.1:${port}` : undefined;
 }
 
-const defaultHealthProbe: DockerHealthProbe = (healthUrl) => waitForHealth(healthUrl, 30_000, 500);
+/** The FIRST boot seeds the whole workspace onto the volume (the image's `node_modules` included)
+ *  before it binds a port, so this budget covers a copy on a slow Docker Desktop disk, not a listen.
+ *  Too short and a successful deploy gates before webhook registration; a container that DIED does
+ *  not spend it, which is what `stillStarting` is for. */
+const defaultHealthProbe: DockerHealthProbe = (healthUrl, stillStarting) =>
+  waitForHealth(healthUrl, 180_000, 500, stillStarting);
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -202,7 +209,17 @@ export async function deployDockerRun(
     log("agent is running (no host-published port found; using the Compose ingress readiness floor)");
   } else {
     const healthUrl = `${url}/health`;
-    if (!(await healthProbe(healthUrl))) {
+    // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a
+    // second, and a `compose ps` per poll would cost more than the wait it shortens — while a docker
+    // hiccup must not cut a boot that is progressing. The probe stays the authority on success.
+    let lastCheck = Date.now();
+    const stillStarting = async (): Promise<boolean> => {
+      if (Date.now() - lastCheck < 5_000) return true;
+      lastCheck = Date.now();
+      const ps = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true, env });
+      return ps.code !== 0 || ps.stdout.split(/\s+/).includes("agent");
+    };
+    if (!(await healthProbe(healthUrl, stillStarting))) {
       return gate(
         `agent did not become healthy at ${healthUrl} — inspect \`docker compose -f ${plan.composeFile} logs agent\``,
       );

@@ -1,8 +1,10 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts } from "../src/deploy/container.ts";
+import { piBasePrompt } from "../src/engines/pi/create.ts";
 
 const input = {
+  releaseId: "release-one",
   hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
@@ -11,6 +13,10 @@ const input = {
 } as const;
 
 describe("deploy/container: shared Docker context", () => {
+  it("requires a safe nested definition", () => {
+    expect(() => containerArtifacts({ ...input, agentPrefix: "" })).toThrow("nested agent");
+    expect(() => containerArtifacts({ ...input, agentPrefix: "../agent/" })).toThrow("manifest");
+  });
   it("keeps tracked secrets scaffolds without shipping credentials or state", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
@@ -48,5 +54,37 @@ describe("deploy/container: shared Docker context", () => {
     expect(tracked.filter((path) => !ships(path))).toEqual([]);
     expect(sensitive.filter(ships)).toEqual([]);
     expect(ships(".git/HEAD")).toBe(true);
+  });
+
+  it("gives each image a stable release and describes its persistent workspace", () => {
+    const values = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }]
+      .map((i) => containerArtifacts(i).find((artifact) => artifact.path === "fastagent/Dockerfile")!.content)
+      .map((content) => /^ENV FASTAGENT_RELEASE_FILE=(\S+)$/m.exec(content)?.[1]);
+    expect(values).toEqual(Array(3).fill("/app/fastagent/fastagent.release.json"));
+    const manifest = containerArtifacts(input).find((a) => a.path.endsWith("fastagent.release.json"))!;
+    expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "fastagent" });
+    const before = process.env.FASTAGENT_RELEASE_FILE;
+    const beforeAgentcore = process.env.FASTAGENT_AGENTCORE;
+    try {
+      delete process.env.FASTAGENT_RELEASE_FILE;
+      delete process.env.FASTAGENT_AGENTCORE;
+      expect(piBasePrompt()).not.toContain("Your workspace survives");
+      process.env.FASTAGENT_RELEASE_FILE = values[0];
+      expect(piBasePrompt()).toContain("Your workspace survives restarts and deployments");
+      expect(piBasePrompt()).toContain("replaces your definition directory");
+      // The host whose storage a deploy RESETS must not be told that work outside the definition
+      // survives one — that would name a location its next deploy erases.
+      process.env.FASTAGENT_AGENTCORE = "1";
+      expect(piBasePrompt()).not.toContain("survives restarts and deployments");
+      expect(piBasePrompt()).toContain("resets this host's storage entirely");
+    } finally {
+      for (const [key, value] of [
+        ["FASTAGENT_RELEASE_FILE", before],
+        ["FASTAGENT_AGENTCORE", beforeAgentcore],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

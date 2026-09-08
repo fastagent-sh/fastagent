@@ -21,7 +21,8 @@ function snippet(file: string): string {
 it("the agent development guide's copied files typecheck, run, and reject a mistyped helper call", async () => {
   const workspace = await realpath(await mkdtemp(join(tmpdir(), "fa-ai-start-")));
   const agentDir = join(workspace, "fastagent");
-  const node = (args: string[], cwd = workspace) => exec(process.execPath, args, { cwd, timeout: 25_000 });
+  // Per-process, so a hung step fails naming its own command instead of the whole test.
+  const node = (args: string[], cwd = workspace) => exec(process.execPath, args, { cwd, timeout: 60_000 });
   const cli = (args: string[]) => node([join(root, "src/cli.ts"), ...args]);
   try {
     await cli(["init", ".", "--no-install"]);
@@ -84,4 +85,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
-});
+  // Its OWN ceiling: seven subprocesses, two of them full `tsc` runs — ~14s idle here, which leaves
+  // the global 30s no room for contention (a loaded dev machine and a few-core CI runner are the
+  // same case). CPU-bound work scales with the load; the timeout is what absorbs it (vitest.config.ts).
+}, 120_000);

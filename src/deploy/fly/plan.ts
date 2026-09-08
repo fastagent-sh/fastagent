@@ -9,7 +9,7 @@
  * default a coding agent (or you) runs flyctl from that runbook; `deploy fly --run` drives it from the
  * CLI instead. This module stays pure either way — it produces the plan, never runs flyctl. The runbook
  * is a FIRST-deploy sequence: `apps`/`volumes create` are one-time (marked so — re-running would make a
- * second volume, the state split it warns against); a redeploy is `fly deploy` alone.
+ * second volume, splitting the persistent workspace). Each definition release needs a fresh manifest.
  *
  * autostop = "suspend": the machine snapshots and suspends when idle (Fly Proxy sees inbound load 0),
  * resumes on the next webhook in ~hundreds of ms. A long turn interrupted by an idle-suspend whose
@@ -102,7 +102,7 @@ ${min}
 
 [mounts]
   source = "data"
-  destination = "/data"            # .state + .secrets — persists across stop/suspend/redeploy
+  destination = "/data"            # workspace, state and credentials survive stop/suspend/redeploy
 
 [[vm]]
   size = "shared-cpu-1x"
@@ -159,7 +159,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in fly.toml and`,
     `# re-run \`fastagent deploy fly\` — the runbook follows fly.toml's app name.`,
     `fly apps create ${appName}`,
-    `# volume persists /data/.state (sessions, channel state) + /data/.secrets (seeded auth) across stop/suspend/redeploy.`,
+    `# The volume persists the workspace, state and credentials across stop/suspend/redeploy.`,
     `# <region> MUST equal primary_region in fly.toml (a volume in another region can't mount) — fly.toml`,
     `# is the single source for the region; skip this if the volume exists (fly volumes list --app ${appName}):`,
     `fly volumes create data --app ${appName} --region <region> --size 1`,
@@ -191,30 +191,19 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   runbook.push(
     ``,
     `# The build context is the WORKSPACE ROOT (the whole directory is baked as the agent's cwd).`,
-    ...(input.agentPrefix
-      ? [`# The config/Dockerfile live under ${input.agentPrefix} so they never collide with the workspace's own.`]
-      : []),
-    `# Run this from ${input.agentPrefix ? "the workspace root" : "this directory"}:`,
+    `# The config/Dockerfile live under ${input.agentPrefix} so they never collide with the workspace's own.`,
+    `# Before a new definition release, run \`fastagent deploy fly\` to refresh the release manifest.`,
+    `# Run this from the workspace root:`,
     deployCmd,
   );
-  if (input.shipsGit) {
-    runbook.push(
-      ``,
-      `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
-      `# by the agent itself: .git ships in the image (see .dockerignore) and git is baked in, so the agent`,
-      `# can pull to freshen content and commit/push its work back (creds ride config.deploy.secrets; the`,
-      `# POLICY — push vs PR, identity — lives in persona.md). CAVEAT: whether .git survives the upload is`,
-      `# host-CLI-dependent — verify \`git status\` on the box; if missing, have the agent clone instead.`,
-      `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
-    );
-  } else {
-    runbook.push(
-      ``,
-      `# The image is a WYSIWYG snapshot of this directory. No .git here, so no history ships and the`,
-      `# generated image does not install git — changes on the box are ephemeral and never survive a`,
-      `# redeploy. If the agent should clone/push repos as part of its work, add deploy: { apt: ["git"] }.`,
-    );
-  }
+  runbook.push(
+    ``,
+    `# The volume keeps /data/base (including uncommitted work), .state and .secrets across restarts and deploys.`,
+    `# Each generated release replaces only /data/base/${input.agentPrefix}; other workspace files are initialized once.`,
+    input.shipsGit
+      ? `# Git is available for optional collaboration. Verify uploaded history with \`git status\`; clone if the host stripped it.`
+      : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
+  );
 
   // Model-auth guidance: an env key becomes a secret above. Otherwise the plan can't read the local
   // credential's VALUE to set as a secret — true for OAuth AND a stored API key (both are

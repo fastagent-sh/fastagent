@@ -97,30 +97,26 @@ src/
 │   │                     # to swap. The types stay pure Fetch.
 │   ├── agentcore-service.ts # the AgentCore SERVING assembly — same product as service.ts, built
 │   │                     # differently because the host is: the adapter is the surface, channels are
-│   │                     # discovered LAZILY (the state mount at boot is pre-restore, so eager
-│   │                     # discovery would cache that emptiness and clobber the restore), the clock
+│   │                     # discovered on trusted ingress. Runtime filesystems appear ON INVOCATION, so the
+│   │                     # process opener defers the WHOLE definition until the first envelope. The clock
 │   │                     # is external, resident connections cannot survive scale-to-zero. Returns an
 │   │                     # AgentService, so `start` picks an assembly once and everything after is
 │   │                     # common. Owns nothing process-global: the wake sink stays with the entry.
 │   ├── agentcore.ts          # the RUNTIME adapter that assembly serves: AgentCore gives a container two
 │   │                     # paths (POST /invocations, GET /ping) and no public URL, so every trigger arrives
-│   │                     # as an ENVELOPE (webhook | schedule-fire | invoke | wake-poke | checkpoint | probe)
+│   │                     # as an ENVELOPE (webhook | schedule-fire | invoke | wake-poke | probe)
 │   │                     # and the channel's real HTTP status rides INSIDE a transport-200 reply. The
 │   │                     # authentication boundary is here: InvokeAgentRuntime is an ordinary IAM action, so
 │   │                     # only a shared-secret envelope is the forwarder's; a public one runs `invoke` alone.
 │   ├── agentcore-protocol.ts # THE WIRE between the forwarder Lambda and the container, in one place: the
-│   │                     # envelope union, the webhook reply, the snapshot URL pair, the wake-alarm request,
+│   │                     # envelope union, the webhook reply, the wake-alarm request,
 │   │                     # the reserved paths. The forwarder (deploy/agentcore/forwarder.js) is JavaScript
 │   │                     # and cannot import it, so agentcore-forwarder.test.ts pins its literals to these
 │   ├── agentcore-effects.ts  # typed host IO + abort-and-join request deadlines; request/background error policies stay with callers
-│   ├── agentcore-state.ts    # cross-deploy durability: the platform wipes the state mount on every version
-│   │                     # update, so the root is restored from / pushed to an S3 snapshot via presigned URLs
-│   │                     # the forwarder mints per envelope; cached restore + owned/coalesced upload fibers and fresh checkpoints
 │   ├── agentcore-limits.ts   # the HOST's body ceilings, computed once (a Function URL caps at 6 MB, and the
 │   │                     # body rides base64 inside a JSON envelope) — deploy states it at plan time
-│   ├── busy.ts               # process-wide in-flight work counter + the 0-in-flight EDGE. Webhook channels ACK
-│   │                     # fast and finish the turn in the background, so "is this process busy?" is NOT
-│   │                     # derivable from open requests — /ping (HealthyBusy) and the state snapshot both read it
+│   ├── busy.ts               # process-wide background work counter read by /ping (HealthyBusy).
+│   │                     # Webhook ACKs do not mean the turn has finished.
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
 │   │                     # serve.ts's job — this file knows only the contract and one stream's shape
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
@@ -225,7 +221,12 @@ src/
 │   │                     # drifted. Consumed by every host AND by the serving path (src/tunnel.ts)
 │   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
-│   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
+│   ├── container.ts         # portable image + ignore files + release manifest (host-neutral)
+│   ├── workspace.ts         # shared deployed lifecycle: assert the storage is MOUNTED (an unmounted dir
+│   │                        # must never look like a new disk), one process lease, recoverable definition
+│   │                        # replacement. base/ is cwd; .state/ and .secrets/ stay outside the definition.
+│   │                        # start loads the service from the workspace's OWN package so tools and engine
+│   │                        # share one runtime module instance (one AsyncLocalStorage).
 │   ├── secrets.ts           # BOTH directions of the credential carry: required-secret NAMES (runbook),
 │   │                     # assembleSecrets VALUES (--run), and the boot-side authSeedBytes/collectAuthSeed
 │   │                     # the container reads them back with. The read side lived in fly/run.ts, which
@@ -236,7 +237,8 @@ src/
 │   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
 │   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js }  # AWS Bedrock AgentCore: ONE CloudFormation stack (runtime +
 │                         # forwarder Lambda for webhooks + EventBridge rules for schedules). No public URL and no
-│                         # resident process — the two facts every difference in channels/agentcore*.ts follows from.
+│                         # resident process — and no volume: managed SessionStorage is wiped on every deploy,
+│                         # which this host STATES rather than engineers around (docs/design/core.md).
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
@@ -324,7 +326,7 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # check that the template parses)
                              # plus a REAL stack + ECR repo + S3 bucket provisioned and destroyed
                              # (agentcore-deploy — no public URL exists, so it proves the deployment
-                             # works through InvokeAgentRuntime; teardown is FOUR places because the
+                             # works through InvokeAgentRuntime; teardown is THREE places because the
                              # bucket, repo and runtime-created wake alarms all live outside the stack
                              # on purpose, and it is ONE shared function in test/live/env.ts because a
                              # second copy of cleanup code drifts where nobody looks), and an agent
@@ -359,7 +361,7 @@ test/                        # vitest; faux models by default + reusable SPEC co
                              # file next door. Fly and Railway have one topology whatever the definition
                              # says; AgentCore's is a FUNCTION of it (`needsForwarder` — a webhook
                              # channel, a schedule, or selfSchedule — decides whether a forwarder, a
-                             # Function URL, EventBridge rules and the state bucket exist at all). The
+                             # Function URL, EventBridge rules and the artifact bucket exist at all). The
                              # three copied lines of persona+config landed on the small side, so both
                              # agentcore probes spent a release describing a deployment neither
                              # performed: 98 lines of template validated while the comment claimed 900,
@@ -392,15 +394,6 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **A session id belongs to the Caller.** `scope.session` is opaque and arbitrary — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`. What an engine needs to store it (pi rejects all of those as record names, so they are encoded) is storage detail and must not leak back out: a tool asking which conversation it is in gets the id the channel minted, not the record's name.
 - **The run plane and the observation plane read the same state, through the same function.** They answer different questions about one session — what will execute, and what to report — so deriving them separately is how they come to disagree. The concrete failures this rule is made of: a turn running on assembly defaults while `state()` reported the recorded override, and one plane refusing a record with a cut parent chain while the other silently ran on the truncated path.
 - **A convention with four enforcers has none.** When several call sites must each remember to do a thing, the thing belongs in a function they all call, and that function must REPAIR rather than trust the first writer. `.secrets/` was created by four paths and only one passed `0700` — and `mkdir`'s mode is a no-op on an existing directory, so the careful one (login, which runs last) never applied it: every scaffolded agent held its credentials in a 0755 directory. `ensureSecretsDir` (paths.ts) is that function; `writeFileAtomic` and `sessionToolActivation` are the same lesson from the same review.
-
-### Reviewing this repo
-
-Read by RISK SHAPE, not by directory. A five-round sweep of `engines/pi/` → `deploy/agentcore/` → `channels/` in listed order produced three bugs, then one, then zero, while missing `auth.ts`, `start.ts` and `scaffold/` entirely — the mode bug above sat in two of them. The shapes that actually carried defects here, all greppable in minutes across the whole tree:
-
-1. **One concept, several implementations.** Two copies that differ by a line (`sessionToolActivation`), N gates where one is careful and the rest are not (the forwarder's three secrets), a convention every caller re-states (the secrets mode). Same-named functions across `channels/*/` are usually NOT this — those are per-platform protocol differences.
-2. **Secret comparison and secret writing.** Every inbound check constant-time; every credential written whole-file with its mode applied before the content is reachable.
-3. **Assumptions about a dependency's undocumented behaviour.** Read the dependency's implementation, not its types or its docs — `firstKeptEntryId` pointing at a metadata entry and pi's setters being synchronous were both found that way, and both had been guessed wrong from the docs.
-4. **A comment that describes code that no longer exists.** The dangerous ones assert a constraint (`MUST stay under 4096 bytes`) or a mechanism (`filters the log stream prefix`) — they argue the next person into the wrong change.
 
 ## GitHub workflow (summary)
 

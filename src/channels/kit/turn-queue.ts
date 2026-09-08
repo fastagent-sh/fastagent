@@ -56,7 +56,7 @@ export function createTurnQueue<T extends { session: string }>(opts: {
     idle: () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          // A finishing turn or idle listener may enqueue more work.
+          // A finishing turn may enqueue more work.
           while (chains.size > 0) yield* Fiber.awaitAll([...chains.values()]);
         }),
       ),

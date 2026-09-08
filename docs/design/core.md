@@ -680,19 +680,26 @@ unsupported.
 wiring, required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one
 app service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
-Quick Tunnel URL and registers webhooks. Deploy has ONE semantic — bake the
-workspace as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Every artifact
-(Dockerfile, fly.toml, compose, railway.json) sits under ONE derived value, the agent prefix: the agent
-directory's name plus a slash when it sits inside the workspace, `""` when the agent IS the workspace.
-When they differ, the single write outside the agent is the workspace-root `.dockerignore` the host CLIs'
-context packers require (kept if the workspace owns one — when they are the same directory that file is
-the agent's own artifact and is
-refreshed like the rest; preflight then ASKS that file — through the `ignore` matcher, with dockerignore's
-root-anchoring applied — whether it would drop the agent dir or ship `fastagent/.secrets/auth.json`:
-either gates `--run`, else warn). `.git`
-ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
-deploy machinery — the git binary is baked in exactly when the workspace ships a `.git`; a non-git
-workspace adds it via `config.deploy.apt`.
+Quick Tunnel URL and registers webhooks. Deploy requires a nested definition. The image seeds the
+persistent workspace once; later releases replace only the definition subtree. Artifacts sit under the
+agent prefix, with the workspace-root `.dockerignore` required by host context packers. Preflight
+checks that a kept ignore file ships the definition and excludes credentials. Git history ships when
+the host packer permits it, and the image installs Git when the workspace contains `.git`. Git is an
+optional collaboration mechanism; storage preserves unfinished work without commits or pushes.
+
+`deploy/workspace.ts` owns the shared lifecycle. Storage contains `base/` (cwd), `.state/`, `.secrets/`
+and `.deployment/`. A generated release manifest selects the definition. A process-lifetime lease
+precedes initialization; staged trees and a pending journal make definition replacement recoverable.
+The same release preserves agent edits; a new one removes obsolete definition files while keeping
+everything outside the definition. Credentials seed only when absent. Nothing is mounted or unmounted
+by fastagent: the host's volume is the only storage, and download caches go to `/tmp` through the
+image's package-manager environment.
+
+`start` loads the actual service from the persistent definition's installed package. Its tools and
+session context must use the same runtime module instance. The image's runtime only bootstraps storage;
+reusing its engine after copying dependencies would give tools a different AsyncLocalStorage instance.
+Dependency installation stays marked until it succeeds; an interrupted install may already have created
+the CLI link, so link existence alone cannot authorize reuse.
 
 **AgentCore** (AWS Bedrock AgentCore Runtime) differs from the resident-box hosts in kind: the platform
 has no public URL (ingress is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute
@@ -720,76 +727,52 @@ the Lambda group. It applies no stream filter: AgentCore names streams `YYYY/MM/
 so the marker is an infix after the UTC date path and a `--log-stream-name-prefix` match is always empty. It changes neither
 log content nor `FASTAGENT_LOG_LEVEL` — it is discovery plus `aws logs tail`, not another logger.
 
-**State durability is an S3 snapshot, not the mount.** The platform's SessionStorage (`/mnt/state`) is
-reset on every runtime VERSION UPDATE — i.e. on every deploy — and after 14 idle days, so it is a local
-disk, not the source of truth (a real deployment proved this: the truncation point in a live chat matched
-the deploy timestamp exactly). `channels/agentcore-state.ts` restores the state root from one gzipped
-JSON object on the first ingress envelope and pushes a coalesced snapshot on the 0-in-flight edge
-(`busy.ts` `onIdle`). The container holds NO AWS credentials (verified on a live box), so the forwarder
-mints SigV4-presigned GET/PUT URLs and rides them on every envelope — keeping the container AWS-SDK-free
-and credential-free. Failure policy is fail-visible: a snapshot that exists but cannot be restored 503s
-the request (serving an empty agent would then overwrite the good copy with that emptiness), while a 404
-is first boot. Channel construction is deferred to that same moment (`start` hands the adapter a LAZY
-channel surface, resolved on the first trusted ingress — webhook, schedule fire, wake poke, or probe —
-after `ready()`): channels load their state files and replay durable turn intent at construction, so
-building them at boot — against the pre-restore mount — would cache emptiness (thread participation,
-delivery dedup, pending turns) and then clobber the restored files with it. The outcome is cached
-EITHER WAY, one activation per process: construction has side effects (healthy channels start and
-replay before another module's failure is reported) and no cleanup contract, so a retry could replay
-the same recovered turn concurrently — the retry boundary is a fresh session. A construction failure
-fails webhook/wake-poke requests (503) but not a schedule fire (cron does not consume channels; the
-error is logged). Verification moved to deploy time — the boot-time `failStartup` this host cannot
-have: `deploy agentcore --run` gates on a failed ingress-session stop (the probe must not "verify"
-the previous image), then drives the forwarder's reserved `/__fastagent/probe` path (answers on every
-forwarder topology; schedule-only URLs refuse ordinary public traffic), which relays a trusted
-`probe` envelope and passes back the runtime's transport-200 structured verdict `{ ok, error? }` —
-transport-200 because the ordinary webhook relay folds a non-200 into an opaque 502, which would
-strip exactly these diagnostics.
+**AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `base/`,
+`.state/`, `.secrets/` layout applies, on the platform's own mount: it survives compute stop/resume
+(so an idle-reclaimed agent resumes with its memory) and AWS wipes it on every runtime version update
+— i.e. every deploy — and after 14 idle days. That is this host's stated semantics, not a gap: AWS's
+only cross-deploy filesystems are EFS and S3 Files, both VPC-only, and VPC mode costs a NAT gateway
+for model/channel egress (~$33/mo standing) plus operator-owned network resources. The previous design
+bought cross-deploy state with an S3 snapshot of the state root instead, and paid for it in a presign
+path in the forwarder, a refresh endpoint, a `checkpoint` envelope and a save-on-idle edge — roughly
+700 lines whose failure modes were invisible until a deploy. A host without a volume promises no
+volume; Fly and Railway are where cross-deploy memory lives.
 
-Restore and post-restore/channel activation outcomes are cached Effects, including failures. Static
-schedule definitions load at mount time; local wake polling starts only after restore and stays stopped
-if the service closes while restore is pending. `StateSync` keeps its ordinary Promise methods. Its
-upload fiber owns busy accounting across URL refresh, filesystem packing, and PUT; background saves
-coalesce, while each checkpoint joins prior work and starts a fresh upload. An older refresh response
-cannot replace a newer envelope's URL pair. The upload's own idle edge never queues another snapshot.
-The alarm sink counts admission synchronously and yields before reconciling, so an empty alarm set
-cannot emit idle between a wake's claim notification and the scheduler's execution admission.
+Credentials need no extra rule: `maybeSeedAuth` is absent-only, so a restart within a release keeps
+what the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Deploying IS re-authenticating.
+The caveat is OAuth's, not ours: a refresh token is single-use and shared with the builder machine, so
+the box can lose model access between deploys and the fix is another deploy.
 
-AgentCore IO has a typed failure channel with separate boundary policies: restore/checkpoint reject,
-background save reports failure, and alarm reconciliation retains its bounded retry policy. PUT and
-alarm deadlines use the captured Effect clock, abort the actual request, and join its settlement before
-releasing ownership or retrying. Non-abortable filesystem/activation ports are joined. A transport
-ignoring abort may delay release; a timeout does not make unfinished IO safe to abandon. Service close
-still stops polling and detaches listeners without draining accepted turns, uploads, or the process-owned
-alarm sink. Snapshot structure and persisted alarm URLs are validated; malformed data is diagnosed,
-with only a missing URL file treated as not yet configured.
+Runtime filesystems are available on invocation, so `deferAgentcoreService` exposes `/ping` before any
+persistent definition or credentials are opened. Initialization runs in two stages, split by what a
+retry would cost. Taking the workspace (`prepareStartWorkspace`: storage check, release, machinery
+paths) starts nothing and releases its lease before failing, so a failed attempt is retried by the
+next envelope: an unmounted volume and a lease the outgoing session still holds clear on their own,
+and caching them would make a healthy microVM refuse every envelope until it is reclaimed. Assembling
+the service (`openPreparedWorkspace`) mounts channels and starts the scheduler, so both its outcomes
+are cached; a second attempt would run two schedulers over one claim state. Concurrent envelopes share
+one attempt at each stage. Mount or initialization failures cannot start an empty agent.
+The process retains its workspace lease until exit, including failed activation and shutdown, since
+service close does not drain every background writer. Only the OPEN is caught there — a failure inside
+the opened service's handler is its own, and reporting it as an initialization failure would also read
+a body the handler already consumed. `flock` acquires the parent's open-file-description
+lock through an inherited fd. The kernel retains it through process pauses and releases it on exit;
+startup never infers a dead writer from a missing JavaScript heartbeat.
 
-**Credentials ride that snapshot, so the secrets dir is INSIDE the state root** (`/mnt/state/.secrets`,
-`deploy/agentcore/plan.ts` `SECRETS_DIR`) — the one place AgentCore departs from the sibling layout the
-volume-backed hosts use (`/data/.state` + `/data/.secrets`). There the persistence boundary is the mount
-point; here the mount is wiped every deploy and the boundary is `packStateRoot(stateRoot)`, which copies
-a single tree. A sibling secrets dir would therefore sit inside the mount but outside the snapshot. The
-ordering is what makes this work: boot seeds `auth.json` absent-only from `FASTAGENT_AUTH_SEED`, the
-first envelope's restore overwrites it with the snapshot's copy, and only then can a model call happen
-(the auth store re-reads the file per request, so no restart is needed). The snapshot's copy must win —
-an OAuth refresh token is single-use, so the seed is the DEPLOY-TIME copy and the box's rotated one is
-the only valid credential; a deployment that keeps re-seeding loses model access once that token is
-spent. The bucket is consequently credential storage (public access blocked + versioning, converged on
-every deploy).
-Only the INGRESS session is snapshotted: a direct-invoke session runs in its own storage, which the
-platform wipes on a version update, so cross-deploy memory is a property of the ingress path and the
-docs say so. `--run` sends a `checkpoint` envelope before `stop-runtime-session` — the stop cuts an
-in-flight turn whose durable intent (written pre-ACK by every replaying channel) would otherwise sit
-only on the mount the version update erases, which is what makes replay real rather than aspirational.
-It protects a LIVE session; one already idle-reclaimed has nothing to lose, because its snapshot was
-written when work settled, before the reclaim. The reply reports whether a snapshot was actually
-written and `--run` prints that verbatim — a blanket "checkpointed" would be the only signal an
-operator has about an interrupted turn, saying the same thing whether or not anything happened.
-The bucket is created OUTSIDE the stack (like the ECR repo) so `delete-stack` cannot take the agent's
-memory with it; a durable MOUNT instead (EFS/S3 Files) requires VPC mode and therefore a NAT gateway for
-model/channel egress, which would replace pay-per-use with a fixed ~$33/mo floor. The same bucket hosts
-the forwarder's deployment package, whose key is content-hashed (the presigning pushed it past
-CloudFormation's 4096-byte inline cap; a hashed key is also what makes CloudFormation notice new code).
+`deploy agentcore --run` stops the fixed runtime session, then probes the new serving path through
+`/__fastagent/probe`. Authenticated initialization and channel failures use transport-200 structured
+verdicts `{ ok, error? }`, preserving their diagnostics through the forwarder. All entry points use the
+same runtime session id; the envelope session id selects the conversation. The S3 bucket contains only
+the content-hashed forwarder deployment package.
+
+AgentCore IO has a typed failure channel (`channels/agentcore-effects.ts`): activation and channel
+construction are cached Effects, failures included, and the alarm sink's deadlines use the captured
+Effect clock, abort the actual request and join its settlement before releasing ownership or retrying.
+Non-abortable filesystem ports are joined rather than abandoned; a transport ignoring abort may delay
+release, and a timeout does not make unfinished IO safe to leave running. The sink counts admission
+synchronously and yields before reconciling, so an empty alarm set cannot emit idle between a wake's
+claim notification and the scheduler's execution admission. A persisted alarm URL is validated: only a
+missing file reads as "not configured yet".
 
 A live session keeps its
 old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
@@ -800,10 +783,9 @@ path (shared secret), and the forwarder mirrors each into a self-deleting one-sh
 schedule that pokes it at the instant — waking the container, whose ordinary wake pump fires the due
 entry (a recurring wake re-arms itself through the same store-save → sink loop). The forwarder
 injects its own URL into every envelope, so nothing is circularly baked into the template. Structural
-limits, gated/warned/noted at deploy time: long-connection channels cannot run (the connection IS the
-ingress; nothing wakes a reclaimed session), and a wake set inside a direct-invoke session (its own
-per-session storage, not the ingress session's) has no alarm — it fires only while that session is
-awake.
+limits are explicit: long-connection channels cannot run because nothing can restore their ingress
+when compute is reclaimed. Wake-alarm reconciliation begins with a trusted forwarder envelope carrying
+the current callback URL; a public invoke cannot redirect that callback.
 
 ## 10. Current boundaries
 

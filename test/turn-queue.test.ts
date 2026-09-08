@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeWork, onIdle } from "../src/channels/busy.ts";
+import { activeWork } from "../src/channels/busy.ts";
 import { type TurnQueue, createTurnQueue } from "../src/channels/kit/turn-queue.ts";
 import { log } from "../src/log.ts";
 import { taskEffect } from "../src/channels/kit/tasks.ts";
@@ -62,25 +62,6 @@ describe("turn-queue", () => {
     }
     expect(order).toEqual(["1", "3", "cleanup", "2"]);
     expect(activeWork()).toBe(base);
-  });
-
-  it("an idle listener can enqueue another turn without losing its tail or busy count", async () => {
-    const base = activeWork();
-    const ran: string[] = [];
-    const queue = makeQueue(async (r) => {
-      ran.push(r.id);
-    });
-    const off = onIdle(() => {
-      if (ran.length === 1) queue.accept(rec("2"));
-    });
-    try {
-      queue.accept(rec("1"));
-      await queue.idle();
-      expect(ran).toEqual(["1", "2"]);
-      expect(activeWork()).toBe(base);
-    } finally {
-      off();
-    }
   });
 
   it("a scope cleanup defect is diagnosed and the FIFO still advances", async () => {

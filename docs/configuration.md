@@ -255,7 +255,12 @@ The agent carries two fastagent-managed machinery dirs, split by deploy lifecycl
   baked into an image. A deployed box gets values through the host's secret store, and its seeded
   (possibly rotated) `auth.json` also lives on the volume so refresh survives restarts.
 
-For deployments, point both at durable storage:
+Generated deployments also retain the workspace at `<persistent-root>/base/`. State and secrets are
+siblings of `base`, outside the release-managed definition. The root is `/data` on Docker, Fly and
+Railway, and `/mnt/data` on AgentCore (managed SessionStorage, which a deploy resets — see
+[Deploy](deploy.md#aws-bedrock-agentcore)). The generated image sets these paths automatically.
+
+For a manually configured service, point state and secrets at durable storage:
 
 ```bash
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start

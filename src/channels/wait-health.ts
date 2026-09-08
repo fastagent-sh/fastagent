@@ -14,7 +14,14 @@ import { setTimeout as sleep } from "node:timers/promises";
  * settled, connection refused) is a "keep waiting", not a failure — that IS the readiness signal. Each
  * probe has its own short timeout so one slow attempt can't eat the whole budget.
  */
-export async function waitForHealth(healthUrl: string, timeoutMs: number, intervalMs: number): Promise<boolean> {
+export async function waitForHealth(
+  healthUrl: string,
+  timeoutMs: number,
+  intervalMs: number,
+  /** Optional liveness answer from whoever runs the server. A budget long enough to absorb a slow
+   *  first boot is also how long a CRASHED server would be waited for, and it cannot come back. */
+  stillStarting?: () => Promise<boolean>,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
@@ -23,6 +30,7 @@ export async function waitForHealth(healthUrl: string, timeoutMs: number, interv
       /* not routable yet — keep polling until the deadline */
     }
     if (Date.now() >= deadline) return false;
+    if (stillStarting && !(await stillStarting())) return false;
     await sleep(intervalMs);
   }
 }

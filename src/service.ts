@@ -10,9 +10,8 @@
  * order right, and getting it wrong is silent: a plane that 404s while advertising itself, a
  * schedule that never fires.
  *
- * So the assembly lives here, and `dev`/`start` are callers. AgentCore is the one exception, and a
- * substantive one: its channels load lazily after a state-snapshot restore, so it cannot use an
- * assembly that discovers them eagerly (cli/commands/start.ts says so at the branch).
+ * `dev`/`start` call this assembly. AgentCore uses channels/agentcore-service.ts: runtime storage
+ * appears on invocation, channels activate on trusted ingress, and scheduling uses an external clock.
  */
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -209,42 +208,28 @@ export function mountSessionControl(
  * ONE load instead of re-discovering. `externalClock` (AgentCore) arms no resident cron timers.
  */
 export async function startSchedules(
-  ...args: Parameters<typeof prepareSchedules>
-): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
-  const scheduled = await prepareSchedules(...args);
-  scheduled.start();
-  return { schedules: scheduled.schedules, stop: scheduled.stop };
-}
-
-/** Load definitions without reading execution state; AgentCore starts polling only after restore. */
-export async function prepareSchedules(
   agentDir: string,
   agent: Agent,
   stateRoot: string,
   selfSchedule: boolean,
   options: { externalClock?: boolean } = {},
-): Promise<{ schedules: LoadedSchedule[]; start: () => void; stop: () => void }> {
+): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
   // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library
   // that calls process.exit takes a decision (degrade? retry? stop?) that belongs to its host. The
   // CLI catches at its own boundary.
   const { schedules, failures } = await loadSchedules(agentDir);
   reportModuleLoadFailures(failures);
-  if (schedules.length === 0 && !selfSchedule) return { schedules, start: () => {}, stop: () => {} };
+  if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
   const scheduler = Effect.runSync(
     createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
   );
-  return {
-    schedules,
-    start() {
-      scheduler.start();
-      if (schedules.length > 0) {
-        log.info(
-          `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
-        );
-      }
-    },
-    stop: () => scheduler.stop(),
-  };
+  scheduler.start();
+  if (schedules.length > 0) {
+    log.info(
+      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
+    );
+  }
+  return { schedules, stop: () => scheduler.stop() };
 }
 
 export interface AgentService {

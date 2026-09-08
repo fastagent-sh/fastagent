@@ -27,7 +27,7 @@ import {
   cfnParamName,
   forwarderSource,
   ingressSessionId,
-  stateBucketName,
+  deploymentBucketName,
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
 
@@ -36,8 +36,9 @@ export interface AgentcoreRunPlan {
   name: string;
   /** Template path relative to the run cwd (kit layout: `agent/agentcore.template.yaml`). */
   templatePath: string;
-  /** Dockerfile path for `-f` (kit layout only; the default context Dockerfile otherwise). */
-  dockerfilePath?: string;
+  /** Dockerfile path for `-f`. Always set: the artifacts live under the agent prefix, and the build
+   *  context is the workspace above it, so the default context Dockerfile is never the right one. */
+  dockerfilePath: string;
   /** Image tag for this deploy — the CALLER mints it unique (a timestamp): CloudFormation only rolls
    *  the runtime when the ImageUri value changes, so a reused tag would deploy nothing. */
   tag: string;
@@ -52,15 +53,16 @@ export interface AgentcoreRunPlan {
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /** What the stack contains — the plan's own reading, so this driver cannot disagree with the
-   *  template about whether a forwarder (and with it the state bucket and its parameters) exists. */
+   *  template about whether a forwarder (and its artifact bucket parameters) exists. */
   topology: AgentcoreTopology;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
-/** How long the post-deploy probe waits for the fresh session (image pull + microVM boot + snapshot
- *  restore + channel construction) before gating with the last answer. */
-const PROBE_TIMEOUT_MS = 120_000;
+/** Budget for image pull, storage initialization and channel construction — this one envelope is
+ *  where a first boot seeds the whole workspace (the image's `node_modules` included) onto
+ *  `/mnt/data`, the same copy docker's health probe budgets 180s for, plus the pull before it. */
+const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
 
 /**
@@ -148,7 +150,7 @@ export function paramsFileContent(
   forwarder?: { bucket: string; key: string },
 ): string {
   const params = [`ImageUri=${imageUri}`];
-  if (forwarder) params.push(`StateBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`);
+  if (forwarder) params.push(`ForwarderBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`);
   for (const [k, v] of Object.entries(secrets)) {
     if (k !== "FASTAGENT_AUTH_SEED") params.push(`${cfnParamName(k)}=${v}`);
   }
@@ -158,34 +160,6 @@ export function paramsFileContent(
     params.push(`${param}=${seed.slice(i * AUTH_SEED_CHUNK_SIZE, (i + 1) * AUTH_SEED_CHUNK_SIZE)}`);
   }
   return `${JSON.stringify(params)}\n`;
-}
-
-export interface CheckpointReply {
-  written: boolean;
-  reason?: string;
-}
-
-/** Parse the runtime's checkpoint acknowledgement without treating malformed output as success.
- *  With `/dev/stdout` as the outfile the CLI writes the body there and then its own metadata JSON to
- *  the same stream, so stdout holds two values; the container's reply is the one line before it. */
-export function parseCheckpointReply(stdout: string): CheckpointReply | undefined {
-  try {
-    const parsed = JSON.parse(stdout.trim().split("\n")[0] ?? "") as unknown;
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      !("written" in parsed) ||
-      typeof parsed.written !== "boolean"
-    ) {
-      return undefined;
-    }
-    return {
-      written: parsed.written,
-      reason: "reason" in parsed && typeof parsed.reason === "string" ? parsed.reason : undefined,
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -288,14 +262,10 @@ export async function deployAgentcoreRun(
     }
   }
 
-  // 4b. The deployment bucket + the forwarder package. The bucket is created OUTSIDE the stack, on
-  //     purpose and unlike everything else here: it holds the agent's STATE SNAPSHOT, and AgentCore
-  //     wipes the /mnt/state mount on every runtime version update (i.e. every deploy). Keeping it
-  //     out of CloudFormation means a `delete-stack` — or a rolled-back create — cannot take the
-  //     agent's sessions, channel state and pending wake-ups with it.
+  // The forwarder package must exist before CloudFormation can create its Lambda.
   let forwarderParams: { bucket: string; key: string } | undefined;
   if (plan.topology.forwarder) {
-    const bucket = stateBucketName(plan.name, account);
+    const bucket = deploymentBucketName(plan.name, account);
     if ((await aws(["s3api", "head-bucket", "--bucket", bucket], { capture: true })).code !== 0) {
       log(`creating deployment bucket ${bucket}…`);
       // us-east-1 is the ONE region that must not carry a LocationConstraint (the API rejects it).
@@ -305,54 +275,22 @@ export async function deployAgentcoreRun(
         return gate(`\`aws s3api create-bucket --bucket ${bucket}\` failed — see the output above; fix and re-run`);
       }
     }
-    // CONVERGE the properties on EVERY deploy, not just at creation. They are what makes the bucket
-    // safe (nothing public) and recoverable (a bad write is not the end of the agent's memory); doing
-    // them only in the create branch means a run that failed halfway leaves a bucket that looks
-    // finished forever after, and ignoring the exit codes means "deployed" would be reported over a
-    // world-readable or unversioned store of the agent's credentials.
-    const converge: { label: string; args: string[] }[] = [
-      {
-        label: "block public access",
-        args: [
-          "s3api",
-          "put-public-access-block",
-          "--bucket",
-          bucket,
-          "--public-access-block-configuration",
-          "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
-        ],
-      },
-      {
-        label: "enable versioning",
-        args: ["s3api", "put-bucket-versioning", "--bucket", bucket, "--versioning-configuration", "Status=Enabled"],
-      },
-      {
-        label: "set the snapshot lifecycle",
-        args: [
-          "s3api",
-          "put-bucket-lifecycle-configuration",
-          "--bucket",
-          bucket,
-          "--lifecycle-configuration",
-          JSON.stringify({
-            Rules: [
-              {
-                ID: "fastagent-expire-old-snapshots",
-                Status: "Enabled",
-                Filter: { Prefix: "state/" },
-                NoncurrentVersionExpiration: { NoncurrentDays: 7 },
-              },
-            ],
-          }),
-        ],
-      },
-    ];
-    for (const step of converge) {
-      // `capture` keeps the CLI's JSON off the deploy log: the exit code is the signal, and a failure
-      // gates with the step's name below.
-      if ((await aws(step.args, { capture: true })).code !== 0) {
-        return gate(`could not ${step.label} on ${bucket} — refusing to store agent state in it; fix and re-run`);
-      }
+    if (
+      (
+        await aws(
+          [
+            "s3api",
+            "put-public-access-block",
+            "--bucket",
+            bucket,
+            "--public-access-block-configuration",
+            "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+          ],
+          { capture: true },
+        )
+      ).code !== 0
+    ) {
+      return gate(`could not block public access on ${bucket}; fix and re-run`);
     }
     // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so
     // identical source must map to an identical key (hence the deterministic zip) and changed source
@@ -378,7 +316,7 @@ export async function deployAgentcoreRun(
   // 6. Build (linux/arm64) + push in one step.
   log(`building + pushing ${image} (linux/arm64)…`);
   const buildArgs = ["buildx", "build", "--platform", "linux/arm64", "-t", image, "--push"];
-  if (plan.dockerfilePath) buildArgs.push("-f", plan.dockerfilePath);
+  buildArgs.push("-f", plan.dockerfilePath);
   buildArgs.push(".");
   if ((await docker(buildArgs)).code !== 0) {
     return gate("`docker buildx build` failed — see the output above; fix and re-run");
@@ -445,62 +383,8 @@ export async function deployAgentcoreRun(
   if (!runtimeArn) return gate("stack has no RuntimeArn output — was the template edited? Regenerate with --force");
   const url = outputs.ForwarderUrl?.replace(/\/$/, ""); // registrars append /<path>; no double slash
 
-  // 8b. Restart the ingress session so the new image serves IMMEDIATELY. A live session keeps its
-  //     old compute until the idle timeout or the max compute lifetime (8 h) — without this, a
-  //     redeploy "succeeds" while an actively-chatting session keeps answering from the PREVIOUS
-  //     image (the exact silent trap the first real deploy hit). Failure is advisory, never a gate:
-  //     on a first deploy the session does not exist yet, and the stop is an immediacy optimization
-  //     — the platform's reclaim gets there eventually. An in-flight turn on the old compute is cut;
-  //     the checkpoint above is what lets a replaying channel re-run it. Only when a forwarder exists
-  //     (the ingress session is the forwarder's session; pure-invoke deployments have none).
-  // Keyed on the FORWARDER: every current forwarder has a callback URL for state-capability refresh,
-  // and every forwarder topology has an ingress session whose next event would otherwise land on compute still
-  // running the previous image.
-  if (plan.topology.forwarder) {
-    // CHECKPOINT FIRST. The stop cuts whatever turn is running, and that turn's durable intent was
-    // written to a mount the version update erases — so without this flush "replay re-runs it" would
-    // be false: the intent never reaches S3 and the message is simply gone. Best-effort: a session
-    // that is not up has nothing to lose, and a failure here must not block the (already applied)
-    // deploy — it only downgrades the promise, so say so.
-    const checkpointPayloadPath = await writeSecretFile(
-      `${JSON.stringify({ kind: "checkpoint", auth: plan.secrets.FASTAGENT_INGRESS_SECRET })}\n`,
-    );
-    const checkpoint = await aws(
-      [
-        "bedrock-agentcore",
-        "invoke-agent-runtime",
-        "--agent-runtime-arn",
-        runtimeArn,
-        "--runtime-session-id",
-        ingressSessionId(plan.name),
-        "--payload",
-        `file://${checkpointPayloadPath}`,
-        "--cli-binary-format",
-        "raw-in-base64-out",
-        "/dev/stdout",
-      ],
-      { capture: true, captureStderr: true },
-    );
-    // Report what the container ACTUALLY did. This line is the only signal an operator has about
-    // whether an in-flight turn survived the deploy, so a blanket "checkpointed" — printed even when
-    // nothing was written — would be worse than no line at all.
-    if (checkpoint.code !== 0) {
-      log(
-        "note: could not reach the ingress session to checkpoint — if a turn was in flight it is lost " +
-          "rather than replayed (see the output above)",
-      );
-    } else {
-      const reply = parseCheckpointReply(checkpoint.stdout);
-      if (reply?.written) {
-        log("checkpointed the ingress session (an interrupted turn can be replayed)");
-      } else if (reply) {
-        // The ordinary case: the session was already idle-reclaimed, so its snapshot was written when
-        // it settled and there is nothing in flight to lose.
-        log(`note: nothing to checkpoint${reply.reason ? ` — ${reply.reason}` : " (no session was running)"}`);
-      } else {
-        log("warn: ingress session returned an invalid checkpoint response — could not verify the state snapshot");
-      }
-    }
+  // A live session keeps its previous image. Stop the fixed writer before verifying the new release.
+  {
     log("stopping the ingress session so the new image serves immediately…");
     const stopCommand = [
       "bedrock-agentcore",
@@ -513,12 +397,19 @@ export async function deployAgentcoreRun(
     const stopped = await aws(stopCommand, { capture: true, captureStderr: true });
     if (stopped.code !== 0) {
       // Classify, don't guess: "no session yet" (first deploy — expected, quiet note) vs a REAL stop
-      // failure (permissions/CLI/network — the old image may keep serving, say so loudly with the
-      // manual command). Not a gate: the deploy itself succeeded, and stop is an immediacy
-      // optimization — the platform's reclaim converges regardless.
+      // failure (permissions/CLI/network), which must stop verification against the previous image.
       const stderr = stopped.stderr ?? "";
-      if (/ResourceNotFound|not\s*found|does not exist/i.test(stderr)) {
-        log("note: no ingress session to stop (first deploy, or already reclaimed)");
+      // The message follows the ANSWER (no session to stop vs a real failure); the gate below follows
+      // the TOPOLOGY, since only a forwarder deployment has a probe whose verdict a stale session
+      // could forge. Without one a failed stop costs immediacy alone — the platform's reclaim
+      // converges — and gating an applied deploy over it would be a failure a re-run reproduces.
+      const noSession = /ResourceNotFound|not\s*found|does not exist/i.test(stderr);
+      if (noSession || !plan.topology.forwarder) {
+        log(
+          noSession
+            ? "note: no ingress session to stop (first deploy, or already reclaimed)"
+            : `note: could not stop the ingress session (${stderr.trim().split("\n")[0]}) — the previous image may keep serving until it is reclaimed`,
+        );
       } else {
         // A GATE, not a warning: the probe below reaches the SAME fixed session id, so a session
         // still running the previous image would answer it and the deploy would claim to have
@@ -546,13 +437,9 @@ export async function deployAgentcoreRun(
     );
   }
 
-  // 8d. Warm + verify the NEW serving path end to end, BEFORE registration: the probe wakes a fresh
-  //     session on the new image through the forwarder's reserved path, which restores the state
-  //     snapshot and constructs the channels — construction is deferred to exactly that moment
-  //     (channels/agentcore.ts), so this is where a bad credential, a broken channels/ module, or an
-  //     unrestorable snapshot surfaces AT DEPLOY TIME with the runtime's own error text.
+  // Verify storage initialization and channel construction before registering webhooks.
   if (url) {
-    log("probing the deployed runtime (state restore + channel construction)…");
+    log("probing the deployed runtime (workspace initialization + channel construction)…");
     const verdict = await probeRuntime(
       `${url}${RESERVED_PATHS.probe}`,
       plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
@@ -561,7 +448,7 @@ export async function deployAgentcoreRun(
       probe.intervalMs,
     );
     if (!verdict.ok) return gate(verdict.gate);
-    log("runtime verified (state restored, channels constructed)");
+    log("runtime verified (workspace ready, channels constructed)");
   }
 
   // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the

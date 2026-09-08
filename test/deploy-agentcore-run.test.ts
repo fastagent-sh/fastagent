@@ -6,7 +6,6 @@ import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
   paramsFileContent,
-  parseCheckpointReply,
   parseStackOutputs,
 } from "../src/deploy/agentcore/run.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
@@ -41,6 +40,7 @@ const FORWARDER = { webhooks: true, forwarder: true, wakeAlarms: false };
 const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   name: "my-agent",
   templatePath: "agentcore.template.yaml",
+  dockerfilePath: "fastagent/Dockerfile",
   tag: "20260728",
   region: "us-west-2",
   secrets: {},
@@ -86,13 +86,10 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
     expect(out).toMatchObject({ ok: true });
     expect(cmds().find((c) => c.startsWith("s3api create-bucket"))).toContain("--bucket fa-my-agent-123456789012");
     expect(cmds().join("\n")).toContain("put-public-access-block");
-    expect(cmds().join("\n")).toContain("put-bucket-versioning"); // one bad write stays recoverable
-    expect(cmds().join("\n")).toContain("NoncurrentDays"); // …without keeping every turn's copy forever
     const upload = cmds().find((c) => c.startsWith("s3 cp"))!;
     expect(upload).toMatch(/s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip/);
-    // The stack learns both, so the Lambda's code and the container's snapshot point at one bucket.
     const params = JSON.parse(writeParams.mock.calls[0]![0]) as string[];
-    expect(params).toContain("StateBucket=fa-my-agent-123456789012");
+    expect(params).toContain("ForwarderBucket=fa-my-agent-123456789012");
     expect(params.some((p) => /^ForwarderS3Key=forwarder\/[0-9a-f]{16}\.zip$/.test(p))).toBe(true);
   });
 
@@ -103,18 +100,16 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
     // A half-finished first run must not leave a world-readable, unversioned store of the agent's
     // credentials looking "done" forever after.
     expect(cmds().join("\n")).toContain("put-public-access-block");
-    expect(cmds().join("\n")).toContain("put-bucket-versioning");
-    expect(cmds().join("\n")).toContain("put-bucket-lifecycle-configuration");
     expect(cmds().some((c) => c.startsWith("s3 cp"))).toBe(true); // the code still uploads
   });
 
-  it("gates when a safety property cannot be established — never store state in an unsecured bucket", async () => {
+  it("gates when the deployment bucket cannot be secured", async () => {
     const { cli: aws, cmds } = fakeCli((a) =>
-      a[1] === "put-bucket-versioning" ? { code: 1 } : a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+      a[1] === "put-public-access-block" ? { code: 1 } : a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
     );
     const out = await run(withForwarder, aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false });
-    expect((out as { gate: string }).gate).toContain("enable versioning");
+    expect((out as { gate: string }).gate).toContain("block public access");
     expect(cmds().join("\n")).not.toContain("cloudformation deploy");
   });
 
@@ -145,99 +140,7 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
     writeParams.mockClear();
     await run(plan({ topology: NO_FORWARDER }), aws, fakeCli().cli);
     expect(cmds().join("\n")).not.toContain("s3");
-    expect(JSON.parse(writeParams.mock.calls[0]![0] as string).join()).not.toContain("StateBucket");
-  });
-});
-
-describe("the pre-stop checkpoint", () => {
-  const checkpointReply = (stdout: string) =>
-    fakeCli((a) => (a[1] === "invoke-agent-runtime" ? { stdout } : happyAws(a)));
-
-  it("claims the protection ONLY when the container says it wrote a snapshot", async () => {
-    const logs: string[] = [];
-    const { cli } = checkpointReply('{"written":true}');
-    await deployAgentcoreRun(
-      plan({ topology: FORWARDER }),
-      cli,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: async () => "registered" },
-    );
-    expect(logs.join("\n")).toContain("checkpointed the ingress session");
-  });
-
-  it("says nothing-to-do (with the reason) when it did not — a blanket claim is worse than no line", async () => {
-    const logs: string[] = [];
-    const { cli } = checkpointReply('{"written":false,"reason":"this session has never served a forwarder envelope"}');
-    await deployAgentcoreRun(
-      plan({ topology: FORWARDER }),
-      cli,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: async () => "registered" },
-    );
-    const out = logs.join("\n");
-    expect(out).not.toContain("checkpointed the ingress session");
-    expect(out).toContain("nothing to checkpoint");
-    expect(out).toContain("never served a forwarder envelope");
-  });
-
-  it("an unreachable session says the turn is LOST, not protected", async () => {
-    const logs: string[] = [];
-    const { cli } = fakeCli((a) => (a[1] === "invoke-agent-runtime" ? { code: 254 } : happyAws(a)));
-    await deployAgentcoreRun(
-      plan({ topology: FORWARDER }),
-      cli,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: async () => "registered" },
-    );
-    expect(logs.join("\n")).toContain("it is lost");
-  });
-
-  it("keeps the ingress secret out of argv by carrying the checkpoint through a 0600-file seam", async () => {
-    const ingressSecret = "must-not-appear-on-argv";
-    const written: string[] = [];
-    const writeSecret = vi.fn(async (content: string) => {
-      written.push(content);
-      return `/tmp/secret-${written.length}.json`;
-    });
-    const { cli, calls } = checkpointReply('{"written":true}');
-    await deployAgentcoreRun(
-      plan({ topology: FORWARDER, secrets: { FASTAGENT_INGRESS_SECRET: ingressSecret } }),
-      cli,
-      fakeCli().cli,
-      () => {},
-      writeSecret,
-      writeZip,
-      { telegram: async () => "registered" },
-    );
-    const invoke = calls.find((call) => call.args[1] === "invoke-agent-runtime")!.args;
-    expect(invoke.join(" ")).not.toContain(ingressSecret);
-    expect(invoke[invoke.indexOf("--payload") + 1]).toBe("file:///tmp/secret-2.json");
-    expect(written[1]).toBe(`${JSON.stringify({ kind: "checkpoint", auth: ingressSecret })}\n`);
-  });
-
-  it("warns instead of claiming success when the checkpoint response is malformed", async () => {
-    const logs: string[] = [];
-    const { cli } = checkpointReply('{"written":"true"}');
-    await deployAgentcoreRun(
-      plan({ topology: FORWARDER }),
-      cli,
-      fakeCli().cli,
-      (message) => logs.push(message),
-      writeParams,
-      writeZip,
-      { telegram: async () => "registered" },
-    );
-    expect(logs.join("\n")).toContain("invalid checkpoint response");
-    expect(logs.join("\n")).not.toContain("checkpointed the ingress session");
+    expect(JSON.parse(writeParams.mock.calls[0]![0] as string).join()).not.toContain("ForwarderBucket");
   });
 });
 
@@ -270,10 +173,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "s3api head-bucket --bucket fa-my-agent-123456789012",
       "s3api put-public-access-block --bucket fa-my-agent-123456789012 --public-access-block-configuration " +
         "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
-      "s3api put-bucket-versioning --bucket fa-my-agent-123456789012 --versioning-configuration Status=Enabled",
-      "s3api put-bucket-lifecycle-configuration --bucket fa-my-agent-123456789012 --lifecycle-configuration " +
-        '{"Rules":[{"ID":"fastagent-expire-old-snapshots","Status":"Enabled","Filter":{"Prefix":"state/"},' +
-        '"NoncurrentVersionExpiration":{"NoncurrentDays":7}}]}',
       expect.stringMatching(
         /^s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip$/,
       ),
@@ -282,12 +181,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
-      // Flush the snapshot BEFORE cutting the session: the interrupted turn's durable intent lives on
-      // a mount the version update erases, so without this "replay re-runs it" would be false.
-      "bedrock-agentcore invoke-agent-runtime " +
-        "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
-        `--runtime-session-id ${ingressSessionId("my-agent")} ` +
-        "--payload file:///tmp/params.json --cli-binary-format raw-in-base64-out /dev/stdout",
       // The redeploy-immediacy step: a live ingress session would keep serving the OLD image.
       "bedrock-agentcore stop-runtime-session " +
         "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
@@ -297,7 +190,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "version",
       "buildx version",
       "login --username AWS --password-stdin 123456789012.dkr.ecr.us-west-2.amazonaws.com",
-      "buildx build --platform linux/arm64 -t 123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728 --push .",
+      // `-f` is unconditional: the artifacts sit under the agent prefix and the context is the
+      // workspace above it, so the context's own Dockerfile is never the one to build.
+      "buildx build --platform linux/arm64 -t 123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728 --push -f fastagent/Dockerfile .",
     ]);
     // The ECR password flows stdout→stdin between the runners, never argv.
     expect(dockerCalls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");
@@ -309,7 +204,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(writeParams).toHaveBeenCalledWith(
       `${JSON.stringify([
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
-        "StateBucket=fa-my-agent-123456789012",
+        "ForwarderBucket=fa-my-agent-123456789012",
         `ForwarderS3Key=${forwarderKey}`,
         "TelegramBotToken=t",
         "TelegramSecretToken=s",
@@ -469,7 +364,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(probe).not.toHaveBeenCalled(); // no probe against a session of unknown vintage
   });
 
-  it("a pure-invoke deployment (no ForwarderUrl output) stops no session", async () => {
+  it("a pure-invoke deployment also stops its fixed writer to activate the new image", async () => {
     const { cli: aws, cmds } = fakeCli((a) =>
       a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
         ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
@@ -477,7 +372,42 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     );
     const out = await run(plan(), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: true, runtimeArn: "arn:x" });
-    expect(cmds().some((c) => c.includes("stop-runtime-session"))).toBe(false);
+    expect(cmds().some((c) => c.includes("stop-runtime-session"))).toBe(true);
+  });
+
+  it("a stop failure does NOT gate a pure-invoke deployment — it has no probe to protect", async () => {
+    // The gate exists because the probe reaches the same fixed session id. Without a forwarder there
+    // is no probe, so the only cost is immediacy (the platform reclaims the session anyway) and
+    // failing an already-applied deploy would be a false failure a re-run reproduces.
+    const logs: string[] = [];
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
+        ? { code: 254, stderr: "An error occurred (AccessDeniedException): not authorized" }
+        : a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
+          ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+          : happyAws(a),
+    );
+    const out = await deployAgentcoreRun(plan(), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
+      telegram: async () => "registered",
+    });
+    expect(out).toMatchObject({ ok: true, runtimeArn: "arn:x" });
+    expect(logs.join("\n")).toContain("AccessDeniedException");
+
+    // The WORDING follows the answer, not the topology: a first deploy has no session to stop, so
+    // "the previous image may keep serving" would name a container that never existed.
+    const first: string[] = [];
+    const { cli: awsFirst } = fakeCli((a) =>
+      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
+        ? { code: 254, stderr: "An error occurred (ResourceNotFoundException): session does not exist" }
+        : a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
+          ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
+          : happyAws(a),
+    );
+    await deployAgentcoreRun(plan(), awsFirst, fakeCli().cli, (m) => first.push(m), writeParams, writeZip, {
+      telegram: async () => "registered",
+    });
+    expect(first.join("\n")).toContain("no ingress session to stop");
+    expect(first.join("\n")).not.toContain("previous image");
   });
 
   it("a failed telegram registration gates AFTER the deploy (the app itself deployed)", async () => {
@@ -533,26 +463,6 @@ describe("deploy/agentcore/run: helpers", () => {
       "FastagentAuthSeed4=",
     ]);
     expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toHaveLength(AUTH_SEED_MAX_CHUNKS);
-  });
-
-  it("parseCheckpointReply validates structured acknowledgements", () => {
-    expect(parseCheckpointReply('  {"written":true}\n')).toEqual({ written: true, reason: undefined });
-    expect(parseCheckpointReply('{"written":false,"reason":"no session"}')).toEqual({
-      written: false,
-      reason: "no session",
-    });
-    for (const invalid of ["not json", "{}", '{"written":"true"}', "null"]) {
-      expect(parseCheckpointReply(invalid)).toBeUndefined();
-    }
-    // What `aws bedrock-agentcore invoke-agent-runtime … /dev/stdout` really prints: the body, then
-    // the CLI's own metadata block on the same stream (#470).
-    const metadata =
-      '{\n    "runtimeSessionId": "fastagent-ingress-x",\n    "contentType": "application/json",\n    "statusCode": 200\n}\n';
-    expect(parseCheckpointReply(`{"written":true}\n${metadata}`)).toEqual({ written: true, reason: undefined });
-    expect(parseCheckpointReply(`{"written":false,"reason":"idle"}\n${metadata}`)).toEqual({
-      written: false,
-      reason: "idle",
-    });
   });
 });
 

@@ -5,19 +5,18 @@
  *
  * THE FIXTURE DECLARES NO CHANNEL AND NO SCHEDULE, and that is what the topology follows from: with
  * `topology.forwarder` false (plan.ts agentcoreTopology) there is no forwarder Lambda, no Function URL, no EventBridge
- * rule and no state bucket — the driver skips creating one. The template's forwarder half is proven
+ * rule and no artifact bucket; the driver skips creating one. The template's forwarder half is proven
  * to PARSE by agentcore.live.test.ts, whose fixture turns it on; what this probe adds is that the
  * minimal stack really converges and really serves. Teardown still sweeps the bucket, because the
  * name is deterministic and a topology change here must not start leaking one.
  *
  * This host shares nothing with the fly/railway probes but the intent. There is NO public URL to curl:
  * AgentCore exposes `POST /invocations` behind `InvokeAgentRuntime`, an IAM-signed AWS API. So the
- * check that the deployment WORKS goes through that API — an `invoke` envelope, not the driver's
- * `checkpoint`; the reason it cannot be a checkpoint is on the assertion itself.
+ * check goes through the public `invoke` envelope and exercises a real model turn.
  *
  * TEARDOWN, which the product offers none of, is {@link destroyAgentcoreDeployment} — shared with the
  * wake probe, and shared deliberately: it is cleanup code, so a second copy drifts unnoticed until it
- * has been leaking. It sweeps more than this fixture creates (wake alarms, a versioned bucket), which
+ * has been leaking. It sweeps more than this fixture creates (wake alarms, an artifact bucket), which
  * is the point: one line here (a channel, a schedule, `selfSchedule`) turns those on.
  *
  * COSTS REAL RESOURCES and is the slowest probe here — a stack create plus delete is minutes.
@@ -28,7 +27,7 @@
  * bucket, the repository or the runtime, and does it only AFTER the image is built and pushed:
  *
  *   stack       `fastagent-live-probe-*`      (the driver prefixes `fastagent-`)
- *   bucket      `fa-live-probe-*-<account>`   (stateBucketName: `fa-` prefix, account suffix)
+ *   bucket      `fa-live-probe-*-<account>`   (deploymentBucketName: `fa-` prefix, account suffix)
  *   repository  `fastagent/live-probe-*`      (a SLASH, not a hyphen)
  *   runtime     `live_probe_*`                (toRuntimeName: underscores, no prefix at all)
  *
@@ -72,11 +71,13 @@ beforeAll(async () => {
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
   workspace = join(tmpdir(), NAME);
-  await mkdir(workspace, { recursive: true });
-  await writeFile(join(workspace, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-  await writeFile(join(workspace, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+  // Nested, because `deploy` requires a workspace that CONTAINS the agent (preflight.ts).
+  const agentDir = join(workspace, "fastagent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(agentDir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await writeFile(
-    join(workspace, "package.json"),
+    join(agentDir, "package.json"),
     `${JSON.stringify(
       { name: "live-agentcore-probe", private: true, dependencies: { "@fastagent-sh/fastagent": await liveVersion() } },
       null,
@@ -95,7 +96,7 @@ afterAll(async () => {
 }, 900_000);
 
 describe("deploy agentcore --run: a real stack, provisioned and destroyed", () => {
-  it("converges the stack and the runtime answers a checkpoint", async () => {
+  it("converges the stack and completes a model turn", async () => {
     try {
       await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
     } catch (error) {
@@ -119,14 +120,7 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
     const runtimeArn = parseStackOutputs(outputs.stdout).RuntimeArn;
     expect(runtimeArn, `the converged stack has no RuntimeArn output:\n${outputs.stdout.slice(0, 500)}`).toBeTruthy();
 
-    // THE assertion that the deployment WORKS, and the only one this host allows: there is no public
-    // URL, so it goes through `InvokeAgentRuntime`. The envelope is `invoke` rather than the driver's
-    // `checkpoint` because this agent declares no channel — no channel means no forwarder, no forwarder
-    // means no FASTAGENT_INGRESS_SECRET (deploy.ts mints it only when one is needed), and without that
-    // secret the adapter serves the PUBLIC kind alone: "Undefined = nothing can be trusted, so only the
-    // public `invoke` kind is served" (agentcore.ts). A checkpoint here answers 403 from the container.
-    // It is also the better assertion: `invoke` runs a real turn, the same thing the fly and railway
-    // probes POST for.
+    // A completed model turn proves the serving path, beyond CloudFormation convergence.
     const body = await invokeAgentcore({
       runtimeArn: runtimeArn as string,
       name: NAME,

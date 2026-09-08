@@ -64,7 +64,7 @@ directories or the same directory.
 | Situation | Placement |
 |---|---|
 | New agent or an agent for an existing project | `fastagent init [workspace]` creates `workspace/fastagent/`; existing workspace files stay untouched. |
-| A standalone agent repository or an existing package that is itself the agent | `fastagent init . --flat` puts the definition in the current directory and keeps existing files. Review retained package and ignore files. |
+| A standalone agent repository or an existing package that is itself the agent | `fastagent init . --flat` puts the definition in the current directory and keeps existing files. Review retained package and ignore files. Not deployable as-is: `deploy` requires the agent to sit inside a workspace. |
 | An existing application embeds the agent | Keep the application's layout. A nested definition is convenient; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Check the workspace itself and its direct
@@ -100,8 +100,8 @@ before continuing. `--no-install` defers that install; `--minimal` omits the cod
 A global CLI installation alone does not make package imports available to authored tools.
 
 **Working-directory convention for the rest of this guide:** stay in `my-agent/`, the workspace.
-Use `npm --prefix fastagent ...` for the nested package. Running `fastagent dev` or `deploy` after
-`cd fastagent` intentionally changes the workspace and build context to the agent directory itself.
+Use `npm --prefix fastagent ...` for the nested package. Running `fastagent dev` after `cd fastagent`
+makes the definition its own workspace. `deploy` requires the containing workspace instead.
 For a flat agent, omit the `fastagent/` path prefix and npm's `--prefix fastagent`.
 
 ## 3. Use TypeScript for new authored code
@@ -381,7 +381,7 @@ and `fastagent schedule cancel <id>` to inspect or cancel pending local wake-ups
 |---|---|
 | Resident `dev` / `start` or embedded `createAgentService` | The process runs the scheduler. Keep one active scheduler with durable state; a sleeping/stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
 | AgentCore webhook/schedule ingress | EventBridge delivers cron slots and, with `selfSchedule`, external wake alarms. Scale-to-zero is supported on this path; no resident timer is required. |
-| Direct `InvokeAgentRuntime` sessions | Separate from ingress. They lack the ingress S3 snapshot and external wake-alarm guarantees. Do not use a successful direct invocation to claim cross-deploy memory or future wake delivery. |
+| Direct `InvokeAgentRuntime` calls | Reuse the deployment's fixed `runtimeSessionId`; the envelope's `session` selects the conversation. A direct invocation does not verify channel activation or future wake delivery. All entry points share storage that resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
 [schedule authoring](api-reference.md#schedule-authoring) for the exact guarantees.
@@ -413,8 +413,9 @@ host's artifacts from the **workspace**, preserving the CLI's formats and existi
 | Railway | `fastagent deploy railway` | `fastagent deploy railway --run` |
 | AgentCore | `fastagent deploy agentcore` | `fastagent deploy agentcore --run` |
 
-Generation prints a runbook and writes artifacts; it does not deploy. After reviewing the selected
-host's plan and completing approved authentication, run the matching `--run` command.
+Generation prints a runbook and writes artifacts, including a new release ID; it does not deploy.
+Review the [definition replacement policy](deploy.md#what-deploy-bakes) and the selected host's plan,
+complete approved authentication, then run the matching `--run` command.
 
 Docker needs Docker/Compose; Fly and Railway need their authenticated CLIs. AgentCore needs AWS CLI v2,
 an approved region, and local Docker/buildx for its arm64 image. `fastagent deploy agentcore` generates
@@ -429,18 +430,17 @@ host. AgentCore's public webhook URL belongs to its forwarder; direct runtime in
 
 | Data | What must survive, and how |
 |---|---|
-| Versioned persona, skills, tools, config, and package lockfile | Commit approved changes and redeploy. The workspace is baked into the image; only the agent package's dependencies are installed. A machine's unpushed edits are not a durable definition update. |
-| Runtime session journals, channel state, pending work, schedule audit | Preserve the resolved state root. Resident recipes use durable storage and one replica; AgentCore snapshots the ingress state tree to S3. |
-| Rotated model and Slack bot credentials | Preserve both the selected secrets/state roots. AgentCore nests runtime secrets inside its snapshotted tree. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
-| Business notes, approvals, generated artifacts | Choose existing durable storage, explicitly synchronized git, or an appropriate durable state-root location. Files elsewhere in the container/workspace can disappear on replacement. Verify the chosen path, retention, and access policy. |
+| Persona, skills, tools, config, and package lockfile | The image seeds the local workspace and installs only the agent package's dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
+| Runtime session journals, channel state, pending work, schedule audit | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
+| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. AgentCore clears them on deploy and re-seeds model auth from the deployer. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
+| Business notes, approvals, generated artifacts | Write ongoing work under the volume's `base/`, outside the release-managed definition. Docker, Fly, and Railway preserve it across deploys; AgentCore resets it. Use an external store when the host's retention is insufficient. |
 
 Turn recovery is channel-specific: Telegram, Slack, and Feishu/Lark replay accepted turns at least once,
 so side effects must tolerate repetition. GitHub post-ACK work has no durable replay.
 
-`fastagent info` shows resolved paths. Do not assume every file, session, or wake survives every redeploy:
-AgentCore's snapshot covers its ingress session, not arbitrary direct runtime sessions. A lost state
-volume or S3 bucket is a separate loss event. See [what deploy bakes](deploy.md#what-deploy-bakes),
-[host guarantees](deploy.md), and [state configuration](configuration.md#machinery-state-and-secrets).
+`fastagent info` shows resolved paths. Verify retention on the selected host; deleting its volume also
+deletes the data it holds. See [what deploy bakes](deploy.md#what-deploy-bakes), [host guarantees](deploy.md),
+and [state configuration](configuration.md#machinery-state-and-secrets).
 
 ## 10. Report what was actually verified
 

@@ -39,11 +39,12 @@ beforeAll(async () => {
   // basename(workspace) IS the app name (deploy.ts: toFlyAppName(basename(workspace))), so the
   // directory is named deliberately rather than by mkdtemp.
   workspace = join(tmpdir(), APP);
-  await mkdir(workspace, { recursive: true });
-  await writeFile(join(workspace, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-  await writeFile(join(workspace, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+  const agentDir = join(workspace, "fastagent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(agentDir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await writeFile(
-    join(workspace, "package.json"),
+    join(agentDir, "package.json"),
     `${JSON.stringify(
       { name: "live-fly-probe", private: true, dependencies: { "@fastagent-sh/fastagent": await liveVersion() } },
       null,

@@ -12,7 +12,6 @@ const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.run
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { readRuns } from "../src/schedule/audit.ts";
-import { onIdle } from "../src/channels/busy.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -45,29 +44,6 @@ const readFires = async (root: string): Promise<Record<string, string>> =>
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-});
-
-it("reports idle only after a busy wake is deferred and audited", async () => {
-  const root = await freshRoot();
-  addWakeup(
-    root,
-    { session: "busy", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
-    new Date("2026-07-07T10:00:00Z"),
-  );
-  const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
-  const snapshots: unknown[] = [];
-  const off = onIdle(() =>
-    snapshots.push({ attempts: listWakeups(root)[0]?.attempts, outcome: readRuns(root, "wake")[0]?.outcome }),
-  );
-  const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
-  try {
-    s.start();
-    await vi.waitFor(() => expect(readRuns(root, "wake")).toHaveLength(1));
-    expect(snapshots).toEqual([{ attempts: 1, outcome: "deferred" }]);
-  } finally {
-    s.stop();
-    off();
-  }
 });
 
 describe("schedule/scheduler: fire algorithm", () => {

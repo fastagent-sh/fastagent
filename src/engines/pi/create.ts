@@ -27,7 +27,7 @@ import {
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
-import { resolveSecretsDir } from "../../paths.ts";
+import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
@@ -203,6 +203,14 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
     deferredCount > 0
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
       : "";
+  // How long the storage lives is the HOST's answer, not a deployment-wide one: AgentCore's managed
+  // mount is reset by every deploy, so telling that agent to keep work "outside the definition" would
+  // name a location its next deploy erases.
+  const deploymentNote = !isDeployedWorkspace()
+    ? ""
+    : isAgentcoreRuntime()
+      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts.`
+      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts.`;
   return `${identity}
 
 Available tools:
@@ -212,7 +220,7 @@ In addition to the tools above, you may have access to other custom tools depend
 
 Guidelines:
 - Be concise in your responses
-- Show file paths clearly when working with files`;
+- Show file paths clearly when working with files${deploymentNote}`;
 }
 
 export interface AssembleSystemPromptOptions {

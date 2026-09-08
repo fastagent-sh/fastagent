@@ -73,8 +73,8 @@ function composeYaml(input: DockerPlanInput): string {
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
   // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the
-  // WORKSPACE, so it climbs back out of the prefix (`..` per level, `.` when there is none).
-  const context = input.agentPrefix ? ".." : ".";
+  // WORKSPACE, so it climbs back out of the one-level prefix deploy requires.
+  const context = "..";
   const dockerfile = `${input.agentPrefix}Dockerfile`;
   const tunnelService = input.tunnel
     ? `
@@ -159,17 +159,15 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   }
 
   runbook.push(
-    input.agentPrefix
-      ? `# Run from the WORKSPACE ROOT (the directory containing ${input.agentPrefix}).`
-      : `# Run from this directory — it is both the agent and its workspace.`,
+    `# Run from the WORKSPACE ROOT (the directory containing ${input.agentPrefix}).`,
     `# The build bakes the whole directory as the agent's workspace; only the agent's own`,
     `# dependencies (${input.agentPrefix}package.json) are installed.`,
   );
 
   runbook.push(
     ``,
-    `# Build/create/reconcile the service. Re-running this is the complete local redeploy; state stays`,
-    `# in the Compose volume mounted at ${MOUNT}.`,
+    `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
+    `# The Compose volume at ${MOUNT} retains the workspace, state and credentials.`,
     `${compose} up -d --build`,
     `curl --fail http://127.0.0.1:${input.port}/health`,
     ``,
@@ -177,7 +175,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     `${compose} logs -f agent`,
     `${compose} ps`,
     `${compose} down        # stops containers; keeps the state volume`,
-    `# ${compose} down -v   # DESTRUCTIVE: also deletes auth, sessions, and channel state`,
+    `# ${compose} down -v   # DESTRUCTIVE: deletes workspace, credentials and all agent state`,
   );
 
   if (input.tunnel) {

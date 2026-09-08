@@ -197,8 +197,8 @@ jobs:
           #   scheduler:DeleteSchedule  teardown here and the sweep step below
           # It is also the first `selfSchedule: true` fixture, i.e. the first deployment with
           # `needsForwarder` true: the forwarder Lambda + its Function URL, the wake role
-          # (iam:CreateRole / PassRole / AttachRolePolicy / DetachRolePolicy) and a VERSIONED state
-          # bucket (s3:PutBucketVersioning, s3:PutLifecycleConfiguration) exist in no other probe.
+          # (iam:CreateRole / PassRole / AttachRolePolicy / DetachRolePolicy) and the forwarder
+          # artifact bucket exist in no other probe.
           # The policy itself lives in AWS and cannot be verified from this repo.
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -248,10 +248,8 @@ jobs:
             | tee /dev/stderr \
             | xargs -r -n1 -I{} railway service delete --service {} --yes
 
-      # Same reasoning as the sweeps above, with AgentCore's twist: THREE kinds are left behind,
-      # because the bucket and repository are deliberately created outside the stack (plan.ts: so a
-      # `delete-stack` cannot take the agent's memory with it). The bucket is versioned, so every
-      # version AND every delete marker goes before the bucket will.
+      # Same reasoning as the sweeps above, with AgentCore's twist: the bucket and the repository are
+      # deliberately created OUTSIDE the stack, so `delete-stack` leaves both behind.
       #
       # Fail-loud like the two sweeps above, and for a sharper reason: this step is the net under a
       # probe that was KILLED, so the run it reports into is already red or cancelled and nobody will
@@ -314,23 +312,7 @@ jobs:
             done
             attempt "delete-stack $name" aws cloudformation delete-stack --stack-name "fastagent-$name"
             attempt "wait stack-delete $name" aws cloudformation wait stack-delete-complete --stack-name "fastagent-$name"
-            # `s3 rm` does not empty a versioned bucket — it writes a delete marker per object, and a
-            # marker comes back under DeleteMarkers, not Versions. Deleting only Versions leaves the
-            # bucket non-empty and `delete-bucket` answers BucketNotEmpty.
-            attempt "s3 rm $bucket" aws s3 rm "s3://$bucket" --recursive
-            if objects=$(aws s3api list-object-versions --bucket "$bucket" --output json 2>&1); then
-              payload=$(printf '%s' "$objects" \
-                | jq -c '{Objects: [(.Versions // []) + (.DeleteMarkers // [])] | flatten | map({Key, VersionId})}')
-              if [ "$(printf '%s' "$payload" | jq '.Objects | length')" -gt 0 ]; then
-                attempt "delete-objects $bucket" aws s3api delete-objects --bucket "$bucket" --delete "$payload"
-              fi
-            else
-              case "$objects" in
-                *NoSuchBucket*) ;;
-                *) echo "::error::list-object-versions $bucket failed: $objects"; failed=1 ;;
-              esac
-            fi
-            attempt "delete-bucket $bucket" aws s3api delete-bucket --bucket "$bucket"
+            attempt "s3 rb $bucket" aws s3 rb "s3://$bucket" --force
             attempt "delete-repository $name" aws ecr delete-repository --repository-name "fastagent/$name" --force
           done < "$RUNNER_TEMP/agentcore-sweep"
           exit "$failed"

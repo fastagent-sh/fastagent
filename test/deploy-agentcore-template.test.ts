@@ -42,6 +42,7 @@ interface Template {
 }
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
+  releaseId: "release-one",
   name: "my-agent",
   modelAuth: "OPENAI_API_KEY",
   channels: [],
@@ -51,7 +52,7 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   runtime: "node",
   hasLockfile: false,
   version: "0.15.0",
-  agentPrefix: "",
+  agentPrefix: "fastagent/",
   ...over,
 });
 
@@ -135,14 +136,21 @@ describe("the agentcore template (parsed)", () => {
     expect(forwarder[1].Properties).toHaveProperty("Code");
     expect(forwarder[1].Properties).not.toHaveProperty("FilesystemConfigurations");
     expect(runtime[1].Properties).not.toHaveProperty("Code");
-    // The state mount lives at FilesystemConfigurations[0].SessionStorage — a nesting level the
-    // substring assertion for `SessionStorage: { MountPath: … }` cannot see at all.
     expect(runtime[1].Properties?.FilesystemConfigurations).toEqual([{ SessionStorage: { MountPath: MOUNT } }]);
+    expect(runtime[1].Properties?.NetworkConfiguration).toEqual({ NetworkMode: "PUBLIC" });
 
     const env = (forwarder[1].Properties as { Environment: { Variables: Record<string, unknown> } }).Environment
       .Variables;
     expect(env).toHaveProperty("RUNTIME_ARN");
     expect(env).toHaveProperty("INGRESS_SESSION_ID");
+  });
+
+  it("asks for no network or filesystem permission beyond the managed mount", () => {
+    // Managed SessionStorage is mounted BY the platform: an execution-role statement for a filesystem,
+    // or a VPC network mode, would mean the EFS topology (and its NAT bill) came back unnoticed.
+    const template = parseTemplate();
+    expect(JSON.stringify(template.Resources.ExecutionRole)).not.toContain("elasticfilesystem");
+    expect(JSON.stringify(template)).not.toContain("NetworkModeConfig");
   });
 
   it("gives every schedule its own rule targeting the forwarder", () => {

@@ -33,6 +33,20 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
   });
 
 describe("deploy/preflight: the host-neutral pre-flight", () => {
+  it("gates a placement the release manifest could not carry, naming the directory", async () => {
+    // `init --agent-dir` accepts any single path segment; the manifest joins this name onto the
+    // storage root inside the container and accepts fewer. Without this gate the refusal surfaced
+    // from artifact generation as "invalid deployment release manifest" — a file nobody wrote.
+    const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
+    const dir = join(host, "my.agent");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.gate).toContain('"my.agent"');
+    await rm(host, { recursive: true, force: true });
+  });
+
   it("gates --run when the model isn't in config (would ship a crash-loop)", async () => {
     const dir = await workspace();
     // model resolved via --model/FASTAGENT_MODEL, absent from config → won't travel.

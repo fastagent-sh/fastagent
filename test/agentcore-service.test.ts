@@ -1,24 +1,11 @@
-/**
- * The AgentCore assembly as a SERVICE — the properties `start` used to get from six inline branches.
- *
- * The point of the extraction is that `start` no longer knows any of this. These tests hold the
- * assembly to what those branches did: the adapter is the surface, the control plane is mounted over
- * it, channels are NOT discovered at boot (the state mount is pre-restore), and one `close()` stops
- * everything the branches wired to separate signal handlers.
- */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { gzipSync } from "node:zlib";
-import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
-import { activeWork } from "../src/channels/busy.ts";
-import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
-import type { Agent } from "../src/agent.ts";
+import type { AgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
-import { mountAgentcoreService } from "../src/channels/agentcore-service.ts";
+import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
+import { openPreparedStartService } from "../src/cli/commands/start.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -33,6 +20,116 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 
 const open = async (dir: string) => createPiAgentFromDir(dir, { serving: true });
 
+/** A deferred service whose stages are scripted: `prepare` takes the workspace, `assemble` runs in it. */
+const deferred = (assemble: () => Promise<AgentService>, prepare: () => Promise<void> = async () => {}) =>
+  deferAgentcoreService({ prepare, assemble: () => assemble() });
+const invocation = () => new Request("http://h/invocations", { method: "POST", body: "{}" });
+
+describe("deferred AgentCore initialization", () => {
+  it("the assemble stage REJECTS instead of exiting — every 503/probe verdict above depends on it", async () => {
+    // On this host `openPreparedStartService` runs inside an envelope, so a `failStartup` there would
+    // kill the container mid-request and the deploy driver would gate on a generic timeout instead of
+    // the runtime's own error text.
+    const dir = await agentDir({ "channels/bad.mjs": "throw new Error('broken channel');\n" });
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("process.exit called");
+    }) as never);
+    try {
+      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/channel setup is invalid/);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
+  it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
+    vi.stubEnv("FASTAGENT_INGRESS_SECRET", "trusted-probe");
+    try {
+      const deferred = deferAgentcoreService({
+        prepare: async () => {
+          throw new Error("EFS mount unavailable");
+        },
+        assemble: async () => {
+          throw new Error("must not assemble");
+        },
+      });
+      for (const auth of ["trusted-probe", "wrong"]) {
+        const r = await deferred.handler(
+          new Request("http://h/invocations", {
+            method: "POST",
+            body: JSON.stringify({ kind: "probe", auth }),
+          }),
+        );
+        expect(r.status).toBe(auth === "trusted-probe" ? 200 : 503);
+        if (r.status === 200)
+          expect(await r.json()).toEqual({ ok: false, error: "initialization failed: Error: EFS mount unavailable" });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("opens only on invocation and shares one initialization across concurrent requests", async () => {
+    const close = vi.fn(async () => {});
+    const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
+    const service = deferred(open);
+    expect((await service.handler(new Request("http://h/ping"))).status).toBe(200);
+    expect(open).not.toHaveBeenCalled();
+    const responses = await Promise.all([service.handler(invocation()), service.handler(invocation())]);
+    expect(await Promise.all(responses.map((r) => r.text()))).toEqual(["ready", "ready"]);
+    expect(open).toHaveBeenCalledOnce();
+    await service.close();
+    await service.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+  it("caches an assembly failure rather than reading an empty workspace or starting a second scheduler", async () => {
+    const open = vi.fn(async (): Promise<AgentService> => {
+      throw new Error("channels/lark.ts is broken");
+    });
+    const service = deferred(open);
+    for (let i = 0; i < 2; i++) {
+      const r = await service.handler(invocation());
+      expect(r.status).toBe(503);
+      expect(await r.text()).toContain("channels/lark.ts is broken");
+    }
+    expect(open).toHaveBeenCalledOnce();
+  });
+  it("does not assemble a service after close() — nothing would ever stop its scheduler", async () => {
+    // Shutdown can land while the workspace is still being taken (a first boot copies it onto the
+    // volume). close() has already run by the time prepare settles, so assembling here would start
+    // channels and a scheduler with no one left to close them.
+    const open = vi.fn(
+      async () => ({ handler: () => new Response("ready"), close: async () => {} }) as unknown as AgentService,
+    );
+    let release = (): void => {};
+    const service = deferred(open, () => new Promise<void>((r) => (release = r)));
+    const pending = service.handler(invocation());
+    await service.close();
+    release();
+    expect((await pending).status).toBe(503);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed prepare on the next envelope — it took no lease and started no timers", async () => {
+    const close = vi.fn(async () => {});
+    const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
+    let attempts = 0;
+    const service = deferred(open, async () => {
+      if (++attempts < 3) throw new Error("could not acquire workspace lease at /mnt/data/.deployment");
+    });
+    for (let i = 0; i < 2; i++) {
+      const r = await service.handler(invocation());
+      expect(r.status).toBe(503);
+      expect(await r.text()).toContain("could not acquire workspace lease");
+    }
+    expect(open).not.toHaveBeenCalled(); // nothing assembles over a workspace this process never took
+    expect(await (await service.handler(invocation())).text()).toBe("ready");
+    // Concurrent envelopes share one attempt, and a taken workspace is never taken twice.
+    await Promise.all([service.handler(invocation()), service.handler(invocation())]);
+    expect(attempts).toBe(3);
+    expect(open).toHaveBeenCalledOnce();
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -40,89 +137,6 @@ afterEach(() => {
 });
 
 describe("mountAgentcoreService", () => {
-  it.each([false, true])(
-    "starts wake polling only after restore and owns its wait (close during restore=%s)",
-    async (closeEarly) => {
-      const opened = await open(await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`));
-      const wake = (id: string) => ({ id, session: id, prompt: "go", fireAt: "2020-01-01T00:00:00Z" });
-      writeScheduleFile(scheduleFile(opened.stateRoot, "wakeups"), [wake("seed")]);
-      const snapshot = gzipSync(
-        Buffer.from(
-          JSON.stringify({
-            v: 1,
-            files: {
-              "schedule/wakeups.json": Buffer.from(JSON.stringify([wake("restored")])).toString("base64"),
-            },
-          }),
-        ),
-      );
-      const entered = Promise.withResolvers<void>();
-      const finish = Promise.withResolvers<void>();
-      vi.stubEnv("FASTAGENT_INGRESS_SECRET", "s");
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (_url, init) => {
-          if (init?.method === "GET") {
-            entered.resolve();
-            await finish.promise;
-            return new Response(snapshot);
-          }
-          return new Response(null);
-        }),
-      );
-      const calls: string[] = [];
-      const agent: Agent = {
-        async *invoke(scope) {
-          calls.push(scope.session);
-          yield { type: "completed" };
-        },
-      };
-      const base = activeWork();
-      const service = await mountAgentcoreService(opened, { wrapAgent: () => agent });
-      const clock = Effect.runSync(Clock.Clock);
-      const sleep = clock.sleep.bind(clock);
-      let armed = 0,
-        cleared = 0;
-      vi.spyOn(clock, "sleep").mockImplementation((ms) => {
-        if (Duration.toMillis(ms) !== 30_000) return sleep(ms);
-        armed++;
-        return Effect.never.pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              cleared++;
-            }),
-          ),
-        );
-      });
-      try {
-        await new Promise(setImmediate);
-        expect(calls).toEqual([]);
-        const pending = service.handler(
-          new Request("http://x/invocations", {
-            method: "POST",
-            body: JSON.stringify({
-              auth: "s",
-              kind: "probe",
-              state: { getUrl: "https://s3/get", putUrl: "https://s3/put" },
-            }),
-          }),
-        );
-        await entered.promise;
-        expect(calls).toEqual([]);
-        if (closeEarly) await service.close();
-        finish.resolve();
-        expect(await (await pending).json()).toEqual({ ok: true });
-        await vi.waitFor(() => expect(activeWork()).toBe(base));
-        expect(calls).toEqual(closeEarly ? [] : ["restored"]);
-        expect(armed).toBe(closeEarly ? 0 : 1);
-        await service.close();
-        await vi.waitFor(() => expect(cleared).toBe(armed));
-      } finally {
-        finish.resolve();
-        await service.close();
-      }
-    },
-  );
   it("serves the adapter surface, not the channel routes", async () => {
     // The channel exists, but on this host it is reachable only THROUGH an envelope — the platform
     // invokes POST /invocations and nothing else.
@@ -140,14 +154,13 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("reports no channels at boot — a list here would be the pre-restore emptiness", async () => {
+  it("reports only the adapter's boot surface", async () => {
     const dir = await agentDir({
       "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("x") });`,
     });
     const service = await mountAgentcoreService(await open(dir));
     try {
-      // Discovery is deferred to the first envelope, AFTER the state snapshot is restored. Reporting
-      // the channel here would mean it had been constructed against an empty state mount.
+      // Channels are constructed only after trusted ingress arrives.
       expect(service.channels).toEqual({ routes: [], longConnections: [], builtinInvoke: false });
       expect(service.ready).resolves.toBeUndefined();
     } finally {

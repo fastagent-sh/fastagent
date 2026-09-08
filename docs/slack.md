@@ -339,8 +339,9 @@ forever. File-backed channel state supports one process/replica only.
 `SLACK_SIGNING_SECRET`. For a reachable webhook ingress, `--run` updates the Request
 URL using the builder's local onboarding state. Without that state, it reports the required manual
 console action. App Configuration tokens stay on the builder. Docker's optional Quick Tunnel URL is
-ephemeral; resident hosts need durable storage and one replica. AgentCore uses the
-[ingress-session S3 snapshot](deploy.md#aws-bedrock-agentcore).
+ephemeral; resident hosts need durable storage and one replica. [AgentCore resets its storage on
+every deploy](deploy.md#aws-bedrock-agentcore), so thread state and delivery dedup start blank after
+each one; both secrets ride the runtime environment and are unaffected.
 
 ## Upgrading from a rotating-token app (releases up to 0.20)
 

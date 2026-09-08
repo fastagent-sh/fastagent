@@ -6,7 +6,7 @@
  */
 import { Buffer } from "node:buffer";
 import * as nodeCrypto from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import { ENVELOPE_KINDS, RESERVED_PATHS } from "../src/channels/agentcore-protocol.ts";
 import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
@@ -129,50 +129,6 @@ function loadForwarder(options: HarnessOptions = {}) {
   };
 }
 
-/**
- * SigV4 query-string signing, written straight from the AWS spec and pinned to their published test
- * vector (see the test below) — an INDEPENDENT check on the generated forwarder's own implementation.
- */
-function referenceSignature(input: {
-  method: string;
-  host: string;
-  key: string;
-  stamp: string;
-  expires: number;
-  region?: string;
-  accessKey?: string;
-  secret?: string;
-}): string {
-  const region = input.region ?? "us-east-1";
-  const accessKey = input.accessKey ?? "AKIAIOSFODNN7EXAMPLE";
-  const secret = input.secret ?? "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-  const esc = (s: string) =>
-    encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-  const hmac = (k: nodeCrypto.BinaryLike, d: string) => nodeCrypto.createHmac("sha256", k).update(d).digest();
-  const scope = `${input.stamp.slice(0, 8)}/${region}/s3/aws4_request`;
-  const query = [
-    ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
-    ["X-Amz-Credential", `${accessKey}/${scope}`],
-    ["X-Amz-Date", input.stamp],
-    ["X-Amz-Expires", String(input.expires)],
-    ["X-Amz-SignedHeaders", "host"],
-  ]
-    .map(([k, v]) => `${esc(k!)}=${esc(v!)}`)
-    .sort()
-    .join("&");
-  const uri = `/${input.key.split("/").map(esc).join("/")}`;
-  const canonical = [input.method, uri, query, `host:${input.host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
-  const sts = [
-    "AWS4-HMAC-SHA256",
-    input.stamp,
-    scope,
-    nodeCrypto.createHash("sha256").update(canonical).digest("hex"),
-  ].join("\n");
-  let key = hmac(`AWS4${secret}`, input.stamp.slice(0, 8));
-  for (const part of [region, "s3", "aws4_request"]) key = hmac(key, part);
-  return hmac(key, sts).toString("hex");
-}
-
 const webhookEvent = (over: Record<string, unknown> = {}) => ({
   requestContext: { http: { method: "POST" } },
   rawPath: "/telegram",
@@ -185,21 +141,14 @@ const webhookEvent = (over: Record<string, unknown> = {}) => ({
 
 describe("agentcore forwarder: the shared-secret gates", () => {
   it("compares every one of them in constant time", () => {
-    // Three public endpoints on the Function URL gate on a shared secret, and this file had ONE of
-    // them comparing in constant time while the other two used `!==`. Asserted structurally because
-    // the property itself is not observable from a test: timing measurements against a Lambda are
-    // noise. What this catches is the next endpoint copying the wrong neighbour.
+    // Timing measurements against Lambda are noisy; pin the comparison used by each public gate.
     const src = forwarderSource();
     // Anchored on the SECRET, not on the request variable: either operand order, `!=`/`!==`/`==`/
     // `===` alike, and whatever the next endpoint calls its parsed body. Naming `req` here would let
     // `if (body.auth !== process.env.WAKE_SECRET)` through while reading as covered. (A subscript,
     // `process.env["WAKE_SECRET"]`, still escapes — no spelling of this catches every spelling.)
     expect(src).not.toMatch(/[!=]=+\s*process\.env\.\w*SECRET|process\.env\.\w*SECRET\s*[!=]=+/);
-    // …and each secret is still actually checked (a gate deleted rather than converted). The WHOLE
-    // call, not the argument position: `process.env.STATE_REFRESH_SECRET)` also closes the unrelated
-    // `(WAKE_SECRET || STATE_REFRESH_SECRET)` ownUrl guard, so that spelling stayed green with the
-    // state-urls gate deleted.
-    for (const secret of ["INGRESS_SECRET", "WAKE_SECRET", "STATE_REFRESH_SECRET"]) {
+    for (const secret of ["INGRESS_SECRET", "WAKE_SECRET"]) {
       expect(src).toMatch(new RegExp(`secretEq\\([^)]+,\\s*process\\.env\\.${secret}\\)`));
     }
   });
@@ -392,122 +341,6 @@ describe("agentcore forwarder (executed)", () => {
     expect(f.urlLookups()).toBe(0);
     expect(f.envelopes[0]!.wake).toBeUndefined();
   });
-
-  describe("state snapshot URLs (the container has NO AWS credentials — presigning is its only reach)", () => {
-    const stateEnv = {
-      STATE_BUCKET: "fa-agent-123456789012",
-      STATE_KEY: "state/snapshot.json.gz",
-      AWS_REGION: "us-east-1",
-      AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
-      AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    };
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("rides a GET/PUT pair on every envelope, signed for the one snapshot object", async () => {
-      const f = loadForwarder({ env: stateEnv });
-      await f.handler(webhookEvent());
-      await f.handler({ scheduleFire: { name: "digest", slot: "2026-07-28T09:00:00Z" } });
-
-      for (const envelope of f.envelopes) {
-        const state = envelope.state as { getUrl: string; putUrl: string };
-        for (const url of [state.getUrl, state.putUrl]) {
-          const parsed = new URL(url);
-          expect(parsed.origin).toBe("https://fa-agent-123456789012.s3.us-east-1.amazonaws.com");
-          expect(parsed.pathname).toBe("/state/snapshot.json.gz");
-          expect(parsed.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
-          expect(parsed.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
-          expect(parsed.searchParams.get("X-Amz-Credential")).toMatch(/AKIAIOSFODNN7EXAMPLE\/\d{8}\/us-east-1\/s3\//);
-          expect(parsed.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
-          // Short-lived by design; Function-URL deployments re-mint immediately before a late PUT.
-          expect(parsed.searchParams.get("X-Amz-Expires")).toBe("3600");
-        }
-        // The method is part of the canonical request: one signature cannot serve both verbs.
-        expect(state.getUrl).not.toBe(state.putUrl);
-      }
-    });
-
-    it("REFERENCE: the signing algorithm reproduces AWS's published query-string vector", () => {
-      // Anchors the cross-check below in something external. From the S3 docs' worked example
-      // (GET examplebucket/test.txt, 86400s, the canonical AKIAIOSFODNN7EXAMPLE credential).
-      expect(
-        referenceSignature({
-          method: "GET",
-          host: "examplebucket.s3.amazonaws.com",
-          key: "test.txt",
-          stamp: "20130524T000000Z",
-          expires: 86400,
-        }),
-      ).toBe("aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404");
-    });
-
-    it("the forwarder's signature MATCHES that reference — a wrong one 403s and the agent loses its memory", async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-28T09:00:00.000Z"));
-      const f = loadForwarder({ env: stateEnv });
-      await f.handler(webhookEvent());
-
-      const state = f.envelopes[0]!.state as { getUrl: string; putUrl: string };
-      for (const [method, url] of [
-        ["GET", state.getUrl],
-        ["PUT", state.putUrl],
-      ] as const) {
-        const parsed = new URL(url);
-        expect(parsed.searchParams.get("X-Amz-Date")).toBe("20260728T090000Z");
-        expect(parsed.searchParams.get("X-Amz-Signature")).toBe(
-          referenceSignature({
-            method,
-            host: "fa-agent-123456789012.s3.us-east-1.amazonaws.com",
-            key: "state/snapshot.json.gz",
-            stamp: "20260728T090000Z",
-            expires: 3600,
-          }),
-        );
-      }
-    });
-
-    it("offers an authenticated callback that re-mints URLs with the current Lambda credentials", async () => {
-      const f = loadForwarder({ env: { ...stateEnv, STATE_REFRESH_SECRET: "refresh-secret" } });
-      await f.handler(webhookEvent());
-      const state = f.envelopes[0]!.state as {
-        refresh: { url: string; auth: string };
-      };
-      expect(state.refresh).toEqual({
-        url: "https://self.lambda-url.on.aws/__fastagent/state-urls",
-        auth: "refresh-secret",
-      });
-
-      const denied = await f.handler(
-        webhookEvent({ rawPath: "/__fastagent/state-urls", body: JSON.stringify({ auth: "wrong" }) }),
-      );
-      expect(denied.statusCode).toBe(403);
-      const refreshed = await f.handler(
-        webhookEvent({ rawPath: "/__fastagent/state-urls", body: JSON.stringify({ auth: "refresh-secret" }) }),
-      );
-      expect(refreshed.statusCode).toBe(200);
-      const pair = JSON.parse(refreshed.body as string) as { getUrl: string; putUrl: string };
-      expect(new URL(pair.getUrl).searchParams.get("X-Amz-Expires")).toBe("3600");
-      expect(pair.getUrl).not.toBe(pair.putUrl);
-    });
-
-    it("carries the role's session token when present — Lambda credentials are always temporary", async () => {
-      const f = loadForwarder({ env: { ...stateEnv, AWS_SESSION_TOKEN: "FwoGZXIvYXdzEJr//////////wEaDA==" } });
-      await f.handler(webhookEvent());
-      const url = new URL((f.envelopes[0]!.state as { getUrl: string }).getUrl);
-      expect(url.searchParams.get("X-Amz-Security-Token")).toBe("FwoGZXIvYXdzEJr//////////wEaDA==");
-      // Canonical-query order is signed: the token must sort into place, not append.
-      const keys = [...url.searchParams.keys()].filter((k) => k !== "X-Amz-Signature");
-      expect(keys).toEqual([...keys].sort());
-    });
-
-    it("no STATE_BUCKET, no state field — an invoke-only deployment keeps nothing durable", async () => {
-      const f = loadForwarder();
-      await f.handler(webhookEvent());
-      expect(f.envelopes[0]!.state).toBeUndefined();
-    });
-  });
 });
 
 describe("agentcore forwarder: envelope authentication + alarm identity", () => {
@@ -573,11 +406,9 @@ describe("the forwarder speaks the protocol module's spelling", () => {
     for (const path of Object.values(RESERVED_PATHS)) expect(src).toContain(`"${path}"`);
   });
 
-  it("emits every envelope kind the adapter dispatches on, except the two nobody forwards", () => {
-    // `invoke` is the public data plane (a caller's own InvokeAgentRuntime) and `checkpoint` is the
-    // deploy driver's — neither passes through the forwarder.
+  it("emits every envelope kind except the public invoke data plane", () => {
     for (const kind of ENVELOPE_KINDS) {
-      if (kind === "invoke" || kind === "checkpoint") continue;
+      if (kind === "invoke") continue;
       expect(src).toContain(`kind: "${kind}"`);
     }
   });

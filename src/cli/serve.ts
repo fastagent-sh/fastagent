@@ -190,7 +190,7 @@ const FORCED_EXIT_MS = 1_500;
  * awaits `hooks.ready` (mountAgentService owns the connections themselves) before announcing
  * anything. Signals are the sole clean-shutdown command; `host` unset binds all interfaces.
  */
-function serve(
+export function serve(
   handler: ChannelHandler,
   bind: { port: number; host?: string },
   hooks: {

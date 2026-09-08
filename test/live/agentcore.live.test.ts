@@ -5,9 +5,13 @@
  *
  * READ-ONLY, and unlike the fly/railway pair this one carries real weight on its own: the CloudFormation
  * template is YAML this repo emits line by line, and `validate-template` is CloudFormation's own parser
- * saying whether it would accept it — for free, in a second, without creating anything. The deploy probe
- * next door proves the stack CONVERGES; this proves the template is well-formed even when nobody wants
- * to wait eight minutes.
+ * reading it — for free, in a second, without creating anything.
+ *
+ * WHAT IT DOES NOT CHECK: resource PROPERTIES. `validate-template` parses the document, its parameters
+ * and its intrinsic functions; a resource carrying an invented property name validates clean (checked
+ * by hand against `AWS::BedrockAgentCore::Runtime` with a nonsense property, which it accepted). So a
+ * wrong `FilesystemConfigurations` variant or a mistyped `LifecycleConfiguration` passes HERE and fails
+ * at create-stack. Only agentcore-deploy.live.test.ts, which really converges a stack, covers that.
  *
  * Needs the `aws` CLI able to authenticate — an exported key or a logged-in profile, the driver takes
  * either. Nothing here creates a resource: STS identity, a template validation, and two describes
@@ -17,7 +21,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { TEMPLATE_FILE, agentcoreName, stateBucketName } from "../../src/deploy/agentcore/plan.ts";
+import { TEMPLATE_FILE, agentcoreName, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
 import { CLI, aws, run } from "./env.ts";
 
 /** Generated artifact dirs, removed however the run ends: this probe writes a template per run and
@@ -33,10 +37,12 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     expect(code, `sts get-caller-identity failed: ${stdout}`).toBe(0);
 
     // run.ts parses this inline (`JSON.parse(identity.stdout).Account`) and gates on a non-string.
-    // The account id is not cosmetic — it suffixes the state bucket, whose name is global.
+    // The account id suffixes the deployment bucket, whose name is global.
     const account = (JSON.parse(stdout) as { Account?: unknown }).Account;
     expect(typeof account, "get-caller-identity no longer returns a string Account").toBe("string");
-    expect(stateBucketName(agentcoreName("fastagent-live-probe"), account as string)).toMatch(/^fa-[a-z0-9-]+-\d+$/);
+    expect(deploymentBucketName(agentcoreName("fastagent-live-probe"), account as string)).toMatch(
+      /^fa-[a-z0-9-]+-\d+$/,
+    );
   });
 
   it("CloudFormation accepts the template this repo generates", async () => {
@@ -49,20 +55,25 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // `fastagent-fastagent-...` and escapes the IAM policy that scopes this credential.
     const dir = await mkdtemp(join(tmpdir(), "live-probe-"));
     dirs.push(dir);
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    const agentDir = join(dir, "fastagent");
+    await mkdir(agentDir);
+    await writeFile(join(agentDir, "persona.md"), "You are terse.\n");
     // selfSchedule AND a schedule file, so the branch that carries the YAML most likely to be wrong is
     // the one CloudFormation reads: a bare agent emits ~100 lines and NONE of the forwarder Lambda, its
     // Function URL, the two Lambda permissions, the wake/scheduler IAM roles or an
     // `AWS::Scheduler::Schedule`. This fixture emits all of them and still creates nothing.
     await writeFile(
-      join(dir, "fastagent.config.mjs"),
+      join(agentDir, "fastagent.config.mjs"),
       `export default { model: "openai-codex/gpt-5.5", selfSchedule: true };\n`,
     );
     // A plain default export, not `defineSchedule(...)`: loadSchedules validates the SHAPE, and this
     // fixture has no node_modules to import the package's helper from.
-    await mkdir(join(dir, "schedules"), { recursive: true });
-    await writeFile(join(dir, "schedules", "nightly.mjs"), `export default { cron: "0 3 * * *", prompt: "probe" };\n`);
-    await writeFile(join(dir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);
+    await mkdir(join(agentDir, "schedules"), { recursive: true });
+    await writeFile(
+      join(agentDir, "schedules", "nightly.mjs"),
+      `export default { cron: "0 3 * * *", prompt: "probe" };\n`,
+    );
+    await writeFile(join(agentDir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);
     // Generation only: `deploy agentcore` without --run writes artifacts and touches no AWS API.
     const generated = await run(process.execPath, [CLI, "deploy", "agentcore"], dir);
     expect(generated.stderr, "generation did not write a template").toContain(TEMPLATE_FILE);
@@ -71,7 +82,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
       "cloudformation",
       "validate-template",
       "--template-body",
-      `file://${join(dir, TEMPLATE_FILE)}`,
+      `file://${join(agentDir, TEMPLATE_FILE)}`,
     ]);
     expect(validated.code, `CloudFormation rejected the generated template:\n${validated.stderr}`).toBe(0);
   });
