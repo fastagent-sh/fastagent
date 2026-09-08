@@ -170,7 +170,7 @@ async function runDeployAgentcore(
       {
         name,
         templatePath: `${agentPrefix}${TEMPLATE_FILE}`,
-        dockerfilePath: agentPrefix ? `${agentPrefix}Dockerfile` : undefined,
+        dockerfilePath: `${agentPrefix}Dockerfile`,
         tag: new Date()
           .toISOString()
           .replace(/[-:.TZ]/g, "")

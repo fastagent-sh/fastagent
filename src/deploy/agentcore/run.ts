@@ -36,8 +36,9 @@ export interface AgentcoreRunPlan {
   name: string;
   /** Template path relative to the run cwd (kit layout: `agent/agentcore.template.yaml`). */
   templatePath: string;
-  /** Dockerfile path for `-f` (kit layout only; the default context Dockerfile otherwise). */
-  dockerfilePath?: string;
+  /** Dockerfile path for `-f`. Always set: the artifacts live under the agent prefix, and the build
+   *  context is the workspace above it, so the default context Dockerfile is never the right one. */
+  dockerfilePath: string;
   /** Image tag for this deploy — the CALLER mints it unique (a timestamp): CloudFormation only rolls
    *  the runtime when the ImageUri value changes, so a reused tag would deploy nothing. */
   tag: string;
@@ -313,7 +314,7 @@ export async function deployAgentcoreRun(
   // 6. Build (linux/arm64) + push in one step.
   log(`building + pushing ${image} (linux/arm64)…`);
   const buildArgs = ["buildx", "build", "--platform", "linux/arm64", "-t", image, "--push"];
-  if (plan.dockerfilePath) buildArgs.push("-f", plan.dockerfilePath);
+  buildArgs.push("-f", plan.dockerfilePath);
   buildArgs.push(".");
   if ((await docker(buildArgs)).code !== 0) {
     return gate("`docker buildx build` failed — see the output above; fix and re-run");

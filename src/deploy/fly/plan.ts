@@ -191,9 +191,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   runbook.push(
     ``,
     `# The build context is the WORKSPACE ROOT (the whole directory is baked as the agent's cwd).`,
-    ...(input.agentPrefix
-      ? [`# The config/Dockerfile live under ${input.agentPrefix} so they never collide with the workspace's own.`]
-      : []),
+    `# The config/Dockerfile live under ${input.agentPrefix} so they never collide with the workspace's own.`,
     `# Before a new definition release, run \`fastagent deploy fly\` to refresh the release manifest.`,
     `# Run this from the workspace root:`,
     deployCmd,

@@ -85,22 +85,20 @@ function aptLayer(packages?: string[]): string {
 
 function dockerfile(input: ContainerInput): string {
   // The whole workspace is baked at /app; deps install (and the local bin lives) under the agent, which
-  // is either a subdirectory of it or /app itself. `into` prefixes a path, `at` runs a command there.
+  // deploy requires to be a SUBDIRECTORY of it (preflight gates a flat layout, containerArtifacts
+  // re-asserts it), so the prefix is never empty. `into` prefixes a path, `at` runs a command there.
   const prefix = input.agentPrefix;
+  const dir = prefix.replace(/\/$/, "");
   const into = (p: string): string => `${prefix}${p}`;
   // A build step that must run IN the agent dir (`RUN` already gets a shell from docker).
-  const at = (cmd: string): string => (prefix ? `cd ${prefix.replace(/\/$/, "")} && ${cmd}` : cmd);
+  const at = (cmd: string): string => `cd ${dir} && ${cmd}`;
   // The entrypoint. Only the BUN path needs a working directory (`bun run` resolves the script from the
   // package.json beside it), and a `cd` there means a shell — with `exec`, or sh stays PID 1 and swallows
   // the container's SIGTERM. The npm path needs no shell at all: the binary path is context-relative and
   // `start /app` is absolute, so exec form is both correct and signal-clean. (A `cd` on that path was a
   // bug: after `cd fastagent`, `./fastagent/node_modules/...` resolves one level too deep.)
-  const bunCmd = prefix
-    ? `["sh", "-c", "cd ${prefix.replace(/\/$/, "")} && exec bun run fastagent start /app"]`
-    : `["bun", "run", "fastagent", "start", "/app"]`;
-  const layoutNote = prefix
-    ? `The whole directory is the agent's workspace; the agent itself lives in ${prefix}`
-    : `The directory IS the agent — it is also its own workspace.`;
+  const bunCmd = `["sh", "-c", "cd ${dir} && exec bun run fastagent start /app"]`;
+  const layoutNote = `The whole directory is the agent's workspace; the agent itself lives in ${prefix}`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
   // different base is the operator's own Dockerfile (kept if present). deploy.apt is package-name-validated.
@@ -112,7 +110,7 @@ function dockerfile(input: ContainerInput): string {
   // environment, which is the one thing it must never do. Baked whenever the agent sits inside the
   // workspace, single agent or not — the value is a fact of this image, and asserting it means a build
   // context that dropped the agent fails loudly rather than serving a sibling.
-  const pin = prefix ? `ENV FASTAGENT_AGENT=${prefix.replace(/\/$/, "")}\n` : "";
+  const pin = `ENV FASTAGENT_AGENT=${dir}\n`;
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=/app/${into(RELEASE_FILE)}\nENV FASTAGENT_STORAGE_DIR=/data\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent`

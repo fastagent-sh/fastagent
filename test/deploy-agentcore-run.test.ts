@@ -40,6 +40,7 @@ const FORWARDER = { webhooks: true, forwarder: true, wakeAlarms: false };
 const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   name: "my-agent",
   templatePath: "agentcore.template.yaml",
+  dockerfilePath: "fastagent/Dockerfile",
   tag: "20260728",
   region: "us-west-2",
   secrets: {},
@@ -189,7 +190,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "version",
       "buildx version",
       "login --username AWS --password-stdin 123456789012.dkr.ecr.us-west-2.amazonaws.com",
-      "buildx build --platform linux/arm64 -t 123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728 --push .",
+      // `-f` is unconditional: the artifacts sit under the agent prefix and the context is the
+      // workspace above it, so the context's own Dockerfile is never the one to build.
+      "buildx build --platform linux/arm64 -t 123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728 --push -f fastagent/Dockerfile .",
     ]);
     // The ECR password flows stdout→stdin between the runners, never argv.
     expect(dockerCalls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");

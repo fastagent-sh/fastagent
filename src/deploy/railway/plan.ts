@@ -196,7 +196,6 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     input.shipsGit
       ? `# Railway uploads may strip .git. Clone inside the persistent workspace when collaboration needs history.`
       : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
-    `# Railway supports temporary download caches under /tmp, but cannot bind-mount temporary directories.`,
   );
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each

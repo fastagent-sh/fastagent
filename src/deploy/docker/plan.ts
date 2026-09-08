@@ -73,8 +73,8 @@ function composeYaml(input: DockerPlanInput): string {
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
   // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the
-  // WORKSPACE, so it climbs back out of the prefix (`..` per level, `.` when there is none).
-  const context = input.agentPrefix ? ".." : ".";
+  // WORKSPACE, so it climbs back out of the one-level prefix deploy requires.
+  const context = "..";
   const dockerfile = `${input.agentPrefix}Dockerfile`;
   const tunnelService = input.tunnel
     ? `
@@ -159,9 +159,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   }
 
   runbook.push(
-    input.agentPrefix
-      ? `# Run from the WORKSPACE ROOT (the directory containing ${input.agentPrefix}).`
-      : `# Run from this directory — it is both the agent and its workspace.`,
+    `# Run from the WORKSPACE ROOT (the directory containing ${input.agentPrefix}).`,
     `# The build bakes the whole directory as the agent's workspace; only the agent's own`,
     `# dependencies (${input.agentPrefix}package.json) are installed.`,
   );
