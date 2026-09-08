@@ -340,13 +340,6 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/c-<chat>/` — downloaded inbound files, one directory per chat.
 
-An upgrade from the earlier session-mode model leaves two dead things behind, and nothing removes them:
-the obsolete `owned-threads.json`, and `buffers.json` buckets keyed `<chat>:root:<id>`. The re-keying
-means no place key can produce that shape again, so those buckets can never be folded or cleared —
-**buffered discussion in threads does not survive the upgrade** (a chat's own bucket does), and it stays
-on disk holding that chat content until you delete it. Remove the file and those keys by hand, with the
-process stopped.
-
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
 after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
 between those writes, a failed ring write, or a duplicate older than the cap can therefore still re-run
@@ -373,32 +366,6 @@ directory or an independent `cwd`.
 `fastagent add feishu|lark` rewrites the tool, keeps `channels/<kind>.ts` and the credentials already in
 `.env`, and re-checks the app's group visibility. That is how an agent scaffolded by an earlier release
 picks up the current tool.
-
-## Upgrading from the session-mode releases
-
-Three behaviour changes, none of them opt-in:
-
-- **Direct messages become one continuous conversation** instead of one session per top-level message,
-  and a group summon is answered **in place** instead of opening a thread.
-- **Sessions are re-keyed** to the place (`<kind>:<chat_id>`, or `<kind>:<chat_id>:<thread_id>` in a
-  thread). Existing history is NOT migrated — every conversation starts fresh, which reads to users as
-  the Agent forgetting. The old session records stay in the store unreferenced; deleting them is
-  optional and safe.
-- **The concurrency unit changes with it.** Turns serialize per session, so a whole room is now one
-  queue: a second person's `@Agent` in a busy room waits behind an unrelated multi-minute turn (they
-  see the "⏳ Queued" card). Open a thread to run something alongside it.
-
-- **Unrelated to the model, but in the same release:** the scaffolded send tool's description gained a
-  "do not use this to answer the current turn" boundary (without it the Agent posts its reply twice).
-  An agent scaffolded earlier still carries the old text — re-run `fastagent add feishu|lark` to rewrite
-  the tool (see the send-tool section above).
-
-State does not clean itself up: `owned-threads.json` and the `buffers.json` buckets under the retired
-key shape are both left in place, unread and unreachable — which means **buffered discussion in threads
-does not survive the upgrade** (a chat's own bucket does), while its content stays on disk. Delete both
-by hand with the process stopped (see State & restarts above).
-
-Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
 
 ## Limits
 
