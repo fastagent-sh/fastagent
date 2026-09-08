@@ -257,12 +257,15 @@ src/
     │                         # must contend on the same lease and validate against the same registry
     ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half: lease (single-writer
     │                         # floor), terminals (settled message/thrown error → SPEC terminal +
-    │                         # retryable), EventQueue (push→pull), prompt image prep, the SPEC
+    │                         # retryable), prompt image prep, the SPEC
     │                         # projection, and the observation seam (RunControls + SessionObserver)
     ├── invoke-session.ts    # THE L0: pi's AgentSession, one per invoke, over the same durable
     │                         # record. Events translate ONCE into the rich SessionEvent vocabulary;
     │                         # the SPEC stream is its projection. Owns the run's identity, its
-    │                         # controls, and exactly one settlement
+    │                         # controls, and exactly one settlement. Its Effect scope stays alive through
+    │                         # consumer settlement; cancellation aborts and joins the actual SDK work
+    ├── session-effects.ts   # typed SDK failures and scoped lease/session acquisition shared by invocation
+    │                         # and control writes. Late acquisition keeps its lease; cleanup faults are logged
     ├── agent-session-factory.ts # the engine binding: the assembly (model/prompt/skills/tools) bound
     │                         # to one record per invoke. services shared, session per turn. Carries
     │                         # the adaptations pi's TUI origins require — see its header. bindPiSession

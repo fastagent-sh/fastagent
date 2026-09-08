@@ -231,22 +231,36 @@ a second way to start work, and never resident process state as the source of co
 Pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
 a value — a turn's outcome is the assistant message the stream ended on, never an index into session
 state (compaction and overflow recovery both rewrite that array mid-turn).
-`src/engines/pi/invoke-session.ts` combines the two into one async iterable, over the lease/terminal/
-queue parts in `turn-kit.ts`:
+`src/engines/pi/invoke-session.ts` combines the two into one async iterable. An Effect execution
+scope owns the shared lease, session and subscription; an Effect queue carries projected events.
+`turn-kit.ts` owns protocol projection and terminal classification. `session-effects.ts` supplies
+the scoped acquisition and typed SDK-failure adapters shared with control-plane writes:
 
 1. acquire the per-session lease;
 2. publish `run_started` with the run's controls — BEFORE binding, so a dispatch that races the build
    queues on it rather than finding no run;
 3. open/create the record and bind a session to it;
 4. subscribe, translating pi events ONCE into the rich `SessionEvent` vocabulary (the SPEC stream is
-   its projection);
+   its projection), then wake waiting controls so their synchronous queue events are observed;
 5. run the prompt;
-6. emit exactly one `completed` or `failed` terminal, then exactly one `run_settled`;
-7. unsubscribe, dispose, and release the lease.
+6. queue exactly one `completed` or `failed` terminal and wait for consumer settlement;
+7. unsubscribe, dispose, publish exactly one `run_settled`, and release the lease.
 
-Setup, model, and tool-loop failures become `failed` events rather than thrown iteration errors.
-Consumer cancellation runs generator cleanup and aborts the session. Cleanup anomalies are logged but
-cannot turn an already-terminal stream into a throw.
+The scope remains alive while output is buffered or the consumer is paused at its terminal. Controls
+reject after SDK work finishes. Consumer cancellation interrupts the execution fiber, aborts and joins
+actual SDK work, and silences pending reads. Acquisition remains uninterruptible so a late-created
+session cannot publish durable state after its lease is released.
+
+`SessionBusy` and `SessionOperationError` remain typed failures inside execution. Protocol boundaries
+translate failures and defects into `failed` events or existing `SessionResult` codes. Cleanup faults
+are logged independently, continue remaining finalizers, and cannot overwrite a published outcome.
+An external SDK callback defect stops the turn and becomes one failed terminal.
+
+Control mutations take the same fail-fast lease through scoped acquisition. Manual compaction owns
+its own execution scope: admission returns before model work finishes, and `compaction_finished`
+is published after cleanup and lease release. Assembly services remain explicitly injected and
+shared; sessions and subscriptions remain per-operation. These scopes do not own channel turns,
+durable replay policy, or service shutdown.
 
 pi retries a failed assistant request itself. That is free resilience while the turn is silent and
 corruption once it is not — SPEC deltas are append-only, so a second attempt would concatenate its
@@ -376,7 +390,8 @@ concurrent and repeated `close()` calls wait for the same completion or failure.
 uses that same shutdown, logging cleanup errors while preserving the startup failure. The public
 `ready` waiter stays outside the scope it may close; channel authors still return ordinary Promises
 and consume an `AbortSignal`. Agent turns and durable replay state remain outside this scope.
-Effect is an internal dependency of `/node`; the contracts and `/core` remain dependency-free.
+Effect is internal to `/node` service assembly and `/pi` execution/control. The contracts, `/core`,
+and `/session` remain dependency-free; public APIs expose no Effect runtime or types.
 
 `channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
 eager subscription, heartbeat, serialization and iterator cleanup. The callers own their event shapes.

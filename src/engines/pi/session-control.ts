@@ -13,6 +13,19 @@
  * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
+import {
+  type SessionBusy,
+  SessionOperationError,
+  acquireSession,
+  acquireSessionLease,
+  sessionCleanup,
+  sessionFailure,
+  sessionOperation,
+  sessionWork,
+} from "./session-effects.ts";
 import {
   type SessionEntry as PiSessionEntry,
   findCutPoint,
@@ -451,7 +464,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
 
   /** No boundary wiring — the write path does not exist in this deployment. A capability-gating
    *  client never lands here; one that does gets the same answer every gate publishes. */
-  const unsupported = (what: string): SessionResult => ({
+  const unsupported = (what: string): Extract<SessionResult, { ok: false }> => ({
     ok: false,
     error: {
       code: UNSUPPORTED_CAPABILITY_CODE,
@@ -460,17 +473,17 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
   });
 
-  const noSuchSession = (session: string): SessionResult => ({
+  const noSuchSession = (session: string): Extract<SessionResult, { ok: false }> => ({
     ok: false,
     error: { code: NO_SUCH_SESSION_CODE, message: `session "${session}" does not exist`, retryable: false },
   });
 
-  const invalid = (message: string): SessionResult => ({
+  const invalid = (message: string): Extract<SessionResult, { ok: false }> => ({
     ok: false,
     error: { code: INVALID_COMMAND_CODE, message, retryable: false },
   });
 
-  const busy = (): SessionResult => ({
+  const busy = (): Extract<SessionResult, { ok: false }> => ({
     ok: false,
     error: {
       code: SESSION_BUSY_CODE,
@@ -479,63 +492,80 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
   });
 
-  const failed = (error: unknown): SessionResult => ({
+  const failed = (error: unknown): Extract<SessionResult, { ok: false }> => ({
     ok: false,
     error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
   });
 
+  const runBoundary = (
+    command: Effect.Effect<SessionResult, SessionOperationError | SessionBusy, Scope.Scope>,
+  ): Promise<SessionResult> =>
+    Effect.runPromise(
+      Effect.scoped(command).pipe(
+        Effect.catchTag("SessionBusy", () => Effect.succeed(busy())),
+        Effect.catchCause((cause) => Effect.succeed(failed(sessionFailure(cause)))),
+      ),
+    );
+
   /** steer / follow_up / abort — the run actions. They reach the LIVE run through the controls
    *  registered with `run_started`; nothing durable is written. */
-  const runAction = async (session: string, action: SessionAction): Promise<SessionResult> => {
-    const run = active.get(session);
-    if (!run) {
-      // Run/compaction symmetry: an in-flight compaction is a model call too, and `abort` is its
-      // only door — interrupting it converges through the detached task's catch into
-      // `compaction_finished{aborted}` with the lease released; answering no_active_run against a
-      // state() that says "compacting" would be a lie.
-      const comp = action.type === "abort" ? compacting.get(session) : undefined;
-      if (comp) {
-        comp.abort();
-        return { ok: true }; // no runId — the outcome travels as compaction_finished{aborted}
-      }
-      // Rejected BEFORE acceptance: no run exists, nothing happened. retryable: false — the same
-      // call fails again; call it after state() shows an active run.
-      return {
-        ok: false,
-        error: {
-          code: NO_ACTIVE_RUN_CODE,
-          message: `no active run for this session — ${action.type} modulates a run an invoke is driving`,
-          retryable: false,
-        },
-      };
-    }
-    if (!run.controls) {
-      // A run EXISTS (state() rightly reports running) but was registered observation-only (the
-      // observer seam allows run_started without controls). That is a CAPABILITY problem, not a run
-      // problem — permanent for this wiring, so neither no_active_run (would poll forever) nor
-      // run_command_failed (transient) fits.
-      return {
-        ok: false,
-        error: {
-          code: UNSUPPORTED_CAPABILITY_CODE,
-          message: `the active run registered without modulation controls (observation-only) — ${action.type} cannot reach it`,
-          retryable: false,
-        },
-      };
-    }
-    try {
-      if (action.type === "steer") await run.controls.steer(action.prompt);
-      else if (action.type === "follow_up") await run.controls.followUp(action.prompt);
-      else await run.controls.abort();
-    } catch (error) {
-      // The run raced us to settlement, failed setup, or the engine refused: still pre-acceptance
-      // (nothing was queued), distinct from "no run existed". retryable: false for the same reason —
-      // the run is gone; consult state() before calling again.
-      return { ok: false, error: { code: RUN_COMMAND_FAILED_CODE, message: String(error), retryable: false } };
-    }
-    // Accepted: joined (or stopped) THIS run. The outcome arrives as run_settled.
-    return { ok: true, runId: run.runId };
-  };
+  const runAction = (session: string, action: SessionAction): Promise<SessionResult> =>
+    Effect.runPromise(
+      Effect.gen(function* (): Effect.fn.Return<SessionResult, SessionOperationError> {
+        const run = active.get(session);
+        if (!run) {
+          // Run/compaction symmetry: an in-flight compaction is a model call too, and `abort` is its
+          // only door — interrupting it converges through the detached task's catch into
+          // `compaction_finished{aborted}` with the lease released; answering no_active_run against a
+          // state() that says "compacting" would be a lie.
+          const comp = action.type === "abort" ? compacting.get(session) : undefined;
+          if (comp) {
+            comp.abort();
+            return { ok: true }; // no runId — the outcome travels as compaction_finished{aborted}
+          }
+          // Rejected BEFORE acceptance: no run exists, nothing happened. retryable: false — the same
+          // call fails again; call it after state() shows an active run.
+          return {
+            ok: false,
+            error: {
+              code: NO_ACTIVE_RUN_CODE,
+              message: `no active run for this session — ${action.type} modulates a run an invoke is driving`,
+              retryable: false,
+            },
+          };
+        }
+        if (!run.controls) {
+          // A run EXISTS (state() rightly reports running) but was registered observation-only (the
+          // observer seam allows run_started without controls). That is a CAPABILITY problem, not a run
+          // problem — permanent for this wiring, so neither no_active_run (would poll forever) nor
+          // run_command_failed (transient) fits.
+          return {
+            ok: false,
+            error: {
+              code: UNSUPPORTED_CAPABILITY_CODE,
+              message: `the active run registered without modulation controls (observation-only) — ${action.type} cannot reach it`,
+              retryable: false,
+            },
+          };
+        }
+        const controls = run.controls;
+        yield* sessionOperation(action.type, () =>
+          action.type === "steer"
+            ? controls.steer(action.prompt)
+            : action.type === "follow_up"
+              ? controls.followUp(action.prompt)
+              : controls.abort(),
+        );
+        return { ok: true, runId: run.runId };
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.succeed({
+            ok: false as const,
+            error: { code: RUN_COMMAND_FAILED_CODE, message: String(sessionFailure(cause)), retryable: false },
+          }),
+        ),
+      ),
+    );
 
   /**
    * {@link Session.update} — validate the whole patch, take the lease once, hand the writes to the
@@ -545,249 +575,232 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    * behind. What a value MEANS is decided here (a model spec against the registry, a level against
    * the model it lands on); how a record takes it is the store's.
    */
-  const updateOf = async (session: string, patch: SessionUpdate): Promise<SessionResult> => {
-    // Keys, not values: a field this runtime does not know must not be silently skipped — that is a
-    // client typo, or a newer client talking to an older serve, and both need to hear about it.
-    const named = Object.keys(patch) as SessionUpdateField[];
-    const unknown = named.filter((f) => !UPDATE_FIELDS.includes(f));
-    if (unknown.length > 0) {
-      return unsupported(`update field(s) ${unknown.join(", ")} — capabilities().updatable lists what this serve sets`);
-    }
-    const fields = named.filter((f) => patch[f] !== undefined);
-    if (fields.length === 0) return { ok: true }; // an empty patch asks for nothing, and gets it
-    const b = boundary;
-    if (!b) return unsupported(`update(${fields.join(", ")})`);
-
-    // PAYLOAD validation first — before the session is even opened, and long before the lease: an
-    // invalid value must not briefly block a run.
-    let model: AnyModel | undefined;
-    if (patch.model !== undefined) {
-      const slash = patch.model.indexOf("/");
-      model = slash > 0 ? b.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
-      if (!model) {
-        return invalid(`unknown model "${patch.model}" — capabilities().allowedModels lists the accepted specs`);
-      }
-    }
-    if (patch.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(patch.thinkingLevel)) {
-      return invalid(
-        `unknown thinking level "${patch.thinkingLevel}" — state().availableThinkingLevels lists what this session accepts`,
-      );
-    }
-    // A name is the client's own label; the only thing that cannot be one is nothing.
-    if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
-
-    // Sessions are created by invoke or copied by fork, never minted by an update: an unknown id is
-    // rejected, not turned into a ghost record. (Read-only handle — the WRITE one is opened under
-    // the lease below, and this one is discarded.)
-    const existing = await sessions.openIfExists(session);
-    if (!existing) return noSuchSession(session);
-
-    if (patch.leafEntryId !== undefined) {
-      // A target that cannot BE a leaf is a permanent payload error, not a session error — the same
-      // disposition as an unknown model spec. Same predicate `entries()` publishes by, so
-      // "everything published is a position" holds by construction rather than by two literals
-      // agreeing.
-      const entry = existing.getEntry(patch.leafEntryId) as PiSessionEntry | undefined;
-      if (!entry || !isNavigable(entry)) {
-        return invalid(
-          entry
-            ? `entry "${patch.leafEntryId}" is not a position — entries() publishes every id you can move to, and this is not one of them`
-            : `entry "${patch.leafEntryId}" does not exist in session "${session}" — entries() lists the positions`,
-        );
-      }
-    }
-    if (patch.thinkingLevel !== undefined) {
-      // The same set `state()` showed the client. Reject here rather than record a level the run
-      // would not use. The read is guarded because this must never REJECT — the contract promises a
-      // SessionResult, so an unreadable chain has to arrive as a code.
-      let resolved: ReturnType<typeof resolveSessionSettings>;
-      try {
-        // Against the path this patch LANDS on: a leaf move is written first, and the branch it
-        // moves to can carry a model override of its own — validating on the path being left would
-        // reject a level the destination supports, and accept one it does not.
-        resolved = resolveSessionSettings(activePath(existing, patch.leafEntryId), b.models, b.defaults);
-      } catch (error) {
-        return failed(error);
-      }
-      // An explicit model in the same patch wins over the one that path resolves to: it is applied
-      // after the move, so it is what the session ends up running.
-      const target = model ?? resolved.model;
-      const levels = model ? (getSupportedThinkingLevels(model) as string[]) : resolved.availableThinkingLevels;
-      if (!levels.includes(patch.thinkingLevel)) {
-        return invalid(
-          `thinking level "${patch.thinkingLevel}" is not supported by ${target.provider}/${target.id} (allowed: ${levels.join(", ")})`,
-        );
-      }
-    }
-
-    // The control plane's writes take the same lease as every run — a write must never race one
-    // (design §9).
-    const release = b.lease.tryAcquire(session);
-    if (!release) return busy();
-    let applied: Awaited<ReturnType<PiSessionRecordStore["applyProperties"]>>;
-    try {
-      // HOW a record takes a property — order, the leaf pointer, the name pi rewrites — is the
-      // store's to know. This asks for the writes and is told what landed.
-      applied = await sessions.applyProperties(session, {
-        ...(patch.name !== undefined ? { name: patch.name } : {}),
-        ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
-        ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
-        ...(patch.leafEntryId !== undefined ? { leafEntryId: patch.leafEntryId } : {}),
-      });
-    } catch (error) {
-      // Opening the record failed — nothing was written; the same patch may succeed on retry. The
-      // lease is freed by the `finally` on the way out, once.
-      return failed(error);
-    } finally {
-      release();
-    }
-    if (!applied) return noSuchSession(session); // vanished in the window: same condition, same code
-
-    if (applied.landed.length > 0) {
-      // ONE event for the patch, built from what the RECORD holds. The settings pair rides along
-      // whenever anything but the name changed: model and thinking level are one setting, and a
-      // moved leaf can drop an override that used to apply.
-      let settings: ReturnType<typeof resolveSessionSettings> | undefined;
-      if (applied.path) {
-        try {
-          settings = resolveSessionSettings(applied.path, b.models, b.defaults);
-        } catch (error) {
-          // Already durable, so an unresolvable pair must NOT read as "nothing took effect": report
-          // the position without it and let the next invoke — which walks the same path — be where
-          // the fault surfaces.
-          log.warn(`[fastagent] session ${session}: updated, settings unresolvable: ${String(error)}`);
+  const updateOf = (session: string, patch: SessionUpdate): Promise<SessionResult> =>
+    runBoundary(
+      Effect.gen(function* () {
+        // Keys, not values: a field this runtime does not know must not be silently skipped — that is a
+        // client typo, or a newer client talking to an older serve, and both need to hear about it.
+        const named = Object.keys(patch) as SessionUpdateField[];
+        const unknown = named.filter((f) => !UPDATE_FIELDS.includes(f));
+        if (unknown.length > 0) {
+          return unsupported(
+            `update field(s) ${unknown.join(", ")} — capabilities().updatable lists what this serve sets`,
+          );
         }
-      }
-      emitOwn(session, {
-        type: "state_changed",
-        timestamp: Date.now(),
-        data: {
-          ...(applied.landed.includes("leafEntryId") ? { leafEntryId: applied.leafEntryId as string } : {}),
-          ...(settings && applied.landed.some((f) => f !== "name")
-            ? { model: `${settings.model.provider}/${settings.model.id}`, thinkingLevel: settings.thinkingLevel }
-            : {}),
-          ...(applied.landed.includes("name") && applied.name ? { name: applied.name } : {}),
-        },
-      });
-    }
-    if (applied.failure !== undefined) {
-      // `boundary_command_failed` means nothing durable landed. When something did, the client needs
-      // a different sentence — and the fields, so it knows what its retry would repeat.
-      return applied.landed.length === 0
-        ? failed(applied.failure)
-        : {
+        const fields = named.filter((f) => patch[f] !== undefined);
+        if (fields.length === 0) return { ok: true }; // an empty patch asks for nothing, and gets it
+        const b = boundary;
+        if (!b) return unsupported(`update(${fields.join(", ")})`);
+
+        // PAYLOAD validation first — before the session is even opened, and long before the lease: an
+        // invalid value must not briefly block a run.
+        let model: AnyModel | undefined;
+        if (patch.model !== undefined) {
+          const slash = patch.model.indexOf("/");
+          model = slash > 0 ? b.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
+          if (!model) {
+            return invalid(`unknown model "${patch.model}" — capabilities().allowedModels lists the accepted specs`);
+          }
+        }
+        if (patch.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(patch.thinkingLevel)) {
+          return invalid(
+            `unknown thinking level "${patch.thinkingLevel}" — state().availableThinkingLevels lists what this session accepts`,
+          );
+        }
+        // A name is the client's own label; the only thing that cannot be one is nothing.
+        if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
+
+        // Sessions are created by invoke or copied by fork, never minted by an update: an unknown id is
+        // rejected, not turned into a ghost record. (Read-only handle — the WRITE one is opened under
+        // the lease below, and this one is discarded.)
+        const existing = yield* sessionOperation("read session", () => sessions.openIfExists(session));
+        if (!existing) return noSuchSession(session);
+
+        if (patch.leafEntryId !== undefined) {
+          // A target that cannot BE a leaf is a permanent payload error, not a session error — the same
+          // disposition as an unknown model spec. Same predicate `entries()` publishes by, so
+          // "everything published is a position" holds by construction rather than by two literals
+          // agreeing.
+          const entry = existing.getEntry(patch.leafEntryId) as PiSessionEntry | undefined;
+          if (!entry || !isNavigable(entry)) {
+            return invalid(
+              entry
+                ? `entry "${patch.leafEntryId}" is not a position — entries() publishes every id you can move to, and this is not one of them`
+                : `entry "${patch.leafEntryId}" does not exist in session "${session}" — entries() lists the positions`,
+            );
+          }
+        }
+        if (patch.thinkingLevel !== undefined) {
+          // The same set `state()` showed the client. Reject here rather than record a level the run
+          // would not use. The read is guarded because this must never REJECT — the contract promises a
+          // SessionResult, so an unreadable chain has to arrive as a code.
+          let resolved: ReturnType<typeof resolveSessionSettings>;
+          try {
+            // Against the path this patch LANDS on: a leaf move is written first, and the branch it
+            // moves to can carry a model override of its own — validating on the path being left would
+            // reject a level the destination supports, and accept one it does not.
+            resolved = resolveSessionSettings(activePath(existing, patch.leafEntryId), b.models, b.defaults);
+          } catch (error) {
+            return failed(error);
+          }
+          // An explicit model in the same patch wins over the one that path resolves to: it is applied
+          // after the move, so it is what the session ends up running.
+          const target = model ?? resolved.model;
+          const levels = model ? (getSupportedThinkingLevels(model) as string[]) : resolved.availableThinkingLevels;
+          if (!levels.includes(patch.thinkingLevel)) {
+            return invalid(
+              `thinking level "${patch.thinkingLevel}" is not supported by ${target.provider}/${target.id} (allowed: ${levels.join(", ")})`,
+            );
+          }
+        }
+
+        // Release before publishing state_changed: an observer may immediately issue another command.
+        const applied = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* acquireSessionLease(b.lease, session);
+            return yield* sessionOperation("update", () =>
+              sessions.applyProperties(session, {
+                ...(patch.name !== undefined ? { name: patch.name } : {}),
+                ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
+                ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
+                ...(patch.leafEntryId !== undefined ? { leafEntryId: patch.leafEntryId } : {}),
+              }),
+            );
+          }),
+        );
+        if (!applied) return noSuchSession(session); // vanished in the window: same condition, same code
+
+        if (applied.landed.length > 0) {
+          // ONE event for the patch, built from what the RECORD holds. The settings pair rides along
+          // whenever anything but the name changed: model and thinking level are one setting, and a
+          // moved leaf can drop an override that used to apply.
+          let settings: ReturnType<typeof resolveSessionSettings> | undefined;
+          if (applied.path) {
+            try {
+              settings = resolveSessionSettings(applied.path, b.models, b.defaults);
+            } catch (error) {
+              // Already durable, so an unresolvable pair must NOT read as "nothing took effect": report
+              // the position without it and let the next invoke — which walks the same path — be where
+              // the fault surfaces.
+              log.warn(`[fastagent] session ${session}: updated, settings unresolvable: ${String(error)}`);
+            }
+          }
+          emitOwn(session, {
+            type: "state_changed",
+            timestamp: Date.now(),
+            data: {
+              ...(applied.landed.includes("leafEntryId") ? { leafEntryId: applied.leafEntryId as string } : {}),
+              ...(settings && applied.landed.some((f) => f !== "name")
+                ? { model: `${settings.model.provider}/${settings.model.id}`, thinkingLevel: settings.thinkingLevel }
+                : {}),
+              ...(applied.landed.includes("name") && applied.name ? { name: applied.name } : {}),
+            },
+          });
+        }
+        if (applied.failure !== undefined) {
+          // `boundary_command_failed` means nothing durable landed. When something did, the client needs
+          // a different sentence — and the fields, so it knows what its retry would repeat.
+          return applied.landed.length === 0
+            ? failed(applied.failure)
+            : {
+                ok: false,
+                error: {
+                  code: PARTIAL_UPDATE_CODE,
+                  message: `applied ${applied.landed.join(", ")}, then failed: ${String(applied.failure)} — read state() before retrying`,
+                  retryable: false,
+                },
+              };
+        }
+        return { ok: true };
+      }),
+    );
+
+  /** Admission waits for binding and local preparation, not the model call. Its execution scope
+   *  survives the control response; completion is published only after releasing the shared lease. */
+  const compactOf = (session: string, instructions?: string): Promise<SessionResult> => {
+    const admitted = Deferred.makeUnsafe<SessionResult>();
+    let accepted = false;
+    let aborted = false;
+    const work = Effect.scoped(
+      Effect.gen(function* (): Effect.fn.Return<
+        { summary: string } | Extract<SessionResult, { ok: false }>,
+        SessionBusy | SessionOperationError,
+        Scope.Scope
+      > {
+        const b = boundary;
+        if (!b) return unsupported("compact()");
+        const existing = yield* sessionOperation("read session", () => sessions.openIfExists(session));
+        if (!existing) return noSuchSession(session);
+        yield* acquireSessionLease(b.lease, session);
+        const bound = yield* acquireSession(b.sessionFactory, session);
+        // Use Pi's own thresholds: a different cut point can admit work Pi later refuses.
+        if (
+          !hasCompactableHistory(
+            bound.sessionManager.getBranch(),
+            bound.settingsManager.getCompactionSettings().keepRecentTokens,
+          )
+        ) {
+          return {
             ok: false,
             error: {
-              code: PARTIAL_UPDATE_CODE,
-              message: `applied ${applied.landed.join(", ")}, then failed: ${String(applied.failure)} — read state() before retrying`,
+              code: NOTHING_TO_COMPACT_CODE,
+              message: "nothing to compact — the session has no compactable history yet; retry after more turns",
               retryable: false,
             },
-          };
-    }
-    return { ok: true };
-  };
-
-  /**
-   * ACCEPT-FAST compaction: a full model call (tens of seconds is normal), so holding the call open
-   * until it finishes would make acceptance = outcome — the one exception to §5.2, and what broke
-   * remote clients whose request timeouts are sized for control calls. This answers once the work is
-   * ADMITTED (lease held, session bound); the outcome travels as
-   * `compaction_finished{summary|error|aborted}`.
-   *
-   * Admission is everything cheap and local: binding the session (the ONE canonical resolution of
-   * overrides + auth) plus the compaction PREPARATION, a pure branch read. The boundary between
-   * "reject" and "the outcome travels as an event" sits where the work becomes asynchronous and
-   * expensive: the model call. "Nothing to compact" is therefore a pre-acceptance answer, never a
-   * finished{error} dressed as a failure — pi reports it as a throw from compact(), too late.
-   */
-  const compactOf = async (session: string, instructions?: string): Promise<SessionResult> => {
-    const b = boundary;
-    if (!b) return unsupported("compact()");
-    const existing = await sessions.openIfExists(session);
-    if (!existing) return noSuchSession(session);
-    const release = b.lease.tryAcquire(session);
-    if (!release) return busy();
-
-    let bound: Awaited<ReturnType<typeof b.sessionFactory>>;
-    try {
-      bound = await b.sessionFactory(session);
-    } catch (error) {
-      release();
-      return failed(error);
-    }
-    const teardown = () => {
-      try {
-        bound.dispose();
-      } catch (error) {
-        log.warn(`[fastagent] compaction session teardown failed: ${String(error)}`);
-      }
-    };
-    try {
-      // The SAME settings pi will use inside compact(): asking with different thresholds would
-      // either reject a compaction pi would have run, or admit one it refuses — and its refusal
-      // arrives too late to be a pre-acceptance answer.
-      const path = bound.sessionManager.getBranch();
-      if (!hasCompactableHistory(path, bound.settingsManager.getCompactionSettings().keepRecentTokens)) {
-        teardown();
-        release();
-        // A no-op, not a failure — its OWN code (the NO_ACTIVE_RUN pattern): a client must
-        // machine-distinguish "give up" from "call again once the session grows", and branching on
-        // message prose is forbidden by contract.
-        return {
-          ok: false,
-          error: {
-            code: NOTHING_TO_COMPACT_CODE,
-            message: "nothing to compact — the session has no compactable history yet; retry after more turns",
-            retryable: false,
+          } as const;
+        }
+        accepted = true;
+        compacting.set(session, {
+          abort: () => {
+            aborted = true;
+            bound.abortCompaction();
           },
-        };
-      }
-    } catch (error) {
-      teardown();
-      release();
-      return failed(error);
-    }
-    // Pi creates the abort controller after an await and emits compaction_start immediately after.
-    // Retain early cancellation until that event; there is no time limit on session startup.
-    let aborted = false;
-    compacting.set(session, {
-      abort: () => {
-        aborted = true;
-        bound.abortCompaction();
-      },
-    });
-    emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
-    void (async () => {
-      let outcome: { summary: string } | { error: string } | { aborted: true };
-      // Retries are otherwise invisible between compaction_started and _finished — surface each
-      // backoff so a long gap is diagnosable (not confusable with a hang): as a session event for
-      // attached observers, as a warn for server logs.
-      const unsub = bound.subscribe((event) => {
-        if (event.type === "compaction_start" && event.reason === "manual" && aborted) bound.abortCompaction();
-        if (event.type !== "summarization_retry_scheduled") return;
-        log.warn(
-          `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
+        });
+        emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+        yield* Deferred.succeed(admitted, { ok: true });
+        yield* Effect.acquireRelease(
+          Effect.try({
+            try: () =>
+              bound.subscribe((event) => {
+                // Pi creates the controller after an await; retain an early stop until this event.
+                if (event.type === "compaction_start" && event.reason === "manual" && aborted) bound.abortCompaction();
+                if (event.type !== "summarization_retry_scheduled") return;
+                log.warn(
+                  `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
+                );
+                emitOwn(session, toRetryScheduledEvent(event));
+              }),
+            catch: (error) => new SessionOperationError("subscribe", error),
+          }),
+          (unsubscribe) => sessionCleanup("unsubscribe", unsubscribe),
         );
-        emitOwn(session, toRetryScheduledEvent(event));
-      });
-      try {
-        const done = await bound.compact(instructions);
-        outcome = { summary: done.summary };
-      } catch (error) {
-        // A deliberate stop is not a failure — run/compaction symmetry with run_settled{aborted}:
-        // the intent is the classification, same discipline as run abort attribution (a racing real
-        // failure still reads as aborted).
-        outcome = aborted ? { aborted: true } : { error: String(error) };
-      }
-      unsub();
-      teardown();
-      // Release BEFORE emitting finished: a watcher seeing finished may act next — "finished ⇒ the
-      // lease is free and status is no longer compacting" must hold.
-      compacting.delete(session);
-      release();
-      emitOwn(session, { type: "compaction_finished", timestamp: Date.now(), data: outcome });
-    })();
-    return { ok: true };
+        const done = yield* sessionWork(
+          "compact",
+          () => bound.compact(instructions),
+          () => bound.abortCompaction(),
+        );
+        return { summary: done.summary };
+      }),
+    ).pipe(
+      Effect.catchTag("SessionBusy", () => Effect.succeed(busy())),
+      Effect.catchCause((cause) => Effect.succeed(failed(sessionFailure(cause)))),
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          if (accepted) {
+            compacting.delete(session);
+            emitOwn(session, {
+              type: "compaction_finished",
+              timestamp: Date.now(),
+              data: "summary" in result ? result : aborted ? { aborted: true } : { error: result.error.message },
+            });
+          }
+          Deferred.doneUnsafe(admitted, Effect.succeed("summary" in result ? { ok: true } : result));
+        }),
+      ),
+    );
+    // The admitted operation, rather than the request waiting on this Deferred, owns the scope.
+    Effect.runFork(work);
+    return Effect.runPromise(Deferred.await(admitted));
   };
 
   /**
@@ -797,95 +810,80 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    * safe rather than merely quiet: the same `into` naming a session that came from somewhere else is
    * a rejection, not an overwrite.
    */
-  const forkOf = async (options: { from: string; at: string; into: string }): Promise<SessionResult> => {
-    const { from, at, into } = options;
-    /** WHICH fork this is: source + branch point. Two forks of one session at different entries are
-     *  different requests, so a retry of one must not be answered by the other. */
-    const provenance = `${from}@${at}`;
-    const b = boundary;
-    if (!b) return unsupported("fork()");
-    // An id no client could then open: the empty string, `.` and `..` are not URL path segments
-    // (isAddressableSession), so minting one would put a row in list() that nothing can address —
-    // listed, unopenable by the client that just listed it.
-    if (!isAddressableSession(into)) {
-      return invalid(`${JSON.stringify(into)} cannot be a session id — the control plane could not address it`);
-    }
-    const source = await sessions.openIfExists(from);
-    if (!source) return noSuchSession(from);
-    // The entry predicate is the one `entries()` publishes by, so "everything published is forkable"
-    // holds by construction — the same argument the leaf move makes.
-    const entry = source.getEntry(at) as PiSessionEntry | undefined;
-    if (!entry || !isNavigable(entry)) {
-      return invalid(`entry "${at}" is not a forkable position in session "${from}" — entries() lists the ids`);
-    }
-    const existingTarget = await sessions.openIfExists(into);
-    if (existingTarget) {
-      // Already forked from HERE: the request already happened, so answering ok is the truth rather
-      // than a convenience. Anything else under that id is a different history, and saying yes would
-      // be the id lying about what it holds.
-      return forkProvenance(existingTarget) === provenance
-        ? { ok: true }
-        : invalid(`session "${into}" already exists with a different history — fork mints nothing over it`);
-    }
+  const forkOf = (options: { from: string; at: string; into: string }): Promise<SessionResult> =>
+    runBoundary(
+      Effect.gen(function* () {
+        const { from, at, into } = options;
+        /** WHICH fork this is: source + branch point. Two forks of one session at different entries are
+         *  different requests, so a retry of one must not be answered by the other. */
+        const provenance = `${from}@${at}`;
+        const b = boundary;
+        if (!b) return unsupported("fork()");
+        // An id no client could then open: the empty string, `.` and `..` are not URL path segments
+        // (isAddressableSession), so minting one would put a row in list() that nothing can address —
+        // listed, unopenable by the client that just listed it.
+        if (!isAddressableSession(into)) {
+          return invalid(`${JSON.stringify(into)} cannot be a session id — the control plane could not address it`);
+        }
+        const source = yield* sessionOperation("read fork source", () => sessions.openIfExists(from));
+        if (!source) return noSuchSession(from);
+        // The entry predicate is the one `entries()` publishes by, so "everything published is forkable"
+        // holds by construction — the same argument the leaf move makes.
+        const entry = source.getEntry(at) as PiSessionEntry | undefined;
+        if (!entry || !isNavigable(entry)) {
+          return invalid(`entry "${at}" is not a forkable position in session "${from}" — entries() lists the ids`);
+        }
+        const existingTarget = yield* sessionOperation("read fork target", () => sessions.openIfExists(into));
+        if (existingTarget) {
+          // Already forked from HERE: the request already happened, so answering ok is the truth rather
+          // than a convenience. Anything else under that id is a different history, and saying yes would
+          // be the id lying about what it holds.
+          return forkProvenance(existingTarget) === provenance
+            ? { ok: true }
+            : invalid(`session "${into}" already exists with a different history — fork mints nothing over it`);
+        }
 
-    // BOTH ends. The source lease keeps the copy from reading a history a run is mid-write on; the
-    // destination lease closes the window the existence check above leaves open — an invoke creating
-    // `into`, or a second fork from a DIFFERENT source (whose source lease is another key entirely),
-    // otherwise lands between that check and this write. tryAcquire never blocks, so taking two
-    // cannot deadlock.
-    const release = b.lease.tryAcquire(from);
-    if (!release) return busy();
-    const releaseInto = b.lease.tryAcquire(into);
-    if (!releaseInto) {
-      release();
-      return busy();
-    }
-    try {
-      // Holding the lease is not the same as having looked: re-asked under it, as the update path
-      // re-opens its record, so an id taken inside the window is a payload error rather than a
-      // store failure the client would read as retryable.
-      const raced = await sessions.openIfExists(into);
-      if (raced) {
-        return forkProvenance(raced) === provenance
-          ? { ok: true }
-          : invalid(`session "${into}" already exists with a different history — fork mints nothing over it`);
-      }
-      await sessions.fork(from, at, into, provenance);
-    } catch (error) {
-      // Nothing durable landed: the copy is staged and published by rename.
-      return failed(error);
-    } finally {
-      releaseInto();
-      release();
-    }
-    return { ok: true };
-  };
+        // BOTH ends. The source lease keeps the copy from reading a history a run is mid-write on; the
+        // destination lease closes the window the existence check above leaves open — an invoke creating
+        // `into`, or a second fork from a DIFFERENT source (whose source lease is another key entirely),
+        // otherwise lands between that check and this write. tryAcquire never blocks, so taking two
+        // cannot deadlock.
+        yield* acquireSessionLease(b.lease, from);
+        yield* acquireSessionLease(b.lease, into);
+        // Recheck under both leases: another creator may have taken the target since validation.
+        const raced = yield* sessionOperation("read fork target", () => sessions.openIfExists(into));
+        if (raced) {
+          return forkProvenance(raced) === provenance
+            ? { ok: true }
+            : invalid(`session "${into}" already exists with a different history — fork mints nothing over it`);
+        }
+        yield* sessionOperation("fork", () => sessions.fork(from, at, into, provenance));
+        return { ok: true };
+      }),
+    );
 
-  const deleteOf = async (session: string): Promise<SessionResult> => {
-    const b = boundary;
-    if (!b) return unsupported("delete()");
-    const existing = await sessions.openIfExists(session);
-    if (!existing) return noSuchSession(session);
-    // The same lease as a run: a delete racing one would pull the record out from under it.
-    const release = b.lease.tryAcquire(session);
-    if (!release) return busy();
-    try {
-      // It was there before the lease and is gone now — the same real condition the check above
-      // answers, so the same code.
-      if (!(await sessions.delete(session))) return noSuchSession(session);
-    } catch (error) {
-      // A delete that throws left the record in place.
-      return failed(error);
-    } finally {
-      release();
-    }
-    // The session is gone, so its live streams have nothing left to report: end them rather than
-    // hold connections open on a record that no longer exists. A client's reconnect then reads an
-    // empty `state()`, which is the truth.
-    for (const sub of [...(subscribers.get(session) ?? [])]) sub.close();
-    subscribers.delete(session);
-    return { ok: true };
-  };
+  const deleteOf = (session: string): Promise<SessionResult> =>
+    runBoundary(
+      Effect.gen(function* () {
+        const b = boundary;
+        if (!b) return unsupported("delete()");
+        const existing = yield* sessionOperation("read session", () => sessions.openIfExists(session));
+        if (!existing) return noSuchSession(session);
+        const removed = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* acquireSessionLease(b.lease, session);
+            return yield* sessionOperation("delete", () => sessions.delete(session));
+          }),
+        );
+        if (!removed) return noSuchSession(session);
+        // The session is gone, so its live streams have nothing left to report: end them rather than
+        // hold connections open on a record that no longer exists. A client's reconnect then reads an
+        // empty `state()`, which is the truth.
+        for (const sub of [...(subscribers.get(session) ?? [])]) sub.close();
+        subscribers.delete(session);
+        return { ok: true };
+      }),
+    );
 
   const control: SessionControl = {
     capabilities: reads.capabilities,

@@ -21,6 +21,7 @@ import { collect, AgentFailure } from "../src/collect.ts";
 import { describe, expect, it } from "vitest";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
+import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 
 /**
  * A per-invoke `AgentSession` factory over one faux model. `dir` makes the record durable (the
@@ -179,3 +180,62 @@ describe("AgentSession L0: pi's auto-retry vs. append-only deltas", () => {
     expect(toolRuns).toBe(1);
   });
 });
+
+it.each(["return", "throw"] as const)(
+  "quiet consumer %s aborts the actual tool and joins its cleanup before releasing",
+  async (method) => {
+    const entered = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    const finishCleanup = Promise.withResolvers<void>();
+    const lease = inProcessLease();
+    const factory = await sessionFactory([fauxAssistantMessage(fauxToolCall("wait", {}, { id: "blocked" }))], {
+      customTools: [
+        {
+          name: "wait",
+          label: "wait",
+          description: "Wait for cancellation",
+          parameters: Type.Object({}),
+          execute: async (_id, _args, signal) => {
+            signal!.addEventListener("abort", () => aborted.resolve(), { once: true });
+            entered.resolve();
+            await finishCleanup.promise;
+            return { content: [{ type: "text", text: "cleaned" }], details: {} };
+          },
+        } as ToolDefinition,
+      ],
+    });
+    let disposed = false;
+    const agent = createPiAgentFromSession({
+      lease,
+      sessionFactory: async (id) => {
+        const session = await factory(id);
+        const dispose = session.dispose.bind(session);
+        session.dispose = () => {
+          disposed = true;
+          dispose();
+        };
+        return session;
+      },
+    });
+    const iterator = agent.invoke({ session: "quiet" }, { text: "go" })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: "tool_started" });
+    await entered.promise;
+    const pending = iterator.next();
+    const error = new Error("consumer stopped");
+    const closing = method === "return" ? iterator.return?.() : iterator.throw?.(error);
+    const checked = method === "return" ? closing : expect(closing).rejects.toBe(error);
+    try {
+      await aborted.promise;
+      expect(disposed).toBe(false);
+      expect(lease.tryAcquire("quiet")).toBeNull();
+    } finally {
+      finishCleanup.resolve();
+      await checked;
+    }
+    expect(await pending).toEqual({ done: true, value: undefined });
+    expect(disposed).toBe(true);
+    const release = lease.tryAcquire("quiet");
+    expect(release).toBeTypeOf("function");
+    release?.();
+  },
+);

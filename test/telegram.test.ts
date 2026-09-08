@@ -11,6 +11,8 @@ import {
 } from "../src/telegram.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxControlledAgent } from "./agent.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
 function replyingAgent(reply = "") {
@@ -144,6 +146,47 @@ describe("durable group buffer (single-process restarts)", () => {
   // Summon on "@go …" — an explicit route keeps these tests independent of bot-identity resolution.
   const route = (u: TelegramUpdate) =>
     (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? {} : null;
+
+  it("runs the real engine after ACK and commits only the folded discussion on completion", async () => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let sawDiscussion = false;
+    const { agent, control } = await fauxControlledAgent([
+      async (context) => {
+        sawDiscussion = JSON.stringify(context.messages).includes("earlier discussion");
+        entered.resolve();
+        await finish.promise;
+        return fauxAssistantMessage("answer");
+      },
+    ]);
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    const channel = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state, control });
+    await channel(tgRequest(group(1, "earlier discussion")));
+    const request = new AbortController();
+    expect((await channel(new Request(tgRequest(group(2, "@go answer")), { signal: request.signal }))).status).toBe(
+      200,
+    );
+    request.abort();
+    try {
+      await entered.promise;
+      expect(sawDiscussion).toBe(true);
+      expect(Object.keys(JSON.parse(readFileSync(join(state, "turns.json"), "utf8")))).toHaveLength(1);
+      expect(await control.sessions.get("-100").update({ name: "while running" })).toMatchObject({
+        ok: false,
+        error: { code: "session_busy" },
+      });
+      await channel(tgRequest(group(3, "later arrival")));
+    } finally {
+      finish.resolve();
+    }
+    await Promise.all([...channelIdles].map((idle) => idle()));
+    expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({});
+    const buffered = readFileSync(join(state, "buffers.json"), "utf8");
+    expect(buffered).toContain("later arrival");
+    expect(buffered).not.toContain("earlier discussion");
+    expect(await control.sessions.get("-100").update({ name: "after completion" })).toEqual({ ok: true });
+  });
 
   it("the group buffer is persisted BEFORE the ACK and survives a restart", async () => {
     vi.stubGlobal("fetch", okFetch());
