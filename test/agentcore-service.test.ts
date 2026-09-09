@@ -44,7 +44,7 @@ describe("deferred AgentCore initialization", () => {
     // 30s ceiling never absorbed and 60s stopped absorbing too — a full `npm test` run puts a fork on
     // every core, and this stage is import-bound, so contention scales it by more than 3x. Raise the
     // budget rather than cap parallelism (vitest.config.ts states why). It still bounds a genuine hang:
-    // the file's other eleven tests answer in single-digit milliseconds, so only THIS one can spend it.
+    // the file's other ten tests answer in ~10ms or less, so only THIS one can spend it.
   }, 120_000);
 
   it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
