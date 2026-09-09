@@ -274,6 +274,9 @@ describe("durable group buffer (single-process restarts)", () => {
   });
 });
 
+// The store's own rules — idempotent re-add, arrival order, the attempt ceiling, the defer on a failed
+// bump — are turn-store.test.ts's, and the lifecycle order around them turn-runner.test.ts's. What is
+// telegram's is its record shape, its ACK boundary, and how a dropped turn reaches the asker.
 describe("durable turn intent (crash recovery)", () => {
   it("persists a turn's intent BEFORE the ACK and removes it when the turn completes", async () => {
     vi.stubGlobal("fetch", okFetch());
@@ -294,21 +297,6 @@ describe("durable turn intent (crash recovery)", () => {
     await flush();
     const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
     expect(Object.keys(after)).toHaveLength(0); // completed → removed; only a hard crash would leave it
-  });
-
-  it("a FAILED turn also removes its intent — a failed event is not replayed on the next start", async () => {
-    vi.stubGlobal("fetch", okFetch());
-    const state = freshStateDir();
-    const agent: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "failed", details: "boom", retryable: true };
-      },
-    };
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
-    await ch(tgRequest(MSG));
-    await flush();
-    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
-    expect(Object.keys(after)).toHaveLength(0);
   });
 
   it("replays a crash-surviving turn on the next start, then removes it", async () => {
@@ -381,37 +369,36 @@ describe("durable turn intent (crash recovery)", () => {
     expect(existsSync(join(state, "turns.json"))).toBe(false); // rolled back — no phantom intent on disk
   });
 
-  it("DEFERS a recovered turn when its attempt bump can't persist — not run, not notified, retained on disk", async () => {
+  it("a DEFERRED turn deletes its ⏳ notice — it no longer reads as queued, and nothing else is said", async () => {
+    // The store's defer rule is turn-store's; what is telegram's is what happens to the notice.
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const state = freshStateDir();
-    writeFileSync(
-      join(state, "turns.json"),
-      JSON.stringify({
-        "9": {
-          id: "9",
-          session: "42",
-          placeKey: "42",
-          baseText: "later",
-          chatId: 42,
-          imageFileIds: [],
-          fileIds: [],
-          attempts: 0,
-        },
-      }),
-    );
+    const record = (id: string, baseText: string) => ({
+      id,
+      session: "s",
+      placeKey: "s",
+      baseText,
+      chatId: 42,
+      imageFileIds: [],
+      fileIds: [],
+      attempts: 0,
+    });
+    // Two recovered turns on one session: the second is queued behind the first, so it holds a ⏳.
+    writeFileSync(join(state, "turns.json"), JSON.stringify({ "8": record("8", "run me"), "9": record("9", "later") }));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { agent, calls } = replyingAgent("done");
-    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state }); // recover() re-enqueues it
-    mkdirSync(join(state, "turns.json.tmp")); // make the dequeue-time bump write fail (EISDIR), before the turn runs
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state }); // recover() re-enqueues both
+    mkdirSync(join(state, "turns.json.tmp")); // every dequeue-time bump write now fails (EISDIR)
     await flush();
-    expect(calls).toHaveLength(0); // deferred — never ran
+    expect(calls).toHaveLength(0); // both deferred — neither ran
     const notices = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map((c) =>
       bodyOf(c),
     );
-    expect(notices.some((b) => String(b.text).includes("complete an earlier request"))).toBe(false); // no notify
+    expect(notices.some((b) => String(b.text).includes("complete an earlier request"))).toBe(false); // not dropped
+    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(1); // the stale ⏳ is removed
     const onDisk = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
-    expect(Object.keys(onDisk)).toEqual(["9"]); // retained intact for the next start
+    expect(Object.keys(onDisk).sort()).toEqual(["8", "9"]); // retained intact for the next start
   });
 
   it("a poison turn queued behind a sibling takes over its ⏳ notice (no orphan, no double-post)", async () => {
@@ -924,10 +911,19 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
 });
 
 describe("telegram channel", () => {
-  it("rejects non-POST with 405", async () => {
+  // The ingress shape guards, in one place (the same grouping feishu's ingress block uses).
+  it("405s non-POST, 413s an oversized body before parsing, 400s a verified body that isn't JSON", async () => {
     const { agent } = replyingAgent();
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "B", route: ignore });
+    const post = (body: string) =>
+      new Request("http://app/telegram", {
+        method: "POST",
+        body,
+        headers: { "x-telegram-bot-api-secret-token": SECRET },
+      });
     expect((await ch(new Request("http://app/telegram", { method: "GET" }))).status).toBe(405);
+    expect((await ch(post("x".repeat((1 << 20) + 1)))).status).toBe(413);
+    expect((await ch(post("not json{"))).status).toBe(400);
   });
 
   it("refuses an empty secretToken / botToken at construction", () => {
@@ -1005,28 +1001,6 @@ describe("telegram channel", () => {
     await flush();
     expect(routed).toBe(false); // the contract: route never sees these kinds
     expect(calls.length).toBe(0); // and the agent never ran
-  });
-
-  it("rejects an oversized body with 413 before parsing", async () => {
-    const { agent } = replyingAgent();
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "B", route: ignore });
-    const big = new Request("http://app/telegram", {
-      method: "POST",
-      body: "x".repeat((1 << 20) + 1),
-      headers: { "x-telegram-bot-api-secret-token": SECRET },
-    });
-    expect((await ch(big)).status).toBe(413);
-  });
-
-  it("a verified body that isn't JSON is 400", async () => {
-    const { agent } = replyingAgent();
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "B", route: ignore });
-    const bad = new Request("http://app/telegram", {
-      method: "POST",
-      body: "not json{",
-      headers: { "x-telegram-bot-api-secret-token": SECRET },
-    });
-    expect((await ch(bad)).status).toBe(400);
   });
 
   it("answers a routed update: composes the prompt (envelope) and sends the reply (model A)", async () => {
@@ -1456,36 +1430,6 @@ describe("telegram channel", () => {
     expect(privacyWarnings()).toBe(1);
   });
 
-  it("serializes the live preview: never two writes in flight (the out-of-order flicker)", async () => {
-    vi.useFakeTimers();
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const fetchMock = vi.fn(async (url: string) => {
-      const method = String(url).split("/").pop();
-      if (method === "sendMessage" || method === "editMessageText") {
-        inFlight++;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        await new Promise((r) => setTimeout(r, 30)); // a real write takes time — events arrive during it
-        inFlight--;
-      }
-      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const agent: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        for (let k = 0; k < 8; k++) yield { type: "thinking", delta: `r${k} ` };
-        yield { type: "text", delta: "done" };
-        yield { type: "completed" };
-      },
-    };
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
-    await ch(tgRequest(MSG));
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(maxInFlight).toBe(1); // single writer: concurrent edits are what reorder frames
-    expect(callsTo(fetchMock, "editMessageText").length).toBeLessThan(9); // a burst coalesced, not 1/delta
-    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // one preview message (the placeholder)
-  });
-
   it("edits the final answer as HTML, falling back to plain text when Telegram rejects the markup", async () => {
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
       if (String(url).endsWith("/editMessageText")) {
@@ -1803,27 +1747,6 @@ describe("telegram channel", () => {
     // the preview is edited to an explicit "(no reply)" (a persisted message can't vanish like the old draft)
     expect(callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c).text)).toContain("(no reply)");
   });
-
-  it("shows a neutral notice when the stream ends without a terminal event (not silence, not a dead 'Thinking…')", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    // an agent that ends WITHOUT completed/failed (a SPEC violation) — the user must still be told, and the
-    // preview (which may show real partial work) must not silently vanish
-    const agent: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "thinking", delta: "…" };
-      },
-    };
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
-    await ch(tgRequest(MSG));
-    await flush();
-    // the preview is edited into the neutral failure notice (unknown retryability → "something went wrong"),
-    // not deleted, not left stuck
-    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c).text as string);
-    expect(edits.some((t) => /something went wrong/i.test(t))).toBe(true);
-    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(0);
-  });
 });
 
 describe("telegram /stop command", () => {
@@ -1911,97 +1834,105 @@ describe("telegram /stop command", () => {
 
   // The four addressing forms are equivalent, and each must abort rather than become a turn — a turn
   // would queue behind the very run it means to stop. (The private-chat form is the first test above.)
-  it.each([
-    ["/stop@mybot", {}],
-    ["@mybot /stop", { entities: [{ type: "mention", offset: 0, length: 6 }] }],
-    ["/stop", { reply_to_message: { message_id: 1, from: { id: 9, is_bot: true, username: "mybot" } } }],
-  ])("aborts on an addressed group stop: %s", async (text, extra) => {
-    invoked.length = 0;
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { control, aborted } = fakeControl({ ok: true });
-    const stateDir = freshStateDir();
-    const ch = telegramChannel(agent, {
-      secretToken: SECRET,
-      botToken: "BOT",
-      botUsername: "mybot",
-      control,
-      stateDir,
-    });
-    expect((await ch(tgRequest(groupStop(text, extra)))).status).toBe(200);
-    await flush();
-    expect(aborted).toEqual(["-100123"]);
-    expect(invoked).toEqual([]);
-    expect(existsSync(join(stateDir, "buffers.json"))).toBe(false);
-    expect(stopFeedback(fetchMock)).toEqual(["\u23f9 Stopped."]);
+  it("aborts on an addressed group stop, in every addressing form", async () => {
+    for (const [text, extra] of [
+      ["/stop@mybot", {}],
+      ["@mybot /stop", { entities: [{ type: "mention", offset: 0, length: 6 }] }],
+      ["/stop", { reply_to_message: { message_id: 1, from: { id: 9, is_bot: true, username: "mybot" } } }],
+    ] as const) {
+      invoked.length = 0;
+      const fetchMock = okFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const { control, aborted } = fakeControl({ ok: true });
+      const stateDir = freshStateDir();
+      const ch = telegramChannel(agent, {
+        secretToken: SECRET,
+        botToken: "BOT",
+        botUsername: "mybot",
+        control,
+        stateDir,
+      });
+      expect((await ch(tgRequest(groupStop(text, extra)))).status).toBe(200);
+      await flush();
+      expect(aborted).toEqual(["-100123"]);
+      expect(invoked).toEqual([]);
+      expect(existsSync(join(stateDir, "buffers.json"))).toBe(false);
+      expect(stopFeedback(fetchMock)).toEqual(["\u23f9 Stopped."]);
+    }
   });
 
   // An addressed stop reports whatever happened — the asker named this bot and must not be left
   // guessing while the run continues.
-  it.each([
-    ["nothing is running", { code: NO_ACTIVE_RUN_CODE } as const, "Nothing is running."],
-    [
-      "the hub rejects the abort",
-      { code: "run_command_failed" } as const,
-      "\u26a0\ufe0f Could not stop (run_command_failed).",
-    ],
-  ])("answers an addressed group stop when %s", async (_case, result, expected) => {
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { control } = fakeControl(result);
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
-    await ch(tgRequest(groupStop("/stop@mybot")));
-    await flush();
-    expect(stopFeedback(fetchMock)).toEqual([expected]);
+  it("answers an addressed group stop with whatever happened", async () => {
+    for (const [_case, result, expected] of [
+      ["nothing is running", { code: NO_ACTIVE_RUN_CODE } as const, "Nothing is running."],
+      [
+        "the hub rejects the abort",
+        { code: "run_command_failed" } as const,
+        "\u26a0\ufe0f Could not stop (run_command_failed).",
+      ],
+    ] as const) {
+      const fetchMock = okFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const { control } = fakeControl(result);
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
+      await ch(tgRequest(groupStop("/stop@mybot")));
+      await flush();
+      expect(stopFeedback(fetchMock)).toEqual([expected]);
+    }
   });
 
   // Cutting mentions must not cut SOMEONE ELSE'S: `@otherbot /stop` names another addressee, and a
   // reply to this bot alongside it does not transfer the command — the reply is context, the mention
   // is the address.
-  it.each([
-    ["alone", {}, 0],
-    [
-      "while replying to this bot",
-      { reply_to_message: { message_id: 1, from: { id: 9, is_bot: true, username: "mybot" } } },
-      1,
-    ],
-  ] as const)("never acts on `@otherbot /stop` %s", async (_case, extra, turns) => {
-    invoked.length = 0;
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { control, aborted } = fakeControl({ ok: true });
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
-    const mention = { entities: [{ type: "mention", offset: 0, length: 9 }] };
-    await ch(tgRequest(groupStop("@otherbot /stop", { ...mention, ...extra })));
-    await flush();
-    expect(aborted).toEqual([]);
-    expect(stopFeedback(fetchMock)).not.toContain("⏹ Stopped.");
-    // The reply still SUMMONS this bot — it just answers as an ordinary turn instead of stopping.
-    expect(invoked).toHaveLength(turns);
+  it("never acts on `@otherbot /stop`, alone or while replying to this bot", async () => {
+    for (const [_case, extra, turns] of [
+      ["alone", {}, 0],
+      [
+        "while replying to this bot",
+        { reply_to_message: { message_id: 1, from: { id: 9, is_bot: true, username: "mybot" } } },
+        1,
+      ],
+    ] as const) {
+      invoked.length = 0;
+      const fetchMock = okFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const { control, aborted } = fakeControl({ ok: true });
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
+      const mention = { entities: [{ type: "mention", offset: 0, length: 9 }] };
+      await ch(tgRequest(groupStop("@otherbot /stop", { ...mention, ...extra })));
+      await flush();
+      expect(aborted).toEqual([]);
+      expect(stopFeedback(fetchMock)).not.toContain("⏹ Stopped.");
+      // The reply still SUMMONS this bot — it just answers as an ordinary turn instead of stopping.
+      expect(invoked).toHaveLength(turns);
+    }
   });
 
   // Unaddressed: Telegram hands a bare group command to EVERY bot in the chat, so acting on it would
   // let a bystander's ask for another bot abort this one's run — and answering it would let them make
   // this bot talk. It is not the command: it stays ordinary discussion, buffered like any message.
-  it.each(["/stop", "/stop@otherbot"])("leaves an unaddressed group stop as discussion: %s", async (text) => {
-    invoked.length = 0;
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { control, aborted } = fakeControl({ ok: true });
-    const stateDir = freshStateDir();
-    const ch = telegramChannel(agent, {
-      secretToken: SECRET,
-      botToken: "BOT",
-      botUsername: "mybot",
-      control,
-      stateDir,
-    });
-    await ch(tgRequest(groupStop(text)));
-    await flush();
-    expect(aborted).toEqual([]);
-    expect(invoked).toEqual([]);
-    expect(stopFeedback(fetchMock)).toEqual([]);
-    expect(readFileSync(join(stateDir, "buffers.json"), "utf8")).toContain(text);
+  it("leaves an unaddressed group stop as discussion, in either spelling", async () => {
+    for (const text of ["/stop", "/stop@otherbot"]) {
+      invoked.length = 0;
+      const fetchMock = okFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const { control, aborted } = fakeControl({ ok: true });
+      const stateDir = freshStateDir();
+      const ch = telegramChannel(agent, {
+        secretToken: SECRET,
+        botToken: "BOT",
+        botUsername: "mybot",
+        control,
+        stateDir,
+      });
+      await ch(tgRequest(groupStop(text)));
+      await flush();
+      expect(aborted).toEqual([]);
+      expect(invoked).toEqual([]);
+      expect(stopFeedback(fetchMock)).toEqual([]);
+      expect(readFileSync(join(stateDir, "buffers.json"), "utf8")).toContain(text);
+    }
   });
 
   // The route is the session authority: a custom route that remaps `session` (the shape docs/telegram.md

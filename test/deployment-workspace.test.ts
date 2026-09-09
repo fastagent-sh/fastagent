@@ -133,9 +133,8 @@ describe("deployed workspace lifecycle", () => {
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe("rotated credential");
   });
 
-  it.each(["before-switch", "after-old-move", "after-new-move"])(
-    "recovers an interrupted definition update: %s",
-    async (point) => {
+  it("recovers an interrupted definition update, whichever step it stopped at", async () => {
+    for (const point of ["before-switch", "after-old-move", "after-new-move"]) {
       const { source, root } = await fixture();
       const base = await applyDeploymentRelease(source, root, release("one"));
       const meta = join(root, ".deployment");
@@ -147,8 +146,8 @@ describe("deployed workspace lifecycle", () => {
       await applyDeploymentRelease(source, root, release("two"));
       expect(await readFile(join(base, "fastagent/persona.md"), "utf8")).toBe("complete new definition");
       expect(await readdir(meta)).toEqual(["applied.json"]);
-    },
-  );
+    }
+  });
 
   it("refuses an existing workspace without ownership metadata", async () => {
     const { source, root } = await fixture();

@@ -18,16 +18,6 @@ describe("serve: router", () => {
   const handle = router(routes);
   const req = (method: string, path: string) => new Request(`http://h${path}`, { method });
 
-  it("HEAD is served by a GET route, with no body", async () => {
-    // Deliberate, and a change from the hand-rolled matcher that answered 405: RFC 9110 makes HEAD
-    // identical to GET except for the content, so a server supporting GET on a path supports HEAD
-    // on it. The control plane advertises only GET in allow-methods, which is what a browser obeys.
-    const handle = router({ "GET /x": () => new Response("body-here") });
-    const head = await handle(new Request("http://h/x", { method: "HEAD" }));
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe("");
-  });
-
   it("matches method + path, 405 on a known path with the wrong method, 404 otherwise", async () => {
     expect((await handle(req("POST", "/webhook"))).status).toBe(202);
     expect((await handle(req("GET", "/health"))).status).toBe(200);
@@ -164,16 +154,7 @@ describe("serve: the route path language", () => {
     expect(() => router({}, [at("/a"), at("/b")])).not.toThrow();
   });
 
-  it("HEAD carries no content whichever route answers it", async () => {
-    // Not only the GET fallback: an explicit HEAD route and a method-less one are HEAD responses too.
-    const explicit = router({ "HEAD /x": () => new Response("should not ship") });
-    expect(await (await explicit(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
-    const anyMethod = router({ "/x": () => new Response("should not ship") });
-    expect(await (await anyMethod(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
-    expect(await (await anyMethod(new Request("http://h/x"))).text()).toBe("should not ship"); // GET unaffected
-  });
-
-  it("HEAD is answered from GET, without the content — and an explicit HEAD wins", async () => {
+  it("HEAD is answered from GET without the content, whichever route answers — and an explicit HEAD wins", async () => {
     // RFC 9110. Dropped here rather than left to the HTTP layer, because this handler is public
     // surface: a caller invoking it directly must get the same answer the socket would carry.
     const fromGet = router({ "GET /x": () => new Response("body", { headers: { "x-mark": "1" } }) });
@@ -181,6 +162,12 @@ describe("serve: the route path language", () => {
     expect(head.status).toBe(200);
     expect(head.headers.get("x-mark")).toBe("1"); // headers survive; only the content goes
     expect(await head.text()).toBe("");
+    // Not only the GET fallback: an explicit HEAD route and a method-less one are HEAD responses too.
+    const explicitOnly = router({ "HEAD /x": () => new Response("should not ship") });
+    expect(await (await explicitOnly(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
+    const anyMethod = router({ "/x": () => new Response("should not ship") });
+    expect(await (await anyMethod(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
+    expect(await (await anyMethod(new Request("http://h/x"))).text()).toBe("should not ship"); // GET unaffected
     // Writing one explicitly is allowed, and takes precedence — nothing here is unreachable.
     const explicit = router({
       "GET /x": () => new Response("get"),

@@ -123,25 +123,17 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(out).toContain("# fly secrets set --app bot FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
   });
 
-  it("includes Slack secrets and its manual Events API Request URL", () => {
-    const out = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack"]) }));
+  // WHICH webhook steps a runbook carries is webhookRunbook's — deploy-channel-ingress owns that. What
+  // is fly's is the base URL those steps are spelled with, and the secrets its own list computes.
+  it("spells every webhook step at the fly URL, alongside that channel's secrets", () => {
+    const out = runbook(
+      planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack", "feishu"]) }),
+    );
     expect(out).toContain("SLACK_BOT_TOKEN=<value>");
     expect(out).toContain("SLACK_SIGNING_SECRET=<value>");
-    expect(out).toContain("POST /slack");
     expect(out).toContain("https://bot.fly.dev/slack");
-  });
-
-  it("prints one event Request URL for each mounted Feishu-cloud kind", () => {
-    const feishu = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["feishu"]) }));
-    expect(feishu).toContain("POST /feishu");
-    expect(feishu).toContain("https://bot.fly.dev/feishu");
-    expect(feishu).not.toContain("https://bot.fly.dev/lark");
-
-    const both = runbook(
-      planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["feishu", "lark"]) }),
-    );
-    expect(both).toContain("https://bot.fly.dev/feishu");
-    expect(both).toContain("https://bot.fly.dev/lark");
+    expect(out).toContain("https://bot.fly.dev/feishu");
+    expect(out).not.toContain("https://bot.fly.dev/lark"); // only what is mounted
   });
 
   it("bakes config deploy.apt into the generated Dockerfile (G6 — system tools the agent's tools need)", () => {
@@ -166,26 +158,16 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).toContain("--region <region>"); // placeholder, not a hardcoded 2nd region that could drift
   });
 
-  it("pins the global-install Dockerfile to the current version for a pure markdown agent", () => {
-    const docker = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasPackageJson: false }));
-    expect(docker).toContain("npm i -g @fastagent-sh/fastagent@9.9.9");
+  it("the markdown path pins the global install and ALWAYS uses node:22-slim, whatever the runtime says", () => {
+    const md = { ...base, modelAuth: undefined, channels: [], hasPackageJson: false } as const;
+    const docker = dockerfile(planFlyDeploy(md));
+    expect(docker).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned to the current version
     expect(docker).not.toContain("npm ci");
-  });
-
-  it("markdown path ALWAYS uses node:22-slim (npm i -g), even if runtime is somehow bun (oven/bun has no npm)", () => {
-    const docker = dockerfile(
-      planFlyDeploy({
-        ...base,
-        modelAuth: undefined,
-        channels: [],
-        hasPackageJson: false,
-        runtime: "bun",
-        bunVersion: "1.3.13",
-      }),
-    );
-    expect(docker).toContain("FROM node:22-slim"); // never oven/bun — the global npm i -g needs npm
-    expect(docker).not.toContain("oven/bun");
-    expect(docker).toContain("npm i -g @fastagent-sh/fastagent");
+    // Even a bun workspace: oven/bun has no npm, so the global install needs the node base.
+    const asBun = dockerfile(planFlyDeploy({ ...md, runtime: "bun", bunVersion: "1.3.13" }));
+    expect(asBun).toContain("FROM node:22-slim");
+    expect(asBun).not.toContain("oven/bun");
+    expect(asBun).toContain("npm i -g @fastagent-sh/fastagent");
   });
 
   it("artifacts namespaced under fastagent/, agent deps installed, .git shipped, explicit deploy flags", () => {

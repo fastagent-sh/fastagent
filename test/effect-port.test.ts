@@ -19,101 +19,107 @@ it("keeps a Promise port's failure typed until a boundary handles it", () => {
   >();
 });
 
-it.each(["resolve", "reject"])("portJoin joins interrupted work before cleanup (%s)", async (settle) => {
-  const pending = Promise.withResolvers<void>();
-  const entered = Promise.withResolvers<void>();
-  const abort = new AbortController();
-  let cleaned = false;
-  const done = Effect.runPromiseExit(
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            cleaned = true;
-          }),
-        );
-        yield* portJoin(() => {
-          entered.resolve();
-          return pending.promise;
-        });
-      }),
-    ),
-    { signal: abort.signal },
-  );
-  try {
-    await entered.promise;
-    abort.abort();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(cleaned).toBe(false);
-  } finally {
-    if (settle === "resolve") pending.resolve();
-    else pending.reject(new Error("late port failure"));
-    await done;
-  }
-  expect(cleaned).toBe(true);
-  const exit = await done;
-  expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-});
-
-it.each(["throw", "reject"])("preserves the original failure (%s)", async (mode) => {
-  const error = new Error("port broke");
-  const exit = await Effect.runPromiseExit(
-    portJoin(() => {
-      if (mode === "throw") throw error;
-      return Promise.reject(error);
-    }),
-  );
-  expect(Exit.isFailure(exit) && portError(exit.cause)).toBe(error);
-});
-
-it.each(["resolve", "reject"])("portAbort joins outstanding work (%s) even when its hook fails", async (settle) => {
-  const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-  const pending = Promise.withResolvers<void>();
-  const entered = Promise.withResolvers<void>();
-  const abortCalled = Promise.withResolvers<void>();
-  const abort = new AbortController();
-  let released = false;
-  const done = Effect.runPromiseExit(
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            released = true;
-          }),
-        );
-        yield* portAbort(
-          "prompt",
-          () => {
+it("portJoin joins interrupted work before cleanup, however it settles", async () => {
+  for (const settle of ["resolve", "reject"]) {
+    const pending = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    let cleaned = false;
+    const done = Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              cleaned = true;
+            }),
+          );
+          yield* portJoin(() => {
             entered.resolve();
             return pending.promise;
-          },
-          () => {
-            abortCalled.resolve();
-            throw new Error("abort hook failed");
-          },
-        );
-      }),
-    ),
-    { signal: abort.signal },
-  );
-  try {
-    await entered.promise;
-    abort.abort();
-    await abortCalled.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(released).toBe(false);
-    // The label names WHICH abort could not be delivered — one tag, but distinguishable diagnostics.
-    expect(warn.mock.calls.flat().join(" ")).toContain("prompt abort failed during cleanup");
-    expect(warn.mock.calls.flat().join(" ")).toContain("abort hook failed");
-  } finally {
-    if (settle === "resolve") pending.resolve();
-    else pending.reject(new Error("port failed after cancellation"));
-    await done;
-    warn.mockRestore();
+          });
+        }),
+      ),
+      { signal: abort.signal },
+    );
+    try {
+      await entered.promise;
+      abort.abort();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(cleaned).toBe(false);
+    } finally {
+      if (settle === "resolve") pending.resolve();
+      else pending.reject(new Error("late port failure"));
+      await done;
+    }
+    expect(cleaned).toBe(true);
+    const exit = await done;
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
   }
-  const exit = await done;
-  expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-  expect(released).toBe(true);
+});
+
+it("preserves the original failure whether the port throws or rejects", async () => {
+  for (const mode of ["throw", "reject"]) {
+    const error = new Error("port broke");
+    const exit = await Effect.runPromiseExit(
+      portJoin(() => {
+        if (mode === "throw") throw error;
+        return Promise.reject(error);
+      }),
+    );
+    expect(Exit.isFailure(exit) && portError(exit.cause)).toBe(error);
+  }
+});
+
+it("portAbort joins outstanding work even when its hook fails, however it settles", async () => {
+  for (const settle of ["resolve", "reject"]) {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const pending = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const abortCalled = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    let released = false;
+    const done = Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              released = true;
+            }),
+          );
+          yield* portAbort(
+            "prompt",
+            () => {
+              entered.resolve();
+              return pending.promise;
+            },
+            () => {
+              abortCalled.resolve();
+              throw new Error("abort hook failed");
+            },
+          );
+        }),
+      ),
+      { signal: abort.signal },
+    );
+    try {
+      await entered.promise;
+      abort.abort();
+      await abortCalled.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(released).toBe(false);
+      // The label names WHICH abort could not be delivered — one tag, but distinguishable diagnostics.
+      expect(warn.mock.calls.flat().join(" ")).toContain("prompt abort failed during cleanup");
+      expect(warn.mock.calls.flat().join(" ")).toContain("abort hook failed");
+    } finally {
+      if (settle === "resolve") pending.resolve();
+      else pending.reject(new Error("port failed after cancellation"));
+      await done;
+      warn.mockRestore();
+    }
+    const exit = await done;
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    expect(released).toBe(true);
+  }
 });
 
 it("portAbort does not run its hook for a Promise that was never created", async () => {
@@ -136,9 +142,8 @@ it("portAbort does not run its hook for a Promise that was never created", async
   expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ _tag: "PortFailure" });
 });
 
-it.each([false, true])(
-  "portRequest preserves a failure and closes its signal (synchronous=%s)",
-  async (synchronous) => {
+it("portRequest preserves a failure and closes its signal, thrown synchronously or rejected", async () => {
+  for (const synchronous of [false, true]) {
     const error = new Error("request failed");
     let signal: AbortSignal | undefined;
     const work = portRequest((s) => {
@@ -148,8 +153,8 @@ it.each([false, true])(
     }, 10_000);
     await expect(Effect.runPromise(work.pipe(Effect.mapError((e) => e.cause)))).rejects.toBe(error);
     expect(signal?.aborted).toBe(true);
-  },
-);
+  }
+});
 
 it("a virtual deadline aborts and joins a real fetch response body", async () => {
   const entered = Promise.withResolvers<void>();

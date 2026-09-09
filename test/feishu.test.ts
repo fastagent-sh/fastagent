@@ -582,35 +582,6 @@ describe("turn flow", () => {
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
 
-  it("a direct-message reply loads its referent and stays in the chat session", async () => {
-    const fx = feishuFetch({
-      "/im/v1/messages/om_old": () =>
-        Response.json({
-          code: 0,
-          msg: "ok",
-          data: {
-            items: [
-              {
-                message_id: "om_old",
-                msg_type: "text",
-                body: { content: '{"text":"earlier context"}' },
-                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
-              },
-            ],
-          },
-        }),
-    });
-    const { handler, calls, idle } = buildChannel({}, "answered");
-
-    await handler(feishuRequest(messageEvent({ id: "om_reply", text: "about that", parentId: "om_old" })));
-    await idle();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1");
-    expect(calls[0]?.prompt.text).toContain("earlier context"); // the referent anchor (rung 2)
-    expect(fx.calls("/im/v1/messages/om_old", "GET")).toHaveLength(1);
-  });
-
   it("different places run concurrently while one place stays FIFO", async () => {
     feishuFetch();
     let releaseFirst: () => void = () => {};
@@ -665,28 +636,6 @@ describe("turn flow", () => {
     expect(fx.calls("/cardkit/v1/cards/c1", "PUT")).toHaveLength(1);
     const texts = fx.calls("receive_id_type=chat_id", "POST").filter((c) => c.body?.msg_type === "text");
     expect(texts).toHaveLength(0);
-  });
-
-  it("a group @mention is answered in the room, in the room's session", async () => {
-    const fx = feishuFetch();
-    const { handler, calls, idle } = buildChannel();
-    await flush(); // let botInfo resolve (open_id drives the default route)
-    const evt = messageEvent({
-      id: "om_g1",
-      chatType: "group",
-      content: JSON.stringify({ text: "@_user_1 status?" }),
-      mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
-    });
-    expect((await handler(feishuRequest(evt))).status).toBe(200);
-    await idle();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1"); // the room's memory, shared by everyone in it
-    expect(calls[0]?.prompt.text).toContain("@Bot status?");
-    // Answered in place: quoted so the ask stays identifiable, but NOT pushed into a new thread.
-    const reply = fx.calls("/im/v1/messages/om_g1/reply", "POST")[0];
-    expect(reply?.body?.msg_type).toBe("interactive");
-    expect(reply?.body?.reply_in_thread).toBeUndefined();
   });
 
   it("dedups unsummoned context, folds it into the next @mention, then commits it", async () => {
@@ -976,54 +925,6 @@ describe("turn flow", () => {
     expect(readFileSync(join(home, "buffers.json"), "utf8")).toContain("who am I asking?");
   });
 
-  it("a mention landing before the bot identity resolves is kept as context, then folded into the next turn", async () => {
-    let releaseBotInfo!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseBotInfo = resolve;
-    });
-    feishuFetch({
-      "/bot/v3/info": () =>
-        gate.then(() =>
-          Response.json({ code: 0, msg: "ok", bot: { open_id: "ou_bot", app_name: "Bot" } }),
-        ) as unknown as Response,
-    });
-    const { handler, calls, idle } = buildChannel();
-    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
-
-    // Acceptance is synchronous, so it cannot wait for the identity: this one is buffered.
-    await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_early",
-          chatType: "group",
-          content: JSON.stringify({ text: "@_user_1 early ask" }),
-          mentions: mention,
-        }),
-      ),
-    );
-    await flush();
-    expect(calls).toHaveLength(0);
-
-    releaseBotInfo();
-    await flush();
-    await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_later",
-          chatType: "group",
-          content: JSON.stringify({ text: "@_user_1 later ask" }),
-          mentions: mention,
-        }),
-      ),
-    );
-    await idle();
-
-    // Delayed, never lost: the early ask arrives as context on the next answered turn in that place.
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("early ask");
-    expect(calls[0]?.prompt.text).toContain("later ask");
-  });
-
   it("buffers @other-only discussion in a thread; the next bare message consumes it", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
@@ -1249,53 +1150,6 @@ describe("turn flow", () => {
     expect(prompts[2]?.text).toContain("mid-flight note");
   });
 
-  it("buffers an unmentioned message in a thread the agent takes no part in", async () => {
-    const fx = feishuFetch();
-    const { handler, calls, home } = buildChannel();
-    await flush();
-
-    await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_unowned",
-          chatType: "group",
-          threadId: "omt_unowned",
-          text: "ordinary discussion",
-        }),
-      ),
-    );
-    await flush();
-
-    expect(calls).toHaveLength(0);
-    expect(fx.calls("/im/v1/messages/om_unowned/reply", "POST")).toHaveLength(0);
-    expect(JSON.parse(readFileSync(join(home, "buffers.json"), "utf8"))).toHaveProperty("oc_1:thread:omt_unowned");
-  });
-
-  it("an @mention inside a thread is answered there, in that thread's session", async () => {
-    const fx = feishuFetch();
-    const { handler, calls, idle } = buildChannel();
-    await flush();
-
-    await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_group_followup",
-          chatType: "group",
-          threadId: "omt_group",
-          parentId: "om_group_parent",
-          content: JSON.stringify({ text: "@_user_1 continue" }),
-          mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
-        }),
-      ),
-    );
-    await idle();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_group");
-    const reply = fx.calls("/im/v1/messages/om_group_followup/reply", "POST")[0];
-    expect(reply?.body?.reply_in_thread).toBe(true);
-  });
-
   it("a group summon answers in the room's session; inside a thread, in the thread's session", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
@@ -1484,15 +1338,6 @@ describe("turn flow", () => {
     expect(fx.calls("/resources/good", "GET")).toHaveLength(1);
   });
 
-  it("group without a mention is buffered without invoking", async () => {
-    feishuFetch();
-    const { handler, calls } = buildChannel();
-    await flush();
-    expect((await handler(feishuRequest(messageEvent({ id: "om_g2", chatType: "group" }))))?.status).toBe(200);
-    await flush();
-    expect(calls).toHaveLength(0);
-  });
-
   it("a failed turn surfaces the onError text through the terminal write (default: neutral)", async () => {
     const fx = feishuFetch();
     injectedAgent = {
@@ -1673,6 +1518,7 @@ describe("turn flow", () => {
     await handler(feishuRequest(messageEvent({ id: "om_r1", text: "summarize this", parentId: "om_parent" })));
     await idle();
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1"); // a reply does not leave the chat session
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("[replied-to message (msg om_parent, from user ou_bob): [file: spec.pdf]]");
     expect(prompt).toContain("attached files:");

@@ -102,7 +102,9 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     );
   });
 
-  it("gates when a webhook registration terminally fails — after attempting the remaining channels", async () => {
+  // What is railway's here is the MINTED domain reaching the shared registrar and the gate becoming
+  // this run's outcome; WHICH channels register, and how manual/failed read, is deploy-channel-ingress.
+  it("registers at the minted domain, and a terminal failure becomes the run's gate", async () => {
     const { railway } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
@@ -128,108 +130,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       ok: false,
       gate: expect.stringMatching(/webhook registration failed for: telegram/),
     });
-    expect(registerFeishu).toHaveBeenCalledWith("https://bot-production.up.railway.app", "feishu"); // one failure doesn't skip the rest
-  });
-
-  it("dispatches Feishu and Lark registration through the per-kind seam", async () => {
-    const { railway } = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: "" };
-      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const registerFeishu = vi.fn(
-      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
-    );
-
-    const out = await deployRailwayRun(plan({ channels: declaredChannels(["feishu", "lark"]) }), railway, () => {}, {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      feishu: registerFeishu,
-    });
-
-    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(registerFeishu.mock.calls).toEqual([
-      ["https://bot-production.up.railway.app", "feishu"],
-      ["https://bot-production.up.railway.app", "lark"],
-    ]);
-  });
-
-  it("dispatches Slack registration through the local onboarding seam", async () => {
-    const { railway } = fakeRailway((args) => {
-      if (args[0] === "status") return { stdout: "" };
-      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
-
-    const out = await deployRailwayRun(plan({ channels: declaredChannels(["slack"]) }), railway, () => {}, {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      feishu: undefined,
-      slack: registerSlack,
-    });
-
-    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(registerSlack).toHaveBeenCalledWith("https://bot-production.up.railway.app");
-  });
-
-  it("reports Slack's Events API URL as a manual non-gating registration step", async () => {
-    const { railway } = fakeRailway((args) => {
-      if (args[0] === "status") return { stdout: "" };
-      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const logs: string[] = [];
-
-    const out = await deployRailwayRun(
-      plan({ channels: declaredChannels(["slack"]) }),
-      railway,
-      (message) => logs.push(message),
-      {
-        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      },
-    );
-
-    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(logs.join("\n")).toContain("https://bot-production.up.railway.app/slack");
-    expect(logs.at(-1)).toMatch(/slack: webhook registration needs a one-time manual step/);
-  });
-
-  it("does not register a long-connection Lark channel as a webhook", async () => {
-    const { railway } = fakeRailway((args) => {
-      if (args[0] === "status") return { stdout: "" };
-      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const registerFeishu = vi.fn(
-      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
-    );
-    const out = await deployRailwayRun(
-      plan({ channels: declaredChannels(["lark"], "long-connection") }),
-      railway,
-      () => {},
-      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"), feishu: registerFeishu },
-    );
-    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(registerFeishu).not.toHaveBeenCalled();
-  });
-
-  it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
-    const { railway } = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: "" };
-      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const logs: string[] = [];
-
-    const out = await deployRailwayRun(
-      plan({ channels: declaredChannels(["feishu", "lark"]) }),
-      railway,
-      (message) => logs.push(message),
-      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
-    );
-
-    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(logs.join("\n")).toContain("https://bot-production.up.railway.app/feishu");
-    expect(logs.join("\n")).toContain("https://bot-production.up.railway.app/lark");
+    expect(registerFeishu).toHaveBeenCalledWith("https://bot-production.up.railway.app", "feishu");
   });
 
   it("secret values go over stdin (variable set --stdin), never argv", async () => {

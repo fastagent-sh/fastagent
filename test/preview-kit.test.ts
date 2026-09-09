@@ -11,33 +11,19 @@ import {
 } from "../src/channels/kit/preview-kit.ts";
 
 describe("humanizeToolName", () => {
-  it("splits an mcp identifier into server: tool", () => {
-    expect(humanizeToolName("mcp__github__create_issue")).toBe("Github: create issue");
-  });
-
-  it("normalizes snake_case and kebab-case into a capitalized phrase", () => {
-    expect(humanizeToolName("create_issue")).toBe("Create issue");
-    expect(humanizeToolName("read-file")).toBe("Read file");
+  it("reshapes an identifier into a readable label, whatever shape it arrives in", () => {
+    // One pure mapping. The identifier is the WHOLE input — there is no separate argument channel
+    // to leak, so "never exposes tool arguments" is a property of the signature, exercised here.
+    expect(humanizeToolName("mcp__github__create_issue")).toBe("Github: create issue"); // mcp → server: tool
+    expect(humanizeToolName("create_issue")).toBe("Create issue"); // snake_case
+    expect(humanizeToolName("read-file")).toBe("Read file"); // kebab-case
     expect(humanizeToolName("search")).toBe("Search");
-  });
-
-  it("collapses dotted and repeated separators", () => {
-    expect(humanizeToolName("read_file.contents")).toBe("Read file contents");
-    expect(humanizeToolName("a__b")).toBe("A b");
-  });
-
-  it("never exposes tool arguments — it only reshapes the identifier", () => {
-    // The identifier is the whole input; there is no separate argument channel to leak.
     expect(humanizeToolName("bash")).toBe("Bash");
-  });
-
-  it("falls back to a stable label for an empty identifier", () => {
-    expect(humanizeToolName("")).toBe("Tool");
+    expect(humanizeToolName("read_file.contents")).toBe("Read file contents"); // dotted
+    expect(humanizeToolName("a__b")).toBe("A b"); // repeated separators
+    expect(humanizeToolName("")).toBe("Tool"); // a stable label rather than an empty one
     expect(humanizeToolName("   ")).toBe("Tool");
-  });
-
-  it("truncates an overlong identifier within the code-point cap", () => {
-    expect(Array.from(humanizeToolName("a".repeat(200))).length).toBeLessThanOrEqual(80);
+    expect(Array.from(humanizeToolName("a".repeat(200))).length).toBeLessThanOrEqual(80); // code-point cap
   });
 });
 

@@ -4,10 +4,15 @@
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { collect } from "../src/collect.ts";
+import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { makeFaux } from "./faux.ts";
 
 const text = (session: SessionManager) => JSON.stringify(session.getBranch());
 
@@ -32,6 +37,47 @@ describe("session inheritance", () => {
 
     expect(text(thread)).toContain("first answer");
     expect(text(thread)).toContain("second answer");
+  });
+
+  it("the SCOPE carries it: a first turn naming a parent runs on the room's history", async () => {
+    // The store is what forks, but only the invoke path turns `scope.parentSession`/`branchHints`
+    // into that call — a channel opening a thread never touches the store itself.
+    const dir = await mkdtemp(join(tmpdir(), "fa-inherit-scope-"));
+    const cwd = process.cwd();
+    const sessions = await roomWithHistory(dir, cwd);
+    const { faux } = makeFaux();
+    let seen = "";
+    const record = (context: { messages: unknown[] }) => {
+      seen = JSON.stringify(context.messages);
+      return fauxAssistantMessage("inherited");
+    };
+    faux.setResponses([record, record]);
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const agent = createPiAgentFromSession({
+      sessionFactory: piAgentSessionFactory({
+        sessions,
+        engine: async () => ({ modelRuntime, model: faux.getModel() }),
+        readDefinition: () => ({ skills: [] }),
+        cwd,
+      }),
+    });
+
+    // No hint: the whole room comes across.
+    expect((await collect(agent.invoke({ session: "plain", parentSession: "room" }, { text: "and?" }))).text).toBe(
+      "inherited",
+    );
+    expect(seen).toContain("second answer");
+
+    // With one: the fork is cut where it names, so `branchHints` travelled too rather than being dropped.
+    await collect(
+      agent.invoke(
+        { session: "hinted", parentSession: "room", branchHints: ["first question"] },
+        { text: "and then?" },
+      ),
+    );
+    expect(seen).toContain("first answer");
+    expect(seen).not.toContain("second answer");
   });
 
   it("branch hints cut the inheritance at the exchange they name", async () => {

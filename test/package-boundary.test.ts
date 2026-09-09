@@ -58,10 +58,10 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     expect(pkgs).not.toContain("@octokit/webhooks-methods");
   });
 
-  it.each(["telegram.ts", "slack.ts", "feishu.ts", "lark.ts"])(
-    "%s pays the explicit channel execution dependency budget",
-    (entry) => {
-      expect([...staticPackageGraph(entry)].filter((p) => p.startsWith("effect/")).sort()).toEqual([
+  it("every channel subpath pays the explicit channel execution dependency budget", () => {
+    for (const entry of ["telegram.ts", "slack.ts", "feishu.ts", "lark.ts"]) {
+      const pkgs = [...staticPackageGraph(entry)];
+      expect(pkgs.filter((p) => p.startsWith("effect/")).sort(), entry).toEqual([
         "effect/Cause",
         "effect/Clock",
         "effect/Effect",
@@ -70,9 +70,12 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
         "effect/Queue",
         "effect/Stream",
       ]);
-      expect([...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
-    },
-  );
+      expect(
+        pkgs.filter((p) => p.startsWith("@earendil-works/")),
+        entry,
+      ).toEqual([]);
+    }
+  });
 
   it("the CLI entry is a thin shell: NO static package loads at all (everything is lazy)", () => {
     // `fastagent <cmd>` pays only for the executed command's module graph — the entry itself must not
@@ -106,12 +109,12 @@ describe("engine neutrality: the core subpath + channel spine import no engine p
     "channel.ts",
     "channels/serve.ts",
   ];
-  for (const entry of neutral) {
-    it(`${entry} pulls no @earendil-works/* package`, () => {
-      const engine = [...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/"));
-      expect(engine).toEqual([]);
-    });
-  }
+  it("none of them pulls an @earendil-works/* package", () => {
+    const offenders = neutral.flatMap((entry) =>
+      [...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/")).map((p) => `${entry} → ${p}`),
+    );
+    expect(offenders).toEqual([]);
+  });
 
   it("pi.ts is the explicit reference-runtime boundary (the guard has teeth)", () => {
     expect([...staticPackageGraph("pi.ts")].some((p) => p.startsWith("@earendil-works/"))).toBe(true);
@@ -138,12 +141,14 @@ describe("the public subpaths do not reach into the CLI", () => {
     visit(resolve(srcDir, entryRel));
     return seen;
   };
-  for (const entry of ["index.ts", "core.ts", "pi.ts", "session.ts"]) {
-    it(`${entry} reaches no cli/ module`, () => {
-      const cli = [...relativeGraph(entry)].filter((f) => f.includes(`${srcDir}/cli/`));
-      expect(cli.map((f) => f.replace(`${srcDir}/`, ""))).toEqual([]);
-    });
-  }
+  it("no public entry reaches a cli/ module", () => {
+    const offenders = ["index.ts", "core.ts", "pi.ts", "session.ts"].flatMap((entry) =>
+      [...relativeGraph(entry)]
+        .filter((f) => f.includes(`${srcDir}/cli/`))
+        .map((f) => `${entry} → ${f.replace(`${srcDir}/`, "")}`),
+    );
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("knip's entry list mirrors the package's subpath exports", () => {
@@ -212,15 +217,21 @@ describe("the assembly's parts stay out of the public surface", () => {
     expect(targets.sort()).toEqual(["./core.ts", "./node.ts", "./pi.ts", "./session.ts"]);
   });
 
-  for (const entry of ["core.ts", "pi.ts", "index.ts"]) {
-    it(`${entry} exports no assembly part`, async () => {
-      // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
-      const mod = (await import(resolve(srcDir, entry))) as Record<string, unknown>;
-      expect(PARTS.filter((p) => p in mod)).toEqual([]);
-    });
+  const ENTRIES = ["core.ts", "pi.ts", "index.ts"];
 
-    it(`${entry} exports no orphaned type`, () => {
-      // The SOURCE, because a type export leaves no runtime trace for the check above to see.
+  it("no entry exports an assembly part", async () => {
+    // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
+    const offenders: string[] = [];
+    for (const entry of ENTRIES) {
+      const mod = (await import(resolve(srcDir, entry))) as Record<string, unknown>;
+      offenders.push(...PARTS.filter((p) => p in mod).map((p) => `${entry} → ${p}`));
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("no entry exports an orphaned type", () => {
+    // The SOURCE, because a type export leaves no runtime trace for the check above to see.
+    const offenders = ENTRIES.flatMap((entry) => {
       const source = readFileSync(resolve(srcDir, entry), "utf8");
       const named = [...source.matchAll(/export (?:type )?\{([^}]*)\}/g)]
         .flatMap((m) => m[1]!.split(","))
@@ -233,9 +244,10 @@ describe("the assembly's parts stay out of the public surface", () => {
             .trim(),
         )
         .filter(Boolean);
-      expect(named.filter((n) => ORPHAN_TYPES.includes(n))).toEqual([]);
+      return named.filter((n) => ORPHAN_TYPES.includes(n)).map((n) => `${entry} → ${n}`);
     });
-  }
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("channels/kit is defined by who imports it", () => {
@@ -260,12 +272,16 @@ describe("channels/kit is defined by who imports it", () => {
     return found;
   };
 
-  for (const file of readdirSync(KIT).filter((f) => f.endsWith(".ts"))) {
-    it(`${file} is used only by platform directories`, () => {
-      const strays = importersOf(file).filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p));
-      expect(strays).toEqual([]);
-    });
-  }
+  it("every kit file is used only by platform directories", () => {
+    const offenders = readdirSync(KIT)
+      .filter((f) => f.endsWith(".ts"))
+      .flatMap((file) =>
+        importersOf(file)
+          .filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p))
+          .map((p) => `${file} ← ${p}`),
+      );
+    expect(offenders).toEqual([]);
+  });
 
   it("...and the serving mechanism beside it stays out of the kit", () => {
     for (const file of ["serve.ts", "http.ts", "control.ts", "discover.ts"]) {
@@ -281,11 +297,12 @@ describe("the contracts depend on nothing", () => {
   // ZERO rather than "no engine": an agent directory's hand-written channel imports ChannelModule,
   // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
-  for (const contract of ["agent.ts", "channel.ts", "session.ts"]) {
-    it(`${contract} pulls no package at all`, () => {
-      expect([...staticPackageGraph(contract)]).toEqual([]);
-    });
-  }
+  it("each of the three pulls no package at all", () => {
+    const offenders = ["agent.ts", "channel.ts", "session.ts"].flatMap((contract) =>
+      [...staticPackageGraph(contract)].map((p) => `${contract} → ${p}`),
+    );
+    expect(offenders).toEqual([]);
+  });
 
   it("the three neutral layers each cost exactly what their name promises", () => {
     // Engine-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by

@@ -46,6 +46,29 @@ describe("Slack Web API transport", () => {
     expect(init?.body).toBeUndefined();
   });
 
+  it("reaction add/remove swallow only their own idempotent error, and surface anything else", async () => {
+    // A racing duplicate is not a fault; a missing scope is, and hiding it would leave the ack
+    // silently absent forever. The caller (startSlackReaction) degrades on the throw, it cannot
+    // classify for itself.
+    const errors: Record<string, string> = {};
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const method = String(input).split("/").pop() ?? "";
+      const error = errors[method];
+      return Response.json(error ? { ok: false, error } : { ok: true });
+    });
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+
+    errors["reactions.add"] = "already_reacted";
+    errors["reactions.remove"] = "no_reaction";
+    await expect(api.addReaction("C1", "1.0", "eyes")).resolves.toBeUndefined();
+    await expect(api.removeReaction("C1", "1.0", "eyes")).resolves.toBeUndefined();
+
+    errors["reactions.add"] = "missing_scope";
+    errors["reactions.remove"] = "missing_scope";
+    await expect(api.addReaction("C1", "1.0", "eyes")).rejects.toThrow(/missing_scope/);
+    await expect(api.removeReaction("C1", "1.0", "eyes")).rejects.toThrow(/missing_scope/);
+  });
+
   it("uses standard Markdown and Slack's native Agent stream protocol", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const method = String(input).split("/").pop();

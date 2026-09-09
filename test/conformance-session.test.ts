@@ -324,9 +324,8 @@ it.each([
   },
 );
 
-it.each(["cron", "wake"] as const)(
-  "scheduler stop lets a claimed %s finish its actual SDK tool and audit",
-  async (kind) => {
+it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and audit", async () => {
+  for (const kind of ["cron", "wake"] as const) {
     const stateRoot = await mkdtemp(join(tmpdir(), "fa-scheduled-sdk-"));
     const entered = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
@@ -388,5 +387,5 @@ it.each(["cron", "wake"] as const)(
       s.stop();
       finish.resolve();
     }
-  },
-);
+  }
+});

@@ -2,29 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import { normalizeSlackEmojiName, resolveReactionEmojis, startSlackReaction } from "../src/channels/slack/reaction.ts";
 
 describe("normalizeSlackEmojiName", () => {
-  it("accepts plain, colon-wrapped, and skin-tone names", () => {
+  it("accepts plain, colon-wrapped and skin-tone names; rejects invalid or empty ones", () => {
     expect(normalizeSlackEmojiName("eyes")).toBe("eyes");
     expect(normalizeSlackEmojiName(":white_check_mark:")).toBe("white_check_mark");
     expect(normalizeSlackEmojiName("+1::skin-tone-3")).toBe("+1::skin-tone-3");
-  });
-
-  it("rejects invalid or empty names", () => {
     expect(normalizeSlackEmojiName("not valid!")).toBeNull();
     expect(normalizeSlackEmojiName("   ")).toBeNull();
   });
 });
 
 describe("resolveReactionEmojis", () => {
-  it("returns defaults, honors overrides, and disables with false", () => {
+  it("returns defaults, honors overrides, disables with false, and throws on an invalid name", () => {
     expect(resolveReactionEmojis({})).toEqual({ processing: "eyes", completed: "white_check_mark" });
     expect(resolveReactionEmojis({ processing: ":hourglass:" })).toEqual({
       processing: "hourglass",
       completed: "white_check_mark",
     });
     expect(resolveReactionEmojis(false)).toBeUndefined();
-  });
-
-  it("throws on an invalid emoji name", () => {
     expect(() => resolveReactionEmojis({ completed: "bad emoji!" })).toThrow(/reactionAck/);
   });
 });

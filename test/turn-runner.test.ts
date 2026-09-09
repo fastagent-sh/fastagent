@@ -111,68 +111,70 @@ function durable() {
 }
 
 describe("turn runner: the lifecycle order every chat channel shares", () => {
-  it.each(["running", "committed"])("SIGTERM preserves the durable %s state", async (phase) => {
-    const { dir, openStore, openBuffer } = durable();
-    const source = new URL("../src/channels/kit/", import.meta.url).href;
-    const child = spawn(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `
-      import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
-      import { portJoin } from ${JSON.stringify(new URL("../src/effect-port.ts", import.meta.url).href)};
-      import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
-      import { createContextBuffer } from ${JSON.stringify(`${source}context-buffer.ts`)};
-      const root = ${JSON.stringify(dir)};
-      const store = createTurnStore(root + '/turns.json', { label: '[child]', isRecord: () => true, order: () => 0 });
-      const buffer = createContextBuffer({ path: root + '/buffer.json', label: '[child]', isEntry: () => true, line: x => x });
-      buffer.push('place:s', 'earlier');
-      const runner = createTurnRunner({
-        label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
-        bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
-        execute: (_rec, _discussion, onCompleted) => portJoin(async () => {
-          process.on('message', () => {
-            onCompleted();
-            buffer.push('place:s', 'later');
-            process.send('committed');
-          });
-          process.send('running');
-          await new Promise(() => {});
-        }),
+  it("SIGTERM preserves the durable state, running or committed", async () => {
+    for (const phase of ["running", "committed"]) {
+      const { dir, openStore, openBuffer } = durable();
+      const source = new URL("../src/channels/kit/", import.meta.url).href;
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+        import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
+        import { portJoin } from ${JSON.stringify(new URL("../src/effect-port.ts", import.meta.url).href)};
+        import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
+        import { createContextBuffer } from ${JSON.stringify(`${source}context-buffer.ts`)};
+        const root = ${JSON.stringify(dir)};
+        const store = createTurnStore(root + '/turns.json', { label: '[child]', isRecord: () => true, order: () => 0 });
+        const buffer = createContextBuffer({ path: root + '/buffer.json', label: '[child]', isEntry: () => true, line: x => x });
+        buffer.push('place:s', 'earlier');
+        const runner = createTurnRunner({
+          label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
+          bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
+          execute: (_rec, _discussion, onCompleted) => portJoin(async () => {
+            process.on('message', () => {
+              onCompleted();
+              buffer.push('place:s', 'later');
+              process.send('committed');
+            });
+            process.send('running');
+            await new Promise(() => {});
+          }),
+        });
+        runner.submit({ id: 'a', session: 's', text: '' }, true);
+      `,
+        ],
+        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      );
+      let stderr = "";
+      child.stderr?.on("data", (data) => {
+        stderr += data;
       });
-      runner.submit({ id: 'a', session: 's', text: '' }, true);
-    `,
-      ],
-      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-    );
-    let stderr = "";
-    child.stderr?.on("data", (data) => {
-      stderr += data;
-    });
-    const exited = once(child, "exit");
-    const message = () =>
-      Promise.race([
-        once(child, "message").then(([value]) => value),
-        exited.then(() => {
-          throw new Error(`child exited before the expected message: ${stderr}`);
-        }),
-      ]);
-    try {
-      expect(await message()).toBe("running");
-      if (phase === "committed") {
-        const committed = message();
-        child.send("complete");
-        expect(await committed).toBe("committed");
+      const exited = once(child, "exit");
+      const message = () =>
+        Promise.race([
+          once(child, "message").then(([value]) => value),
+          exited.then(() => {
+            throw new Error(`child exited before the expected message: ${stderr}`);
+          }),
+        ]);
+      try {
+        expect(await message()).toBe("running");
+        if (phase === "committed") {
+          const committed = message();
+          child.send("complete");
+          expect(await committed).toBe("committed");
+        }
+      } finally {
+        child.kill("SIGTERM");
+        await exited;
       }
-    } finally {
-      child.kill("SIGTERM");
-      await exited;
+      expect(openStore().recover()).toEqual(
+        phase === "running" ? [{ id: "a", session: "s", text: "", attempts: 1 }] : [],
+      );
+      expect(openBuffer().peek("place:s").consumed).toEqual(phase === "running" ? ["earlier"] : ["later"]);
     }
-    expect(openStore().recover()).toEqual(
-      phase === "running" ? [{ id: "a", session: "s", text: "", attempts: 1 }] : [],
-    );
-    expect(openBuffer().peek("place:s").consumed).toEqual(phase === "running" ? ["earlier"] : ["later"]);
   });
 
   it("observes a rejected queue notice while its predecessor is still running", async () => {
@@ -235,9 +237,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(activeWork()).toBe(base);
   });
 
-  it.each([false, true])(
-    "interruption joins work and preserves the actual commit decision (completed=%s)",
-    async (completed) => {
+  it("interruption joins work and preserves the actual commit decision, committed or not", async () => {
+    for (const completed of [false, true]) {
       const { store, buffer, openStore, openBuffer } = durable();
       buffer.push("place:s", "earlier");
       store.add({ id: "a", session: "s", text: "", attempts: 0 });
@@ -285,8 +286,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         expect(openStore().recover()).toEqual([]);
         expect(openBuffer().peek("place:s").consumed).toEqual([]);
       }
-    },
-  );
+    }
+  });
 
   it("pre-ACK persistence and attempt failures preserve dedup, busy accounting and restart recovery", async () => {
     const { store, buffer, storePath, openStore } = durable();

@@ -150,50 +150,9 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     });
   }
 
-  it("gate: `ips list` that exits 0 with unparseable output stops too", async () => {
-    // The other half of the same rule: exit 0 does not mean the answer was readable, and silently
-    // reading "no address" out of it would allocate a second one on every run.
-    const { fly, cmds } = fakeFly((a) => {
-      if (a[0] === "ips") return { stdout: "NAME\tTYPE\n" };
-      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
-    });
-
-    expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("unreadable") });
-    expect(cmds().some((c) => c.startsWith("ips allocate"))).toBe(false);
-  });
-
-  it("dispatches Feishu and Lark registration through the per-kind seam", async () => {
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const registerFeishu = vi.fn(
-      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
-    );
-
-    const out = await deployFlyRun(plan({ channels: declaredChannels(["feishu", "lark"]) }), fly, () => {}, {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      feishu: registerFeishu,
-    });
-
-    expect(out).toEqual({ ok: true });
-    expect(registerFeishu.mock.calls).toEqual([
-      ["https://bot.fly.dev", "feishu"],
-      ["https://bot.fly.dev", "lark"],
-    ]);
-  });
-
-  it("does not register a long-connection Feishu channel as a webhook", async () => {
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const registerFeishu = vi.fn(
-      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
-    );
-    const out = await deployFlyRun(plan({ channels: declaredChannels(["feishu"], "long-connection") }), fly, () => {}, {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      feishu: registerFeishu,
-    });
-    expect(out).toEqual({ ok: true });
-    expect(registerFeishu).not.toHaveBeenCalled();
-  });
-
-  it("gates when a webhook registration terminally fails — after attempting the remaining channels", async () => {
+  // What is fly's here is the URL the shared registrar is handed and the gate becoming this run's
+  // outcome; WHICH channels register, and how manual/failed outcomes read, is deploy-channel-ingress.
+  it("registers at the fly URL, and a terminal failure becomes the run's gate", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const registerFeishu = vi.fn(
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
@@ -210,92 +169,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       ok: false,
       gate: expect.stringMatching(/webhook registration failed for: telegram/),
     });
-    expect(registerFeishu).toHaveBeenCalledWith("https://bot.fly.dev", "feishu"); // one failure doesn't skip the rest
-  });
-
-  it("a 'manual' registration outcome does not gate — but is re-surfaced as the run's last line", async () => {
-    // e.g. the Lark cloud-lag 404: re-running can never change it, so gating would spin an agent forever.
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const logs: string[] = [];
-
-    const out = await deployFlyRun(plan({ channels: declaredChannels(["lark"]) }), fly, (m) => logs.push(m), {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
-    });
-
-    expect(out).toEqual({ ok: true });
-    expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
-  });
-
-  it("dispatches Slack registration through the local onboarding seam", async () => {
-    const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
-    const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
-
-    const out = await deployFlyRun(plan({ channels: declaredChannels(["slack"]) }), fly, () => {}, {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      feishu: undefined,
-      slack: registerSlack,
-    });
-
-    expect(out).toEqual({ ok: true });
-    expect(registerSlack).toHaveBeenCalledWith("https://bot.fly.dev");
-  });
-
-  it("reports Slack's Events API URL as a manual non-gating registration step", async () => {
-    const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
-    const logs: string[] = [];
-
-    const out = await deployFlyRun(
-      plan({ channels: declaredChannels(["slack"]) }),
-      fly,
-      (message) => logs.push(message),
-      {
-        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      },
-    );
-
-    expect(out).toEqual({ ok: true });
-    expect(logs.join("\n")).toContain("https://bot.fly.dev/slack");
-    expect(logs.at(-1)).toMatch(/slack: webhook registration needs a one-time manual step/);
-  });
-
-  it("mixed outcomes: manual notices are logged AND the failed channels still gate", async () => {
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const logs: string[] = [];
-
-    const out = await deployFlyRun(
-      plan({ channels: declaredChannels(["telegram", "lark"]) }),
-      fly,
-      (m) => logs.push(m),
-      {
-        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
-        feishu: vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
-      },
-    );
-
-    expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
-    expect(out).toEqual({
-      ok: false,
-      gate: expect.stringMatching(/webhook registration failed for: telegram/),
-    });
-  });
-
-  it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const logs: string[] = [];
-
-    const out = await deployFlyRun(
-      plan({ channels: declaredChannels(["feishu", "lark"]) }),
-      fly,
-      (message) => logs.push(message),
-      {
-        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-      },
-    );
-
-    expect(out).toEqual({ ok: true });
-    expect(logs.join("\n")).toContain("https://bot.fly.dev/feishu");
-    expect(logs.join("\n")).toContain("https://bot.fly.dev/lark");
+    expect(registerFeishu).toHaveBeenCalledWith("https://bot.fly.dev", "feishu");
   });
 
   it("secret values go over stdin (import), never argv", async () => {

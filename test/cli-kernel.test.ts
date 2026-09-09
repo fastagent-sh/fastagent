@@ -250,6 +250,14 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     expect(r.err).toMatch(/unknown option '--force'/);
     expect(r.err).toMatch(/--help/); // the pointer, not the full help wall (signal-to-noise)
     expect(r.err).not.toMatch(/Usage: fastagent models \[options\]/);
+    // A retired flag is just an unknown one (init --embedded is gone — nesting is the default).
+    const retired = await parse(["init", "--embedded"]);
+    expect(retired.code).toBe(2);
+    expect(retired.err).toMatch(/unknown option '--embedded'/);
+    // An out-of-set argument is the parser's too, and names the set.
+    const host = await parse(["deploy", "heroku"]);
+    expect(host.code).toBe(2);
+    expect(host.err).toMatch(/Allowed choices are docker, fly, railway/);
   });
 
   it("a missing required argument is a usage error: exit 2", async () => {
@@ -300,18 +308,6 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
       expect(r.code, argv.join(" ")).toBe(2);
       expect(r.err, argv.join(" ")).toMatch(/unknown option/);
     }
-  });
-
-  it("an out-of-set <host> argument is rejected by the parser (choices)", async () => {
-    const r = await parse(["deploy", "heroku"]);
-    expect(r.code).toBe(2);
-    expect(r.err).toMatch(/Allowed choices are docker, fly, railway/);
-  });
-
-  it("an unknown flag is rejected by the parser (init --embedded is gone — nesting is the default)", async () => {
-    const r = await parse(["init", "--embedded"]);
-    expect(r.code).toBe(2);
-    expect(r.err).toMatch(/unknown option '--embedded'/);
   });
 });
 

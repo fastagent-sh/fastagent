@@ -67,10 +67,22 @@ describe("github channel", () => {
     await vi.waitFor(() => expect(activeWork()).toBe(base));
   });
 
-  it("rejects non-POST with 405", async () => {
+  // The ingress shape guards, in one place (the same grouping feishu's ingress block uses).
+  it("405s non-POST, 413s an oversized body before verifying, 400s a verified body that isn't JSON", async () => {
     const { agent } = recordingAgent();
     const ch = githubChannel(agent, { secret: SECRET, on: () => [] });
     expect((await ch(new Request("http://app/webhook", { method: "GET" }))).status).toBe(405);
+    const big = await ch(
+      new Request("http://app/webhook", {
+        method: "POST",
+        body: "x".repeat((25 << 20) + 1), // just over the 25 MiB cap
+        headers: { "x-github-event": "pull_request", "x-github-delivery": "big" },
+      }),
+    );
+    expect(big.status).toBe(413); // rejected before HMAC/JSON
+    expect(
+      (await ch(signedRaw("not json{", { "x-github-event": "pull_request", "x-github-delivery": "j1" }))).status,
+    ).toBe(400);
   });
 
   it("refuses an empty secret at construction (an empty HMAC key accepts forged deliveries)", () => {
@@ -111,28 +123,6 @@ describe("github channel", () => {
     });
     expect((await ch(signed({ zen: "hi" }, { "x-github-event": "ping", "x-github-delivery": "p1" }))).status).toBe(204);
     expect(routed).toBe(false);
-  });
-
-  it("a verified body that isn't JSON is 400", async () => {
-    const { agent } = recordingAgent();
-    const ch = githubChannel(agent, { secret: SECRET, on: () => [] });
-    expect(
-      (await ch(signedRaw("not json{", { "x-github-event": "pull_request", "x-github-delivery": "j1" }))).status,
-    ).toBe(400);
-  });
-
-  it("rejects an oversized body with 413 before verifying (DoS guard)", async () => {
-    const { agent } = recordingAgent();
-    const big = "x".repeat((25 << 20) + 1); // just over the 25 MiB cap
-    const ch = githubChannel(agent, { secret: SECRET, on: () => [] });
-    const res = await ch(
-      new Request("http://app/webhook", {
-        method: "POST",
-        body: big,
-        headers: { "x-github-event": "pull_request", "x-github-delivery": "big" },
-      }),
-    );
-    expect(res.status).toBe(413); // rejected before HMAC/JSON
   });
 
   it("routes a verified PR event: pre-extracts header fields + typed payload, 202, agent invoked", async () => {

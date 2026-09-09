@@ -428,7 +428,7 @@ describe("deploy/agentcore/run: helpers", () => {
     });
   });
 
-  it("paramsFileContent maps env names and explicitly clears every unused auth-seed chunk", () => {
+  it("paramsFileContent: maps env names, chunks a long auth seed in order, clears every unused chunk", () => {
     expect(paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64" })).toBe(
       `${JSON.stringify([
         "ImageUri=img:1",
@@ -439,30 +439,28 @@ describe("deploy/agentcore/run: helpers", () => {
         "FastagentAuthSeed4=",
       ])}\n`,
     );
-  });
 
-  it("paramsFileContent chunks a long auth seed across FastagentAuthSeed(2…), reassemblable in order", () => {
-    const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756); // a real OAuth-size seed (2756+)
-    const params = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed })) as string[];
-    expect(params).toEqual([
+    // A real OAuth-size seed (2756+) rides across the chunks, reassemblable in order.
+    const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756);
+    const chunked = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed })) as string[];
+    expect(chunked).toEqual([
       "ImageUri=img:1",
       `FastagentAuthSeed=${"a".repeat(2000)}`,
       `FastagentAuthSeed2=${"b".repeat(2000)}`,
       `FastagentAuthSeed3=${"c".repeat(756)}`,
       "FastagentAuthSeed4=",
     ]);
-    for (const p of params) expect(p.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
-  });
+    for (const param of chunked) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
 
-  it("clears a previous auth seed when a deploy switches to an API key", () => {
-    const params = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" })) as string[];
-    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
+    // Switching to an API key clears a previously deployed seed rather than leaving it behind.
+    const cleared = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" })) as string[];
+    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toEqual([
       "FastagentAuthSeed=",
       "FastagentAuthSeed2=",
       "FastagentAuthSeed3=",
       "FastagentAuthSeed4=",
     ]);
-    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toHaveLength(AUTH_SEED_MAX_CHUNKS);
+    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toHaveLength(AUTH_SEED_MAX_CHUNKS);
   });
 });
 

@@ -14,18 +14,21 @@ describe("runtime logger", () => {
   });
   const lines = () => vi.mocked(console.error).mock.calls.map(([line]) => String(line));
 
-  it.each([
-    ["debug", ["DEBUG d", "INFO  i", "WARN  w", "ERROR e"]],
-    ["info", ["INFO  i", "WARN  w", "ERROR e"]],
-    ["warn", ["WARN  w", "ERROR e"]],
-    ["error", ["ERROR e"]],
-  ] as const)("emits at or above %s to stderr", (level, expected) => {
-    setLogLevel(level);
-    log.debug("d");
-    log.info("i");
-    log.warn("w");
-    log.error("e");
-    expect(lines()).toEqual(expected);
+  it("emits at or above the set level to stderr, at every level", () => {
+    for (const [level, expected] of [
+      ["debug", ["DEBUG d", "INFO  i", "WARN  w", "ERROR e"]],
+      ["info", ["INFO  i", "WARN  w", "ERROR e"]],
+      ["warn", ["WARN  w", "ERROR e"]],
+      ["error", ["ERROR e"]],
+    ] as const) {
+      vi.mocked(console.error).mockClear();
+      setLogLevel(level);
+      log.debug("d");
+      log.info("i");
+      log.warn("w");
+      log.error("e");
+      expect(lines(), level).toEqual(expected);
+    }
   });
 
   it("reads the environment on each emit and lets a valid value override the posture", () => {
@@ -47,20 +50,21 @@ describe("runtime logger", () => {
     expect(lines()).toEqual(["DEBUG first", "ERROR last"]);
   });
 
-  it.each(["verbose-typo", "constructor", "__proto__"])(
-    "invalid level %s warns once and preserves logging",
-    (value) => {
+  // `constructor` / `__proto__` are the prototype-chain names a plain lookup would accept as levels.
+  it("an invalid level warns ONCE and preserves logging, whatever the value is", () => {
+    for (const value of ["verbose-typo", "constructor", "__proto__"]) {
+      vi.mocked(console.error).mockClear();
       vi.stubEnv("FASTAGENT_LOG_LEVEL", value);
       setLogLevel("debug");
       log.debug("first");
       log.debug("second");
-      expect(lines()).toEqual([
+      expect(lines(), value).toEqual([
         `WARN  [fastagent] unknown FASTAGENT_LOG_LEVEL "${value}"; using the posture default`,
         "DEBUG first",
         "DEBUG second",
       ]);
-    },
-  );
+    }
+  });
 
   it("reports module failures through the same runtime logger", () => {
     reportModuleLoadFailures([{ label: "tools/broken.ts", file: "/agent/tools/broken.ts", message: "bad export" }]);

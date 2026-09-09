@@ -33,7 +33,7 @@ const CHANNEL_IDS = [
 ];
 
 describe("piSessionId", () => {
-  it("every id a channel can mint becomes a name pi accepts", () => {
+  it("encodes every id a channel can mint into a name pi accepts, injectively and readably", () => {
     // pi's own rule, restated: SessionManager.create throws on anything else, and every built-in
     // channel violates it (a telegram group id leads with a dash; feishu and slack keys carry : and /).
     const PI_SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -41,16 +41,10 @@ describe("piSessionId", () => {
       expect(piSessionId(id)).toMatch(PI_SESSION_ID);
       expect(() => SessionManager.inMemory(process.cwd(), { id: piSessionId(id) })).not.toThrow();
     }
-  });
-
-  it("is injective — no two conversations can resolve to one record", () => {
-    // The pairs that a careless encoding collapses: escape-vs-literal, and the conditional-prefix trap.
+    // Injective: the pairs a careless encoding collapses — escape-vs-literal, and the conditional prefix.
     const ids = [...CHANNEL_IDS, "-a", "s-a", "a_2D", "a-", "a.", "a", "_", "__", "%2D", "-1001234567890 "];
-    const encoded = ids.map(piSessionId);
-    expect(new Set(encoded).size).toBe(ids.length);
-  });
-
-  it("stays readable for the ids an operator reads off disk", () => {
+    expect(new Set(ids.map(piSessionId)).size).toBe(ids.length);
+    // …and still readable for the ids an operator reads off disk.
     expect(piSessionId("-1001234567890")).toBe("s-1001234567890");
     expect(piSessionId("42")).toBe("s42");
   });

@@ -29,28 +29,24 @@ const IDS = [
 ];
 
 describe("attachmentPath", () => {
-  it("puts every conversation id in its own directory under filesDir", () => {
+  it("puts every conversation id in its OWN directory under filesDir, and never rejects one", () => {
     const dirs = IDS.map((id) => attachmentPath(FILES, id, "report.pdf").dir);
     for (const dir of dirs) expect(dir.startsWith(FILES + sep)).toBe(true);
     // Lossless, so no two conversations share a directory — `a/b` and `a_b` are different places.
     expect(new Set(dirs).size).toBe(IDS.length);
-  });
-
-  it("never rejects an id, including malformed UTF-16 a route can slice out of a message", () => {
+    // Malformed UTF-16 a route can slice out of a message must not throw (encodeURIComponent would).
     expect(() => attachmentPath(FILES, "\ud800abc", "a.pdf")).not.toThrow();
     expect(attachmentPath(FILES, "a\u{1F600}b", "a.pdf").dir).toBe(`${FILES}/c-a%F0%9F%98%80b`);
-  });
-
-  it("keeps an ordinary id and file name readable", () => {
+    // …and an ordinary id stays readable on disk.
     expect(attachmentPath(FILES, "-1001234567890", "report.pdf")).toEqual({
       dir: `${FILES}/c--1001234567890`,
       name: "report.pdf",
       path: `${FILES}/c--1001234567890/report.pdf`,
     });
-    expect(attachmentPath(FILES, 42, ".gitignore").name).toBe(".gitignore");
   });
 
   it("reduces a file name that would leave its directory, since names are not encoded", () => {
+    expect(attachmentPath(FILES, 42, ".gitignore").name).toBe(".gitignore"); // an ordinary one is kept
     for (const hostile of ["..", ".", "", "../../etc/passwd", "a/b.txt", "..\\..\\x", "D:foo"]) {
       const { dir, path } = attachmentPath(FILES, "c1", hostile);
       expect(dir).toBe(`${FILES}/c-c1`);
