@@ -278,6 +278,8 @@ export async function runAddSkill(
     );
   }
   // Skills are agent surface — vendored into the agent dir's `skills/`.
+  loadDotEnv(target); // a git-ref source is a network fetch (giget uses global fetch) — the proxy may be in .env
+  installProxyFetch();
   const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);
