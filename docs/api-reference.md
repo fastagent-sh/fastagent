@@ -323,6 +323,31 @@ ride `AsyncLocalStorage`, not definition closures, because a tool is built once 
 The built-in **`wake`** tool uses `sessionManager.getSessionId()` to schedule a follow-up in the same
 conversation.
 
+### Output budget
+
+Everything a tool returns is spent from the model's context, on every turn that keeps the result in
+view. One GitHub repository object is ~6 KB, so returning a raw `/search/repositories` page (30
+results) costs ~180 KB — roughly 45k tokens for one call.
+
+Return what the model needs, not what the API sent:
+
+- **Project the fields.** A name, a URL and a description usually replace the whole object.
+- **Truncate, and say so.** The scaffolded `tools/fetch-url.ts` is the pattern: a `MAX_TEXT` ceiling
+  plus a `truncated: true` flag, so the model knows the text was cut rather than guessing.
+- **Expose the paging knob** (`per_page`, `limit`) as an input, so the model can ask for less.
+
+`fastagent tool <name> '<json>'` reports the size of what the model would receive:
+
+```
+[fastagent] result: 143910 chars ≈ 35978 tokens to the model
+```
+
+That measures the tool result's content text, which is not what the command prints — the printed form
+is the indented `details`, so measuring the piped stdout answers a different question.
+
+Tools are plain ES modules, so they can be imported and tested without fastagent: `node --test
+test/my-tool.test.ts` on Node 22+ needs no framework and no test script.
+
 ### Deferred tools
 
 For tool-heavy agents, `defineTool({ ..., deferred: true })` registers a tool without activating it:

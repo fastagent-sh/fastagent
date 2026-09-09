@@ -243,6 +243,10 @@ Example:
 fastagent tool fetch-url '{"url":"https://example.com"}'
 ```
 
+The result goes to stdout as data; stderr reports how much of it the model would receive
+(`result: 143910 chars ≈ 35978 tokens to the model`). See
+[Output budget](api-reference.md#output-budget) for what to do about a large one.
+
 ## `fastagent add github|telegram|slack|feishu|lark`
 
 ```bash

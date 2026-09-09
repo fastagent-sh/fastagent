@@ -44,11 +44,17 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   gateSecretsOrExit({ declared: toolSecrets, failures: toolFailures, owner: name });
   // Authored tools read cwd from turnContext; coding tools are already rooted at the workspace.
   const result = await turnContext.run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
-  const out =
-    result?.details !== undefined
-      ? result.details
-      : (result?.content ?? []).map((c) => ("text" in c ? c.text : "")).join("");
-  console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
+  // What the MODEL receives, which is not what is printed below: the printed form is `details` (readable, indented),
+  // the model's is the content text (compact JSON). Piping stdout through `wc -c` therefore answers the wrong
+  // question, and there is nowhere else to ask this one — so the run that a tool author already does reports it.
+  const modelText = (result?.content ?? []).map((c) => ("text" in c ? c.text : "")).join("");
+  const out = result?.details !== undefined ? result.details : modelText;
+  console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2)); // stdout stays DATA
+  // No threshold warning: context windows run from 128k to 1M, so any fixed ceiling here would be invented. The
+  // number is the signal; docs/api-reference.md carries the judgement. ~4 chars/token is the usual rough figure.
+  console.error(
+    `[fastagent] result: ${modelText.length} chars ≈ ${Math.ceil(modelText.length / 4)} tokens to the model`,
+  );
 }
 
 /** Parse the CLI's JSON args blob; malformed input syntax is a usage error (exit 2). */
