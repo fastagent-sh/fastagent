@@ -11,7 +11,7 @@ import {
 } from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
 import {
-  CONFIG_TOKEN_TTL_MS,
+  configTokenExpiry,
   currentSlackConfigToken,
   type SlackOnboardingState,
   writeSlackOnboardingState,
@@ -180,6 +180,8 @@ export function newSlackOnboardingState(input: {
   groupBehavior: SlackGroupBehavior;
   configToken: string;
   configRefreshToken: string;
+  /** When the pair was captured; pass it through rather than re-deriving the same expiry twice. */
+  configTokenExpiresAt?: number;
   now?: number;
 }): SlackOnboardingState {
   return {
@@ -188,6 +190,6 @@ export function newSlackOnboardingState(input: {
     groupBehavior: input.groupBehavior,
     configToken: input.configToken,
     configRefreshToken: input.configRefreshToken,
-    configTokenExpiresAt: (input.now ?? Date.now()) + CONFIG_TOKEN_TTL_MS,
+    configTokenExpiresAt: input.configTokenExpiresAt ?? configTokenExpiry(input.now),
   };
 }

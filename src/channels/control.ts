@@ -168,7 +168,7 @@ function parseWireAction(raw: unknown): SessionAction | undefined {
     // exists to prevent (ImageRef shape from src/session.ts's Prompt).
     return images === undefined || (Array.isArray(images) && images.every(imageOk));
   };
-  // REBUILD, never pass raw through: "typed out" must be construction, not assertion — a passed- through object would
+  // REBUILD, never pass raw through: "typed out" must be construction, not assertion — a passed-through object would
   // carry arbitrary extra keys into the engine.
   const rebuildPrompt = (p: { text: string }): { text: string; images?: { data: string; mimeType: string }[] } => {
     const images = (p as { images?: { data: string; mimeType: string }[] }).images;

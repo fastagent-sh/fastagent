@@ -7,7 +7,7 @@ import { installProxyFetch } from "../proxy.ts";
 import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
 import {
-  CONFIG_TOKEN_TTL_MS,
+  configTokenExpiry,
   readSlackOnboardingState,
   writeSlackOnboardingState,
 } from "../channels/slack/onboarding-state.ts";
@@ -37,7 +37,7 @@ async function promptConfigTokens(): Promise<{
   if (!configToken.startsWith("xoxe.") || !configRefreshToken.startsWith("xoxe-")) {
     throw new Error("invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh)");
   }
-  return { configToken, configRefreshToken, configTokenExpiresAt: Date.now() + CONFIG_TOKEN_TTL_MS };
+  return { configToken, configRefreshToken, configTokenExpiresAt: configTokenExpiry() };
 }
 
 /** Keep the saved token pair, or paste a fresh one? `--replace-config` answers without asking. */
@@ -139,12 +139,10 @@ export async function onboardSlackInternalApp(input: {
       "Slack's configuration refresh token can manage apps owned by your user in this workspace. " +
         "FastAgent stores it only in owner-readable local state; it is never deployed.",
     );
-    const { configToken, configRefreshToken } = await promptConfigTokens();
     state = newSlackOnboardingState({
       appName,
       groupBehavior: input.groupBehavior.behavior,
-      configToken,
-      configRefreshToken,
+      ...(await promptConfigTokens()),
     });
     writeSlackOnboardingState(input.stateRoot, state);
   } else if (input.groupBehavior.explicit && !state.appId) {

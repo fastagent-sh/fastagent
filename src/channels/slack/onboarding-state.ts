@@ -5,7 +5,12 @@ import { rotateSlackConfigToken } from "./config-api.ts";
 import type { SlackGroupBehavior } from "./manifest.ts";
 
 /** Slack config access tokens expire in 12 hours; use 11h so registration rotates before the edge. */
-export const CONFIG_TOKEN_TTL_MS = 11 * 60 * 60_000;
+const CONFIG_TOKEN_TTL_MS = 11 * 60 * 60_000;
+
+/** When a token pair captured `now` stops being usable — the ONE place that answers it. */
+export function configTokenExpiry(now = Date.now()): number {
+  return now + CONFIG_TOKEN_TTL_MS;
+}
 
 export interface SlackOnboardingState {
   version: 1;

@@ -1,7 +1,7 @@
 /**
  * The telegram-shaped turn store: the channel's persisted record (what its runner needs to re-execute a turn), its
  * IO-boundary shape validator, and its arrival ordering, over the generic L1 turn store (../kit/turn-store.ts — the
- * semantics live there: pre-ACK persist, replay on the next start, the poison- turn execution ceiling, the fail-closed
+ * semantics live there: pre-ACK persist, replay on the next start, the poison-turn execution ceiling, the fail-closed
  * attempt bump).
  */
 import { type TurnStore, createTurnStore as createGenericTurnStore } from "../kit/turn-store.ts";

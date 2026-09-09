@@ -165,7 +165,13 @@ const AUTH_ACK_BUDGET_MS = 2_000;
  * it takes, and {@link ready} for the ingress path, which must answer inside the ACK budget.
  */
 interface SlackAuthentication {
+  /**
+   * REJECTS when `auth.test` failed, and every consumer must await or catch it. The rejection is already reported
+   * once (an internal `catch` logs it), so this promise carries the failure for control flow, not for reporting it a
+   * second time — a consumer that neither awaits nor catches drops a turn silently.
+   */
   readonly settled: Promise<void>;
+  /** {@link settled}, bounded by the Events API ACK budget: rejects rather than letting an ingress miss it. */
   ready(): Promise<void>;
   teamId(): string | undefined;
   botUserId(): string | undefined;

@@ -145,7 +145,7 @@ export function telegramEnvelope(m: TelegramMessage): string {
   return `[telegram: ${meta}]${scope}${replyTo}\n${parts.filter(Boolean).join("\n")}`;
 }
 
-/** Normalize a configured bot username: drop a leading `@`, trim, lowercase (usernames are case- insensitive). */
+/** Normalize a configured bot username: drop a leading `@`, trim, lowercase (usernames are case-insensitive). */
 function botName(botUsername: string | undefined): string | undefined {
   const s = botUsername?.replace(/^@/, "").trim().toLowerCase();
   return s || undefined;
