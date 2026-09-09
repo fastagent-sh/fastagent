@@ -342,8 +342,10 @@ track it upstream and state the limitation instead of silently building a replac
 
 ## 7. Add clock triggers deliberately
 
-After adding Telegram and selecting an approved recipient, this is a schedule file. Replace
-`OWNER_APPROVED_CHAT_ID` before running it; no destination is inferred from a previous chat.
+After adding Telegram and selecting an approved recipient, this is a schedule file. The recipient is
+environment-specific, so declare it in `secrets` and build the prompt from it — set
+`OWNER_APPROVED_CHAT_ID` in `.secrets/.env` before running it; no destination is inferred from a
+previous chat.
 
 **`fastagent/schedules/daily-review.ts`**
 
@@ -353,7 +355,9 @@ import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
-  prompt: "Review pending proposals and use telegram-send to send a short digest to Telegram chat OWNER_APPROVED_CHAT_ID. Leave unapproved actions pending.",
+  secrets: ["OWNER_APPROVED_CHAT_ID"],
+  prompt: (secrets) =>
+    `Review pending proposals and use telegram-send to send a short digest to Telegram chat ${secrets.OWNER_APPROVED_CHAT_ID}. Leave unapproved actions pending.`,
 });
 ```
 

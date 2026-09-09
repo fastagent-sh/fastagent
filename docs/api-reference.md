@@ -407,10 +407,16 @@ See [Channel development](channel-development.md).
 interface Schedule {
   cron: string; // 5-field cron expression
   tz?: string; // IANA timezone (default "UTC")
-  prompt: string | ((secrets: Record<string, string>) => string); // the turn's text = the job's instruction
+  prompt: string; // the turn's text = the job's instruction (a builder is resolved at load)
   secrets?: readonly string[]; // env vars this file needs, typed into the prompt builder
 }
-function defineSchedule(schedule: Schedule): Schedule;
+// what an author writes: `prompt` may be built FROM the declared secrets, keys typed from `secrets`
+function defineSchedule<const S extends readonly string[]>(schedule: {
+  cron: string;
+  tz?: string;
+  prompt: string | ((secrets: Record<S[number], string>) => string);
+  secrets?: S;
+}): Schedule;
 ```
 
 An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;

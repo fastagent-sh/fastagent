@@ -277,12 +277,15 @@ file id) so the agent can record the outcome.
 The destination is what the turn's instruction names. A user id (`U…`) as `channelId` messages that
 user's DM — Slack opens it under `chat:write`, no `conversations.open` needed — and the result reports
 the DM channel id (`D…`), which is what a file upload to that user needs. A schedule that reports to its
-owner therefore needs only the owner's user id in its prompt:
+owner therefore needs only the owner's user id — declared in `secrets`, since it is
+environment-specific, and built into the prompt:
 
 ```ts
 export default defineSchedule({
   cron: "0 9 * * 1-5",
-  prompt: "Summarize yesterday's growth notes and send them with slack-send to user U0123456789.",
+  secrets: ["OWNER_SLACK_USER_ID"],
+  prompt: (secrets) =>
+    `Summarize yesterday's growth notes and send them with slack-send to user ${secrets.OWNER_SLACK_USER_ID}.`,
 });
 ```
 
