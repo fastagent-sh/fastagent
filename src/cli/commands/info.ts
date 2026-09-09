@@ -1,6 +1,6 @@
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. */
 import { resolve } from "node:path";
-import { loadDotEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
 import {
   defaultSessionsDir,
@@ -32,7 +32,7 @@ export interface InfoOptions {
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const dir = resolve(dirArg);
   const { agentDir, workspace } = placementOrExit(dir);
-  loadDotEnv(agentDir); // skills/tools may read env at load time
+  enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
   // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON (its cwd, whose

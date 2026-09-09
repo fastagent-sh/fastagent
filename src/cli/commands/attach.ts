@@ -6,9 +6,8 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { loadDotEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { classifyBind } from "../../bind.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
@@ -122,19 +121,15 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   }
   // A REMOTE attach reads nothing under `dir`.
   const dir = remote ? resolve(dirArg ?? ".") : placementOrExit(resolve(dirArg ?? ".")).agentDir;
-  if (!remote) loadDotEnv(dir);
+  // A remote attach has no agent directory to read, so its proxy can only come from the ambient environment; a
+  // discovered one enters the agent's. Either way the endpoint decides nothing here — loopback stays direct because
+  // the dispatcher exempts it, not because a command remembered to ask.
+  if (remote) installProxyFetch();
+  else enterAgentEnv(dir);
   // For a discovered endpoint the FIRST read joins the startup budget below: the dev-watch restart window has two
   // halves.
   let endpoint!: { url: string; token: string };
   if (remote) endpoint = { url: opts.url as string, token: opts.token as string };
-  // The TARGET decides, not the flag: an endpoint out on the internet needs HTTP(S)_PROXY, while a loopback one (a
-  // discovered local serve, or an `ssh -L` forward given to --url) must stay direct — undici's EnvHttpProxyAgent
-  // proxies loopback too unless NO_PROXY happens to list it.
-  if (remote) {
-    const host = URL.parse(endpoint.url)?.hostname;
-    if (host === undefined) failStartup(new Error(`--url is not a valid URL: ${endpoint.url}`));
-    if (classifyBind(host) !== "loopback") installProxyFetch();
-  }
   const discovered = !remote;
   // ONE policy for both phases: startup and the round loop gather the same facts (errorFacts) and route them through
   // decideRound with their phase.

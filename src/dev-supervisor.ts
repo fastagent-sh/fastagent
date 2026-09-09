@@ -14,7 +14,6 @@ import {
 } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
-import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
@@ -60,9 +59,6 @@ export async function runDevSupervisor(
   // The supervisor owns the tunnel so the public URL survives worker reloads (a fresh tunnel per save would mean a
   // new URL + re-registering the webhook on every edit).
   let tunnel: Tunnel | undefined;
-  // The supervisor itself calls the channel webhook APIs (setWebhook) when announcing the tunnel, so it needs the
-  // proxy too (workers install their own).
-  if (options.tunnel) installProxyFetch();
 
   const spawnWorker = (): void => {
     // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.

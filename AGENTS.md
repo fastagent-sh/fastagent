@@ -55,9 +55,9 @@ src/
 ├── observe.ts              # turn-trace logging around an Agent
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
-├── proxy.ts                # HTTPS_PROXY wiring
+├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
-├── env.ts                  # `.env` → process.env loading
+├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ schedules/ config
 ├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared

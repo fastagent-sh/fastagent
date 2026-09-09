@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./log.ts";
+import { installProxyFetch } from "./proxy.ts";
 import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
@@ -42,8 +43,24 @@ export function envExamplePath(agentDir: string): string {
 }
 
 /**
+ * ENTER an agent directory's runtime environment: its `.env` becomes `process.env`, and this process's outbound fetch
+ * follows whatever proxy that (or the ambient environment) declares.
+ *
+ * ONE function because the two steps are one fact in a fixed order — the proxy can be declared in the `.env`, so it
+ * has to be read first, and `installProxyFetch` reads the environment at construction. Every command used to spell
+ * the pair out itself, and the ones that spelled out only half (`tool`, `add`, `attach`) shipped the bug this exists
+ * to make unrepresentable: an authored tool, a channel's app-creation flow, or a skill download connecting DIRECT on a
+ * machine that has no direct route. Whether a given request then uses the proxy is the dispatcher's decision, not the
+ * caller's — see {@link installProxyFetch} on loopback.
+ */
+export function enterAgentEnv(agentDir: string): void {
+  loadDotEnv(agentDir);
+  installProxyFetch();
+}
+
+/**
  * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link loadEnvFile}), treating a MISSING file as
- * normal (no .env).
+ * normal (no .env). Commands want {@link enterAgentEnv}, which is this plus the proxy that `.env` may declare.
  */
 export function loadDotEnv(agentDir: string): void {
   const path = dotEnvPath(agentDir);

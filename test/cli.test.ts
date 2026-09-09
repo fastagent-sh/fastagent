@@ -41,35 +41,6 @@ function run(
   });
 }
 
-/** Run `body` against a local HTTP proxy that answers everything 200 and records the URLs it was asked for. The
- *  `env` it hands over has every proxy variable stripped, so a command can only find one by loading the agent's
- *  own `.env` — which is what these tests are about. */
-async function withLocalProxy(
-  body: (proxyUrl: string, env: NodeJS.ProcessEnv, requests: string[]) => Promise<void>,
-): Promise<void> {
-  const requests: string[] = [];
-  const proxy = createServer((req, res) => {
-    requests.push(req.url ?? "");
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end("proxied");
-  });
-  await new Promise<void>((resolve, reject) => {
-    proxy.once("error", reject);
-    proxy.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = proxy.address();
-    if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
-    const env = { ...process.env };
-    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
-      delete env[key];
-    }
-    await body(`http://127.0.0.1:${address.port}`, env, requests);
-  } finally {
-    await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));
-  }
-}
-
 describe("cli papercuts", () => {
   it("deploy WIRES the ownership rule — the real command keeps a file it did not generate", async () => {
     // The rule itself (exists x ours x force) is a state machine, tested at its own level in
@@ -177,32 +148,26 @@ describe("cli papercuts", () => {
     expect(await readFile(join(dir, "fastagent", "fastagent.compose.yml"), "utf8")).toBe(compose);
   });
 
-  it("deploy loads .env and installs its proxy before config-time network work", async () => {
-    // Regression: the Node CLI used to load .env but omit installProxyFetch(), so post-deploy channel
-    // calls bypassed HTTP(S)_PROXY. A config-time fetch gives the real CLI path an early network probe;
-    // the reserved .invalid host can succeed only when the .env-only local proxy was installed first.
-    await withLocalProxy(async (proxyUrl, env, requests) => {
-      const dir = await agentWorkspace("fa-deploy-proxy-", {
-        ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
-        "fastagent.config.mjs":
-          `const response = await fetch("http://deploy-proxy.invalid/probe");\n` +
-          `if (!response.ok) throw new Error("proxy probe failed");\n` +
-          `export default { model: "openai-codex/gpt-5.5" };\n`,
-      });
-      await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-
-      const { code, stderr } = await run(["deploy", "fly", dir], undefined, env);
-      expect(code, stderr).toBe(0);
-      expect(requests).toContain("http://deploy-proxy.invalid/probe");
+  it("a command ENTERS the agent's environment: a proxy declared only in .env carries a tool's fetch", async () => {
+    // The WIRING half of #474 (the policy itself is test/proxy.test.ts): a real CLI process, a proxy that exists
+    // nowhere but the agent's `.env`, and an authored tool that fetches. `enterAgentEnv` is what makes the two
+    // steps inseparable — the bug was commands that did only the first. The reserved .invalid host resolves
+    // nowhere, so a direct connection cannot pass.
+    const requests: string[] = [];
+    const proxy = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("proxied");
     });
-  });
+    await new Promise<void>((resolve, reject) => {
+      proxy.once("error", reject);
+      proxy.listen(0, "127.0.0.1", resolve);
+    });
 
-  it("tool runs an authored tool through the agent's proxy, not a direct connection", async () => {
-    // Regression (#474): `tool` loaded .env but skipped installProxyFetch(), so an authored tool built on
-    // fetch failed with a bare undici connect timeout on a machine that needs a proxy — while dev/start ran
-    // the same tool fine. Same probe as the deploy test: the reserved .invalid host resolves only via the
-    // local proxy, so a direct connection cannot pass.
-    await withLocalProxy(async (proxyUrl, env, requests) => {
+    try {
+      const address = proxy.address();
+      if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+      const proxyUrl = `http://127.0.0.1:${address.port}`;
       const dir = await agentWorkspace("fa-tool-proxy-", {
         ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
         "tools/probe.mjs":
@@ -211,26 +176,17 @@ describe("cli papercuts", () => {
           `  return await res.text();\n` +
           `} };\n`,
       });
+      const env = { ...process.env };
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
+        delete env[key]; // the proxy must come from the agent's .env, read inside the command
+      }
 
       const { code, stderr } = await run(["tool", "probe", "{}", dir], undefined, env);
       expect(code, stderr).toBe(0);
       expect(requests).toContain("http://tool-proxy.invalid/probe");
-    });
-  });
-
-  it("add skill downloads a remote source through the agent's proxy", async () => {
-    // The vendor path fetches with giget, which is built on global fetch — so it needs the same proxy the rest of
-    // the CLI installs. The download is REACHED here, not completed: the stub proxy answers text/plain, so giget
-    // fails to unpack and the command exits 1 — what is asserted is which route the request took.
-    await withLocalProxy(async (proxyUrl, env, requests) => {
-      const dir = await agentWorkspace("fa-skill-proxy-", {
-        ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
-      });
-
-      const { code } = await run(["add", "skill", "http://skill-proxy.invalid/skill.tar.gz", dir], undefined, env);
-      expect(code).toBe(1);
-      expect(requests).toContain("http://skill-proxy.invalid/skill.tar.gz");
-    });
+    } finally {
+      await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {

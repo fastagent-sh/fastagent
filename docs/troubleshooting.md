@@ -301,7 +301,13 @@ FastAgent CLI commands install proxy-aware fetch handling. Set standard proxy en
 HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-Then retry `fastagent login`, `fastagent dev`, or `fastagent start`.
+Then retry `fastagent login`, `fastagent dev`, or `fastagent start`. The variables may also live in the agent's
+`.secrets/.env` — every command reads it before deciding where its requests go, so a tool's `fetch`, a channel's
+app-creation flow and a skill download all follow the same proxy.
+
+Loopback (`localhost`, `127.0.0.1`, `::1`) stays direct unless you set `NO_PROXY` yourself, so a proxy variable does
+not break local health probes, `fastagent attach`, or an `ssh -L` forward. Setting `NO_PROXY` replaces that default
+entirely — include the loopback names in your own value.
 
 ## Need a machine-readable report
 
