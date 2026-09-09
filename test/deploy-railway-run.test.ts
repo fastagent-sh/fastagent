@@ -133,6 +133,24 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(registerFeishu).toHaveBeenCalledWith("https://bot-production.up.railway.app", "feishu");
   });
 
+  it("names the secrets it sets — the list is no longer only what the author typed", async () => {
+    // A mounted tool/channel/schedule declares its own names, so a count is not enough for the
+    // operator to see what `--run` read from this machine and pushed to the host.
+    const { railway } = fakeRailway((args) => {
+      if (args[0] === "status") return { stdout: "" };
+      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const logs: string[] = [];
+    await deployRailwayRun(
+      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
+      railway,
+      (message) => logs.push(message),
+      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
+    );
+    expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
+  });
+
   it("secret values go over stdin (variable set --stdin), never argv", async () => {
     const { railway, calls } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };

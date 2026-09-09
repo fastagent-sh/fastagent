@@ -61,12 +61,17 @@ A minimal channel module looks like this:
 
 ```ts
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default telegramChannel({
-  secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
-  botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
-  // Optional. The scaffold uses this for development transparency.
-  onError: (failed) => `⚠️ ${failed.details}`,
+export default defineChannel({
+  secrets: ["TELEGRAM_SECRET_TOKEN", "TELEGRAM_BOT_TOKEN"],
+  channel: (secrets) =>
+    telegramChannel({
+      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+      botToken: secrets.TELEGRAM_BOT_TOKEN,
+      // Optional. The scaffold uses this for development transparency.
+      onError: (failed) => `⚠️ ${failed.details}`,
+    }),
 });
 ```
 
@@ -97,24 +102,29 @@ The buffer needs Telegram **group privacy mode off** (@BotFather → `/setprivac
 
 ```ts
 import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@fastagent-sh/fastagent/telegram";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
 const botUsername = "my_bot";
 
-telegramChannel({
-  secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
-  botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
-  botUsername,
-  route(update) {
-    const base = defaultTelegramRoute(update, { botUsername });
-    if (!base) return null;
-    const message = update.message;
-    if (!message) return null;
-    return {
-      ...base,
-      session: `telegram:${message.chat.id}`,
-      text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
-    };
-  },
+export default defineChannel({
+  secrets: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"],
+  channel: (secrets) =>
+    telegramChannel({
+      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+      botToken: secrets.TELEGRAM_BOT_TOKEN,
+      botUsername,
+      route(update) {
+        const base = defaultTelegramRoute(update, { botUsername });
+        if (!base) return null;
+        const message = update.message;
+        if (!message) return null;
+        return {
+          ...base,
+          session: `telegram:${message.chat.id}`,
+          text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
+        };
+      },
+    }),
 });
 ```
 

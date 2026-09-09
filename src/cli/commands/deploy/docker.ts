@@ -15,6 +15,7 @@ import { announceWebhooks } from "../../../tunnel.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
+import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
@@ -89,7 +90,7 @@ async function runDeployDocker(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: string[];
+    extraSecrets: readonly DeclaredSecret[];
   },
 ): Promise<void> {
   const { agentDir, workspace, composeFile, port, requireTunnel, channels } = params;

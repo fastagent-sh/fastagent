@@ -15,6 +15,7 @@ import { spawnRunner } from "../../../deploy/runner.ts";
 import type { ResolvedPlacement } from "../../../paths.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
+import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
@@ -67,7 +68,7 @@ async function runDeployRailway(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: string[];
+    extraSecrets: readonly DeclaredSecret[];
     intoLinked: boolean;
     /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
     dockerfilePath: string;

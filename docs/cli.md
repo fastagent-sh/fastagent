@@ -77,9 +77,10 @@ Prints the assembled surface without starting a server:
 - persona presence and context files (`AGENTS.md`),
 - skills and their diagnostics,
 - the complete coding-tool set (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), plus authored tools and collisions,
-- channel files,
+- channel files that IMPORT cleanly (`info` loads them to read their declarations); one that fails to import is absent from this list and reported instead — as a warning, and as `channelFailures` in `--json`,
 - schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),
 - whether self-scheduling (`selfSchedule`) is on,
+- declared secrets (`defineTool({ secrets })`, `defineChannel({ secrets })`, `defineSchedule({ secrets })`, `config.deploy.secrets`), flagging any that have no value here and which of those block `dev`/`start`,
 - session directory.
 
 `info` is read-only: it does not create sessions or modify `.state/`/`.secrets/`.

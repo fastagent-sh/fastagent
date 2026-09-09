@@ -225,6 +225,24 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(up.env).toEqual({ OPENAI_API_KEY: "sk-secret", FASTAGENT_AUTH_SEED: "base64-secret" });
   });
 
+  it("names the secrets it carries — the list is no longer only what the author typed", async () => {
+    // A mounted tool/channel/schedule declares its own names, so what `--run` reads from THIS machine
+    // and pushes to the host has to be visible, not a count.
+    const { docker } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const logs: string[] = [];
+    await deployDockerRun(
+      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
+      docker,
+      (message) => logs.push(message),
+      healthy,
+    );
+    expect(logs.join("\n")).toContain("2 secret(s) to Compose: OPENAI_API_KEY, X_API_KEY");
+  });
+
   it("accepts a running custom topology with no host-published port (operator-owned ingress)", async () => {
     const logs: string[] = [];
     const { docker } = fakeDocker((args) => {

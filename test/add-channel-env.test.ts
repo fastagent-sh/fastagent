@@ -52,6 +52,20 @@ describe("channel setup guidance", () => {
     expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
   });
 
+  it("a kind with no long-connection template says so, instead of an ENOENT for a path nobody named", async () => {
+    // The CLI's resolveIngress only asks for websocket on feishu/lark, but that is the caller's
+    // guarantee, not this function's: `scaffoldChannel` is exported and a new kind may arrive first.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-missing-"));
+    await expect(scaffoldChannel(dir, "telegram", { ingress: "websocket" })).rejects.toThrow(
+      /telegram has no websocket scaffold/,
+    );
+    // The "available" list names CHANNEL templates only — a companion tool in the same bundle is not
+    // an ingress anyone can ask for, and offering it sends the reader after the wrong file.
+    await expect(scaffoldChannel(dir, "telegram", { ingress: "websocket" })).rejects.toThrow(
+      /available: channel\.ts$/m,
+    );
+  });
+
   it("WebSocket setup needs only App ID/Secret and writes the WebSocket factory into the scaffold", async () => {
     const setup = channelSetup("feishu", "websocket");
     expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);

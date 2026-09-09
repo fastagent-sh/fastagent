@@ -151,13 +151,18 @@ A minimal channel module looks like this (`channels/feishu.ts`; the lark kind mi
 
 ```ts
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default feishuChannel({
-  appId: process.env.FEISHU_APP_ID ?? "",
-  appSecret: process.env.FEISHU_APP_SECRET ?? "",
-  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
-  encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-  onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
+export default defineChannel({
+  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
+  channel: (secrets) =>
+    feishuChannel({
+      appId: secrets.FEISHU_APP_ID,
+      appSecret: secrets.FEISHU_APP_SECRET,
+      verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
+      encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
+      onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
+    }),
 });
 ```
 
@@ -165,10 +170,15 @@ The WebSocket form uses its transport-specific factory and has no webhook-only o
 
 ```ts
 import { feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default feishuWebSocketChannel({
-  appId: process.env.FEISHU_APP_ID ?? "",
-  appSecret: process.env.FEISHU_APP_SECRET ?? "",
+export default defineChannel({
+  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+  channel: (secrets) =>
+    feishuWebSocketChannel({
+      appId: secrets.FEISHU_APP_ID,
+      appSecret: secrets.FEISHU_APP_SECRET,
+    }),
 });
 ```
 

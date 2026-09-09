@@ -23,6 +23,8 @@ import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
+import type { DeclaredSecret } from "../../declared-secrets.ts";
+import { gateSecrets } from "../../secrets-gate.ts";
 
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). */
@@ -64,6 +66,8 @@ export interface AgentAssembly {
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
+  /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
+  toolSecrets: Map<string, DeclaredSecret[]>;
 }
 
 export async function resolveAgentAssembly(
@@ -79,11 +83,21 @@ export async function resolveAgentAssembly(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveAgentTools(
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,
     agentDir,
     workspace,
   );
+  // THE serving-path gate for tool declarations. Here rather than inside resolveAgentTools, which
+  // `info` and `fastagent tool` call to REPORT on a definition and must survive an unset value; every
+  // path through this function is about to run ALL of the tools, so no `owner`. `toolFailures` goes
+  // to the gate because the refusal throws out of here while the caller prints them only after it
+  // gets an assembly back (secrets-gate.ts, decision 2).
+  //
+  // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
+  // means "may run in this process" — letting it start would put the empty-credential failure back
+  // inside a turn. An author who does not want that opts out per tool by not declaring.
+  gateSecrets({ declared: toolSecrets, failures: toolFailures });
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
@@ -102,6 +116,7 @@ export async function resolveAgentAssembly(
     deferredToolNames,
     toolCollisions,
     toolFailures,
+    toolSecrets,
   };
 }
 

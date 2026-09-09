@@ -18,7 +18,15 @@ import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../.
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type ToolCollision, isDeferredTool, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
+import {
+  type FastagentTool,
+  type ToolCollision,
+  isDeferredTool,
+  loadTools,
+  mergeDiscoveredTools,
+  type MountedTool,
+} from "./tool.ts";
+import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
 import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
@@ -88,6 +96,13 @@ export async function resolveAgentTools(
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
+  /** Env vars the MOUNTED tools declared they need, BY TOOL NAME — a discovered tool shadowed by a
+   *  coding tool or `config.tools` never executes, so its declaration is dropped here rather than
+   *  gating a start. Per tool because a caller that runs exactly ONE of them (`fastagent tool`) must
+   *  not be stopped by a sibling's credential; the serving paths flatten it (they mount all of
+   *  them). DATA: `info` reports it and the deploy pre-flight carries it, while the serving opener
+   *  asserts it (open.ts) — this function must stay reportable. */
+  toolSecrets: Map<string, DeclaredSecret[]>;
 }> {
   // Discovered `tools/` come from `agentDir` (the agent's own surface); the coding tools are rooted at `cwd`, the
   // WORKSPACE.
@@ -95,6 +110,10 @@ export async function resolveAgentTools(
   const configured = piAllCodingTools(cwd);
   const configuredNames = new Set(configured.map((tool) => tool.name));
   const configuredCollisions: ToolCollision[] = [];
+  // The config.tools that actually MOUNT — collected here rather than re-derived from `config.tools`
+  // afterwards, so a tool dropped for sharing a coding tool's name cannot contribute a declaration
+  // (its body never runs, and gating a start on its secret would refuse to serve for nothing).
+  const mountedConfigTools: FastagentTool[] = [];
   for (const tool of config.tools ?? []) {
     if (configuredNames.has(tool.name)) {
       configuredCollisions.push({ name: tool.name, source: "config.tools" });
@@ -102,6 +121,7 @@ export async function resolveAgentTools(
     }
     configuredNames.add(tool.name);
     configured.push(tool);
+    mountedConfigTools.push(tool);
   }
   const merged = mergeDiscoveredTools(configured, discovered.tools);
   // The built-in `search_tools` loader mounts here.
@@ -112,6 +132,9 @@ export async function resolveAgentTools(
     !merged.tools.some((t) => t.name === "search_tools") && tools.some((t) => t.name === "search_tools");
   const toolCollisions = [...discovered.collisions, ...configuredCollisions, ...merged.collisions];
   // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/).
+  // The discovered tools that were DROPPED (a coding tool or config.tools already owns the name):
+  // asking the mounted set instead would read the winner's name as proof the loser is mounted.
+  const shadowed = new Set(merged.collisions.map((c) => c.name));
   const defaultNames = new Set<string>(CODING_TOOL_NAMES);
   const toolNames = tools
     .filter(
@@ -124,6 +147,21 @@ export async function resolveAgentTools(
     deferredToolNames: tools.filter(isDeferredTool).map((t) => t.name),
     toolCollisions,
     toolFailures: discovered.failures,
+    // Mounted only, and config.tools are FastagentTools too, so a programmatic tool declares the
+    // same way a file does.
+    toolSecrets: new Map([
+      ...[...discovered.secrets].filter(([name]) => !shadowed.has(name)),
+      // A programmatic tool declares the same way a file does. The source names the ENTRY, not just
+      // the list: `source` has to point at something the author can find, and "config.tools" alone
+      // locates nothing when the list has several tools. The shape was already refused by config
+      // validation (config.ts), so a throw here means a FastagentConfig assembled in code bypassed
+      // it — still the caller's own object, so it fails loudly rather than being isolated.
+      ...mountedConfigTools.map((tool) => {
+        const declaration = readSecretDeclaration(tool, `config.tools "${tool.name}"`);
+        if (declaration.error !== undefined) throw new Error(declaration.error);
+        return [tool.name, declaration.secrets] as [string, DeclaredSecret[]];
+      }),
+    ]),
   };
 }
 

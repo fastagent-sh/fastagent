@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's internal_port) —
@@ -17,8 +18,9 @@ export interface RailwayPlanInput extends ContainerInput {
    */
   channels: readonly DeclaredChannel[];
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
-  /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
-  extraSecrets?: string[];
+  /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
+   *  attributed to the file that declared it. */
+  extraSecrets?: readonly DeclaredSecret[];
   /**
    * Time triggers present (schedules/ or selfSchedule) — the runbook forbids App Sleeping: cron/wake has no external
    * wake-up, so a sleeping service sleeps through them.

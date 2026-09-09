@@ -90,7 +90,7 @@ describe("deploy/docker: planDockerDeploy", () => {
         ...base,
         modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram", "feishu"]),
-        extraSecrets: ["GH_TOKEN"],
+        extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
       }),
     );
     for (const name of [

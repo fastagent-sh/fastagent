@@ -1,4 +1,5 @@
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
 // feishuChannel is fastagent's canonical Feishu adapter (verify + run + reply), configured with YOUR
 // policy. fastagent discovers this file, mounts POST /feishu, and pipes the agent + state home to it.
@@ -20,23 +21,30 @@ import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 //   5. create a version and publish the app (a Feishu admin approves it), then add the bot to a chat
 // `fastagent add feishu` already did steps 1-3 for you (scan-to-create); this walkthrough is for a
 // hand-made app or for auditing what the scan configured.
-export default feishuChannel({
-  appId: process.env.FEISHU_APP_ID ?? "", // missing → fails at startup (no replies could be sent)
-  appSecret: process.env.FEISHU_APP_SECRET ?? "",
-  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "", // authenticates inbound events
-  encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined, // optional; when set, plaintext events are refused
-  // No session modes: a chat is one session and a thread is another, and where the answer goes follows
-  // from that (docs/design/participant-model.md).
-  // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
-  // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
-  // full details always go to the server log regardless.
-  onError: (failed) => `⚠️ ${failed.details}`,
-  // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
-  // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultFeishuRoute:
-  // p2p chats always answer; groups answer on @this-bot, plus bare messages in a thread where the
-  // Agent takes part and exactly ONE human does. Other human group/thread discussion buffers until
-  // that place's next answered turn; @other-only messages buffer rather than triggering the Agent.
-  // Override to customise explicit routing, reusing the export:
-  //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
-  //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },
+export default defineChannel({
+  // The env vars this channel needs. fastagent carries them to a deployed box and refuses to serve
+  // while one is unset — a bare process.env read gets neither guarantee. FEISHU_ENCRYPT_KEY is
+  // optional, so it is NOT declared here: an undeclared read stays undeclared on purpose.
+  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
+  channel: (secrets) =>
+    feishuChannel({
+      appId: secrets.FEISHU_APP_ID,
+      appSecret: secrets.FEISHU_APP_SECRET,
+      verificationToken: secrets.FEISHU_VERIFICATION_TOKEN, // authenticates inbound events
+      encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined, // optional; when set, plaintext events are refused
+      // No session modes: a chat is one session and a thread is another, and where the answer goes follows
+      // from that (docs/design/participant-model.md).
+      // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
+      // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
+      // full details always go to the server log regardless.
+      onError: (failed) => `⚠️ ${failed.details}`,
+      // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
+      // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultFeishuRoute:
+      // p2p chats always answer; groups answer on @this-bot, plus bare messages in a thread where the
+      // Agent takes part and exactly ONE human does. Other human group/thread discussion buffers until
+      // that place's next answered turn; @other-only messages buffer rather than triggering the Agent.
+      // Override to customise explicit routing, reusing the export:
+      //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
+      //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },
+    }),
 });

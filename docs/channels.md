@@ -125,13 +125,18 @@ Example GitHub glue:
 
 ```ts
 import { githubChannel } from "@fastagent-sh/fastagent/github";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default githubChannel({
-  secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-  on: (event) =>
-    event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload
-      ? [{ session: event.deliveryId, text: `Review PR #${event.payload.pull_request.number}` }]
-      : [],
+export default defineChannel({
+  secrets: ["GITHUB_WEBHOOK_SECRET"],
+  channel: (secrets) =>
+    githubChannel({
+      secret: secrets.GITHUB_WEBHOOK_SECRET,
+      on: (event) =>
+        event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload
+          ? [{ session: event.deliveryId, text: `Review PR #${event.payload.pull_request.number}` }]
+          : [],
+    }),
 });
 ```
 
@@ -139,10 +144,15 @@ Example Telegram glue:
 
 ```ts
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default telegramChannel({
-  secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
-  botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+export default defineChannel({
+  secrets: ["TELEGRAM_SECRET_TOKEN", "TELEGRAM_BOT_TOKEN"],
+  channel: (secrets) =>
+    telegramChannel({
+      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+      botToken: secrets.TELEGRAM_BOT_TOKEN,
+    }),
 });
 ```
 
@@ -150,14 +160,19 @@ Example Slack glue:
 
 ```ts
 import { slackChannel } from "@fastagent-sh/fastagent/slack";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default slackChannel({
-  botToken: process.env.SLACK_BOT_TOKEN ?? "",
-  signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
-  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-  // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),
-  // and that thread is the session — see docs/design/participant-model.md.
+export default defineChannel({
+  secrets: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
+  channel: (secrets) =>
+    slackChannel({
+      botToken: secrets.SLACK_BOT_TOKEN,
+      signingSecret: secrets.SLACK_SIGNING_SECRET,
+      rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
+      // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+      // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),
+      // and that thread is the session — see docs/design/participant-model.md.
+    }),
 });
 ```
 
@@ -166,20 +181,25 @@ adapter over this engine and reads `LARK_*`):
 
 ```ts
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default feishuChannel({
-  appId: process.env.FEISHU_APP_ID ?? "",
-  appSecret: process.env.FEISHU_APP_SECRET ?? "",
-  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
-  encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-  // No session modes: a chat is one session and a thread is another, and the summon/placement rules
-  // follow from that (docs/design/participant-model.md).
+export default defineChannel({
+  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
+  channel: (secrets) =>
+    feishuChannel({
+      appId: secrets.FEISHU_APP_ID,
+      appSecret: secrets.FEISHU_APP_SECRET,
+      verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
+      encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
+      // No session modes: a chat is one session and a thread is another, and the summon/placement rules
+      // follow from that (docs/design/participant-model.md).
+    }),
 });
 ```
 
 A route-adapter call returns a `ChannelModule`; a WebSocket adapter such as
 `feishuWebSocketChannel` returns a `LongConnectionChannelModule`. In either form the glue holds only
-policy (secrets from env, `on`/`route`), while `agent` and the state root flow from the framework to the adapter without transiting your code.
+policy (the declared `secrets` and `on`/`route`), while `agent` and the state root flow from the framework to the adapter without transiting your code.
 The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /slack`, `POST /feishu`, `POST /lark`);
 wrap it in your own `ChannelModule` to remap.
 
@@ -229,12 +249,20 @@ The user's agent installs the adapter and wires it with a channel file:
 
 ```ts
 import { acmeChannel } from "fastagent-channel-acme";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default acmeChannel({
-  secret: process.env.ACME_SECRET ?? "",
-  on: (event) => ({ session: event.user, text: event.text }),
+export default defineChannel({
+  secrets: ["ACME_SECRET"],
+  channel: (secrets) =>
+    acmeChannel({
+      secret: secrets.ACME_SECRET,
+      on: (event) => ({ session: event.user, text: event.text }),
+    }),
 });
 ```
+
+A custom channel's credentials exist nowhere else in the definition, so `secrets` is the only way
+`deploy` learns to carry them and the only thing that makes an unset value a startup failure.
 
 Read [Channel development](channel-development.md) for adapter design, packaging, and testing guidance.
 

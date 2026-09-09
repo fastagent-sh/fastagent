@@ -353,37 +353,24 @@ export async function scaffoldChannel(
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
   await mkdir(channelsDir, { recursive: true });
-  let content = channelTemplate(kind, "channel.ts");
-  if ((kind === "feishu" || kind === "lark") && options.ingress === "websocket") {
-    const factory = `${kind}Channel`;
-    const wsFactory = `${kind}WebSocketChannel`;
-    let configured = content
-      .replace(`import { ${factory} }`, `import { ${wsFactory} }`)
-      .replace(`export default ${factory}({`, `export default ${wsFactory}({`);
-    if (configured === content) throw new Error(`${kind} channel template has no factory anchors`);
-    const prefix = kind === "feishu" ? "FEISHU" : "LARK";
-    const exportAt = configured.indexOf("export default");
-    const importEnd = configured.indexOf("\n\n");
-    if (exportAt < 0 || importEnd < 0) throw new Error(`${kind} channel template header anchors are missing`);
-    const brand = kind === "feishu" ? "Feishu" : "Lark";
-    configured =
-      `${configured.slice(0, importEnd)}\n\n` +
-      `// ${brand} WebSocket long connection: the process connects OUT to the platform, so no public URL,\n` +
-      `// Verification Token, Encrypt Key, or --tunnel is needed. In Events & Callbacks choose long\n` +
-      `// connection, subscribe im.message.receive_v1, then publish the app version. Keep one process\n` +
-      `// running in production: scale-to-zero/App Sleeping would disconnect ingress.\n` +
-      configured.slice(exportAt);
-    configured = configured
-      .split("\n")
-      .filter(
-        (line) =>
-          !line.includes(`verificationToken: process.env.${prefix}_VERIFICATION_TOKEN`) &&
-          !line.includes(`encryptKey: process.env.${prefix}_ENCRYPT_KEY`),
-      )
-      .join("\n");
-    content = configured;
+  // The long-connection variant is its own template FILE, not a transform of the webhook one: the
+  // surgery that used to produce it (rename the factory, splice a header, delete the credential
+  // lines) had to be re-taught by hand every time the template changed shape, and a missed anchor
+  // scaffolded a channel configured for the wrong ingress with nothing failing.
+  // Which templates exist is the BUNDLE's fact, asked here rather than assumed from the kind: only
+  // feishu/lark ship a long-connection variant today, and a caller asking for one that is missing
+  // must get that sentence, not the ENOENT of a path it never named.
+  const template = options.ingress === "websocket" ? "channel.websocket.ts" : "channel.ts";
+  // CHANNEL templates only: the bundle also holds companion tools (`telegram-send.ts`), and listing
+  // one as an available scaffold sends whoever reads this line looking for an ingress that is a tool.
+  const available = channelBundleFiles(kind).filter((f) => f.startsWith("channel."));
+  if (!available.includes(template)) {
+    throw new Error(
+      `${kind} has no ${options.ingress ?? "webhook"} scaffold (${template} is not in its bundle) — ` +
+        `available: ${available.join(", ")}`,
+    );
   }
-  await writeFile(file, content, { flag: "wx" });
+  await writeFile(file, channelTemplate(kind, template), { flag: "wx" });
   return file;
 }
 
@@ -391,7 +378,7 @@ export async function scaffoldChannel(
 export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Promise<string[]> {
   const written: string[] = [];
   for (const name of channelBundleFiles(kind)) {
-    if (name === "channel.ts") continue;
+    if (name.startsWith("channel.")) continue; // channel.ts / channel.websocket.ts are the channel, not tools
     const file = join(dir, "tools", name);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, channelTemplate(kind, name));

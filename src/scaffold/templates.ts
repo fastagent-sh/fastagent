@@ -15,7 +15,8 @@ const channelScaffoldDir = (kind: string): URL => new URL(`../channels/${kind}/s
 export const channelTemplate = (kind: string, name: string): string =>
   readFileSync(new URL(name, channelScaffoldDir(kind)), "utf8");
 
-/** The .ts files in a channel's bundle: `channel.ts` is the channel adapter; the rest are companion tools. */
+/** The .ts files in a channel's bundle: `channel.*` are the channel templates (one per ingress —
+ *  `channel.ts`, `channel.websocket.ts`); the rest are companion tools. */
 export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 

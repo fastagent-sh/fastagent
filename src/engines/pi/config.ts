@@ -10,6 +10,7 @@ import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
+import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
@@ -145,6 +146,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
       if (typeof candidate.name !== "string" || typeof candidate.execute !== "function") {
         throw new Error(`${path}: "tools[${i}]" must have string "name" and function "execute"`);
       }
+      // The declaration's SHAPE, checked with the same read the code-input loaders use. Here rather
+      // than at tool resolution because this is the author's own config file: a wrong shape in it is
+      // a config error like any other (it stops the command with one line naming the entry), while a
+      // wrong shape in `tools/x.ts` is that one file's load failure and the agent serves without it.
+      const declaration = readSecretDeclaration(candidate, `${path}: "tools[${i}]"`);
+      if (declaration.error !== undefined) throw new Error(declaration.error);
     }
   }
   if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {

@@ -21,7 +21,7 @@ function moduleName(fileName: string): string {
 }
 
 /** One module file a directory declares. */
-export interface InventoryEntry {
+interface InventoryEntry {
   /** Basename without extension — the authoritative name for tools/channels/schedules. */
   name: string;
   /** "tools/foo.ts"-style label for errors and collisions. */
@@ -31,9 +31,9 @@ export interface InventoryEntry {
 
 /**
  * WHAT A CODE-INPUT DIRECTORY DECLARES — the single answer to "which files here are modules", without importing any of
- * them.
+ * them. Internal: the loading functions below are its only consumers.
  */
-export async function moduleInventory(subDir: string): Promise<InventoryEntry[]> {
+async function moduleInventory(subDir: string): Promise<InventoryEntry[]> {
   let dirents: Dirent[];
   try {
     dirents = await readdir(subDir, { withFileTypes: true });

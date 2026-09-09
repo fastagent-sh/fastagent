@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface DockerPlanInput extends ContainerInput {
   /** Stable Compose project name, sanitized by {@link toDockerProjectName}. */
@@ -15,8 +16,8 @@ export interface DockerPlanInput extends ContainerInput {
   channels: readonly DeclaredChannel[];
   /** Generate an optional Cloudflare Quick Tunnel service in Compose. */
   tunnel: boolean;
-  /** Extra environment-variable names declared in config.deploy.secrets. */
-  extraSecrets?: string[];
+  /** Everything the definition declared it needs (deploy.secrets + tool/schedule declarations). */
+  extraSecrets?: readonly DeclaredSecret[];
 }
 
 export interface DockerPlan {

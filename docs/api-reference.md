@@ -270,6 +270,34 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
+### Declaring the secrets a tool needs
+
+A tool that needs an env var says so where it is defined:
+
+```ts
+export default defineTool({
+  description: "Post to X.",
+  input: z.object({ text: z.string() }),
+  secrets: ["X_API_KEY", "X_API_SECRET"],
+  async execute({ text }, ctx) {
+    return await post(text, ctx.secrets.X_API_KEY); // typed from the list above
+  },
+});
+```
+
+**This is how agent code gets a credential — not `process.env`.** The declaration buys two things a
+bare read cannot have:
+
+- **`deploy` carries the value** to the host and lists it in the runbook against this file. There is no
+  second list to keep in sync — `config.deploy.secrets` is only for names no code declares.
+- **`dev`/`start` refuse to boot** while a declared name is unset, naming the file. Without the
+  declaration the same mistake surfaces as a failed tool call on the deployed box, days later.
+
+`ctx.secrets` reads the process environment on every call, so a value rotated IN THE ENVIRONMENT
+takes effect without a restart — a value rotated in `.secrets/.env` does not, since that file is read
+once at startup. Its keys are typed from the list: a typo is a compile error. `defineChannel` and `defineSchedule` take the same
+field, and `fastagent info` prints every declared name plus the ones with no local value.
+
 The second `execute` argument is a `ToolContext`:
 
 ```ts
@@ -278,6 +306,8 @@ interface ToolContext {
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
   tools?: ToolActivation;
+  /** The values of this tool's own `secrets`, keyed by the names it declared. */
+  secrets: Record<string, string>;
 }
 
 interface ReadonlySessionManager {
@@ -393,6 +423,7 @@ export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
   prompt: "Generate today's digest and send it to the team Telegram.",
+  secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — carried by deploy, asserted at start
 });
 ```
 

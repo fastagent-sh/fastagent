@@ -5,6 +5,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
+import { type DeclaredSecret, readSecretDeclaration, secretValues } from "../../declared-secrets.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
 
 export interface ToolContext {
@@ -18,9 +19,15 @@ export interface ToolContext {
    * the built-in `search_tools` is one consumer).
    */
   tools?: ToolActivation;
+  /** THE values of {@link DefineToolOptions.secrets}, keyed by the names this tool declared — read
+   *  from the process environment per call, so a value rotated THERE takes effect without a restart
+   *  (one rotated in `.secrets/.env` does not: that file is loaded once at startup). This is how a
+   *  tool gets a credential: reaching into `process.env` instead leaves the name undeclared, which
+   *  means nothing carries it to a deployed box and nothing checks it before the call fails. */
+  secrets: Record<string, string>;
 }
 
-export interface DefineToolOptions<I extends z.ZodType> {
+export interface DefineToolOptions<I extends z.ZodType, S extends readonly string[] = readonly []> {
   name?: string;
   description: string;
   input: I;
@@ -31,7 +38,18 @@ export interface DefineToolOptions<I extends z.ZodType> {
   deferred?: boolean;
   /** pi's per-tool execution mode: "sequential" makes pi run any batch containing this tool serially. */
   executionMode?: "sequential" | "parallel";
-  execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
+  /**
+   * Env vars this tool needs (`secrets: ["X_API_KEY"]`). Their values arrive as `ctx.secrets.X_API_KEY`,
+   * typed from this list. Declaring buys the two guarantees a bare `process.env` read cannot have:
+   * `deploy` carries the value to the host without it being listed anywhere else, and `dev`/`start`
+   * REFUSE TO START while it is unset, naming this file — instead of the tool failing on its first
+   * real call (see src/declared-secrets.ts).
+   */
+  secrets?: S;
+  execute: (
+    input: z.infer<I>,
+    ctx: Omit<ToolContext, "secrets"> & { secrets: Record<S[number], string> },
+  ) => unknown | Promise<unknown>;
 }
 
 /** AgentTool with Pi's optional per-call context; absent for sessionless CLI execution. */
@@ -42,6 +60,8 @@ export type MountedTool = Omit<AgentTool, "execute"> & {
 /** An AgentTool with fastagent's deferral marker. */
 export type FastagentTool = AgentTool & {
   deferred?: boolean;
+  /** {@link DefineToolOptions.secrets} — read back by `readSecretDeclaration`; pi ignores it. */
+  secrets?: readonly string[];
 };
 
 /**
@@ -71,7 +91,13 @@ function wrapResult(value: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details: value };
 }
 
-export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): FastagentTool {
+// `S` defaults to the EMPTY tuple, not `readonly string[]`: a tool that declares nothing then gets
+// `ctx.secrets` with no keys, so `ctx.secrets.X_API_KEY` fails to compile instead of type-checking as
+// a `string` that is `undefined` at run time. "A typo is a compile error" has to hold for the tool
+// that forgot to declare, which is the one making the mistake.
+export function defineTool<I extends z.ZodType, const S extends readonly string[] = readonly []>(
+  options: DefineToolOptions<I, S>,
+): FastagentTool {
   const { $schema: _drop, ...parameters } = z.toJSONSchema(options.input) as Record<string, unknown>;
   const tool = {
     name: options.name ?? "",
@@ -80,6 +106,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
     parameters,
     ...(options.deferred ? { deferred: true } : {}),
     ...(options.executionMode ? { executionMode: options.executionMode } : {}),
+    ...(options.secrets?.length ? { secrets: options.secrets } : {}),
     async execute(_toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> {
       const parsed = options.input.safeParse(rawParams);
       if (!parsed.success) {
@@ -107,6 +134,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
           signal,
           sessionManager: store?.sessionManager,
           tools,
+          secrets: secretValues(options.secrets),
         }),
       );
       if (added.length > 0) {
@@ -127,18 +155,30 @@ export interface ToolCollision {
 }
 
 /** Discover code tools in `<dir>/tools/`: each `*.ts|.js|.mjs` default-exports a tool, named from its filename. */
-export async function loadTools(
-  dir: string,
-): Promise<{ tools: AgentTool[]; collisions: ToolCollision[]; failures: ModuleLoadFailure[] }> {
+export async function loadTools(dir: string): Promise<{
+  tools: AgentTool[];
+  /** What each loaded tool declared it needs, BY TOOL NAME and attributed to the file. Per tool
+   *  because whether a declaration counts depends on whether that tool ends up MOUNTED — a name
+   *  shadowed by a coding tool never runs ({@link resolveAgentTools} makes that call). */
+  secrets: Map<string, DeclaredSecret[]>;
+  collisions: ToolCollision[];
+  failures: ModuleLoadFailure[];
+}> {
   // The same containment guard channels/schedules/skills get.
   await assertInsideAgentDir(dir, "tools");
   const { modules, failures } = await loadModuleDir(join(dir, "tools"));
   const byName = new Map<string, AgentTool>();
   const collisions: ToolCollision[] = [];
+  const secrets = new Map<string, DeclaredSecret[]>();
   for (const { name, label, file, mod } of modules) {
     const tool = mod.default as Partial<AgentTool> | undefined;
     if (!tool || typeof tool.execute !== "function") {
       failures.push({ label, file, message: `${label} must default-export defineTool({...})` });
+      continue;
+    }
+    const declaration = readSecretDeclaration(tool, label);
+    if (declaration.error !== undefined) {
+      failures.push({ label, file, message: declaration.error });
       continue;
     }
     if (byName.has(name)) {
@@ -146,8 +186,9 @@ export async function loadTools(
       continue;
     }
     byName.set(name, { ...(tool as AgentTool), name });
+    secrets.set(name, declaration.secrets);
   }
-  return { tools: [...byName.values()], collisions, failures };
+  return { tools: [...byName.values()], secrets, collisions, failures };
 }
 
 /** Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name. */

@@ -17,6 +17,7 @@ import { assembleSecrets } from "../../../deploy/secrets.ts";
 import type { FastagentConfig } from "../../../engines/pi/config.ts";
 import { exists, resolveStateRoot } from "../../../paths.ts";
 import { failStartup } from "../../fail.ts";
+import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export interface DeployOptions {
   run?: boolean;
@@ -82,7 +83,7 @@ export async function carryCredentials(params: {
   modelKeyInDefinition: boolean;
   authPath: string;
   channels: readonly DeclaredChannel[];
-  extraSecrets: string[];
+  extraSecrets: readonly DeclaredSecret[];
 }): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
   const { modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets } = params;
   return assembleSecrets({
