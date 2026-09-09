@@ -8,7 +8,7 @@ import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
-import { dotEnvPath, loadDotEnv } from "../../env.ts";
+import { dotEnvPath, enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -38,7 +38,7 @@ export async function runAddChannel(
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
   const { agentDir: target } = placementOrExit(resolve(dirArg));
-  loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
+  enterAgentEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
   // Paths are printed to someone standing in their CWD, usually the workspace, while every file belongs to the AGENT
   // dir — prefix them, or they point at nothing.
   const agentFromCwd = displayPath(process.cwd(), target);
@@ -276,6 +276,7 @@ export async function runAddSkill(
     );
   }
   // Skills are agent surface — vendored into the agent dir's `skills/`.
+  enterAgentEnv(target); // a git-ref source is a network fetch (giget uses global fetch)
   const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);

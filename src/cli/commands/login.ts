@@ -4,11 +4,10 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadDotEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
-import { installProxyFetch } from "../../proxy.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
@@ -26,8 +25,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
   // need no "is this $HOME?" special case to infer it.
   const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);
-  loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
-  installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
+  // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
+  // through that proxy (region-locked providers).
+  enterAgentEnv(loginDir);
   const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.

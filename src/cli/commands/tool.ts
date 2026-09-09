@@ -1,6 +1,6 @@
 /** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
-import { loadDotEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 
 import { resolveAgentTools } from "../../engines/pi/create.ts";
@@ -13,7 +13,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   // (a runtime failure, exit 1).
   const args = parseToolArgs(argsJson);
   const { agentDir, workspace } = placementOrExit(resolve(dirArg));
-  loadDotEnv(agentDir); // a tool may read a key from .env
+  enterAgentEnv(agentDir); // a tool may read a key from .env — and fetch through the proxy it declares
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The same tool set dev/start mount (all coding tools + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served.

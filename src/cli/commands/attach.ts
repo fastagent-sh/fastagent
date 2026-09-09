@@ -6,7 +6,8 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { loadDotEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
+import { installProxyFetch } from "../../proxy.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
@@ -120,7 +121,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   }
   // A REMOTE attach reads nothing under `dir`.
   const dir = remote ? resolve(dirArg ?? ".") : placementOrExit(resolve(dirArg ?? ".")).agentDir;
-  if (!remote) loadDotEnv(dir);
+  // A remote attach has no agent directory to read, so its proxy can only come from the ambient environment; a
+  // discovered one enters the agent's. Either way the endpoint decides nothing here — loopback stays direct because
+  // the dispatcher exempts it, not because a command remembered to ask.
+  if (remote) installProxyFetch();
+  else enterAgentEnv(dir);
   // For a discovered endpoint the FIRST read joins the startup budget below: the dev-watch restart window has two
   // halves.
   let endpoint!: { url: string; token: string };

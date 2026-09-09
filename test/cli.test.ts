@@ -148,10 +148,11 @@ describe("cli papercuts", () => {
     expect(await readFile(join(dir, "fastagent", "fastagent.compose.yml"), "utf8")).toBe(compose);
   });
 
-  it("deploy loads .env and installs its proxy before config-time network work", async () => {
-    // Regression: the Node CLI used to load .env but omit installProxyFetch(), so post-deploy channel
-    // calls bypassed HTTP(S)_PROXY. A config-time fetch gives the real CLI path an early network probe;
-    // the reserved .invalid host can succeed only when the .env-only local proxy was installed first.
+  it("a command ENTERS the agent's environment: a proxy declared only in .env carries a tool's fetch", async () => {
+    // The WIRING half of #474 (the policy itself is test/proxy.test.ts): a real CLI process, a proxy that exists
+    // nowhere but the agent's `.env`, and an authored tool that fetches. `enterAgentEnv` is what makes the two
+    // steps inseparable — the bug was commands that did only the first. The reserved .invalid host resolves
+    // nowhere, so a direct connection cannot pass.
     const requests: string[] = [];
     const proxy = createServer((req, res) => {
       requests.push(req.url ?? "");
@@ -167,22 +168,22 @@ describe("cli papercuts", () => {
       const address = proxy.address();
       if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
       const proxyUrl = `http://127.0.0.1:${address.port}`;
-      const dir = await agentWorkspace("fa-deploy-proxy-", {
+      const dir = await agentWorkspace("fa-tool-proxy-", {
         ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
-        "fastagent.config.mjs":
-          `const response = await fetch("http://deploy-proxy.invalid/probe");\n` +
-          `if (!response.ok) throw new Error("proxy probe failed");\n` +
-          `export default { model: "openai-codex/gpt-5.5" };\n`,
+        "tools/probe.mjs":
+          `export default { description: "Probe", parameters: { type: "object" }, async execute() {\n` +
+          `  const res = await fetch("http://tool-proxy.invalid/probe");\n` +
+          `  return await res.text();\n` +
+          `} };\n`,
       });
-      await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
       const env = { ...process.env };
       for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
-        delete env[key]; // the proxy must come from the agent's .env, loaded inside runDeploy()
+        delete env[key]; // the proxy must come from the agent's .env, read inside the command
       }
 
-      const { code, stderr } = await run(["deploy", "fly", dir], undefined, env);
+      const { code, stderr } = await run(["tool", "probe", "{}", dir], undefined, env);
       expect(code, stderr).toBe(0);
-      expect(requests).toContain("http://deploy-proxy.invalid/probe");
+      expect(requests).toContain("http://tool-proxy.invalid/probe");
     } finally {
       await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));
     }

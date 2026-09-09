@@ -34,9 +34,8 @@ import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
 import { type ResolvedPlacement, workspaceHint } from "../paths.ts";
 import { log } from "../log.ts";
-import { loadDotEnv } from "../env.ts";
+import { enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { installProxyFetch } from "../proxy.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { failStartup, failUsage, placementOrExit } from "./fail.ts";
 
@@ -46,8 +45,7 @@ export async function enterAgentCommand(
   opts: { model?: string; authPath?: string; input?: boolean },
 ): Promise<ResolvedPlacement> {
   const placement = placementOrExit(resolve(dirArg));
-  loadDotEnv(placement.agentDir);
-  installProxyFetch();
+  enterAgentEnv(placement.agentDir);
   await resolveFirstRunModel(placement.agentDir, opts);
   return placement;
 }
