@@ -148,10 +148,11 @@ describe("cli papercuts", () => {
     expect(await readFile(join(dir, "fastagent", "fastagent.compose.yml"), "utf8")).toBe(compose);
   });
 
-  it("deploy loads .env and installs its proxy before config-time network work", async () => {
-    // Regression: the Node CLI used to load .env but omit installProxyFetch(), so post-deploy channel
-    // calls bypassed HTTP(S)_PROXY. A config-time fetch gives the real CLI path an early network probe;
-    // the reserved .invalid host can succeed only when the .env-only local proxy was installed first.
+  it("a command ENTERS the agent's environment: a proxy declared only in .env carries a tool's fetch", async () => {
+    // The WIRING half of #474 (the policy itself is test/proxy.test.ts): a real CLI process, a proxy that exists
+    // nowhere but the agent's `.env`, and an authored tool that fetches. `enterAgentEnv` is what makes the two
+    // steps inseparable — the bug was commands that did only the first. The reserved .invalid host resolves
+    // nowhere, so a direct connection cannot pass.
     const requests: string[] = [];
     const proxy = createServer((req, res) => {
       requests.push(req.url ?? "");
@@ -167,22 +168,22 @@ describe("cli papercuts", () => {
       const address = proxy.address();
       if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
       const proxyUrl = `http://127.0.0.1:${address.port}`;
-      const dir = await agentWorkspace("fa-deploy-proxy-", {
+      const dir = await agentWorkspace("fa-tool-proxy-", {
         ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
-        "fastagent.config.mjs":
-          `const response = await fetch("http://deploy-proxy.invalid/probe");\n` +
-          `if (!response.ok) throw new Error("proxy probe failed");\n` +
-          `export default { model: "openai-codex/gpt-5.5" };\n`,
+        "tools/probe.mjs":
+          `export default { description: "Probe", parameters: { type: "object" }, async execute() {\n` +
+          `  const res = await fetch("http://tool-proxy.invalid/probe");\n` +
+          `  return await res.text();\n` +
+          `} };\n`,
       });
-      await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
       const env = { ...process.env };
       for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
-        delete env[key]; // the proxy must come from the agent's .env, loaded inside runDeploy()
+        delete env[key]; // the proxy must come from the agent's .env, read inside the command
       }
 
-      const { code, stderr } = await run(["deploy", "fly", dir], undefined, env);
+      const { code, stderr } = await run(["tool", "probe", "{}", dir], undefined, env);
       expect(code, stderr).toBe(0);
-      expect(requests).toContain("http://deploy-proxy.invalid/probe");
+      expect(requests).toContain("http://tool-proxy.invalid/probe");
     } finally {
       await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));
     }
@@ -243,6 +244,108 @@ describe("cli papercuts", () => {
     // The path is REPORTED, not spelled from the nested default — a flat agent's schedules live at its
     // own root, and pointing at `fastagent/schedules` there would invent a directory.
     expect(stderr).toMatch(/looked in .*fastagent\/schedules/);
+  });
+
+  it("an unknown name still reports the file that failed to load — that IS why the name is missing", async () => {
+    // A broken file is absent from the available list, so "unknown tool/schedule" is exactly the case
+    // where the author needs to hear about the import error rather than doubt their spelling.
+    const dir = await agentWorkspace("fa-unknown-broken-", {
+      "tools/broken.mjs": `throw new Error("boom at import");\n`,
+      "schedules/broken.mjs": `throw new Error("sched boom");\n`,
+    });
+    const tool = await run(["tool", "nope", "{}", dir]);
+    expect(tool.code).toBe(1);
+    expect(tool.stderr).toMatch(/tools\/broken\.mjs failed to load/);
+    expect(tool.stderr).toMatch(/unknown tool "nope"/);
+
+    const fired = await run(["fire", "nope", dir]);
+    expect(fired.code).toBe(1);
+    expect(fired.stderr).toMatch(/schedules\/broken\.mjs failed to load/);
+    expect(fired.stderr).toMatch(/unknown schedule "nope"/);
+  });
+
+  it("fire refuses a schedule whose declared secret has no value, instead of running a degraded prompt", async () => {
+    // `defineSchedule` resolves a prompt builder at load, so an unset value would have produced
+    // "Post the digest to " and `fire` would have sent it — the exact failure the declaration exists
+    // to prevent. `fire` runs the schedule, so it takes the serving path's assertion.
+    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+    const dir = await agentWorkspace("fa-fire-secret-", {
+      "schedules/digest.ts":
+        `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\n` +
+        `export default defineSchedule({ cron: "0 9 * * *", secrets: ["FA_TEST_FIRE_CHANNEL"],\n` +
+        `  prompt: (s) => \`Post the digest to \${s.FA_TEST_FIRE_CHANNEL}\` });\n`,
+    });
+    const env = { ...process.env };
+    delete env.FA_TEST_FIRE_CHANNEL;
+    const { code, stderr } = await run(["fire", "digest", dir], undefined, env);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/FA_TEST_FIRE_CHANNEL \(schedules\/digest\.ts\)/);
+    // Through the CLI's failure boundary: the one line that names the file, never a Node stack that
+    // buries it (the assertion throws synchronously, so it has no opener promise to ride).
+    expect(stderr).toMatch(/^Error: missing required secrets/m);
+    expect(stderr).not.toMatch(/at gateSecrets|Node\.js v/);
+  });
+
+  it("tool reports the size the MODEL sees, which is not the size it prints", async () => {
+    // The printed form is `details`, indented for a human; the model gets the content text (compact JSON). Measuring
+    // the piped stdout therefore answers a different question, which is why the run reports this one itself.
+    const value = { note: "x".repeat(200) };
+    const dir = await agentWorkspace("fa-tool-size-", {
+      "tools/big.mjs":
+        `export default { name: "big", description: "b", parameters: { type: "object", properties: {} },\n` +
+        `  execute: async () => ({ content: [{ type: "text", text: ${JSON.stringify(JSON.stringify(value))} }],\n` +
+        `    details: ${JSON.stringify(value)} }) };\n`,
+    });
+
+    const { code, stdout, stderr } = await run(["tool", "big", "{}", dir]);
+    expect(code, stderr).toBe(0);
+    const modelChars = JSON.stringify(value).length;
+    expect(stderr).toContain(`result: ${modelChars} chars \u2248 ${Math.ceil(modelChars / 4)} tokens to the model`);
+    expect(stdout.trim().length).toBeGreaterThan(modelChars); // the indented print is the bigger one
+  });
+
+  it("tool asserts only the named tool's secrets, not every mounted tool's", async () => {
+    // Same scoping as `fire`: running one tool by hand on a machine that holds only some credentials
+    // must not be blocked by a sibling tool's declaration.
+    const dir = await agentWorkspace("fa-tool-scope-", {
+      "tools/x-post.mjs":
+        `export default { name: "x-post", description: "p", parameters: { type: "object", properties: {} },\n` +
+        `  secrets: ["FA_TEST_TOOL_KEY"], execute: async () => ({ content: [{ type: "text", text: "x" }] }) };\n`,
+      "tools/echo.mjs":
+        `export default { name: "echo", description: "e", parameters: { type: "object", properties: {} },\n` +
+        `  execute: async () => ({ content: [{ type: "text", text: "echoed" }] }) };\n`,
+    });
+    const env = { ...process.env };
+    delete env.FA_TEST_TOOL_KEY;
+    const ok = await run(["tool", "echo", "{}", dir], undefined, env);
+    expect(ok.code).toBe(0);
+    expect(ok.stdout).toContain("echoed");
+    // The declaring tool itself still refuses, naming its file.
+    const gated = await run(["tool", "x-post", "{}", dir], undefined, env);
+    expect(gated.code).toBe(1);
+    expect(gated.stderr).toMatch(/FA_TEST_TOOL_KEY \(tools\/x-post\.mjs\)/);
+    expect(gated.stderr).toMatch(/^Error: missing required secrets/m); // the CLI's failure shape, not a stack
+    expect(gated.stderr).not.toMatch(/at gateSecrets|Node\.js v/);
+  });
+
+  it("fire asserts only the named schedule's secrets, not every sibling's", async () => {
+    // One manual trigger must not require the credentials of the SCHEDULES it is not running: a laptop
+    // that has no reason to hold the digest channel can still fire `cleanup`. (The agent it then
+    // assembles still gates every mounted tool — a fired turn can call any of them.)
+    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+    const dir = await agentWorkspace("fa-fire-sibling-", {
+      "schedules/digest.ts":
+        `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\n` +
+        `export default defineSchedule({ cron: "0 9 * * *", secrets: ["FA_TEST_FIRE_CHANNEL"],\n` +
+        `  prompt: (s) => \`Post to \${s.FA_TEST_FIRE_CHANNEL}\` });\n`,
+      "schedules/cleanup.ts":
+        `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\n` +
+        `export default defineSchedule({ cron: "0 3 * * *", prompt: "tidy up" });\n`,
+    });
+    const env = { ...process.env };
+    delete env.FA_TEST_FIRE_CHANNEL;
+    const { stderr } = await run(["fire", "cleanup", dir], undefined, env);
+    expect(stderr).not.toMatch(/FA_TEST_FIRE_CHANNEL/); // got past the gate (it then needs a model/auth)
   });
 
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {

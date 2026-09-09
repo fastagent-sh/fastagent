@@ -22,21 +22,26 @@ This creates `channels/github.ts` and appends the required env var to `.env.exam
 
 ```ts
 import { githubChannel } from "@fastagent-sh/fastagent/github";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default githubChannel({
-  secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-  on: (event) => {
-    if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
-      const { repository, pull_request } = event.payload;
-      return [
-        {
-          session: event.deliveryId,
-          text: `Review PR #${pull_request.number} in ${repository.full_name}`,
-        },
-      ];
-    }
-    return [];
-  },
+export default defineChannel({
+  secrets: ["GITHUB_WEBHOOK_SECRET"],
+  channel: (secrets) =>
+    githubChannel({
+      secret: secrets.GITHUB_WEBHOOK_SECRET,
+      on: (event) => {
+        if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
+          const { repository, pull_request } = event.payload;
+          return [
+            {
+              session: event.deliveryId,
+              text: `Review PR #${pull_request.number} in ${repository.full_name}`,
+            },
+          ];
+        }
+        return [];
+      },
+    }),
 });
 ```
 

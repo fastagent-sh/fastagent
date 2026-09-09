@@ -150,8 +150,13 @@ export async function deployRailwayRun(
     `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
     `RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`,
   ];
+  // The secret NAMES, not a count: what `--run` uploads is read from THIS machine's environment and
+  // is no longer only what the author typed in deploy.secrets (a mounted tool/channel/schedule
+  // declares its own), so the operator has to be able to see the list on every host.
+  const secretNames = Object.keys(plan.secrets);
   log(
-    `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${Object.keys(plan.secrets).length} secret(s)…`,
+    `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${secretNames.length} secret(s)` +
+      `${secretNames.length > 0 ? `: ${secretNames.join(", ")}` : ""}…`,
   );
   if ((await railway(["variables", "set", ...machineryVars, ...svc])).code !== 0) {
     return gate("`railway variables set` failed — see the railway output above");

@@ -16,6 +16,7 @@ import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
 import { reportModuleLoadFailures } from "./loader.ts";
+import { gateSecrets } from "./secrets-gate.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. */
@@ -174,7 +175,11 @@ export async function startSchedules(
 ): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
   // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library that calls
   // process.exit takes a decision (degrade? retry? stop?) that belongs to its host.
-  const { schedules, failures } = await loadSchedules(agentDir);
+  const { schedules, secrets, failures } = await loadSchedules(agentDir);
+  // The schedules' half of the serving-path gate (the opener does the tools', loadChannels the
+  // channels'): a schedule reads its env at IMPORT time, so an unset declared value has already
+  // produced a broken prompt — refusing here is the last point where that is a startup failure.
+  gateSecrets({ declared: secrets, failures });
   reportModuleLoadFailures(failures);
   if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
   const scheduler = Effect.runSync(

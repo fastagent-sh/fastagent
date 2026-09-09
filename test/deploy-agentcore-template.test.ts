@@ -36,7 +36,7 @@ const CFN_TAGS = [
 ];
 
 interface Template {
-  Parameters?: Record<string, { Type: string; NoEcho?: boolean }>;
+  Parameters?: Record<string, { Type: string; NoEcho?: boolean; Description?: string }>;
   Resources: Record<string, { Type: string; Properties?: Record<string, unknown> }>;
   Outputs?: Record<string, unknown>;
 }
@@ -187,5 +187,13 @@ describe("the agentcore template (parsed)", () => {
     const env = (runtime.Properties as { EnvironmentVariables: Record<string, unknown> }).EnvironmentVariables;
     const [paramName] = secretParams.find(([n]) => n.toLowerCase().includes("telegram"))!;
     expect(env.TELEGRAM_BOT_TOKEN).toEqual({ Ref: paramName });
+  });
+
+  it("quotes the parameter description — a declaration source carrying `: ` is not a plain scalar", () => {
+    // The source is authored text (a file name, a config.tools key); unquoted it breaks the whole
+    // template, and the parse error names nothing the author can find.
+    const t = parseTemplate({ extraSecrets: [{ name: "FA_X_KEY", source: 'config.tools "a: b"' }] });
+    const param = Object.entries(t.Parameters ?? {}).find(([n]) => n.includes("FaXKey"))!;
+    expect(param[1].Description).toBe('required by config.tools "a: b"');
   });
 });

@@ -1,4 +1,5 @@
 import { larkChannel } from "@fastagent-sh/fastagent/lark";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
 // larkChannel is the branded compatibility adapter over fastagent's canonical Feishu engine, configured
 // with YOUR policy. fastagent discovers this file, mounts POST /lark, and pipes the agent + state home
@@ -18,23 +19,30 @@ import { larkChannel } from "@fastagent-sh/fastagent/lark";
 //      the URL automatically. If this app returns a config-API 404, do both BY HAND in the console
 //      with the server running (the platform verifies https://your.host/lark with a challenge).
 //   5. create a version and publish the app (a tenant admin approves it), then add the bot to a chat
-export default larkChannel({
-  appId: process.env.LARK_APP_ID ?? "", // missing → fails at startup (no replies could be sent)
-  appSecret: process.env.LARK_APP_SECRET ?? "",
-  verificationToken: process.env.LARK_VERIFICATION_TOKEN ?? "", // authenticates inbound events
-  encryptKey: process.env.LARK_ENCRYPT_KEY || undefined, // optional; when set, plaintext events are refused
-  // No session modes: a chat is one session and a thread is another, and where the answer goes follows
-  // from that (docs/design/participant-model.md).
-  // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
-  // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
-  // full details always go to the server log regardless.
-  onError: (failed) => `⚠️ ${failed.details}`,
-  // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
-  // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultLarkRoute:
-  // p2p chats always answer; groups answer on @this-bot, plus bare messages in a thread where the
-  // Agent takes part and exactly ONE human does. Other human group/thread discussion buffers until
-  // that place's next answered turn; @other-only messages buffer rather than triggering the Agent.
-  // Override to customise explicit routing, reusing the export:
-  //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
-  //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { text: `${larkEnvelope(e)}\n[extra]` },
+export default defineChannel({
+  // The env vars this channel needs. fastagent carries them to a deployed box and refuses to serve
+  // while one is unset — a bare process.env read gets neither guarantee. LARK_ENCRYPT_KEY is
+  // optional, so it is NOT declared here: an undeclared read stays undeclared on purpose.
+  secrets: ["LARK_APP_ID", "LARK_APP_SECRET", "LARK_VERIFICATION_TOKEN"],
+  channel: (secrets) =>
+    larkChannel({
+      appId: secrets.LARK_APP_ID,
+      appSecret: secrets.LARK_APP_SECRET,
+      verificationToken: secrets.LARK_VERIFICATION_TOKEN, // authenticates inbound events
+      encryptKey: process.env.LARK_ENCRYPT_KEY || undefined, // optional; when set, plaintext events are refused
+      // No session modes: a chat is one session and a thread is another, and where the answer goes follows
+      // from that (docs/design/participant-model.md).
+      // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
+      // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
+      // full details always go to the server log regardless.
+      onError: (failed) => `⚠️ ${failed.details}`,
+      // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
+      // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultLarkRoute:
+      // p2p chats always answer; groups answer on @this-bot, plus bare messages in a thread where the
+      // Agent takes part and exactly ONE human does. Other human group/thread discussion buffers until
+      // that place's next answered turn; @other-only messages buffer rather than triggering the Agent.
+      // Override to customise explicit routing, reusing the export:
+      //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
+      //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { text: `${larkEnvelope(e)}\n[extra]` },
+    }),
 });

@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
@@ -17,8 +18,9 @@ export interface FlyPlanInput extends ContainerInput {
    * must stay up for an outbound connection.
    */
   channels: readonly DeclaredChannel[];
-  /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
-  extraSecrets?: string[];
+  /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
+   *  attributed to the file that declared it. */
+  extraSecrets?: readonly DeclaredSecret[];
   /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). */
   autostop: "suspend" | "stop";
   /** Allow scaling to zero when idle (default true → `min_machines_running=0`). */

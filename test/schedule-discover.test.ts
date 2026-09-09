@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverScheduleFiles, loadSchedules } from "../src/schedule/discover.ts";
+import { loadSchedules } from "../src/schedule/discover.ts";
 
 const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
 const def = (cron: string, prompt = "go", tz?: string): string =>
@@ -22,7 +22,6 @@ describe("schedule/discover", () => {
     const { schedules, failures } = await loadSchedules(dir);
     expect(failures).toEqual([]);
     expect(schedules).toEqual([{ name: "daily", cron: "0 9 * * *", tz: "UTC", prompt: "digest" }]);
-    expect(await discoverScheduleFiles(dir)).toEqual(["daily"]);
   });
 
   it("isolates a file with an invalid cron — reported, not thrown (G2)", async () => {
@@ -41,7 +40,6 @@ describe("schedule/discover", () => {
 
   it("a missing schedules/ dir yields empty (no schedules is normal)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sd-empty-"));
-    expect(await discoverScheduleFiles(dir)).toEqual([]);
     expect((await loadSchedules(dir)).schedules).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 /** `fastagent schedule history|list|cancel`. */
 import { resolve } from "node:path";
-import { loadDotEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { readRuns } from "../../schedule/audit.ts";
@@ -15,7 +15,7 @@ import { failStartup, placementOrExit } from "../fail.ts";
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
-  loadDotEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
+  enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const runs = readRuns(resolveStateRoot(target), name);
   if (json) {
     console.log(JSON.stringify(runs, null, 2));
@@ -42,7 +42,7 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
 /** `fastagent schedule list [dir]`: everything that will fire. */
 export async function runScheduleList(dirArg: string, json: boolean): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
-  loadDotEnv(target);
+  enterAgentEnv(target);
   const { schedules, failures } = await loadSchedules(target).catch(failStartup);
   reportModuleLoadFailures(failures);
   const wakeups = listWakeups(resolveStateRoot(target));
@@ -79,7 +79,7 @@ export async function runScheduleList(dirArg: string, json: boolean): Promise<vo
  */
 export function runScheduleCancel(id: string, dirArg: string): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
-  loadDotEnv(target);
+  enterAgentEnv(target);
   if (removeWakeup(resolveStateRoot(target), id)) {
     // ponytail: the store's load→save is lock-free — a serving scheduler's claim-advance can race this write (window
     // = ms around each fire).

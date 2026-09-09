@@ -115,16 +115,21 @@ without touching the installed app or its runtime credentials.
 
 ```ts
 import { slackChannel } from "@fastagent-sh/fastagent/slack";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default slackChannel({
-  botToken: process.env.SLACK_BOT_TOKEN ?? "",
-  signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
-  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
-  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-  // No session modes: an answer attaches to its question with a thread, and that thread is the session.
-  onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+export default defineChannel({
+  secrets: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
+  channel: (secrets) =>
+    slackChannel({
+      botToken: secrets.SLACK_BOT_TOKEN,
+      signingSecret: secrets.SLACK_SIGNING_SECRET,
+      rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
+      // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+      // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+      // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
+      // No session modes: an answer attaches to its question with a thread, and that thread is the session.
+      onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+    }),
 });
 ```
 
@@ -272,12 +277,15 @@ file id) so the agent can record the outcome.
 The destination is what the turn's instruction names. A user id (`U…`) as `channelId` messages that
 user's DM — Slack opens it under `chat:write`, no `conversations.open` needed — and the result reports
 the DM channel id (`D…`), which is what a file upload to that user needs. A schedule that reports to its
-owner therefore needs only the owner's user id in its prompt:
+owner therefore needs only the owner's user id — declared in `secrets`, since it is
+environment-specific, and built into the prompt:
 
 ```ts
 export default defineSchedule({
   cron: "0 9 * * 1-5",
-  prompt: "Summarize yesterday's growth notes and send them with slack-send to user U0123456789.",
+  secrets: ["OWNER_SLACK_USER_ID"],
+  prompt: (secrets) =>
+    `Summarize yesterday's growth notes and send them with slack-send to user ${secrets.OWNER_SLACK_USER_ID}.`,
 });
 ```
 

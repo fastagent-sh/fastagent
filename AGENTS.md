@@ -55,13 +55,19 @@ src/
 ├── observe.ts              # turn-trace logging around an Agent
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
-├── proxy.ts                # HTTPS_PROXY wiring
+├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
-├── env.ts                  # `.env` → process.env loading
+├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ schedules/ config
 ├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared
 │                           # path predicates and the machinery paths that follow (.secrets/.state)
+├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
+│                           # (defineTool/defineChannel/defineSchedule + deploy.secrets): the ONE read of
+│                           # an authored `secrets:`, the values handed back to the code that declared
+│                           # them, and what "has no value" means
+├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load
+│                           # failures reported before it throws, and the shape of that throw
 ├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
@@ -81,6 +87,8 @@ src/
 │   ├── control.ts          # session-control transport: bearer-token /control/* routes + SSE events + /control/invoke
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), engine-neutral
+│   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
+│   │                       # (the only way a CUSTOM channel's credentials can reach a deploy)
 │   ├── body.ts, respond.ts # channel-authoring kit (body cap, responses)
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)

@@ -73,9 +73,11 @@ export default defineTool({
     asPhoto: z.boolean().optional().describe("send the file as a photo (inline) instead of a document"),
     messageThreadId: z.number().optional().describe("thread to reply into (from the context line), if any"),
   }),
-  async execute({ chatId, text, path, caption, asPhoto, messageThreadId }) {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+  // The bot token, declared: fastagent carries it to a deployed box and refuses to start while it is
+  // unset, so `execute` gets a value rather than checking for one.
+  secrets: ["TELEGRAM_BOT_TOKEN"],
+  async execute({ chatId, text, path, caption, asPhoto, messageThreadId }, ctx) {
+    const token = ctx.secrets.TELEGRAM_BOT_TOKEN;
     if ((text === undefined) === (path === undefined)) {
       throw new Error("pass exactly one of `text` (a message) or `path` (a file)");
     }

@@ -128,6 +128,11 @@ export async function deployDockerRun(
     );
   }
 
+  // Name what travels from THIS machine's environment into the container: the list is no longer
+  // only what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  const secretNames = Object.keys(plan.secrets);
+  if (secretNames.length > 0) log(`passing ${secretNames.length} secret(s) to Compose: ${secretNames.join(", ")}`);
+
   if ((await docker(["info"], { capture: true })).code !== 0) {
     return gate("Docker daemon is unavailable — start Docker Engine/Desktop, then re-run");
   }

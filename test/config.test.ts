@@ -273,6 +273,15 @@ describe("config: loadConfig", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { tools: [{}] };`);
     await expect(loadConfig(dir)).rejects.toThrow(/tools\[0\].*name.*execute/);
+
+    // A malformed `secrets` on a config tool is a CONFIG error, refused here with the entry named —
+    // not a fault thrown out of tool resolution later, where it would take `info`'s other reporting
+    // down with it. A `tools/x.ts` file with the same mistake stays that one file's load failure.
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { tools: [{ name: "gh", execute: async () => ({}), secrets: "GH_TOKEN" }] };`,
+    );
+    await expect(loadConfig(dir)).rejects.toThrow(/"tools\[0\]": secrets must be an array of env-var names/);
   });
 });
 

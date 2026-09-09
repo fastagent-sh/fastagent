@@ -221,9 +221,16 @@ describe("deploy agentcore: the plan", () => {
         }),
       ),
     ).toThrow(/same CloudFormation logical id/);
-    expect(() => planAgentcoreDeploy(baseInput({ extraSecrets: ["FOO_BAR", "FOO__BAR"] }))).toThrow(
-      /same CloudFormation parameter/,
-    );
+    expect(() =>
+      planAgentcoreDeploy(
+        baseInput({
+          extraSecrets: [
+            { name: "FOO_BAR", source: "fastagent.config deploy.secrets" },
+            { name: "FOO__BAR", source: "fastagent.config deploy.secrets" },
+          ],
+        }),
+      ),
+    ).toThrow(/same CloudFormation parameter/);
   });
 
   it("a schedule name with a quote cannot break the EventBridge Input YAML/JSON", () => {

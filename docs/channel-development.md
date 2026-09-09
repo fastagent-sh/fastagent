@@ -229,12 +229,21 @@ The user's agent installs the adapter and wires it in `channels/acme.ts`:
 
 ```ts
 import { acmeChannel } from "fastagent-channel-acme";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default acmeChannel({
-  secret: process.env.ACME_WEBHOOK_SECRET ?? "",
-  on: (event) => ({ session: event.id, text: event.text }),
+export default defineChannel({
+  secrets: ["ACME_WEBHOOK_SECRET"],
+  channel: (secrets) =>
+    acmeChannel({
+      secret: secrets.ACME_WEBHOOK_SECRET,
+      on: (event) => ({ session: event.id, text: event.text }),
+    }),
 });
 ```
+
+Take the adapter's credentials as OPTIONS, never from `process.env` inside the package: the agent file
+declares them with `defineChannel`, which is what lets `deploy` carry them and the serve refuse to
+start without them.
 
 Keep agent-specific policy in the user's `channels/*.ts`; keep transport mechanics in the adapter package.
 

@@ -100,7 +100,7 @@ describe("deploy/fly: planFlyDeploy", () => {
         ...base,
         modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram"]),
-        extraSecrets: ["GH_TOKEN"],
+        extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
       }),
     );
     expect(out).toContain("OPENAI_API_KEY=");

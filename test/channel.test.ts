@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
-import { loadChannels, discoverChannelFiles, inspectChannels } from "../src/channels/discover.ts";
+import { loadChannels, inspectChannels } from "../src/channels/discover.ts";
 import { log } from "../src/log.ts";
 
 // loadChannels only forwards the ctx to the factory; these factories ignore it.
@@ -254,10 +254,14 @@ describe("loadChannels (filesystem discovery)", () => {
   });
 });
 
-describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
-  it("lists channel basenames (sorted, no import); empty when there is no channels/", async () => {
+/** The names `info` prints: what inspectChannels imported and accepted, in inventory order. */
+const channelNames = async (dir: string): Promise<string[]> =>
+  (await inspectChannels(dir)).channels.map((channel) => channel.name);
+
+describe("inspectChannels (the `fastagent info` / deploy pre-flight reading view)", () => {
+  it("lists channel basenames (sorted, by import); empty when there is no channels/", async () => {
     const dir = await freshDir();
-    expect(await discoverChannelFiles(dir)).toEqual([]);
+    expect(await channelNames(dir)).toEqual([]);
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "telegram.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
@@ -268,7 +272,7 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     const said: string[] = [];
     const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
     try {
-      expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
+      expect(await channelNames(dir)).toEqual(["github", "telegram"]);
     } finally {
       warn.mockRestore();
     }
@@ -283,7 +287,7 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "a.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "a-b.ts"), "export default () => ({});\n");
-    expect(await discoverChannelFiles(dir)).toEqual(["a", "a-b"]);
+    expect(await channelNames(dir)).toEqual(["a", "a-b"]);
   });
 
   it("a SYMLINKED channel file is skipped, and says why", async () => {
@@ -307,7 +311,7 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
       // The LISTING path says it too: `fastagent info` only lists names, so a silent skip there
       // reads as "I never created it" rather than "this one cannot be loaded".
       said.length = 0;
-      expect(await discoverChannelFiles(dir)).toEqual([]);
+      expect(await channelNames(dir)).toEqual([]);
       expect(said.filter((m) => m.includes("symlink"))).toHaveLength(1);
     } finally {
       warn.mockRestore();
@@ -320,7 +324,7 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     // they wrote. service.test.ts pins the same verdict for `schedules`.
     const dir = await freshDir();
     await writeFile(join(dir, "channels"), "not a directory\n");
-    await expect(discoverChannelFiles(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
+    await expect(inspectChannels(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
   });
 
   it("enforces containment on its OWN path: rejects a channels/ symlink escaping the workspace", async () => {
@@ -329,6 +333,6 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     const ext = await freshDir();
     await mkdir(join(ext, "ch"));
     await symlink(join(ext, "ch"), join(dir, "channels"));
-    await expect(discoverChannelFiles(dir)).rejects.toThrow(/outside the agent dir/);
+    await expect(inspectChannels(dir)).rejects.toThrow(/outside the agent dir/);
   });
 });

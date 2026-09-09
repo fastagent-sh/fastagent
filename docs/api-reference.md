@@ -270,6 +270,34 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
+### Declaring the secrets a tool needs
+
+A tool that needs an env var says so where it is defined:
+
+```ts
+export default defineTool({
+  description: "Post to X.",
+  input: z.object({ text: z.string() }),
+  secrets: ["X_API_KEY", "X_API_SECRET"],
+  async execute({ text }, ctx) {
+    return await post(text, ctx.secrets.X_API_KEY); // typed from the list above
+  },
+});
+```
+
+**This is how agent code gets a credential — not `process.env`.** The declaration buys two things a
+bare read cannot have:
+
+- **`deploy` carries the value** to the host and lists it in the runbook against this file. There is no
+  second list to keep in sync — `config.deploy.secrets` is only for names no code declares.
+- **`dev`/`start` refuse to boot** while a declared name is unset, naming the file. Without the
+  declaration the same mistake surfaces as a failed tool call on the deployed box, days later.
+
+`ctx.secrets` reads the process environment on every call, so a value rotated IN THE ENVIRONMENT
+takes effect without a restart — a value rotated in `.secrets/.env` does not, since that file is read
+once at startup. Its keys are typed from the list: a typo is a compile error. `defineChannel` and `defineSchedule` take the same
+field, and `fastagent info` prints every declared name plus the ones with no local value.
+
 The second `execute` argument is a `ToolContext`:
 
 ```ts
@@ -278,6 +306,8 @@ interface ToolContext {
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
   tools?: ToolActivation;
+  /** The values of this tool's own `secrets`, keyed by the names it declared. */
+  secrets: Record<string, string>;
 }
 
 interface ReadonlySessionManager {
@@ -292,6 +322,31 @@ conversation. It is undefined in a sessionless direct call such as `fastagent to
 ride `AsyncLocalStorage`, not definition closures, because a tool is built once and reused across turns.
 The built-in **`wake`** tool uses `sessionManager.getSessionId()` to schedule a follow-up in the same
 conversation.
+
+### Output budget
+
+Everything a tool returns is spent from the model's context, on every turn that keeps the result in
+view. One GitHub repository object is ~6 KB, so returning a raw `/search/repositories` page (30
+results) costs ~180 KB — roughly 45k tokens for one call.
+
+Return what the model needs, not what the API sent:
+
+- **Project the fields.** A name, a URL and a description usually replace the whole object.
+- **Truncate, and say so.** The scaffolded `tools/fetch-url.ts` is the pattern: a `MAX_TEXT` ceiling
+  plus a `truncated: true` flag, so the model knows the text was cut rather than guessing.
+- **Expose the paging knob** (`per_page`, `limit`) as an input, so the model can ask for less.
+
+`fastagent tool <name> '<json>'` reports the size of what the model would receive:
+
+```
+[fastagent] result: 143910 chars ≈ 35978 tokens to the model
+```
+
+That measures the tool result's content text, which is not what the command prints — the printed form
+is the indented `details`, so measuring the piped stdout answers a different question.
+
+Tools are plain ES modules, so they can be imported and tested without fastagent: `node --test
+test/my-tool.test.ts` on Node 22+ needs no framework and no test script.
 
 ### Deferred tools
 
@@ -377,9 +432,16 @@ See [Channel development](channel-development.md).
 interface Schedule {
   cron: string; // 5-field cron expression
   tz?: string; // IANA timezone (default "UTC")
-  prompt: string; // the turn's text = the job's instruction
+  prompt: string; // the turn's text = the job's instruction (a builder is resolved at load)
+  secrets?: readonly string[]; // env vars this file needs, typed into the prompt builder
 }
-function defineSchedule(schedule: Schedule): Schedule;
+// what an author writes: `prompt` may be built FROM the declared secrets, keys typed from `secrets`
+function defineSchedule<const S extends readonly string[]>(schedule: {
+  cron: string;
+  tz?: string;
+  prompt: string | ((secrets: Record<S[number], string>) => string);
+  secrets?: S;
+}): Schedule;
 ```
 
 An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
@@ -392,9 +454,15 @@ import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
-  prompt: "Generate today's digest and send it to the team Telegram.",
+  secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — carried by deploy, asserted at start
+  prompt: (secrets) => `Generate today's digest and send it with slack-send to channel ${secrets.SLACK_DIGEST_CHANNEL}.`,
 });
 ```
+
+**The delivery target belongs in `secrets`, not in the prompt text.** A chat/channel id is
+environment-specific, so declare it and build the prompt from it: the builder runs once at load, its
+keys are typed from the list, and `dev`/`start` refuse to boot while the name is unset — instead of a
+hardcoded id travelling to the wrong workspace.
 
 The scheduler is a time-trigger (the N axis, clock form): on each cron instant it invokes the agent
 with `prompt` — borrowing the same `Agent` contract as channels, adding none. It:

@@ -2,7 +2,9 @@
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
 import { assertRouteKey, routeKeysConflict } from "./serve.ts";
-import { type ModuleLoadFailure, loadModuleDir, moduleInventory } from "../loader.ts";
+import { type ModuleLoadFailure, loadModuleDir } from "../loader.ts";
+import { type DeclaredSecret, readSecretDeclaration } from "../declared-secrets.ts";
+import { gateSecrets } from "../secrets-gate.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 
 /** A dropped route: two channels claim the same key. */
@@ -44,38 +46,33 @@ export function declaredChannels(names: readonly string[], ingress: ChannelIngre
 /** Import channel files without mounting route factories or opening connections. */
 export async function inspectChannels(dir: string): Promise<{
   channels: DeclaredChannel[];
+  /** What each channel declared through {@link defineChannel}, BY CHANNEL NAME — the only way a
+   *  CUSTOM channel's credentials can reach a deploy, since nothing else here can name them. */
+  secrets: Map<string, DeclaredSecret[]>;
   failures: ModuleLoadFailure[];
 }> {
   await assertInsideAgentDir(dir, "channels");
   const { modules, failures } = await loadModuleDir(join(dir, "channels"));
   const channels: DeclaredChannel[] = [];
+  const secrets = new Map<string, DeclaredSecret[]>();
   for (const { name, label, file, mod } of modules) {
     try {
+      const declaration = readSecretDeclaration(mod.default, label);
+      if (declaration.error !== undefined) throw new Error(declaration.error);
       if (typeof mod.default === "function") {
         channels.push({ name, ingress: "webhook" });
-        continue;
-      }
-      if (longConnectionModule(mod.default)) {
+      } else if (longConnectionModule(mod.default)) {
         validateLongConnectionModule(mod.default, label);
         channels.push({ name, ingress: "long-connection" });
-        continue;
+      } else {
+        throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
       }
-      throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
+      secrets.set(name, declaration.secrets);
     } catch (error) {
       failures.push({ label, file, message: (error as Error).message });
     }
   }
-  return { channels, failures };
-}
-
-/**
- * Channel file basenames under `<dir>/channels/` — the authoring view (`fastagent info`), which lists WITHOUT
- * importing.
- */
-export async function discoverChannelFiles(dir: string): Promise<string[]> {
-  await assertInsideAgentDir(dir, "channels");
-  const entries = await moduleInventory(join(dir, "channels"));
-  return entries.map((entry) => entry.name);
+  return { channels, secrets, failures };
 }
 
 function validateRoutes(value: unknown, label: string): [string, (req: Request) => Response | Promise<Response>][] {
@@ -114,8 +111,22 @@ export async function loadChannels(
   const longConnections: LoadedLongConnectionChannel[] = [];
   const routeChannels: string[] = [];
   const collisions: ChannelCollision[] = [];
+  // Collected from the channels that actually MOUNTED, GATED at the end of the function: this is a
+  // serving path, so an unset declared value must stop it (a channel built from an empty credential
+  // is the failure the declaration exists to prevent — a webhook that accepts forged updates, a bot
+  // that cannot reply), while `inspectChannels` — the reporting reader — only collects. A channel
+  // that failed to mount does not gate: its own failure is the report the author needs.
+  const declaredSecrets = new Map<string, DeclaredSecret[]>();
+  const declaring = modules.flatMap((entry) => {
+    const declaration = readSecretDeclaration(entry.mod.default, entry.label);
+    if (declaration.error !== undefined) {
+      failures.push({ label: entry.label, file: entry.file, message: declaration.error });
+      return [];
+    }
+    return [{ ...entry, secrets: declaration.secrets }];
+  });
 
-  for (const { name, label, file, mod } of modules) {
+  for (const { name, label, file, mod, secrets } of declaring) {
     try {
       if (longConnectionModule(mod.default)) {
         validateLongConnectionModule(mod.default, label);
@@ -124,6 +135,7 @@ export async function loadChannels(
           name: channel.name,
           connect: (signal) => channel.connect(ctx, signal),
         });
+        declaredSecrets.set(name, secrets);
         continue;
       }
       if (typeof mod.default !== "function") {
@@ -148,9 +160,14 @@ export async function loadChannels(
         routes[route] = handler;
       }
       routeChannels.push(name);
+      declaredSecrets.set(name, secrets);
     } catch (error) {
       failures.push({ label, file, message: (error as Error).message });
     }
   }
+  // Gated LAST, after the loop has said what it found (the gate reports those failures before it
+  // refuses — src/secrets-gate.ts, decision 2). Binding a module ahead of the gate costs nothing: a
+  // route factory builds handlers; nothing listens or dials until the caller mounts what this returns.
+  gateSecrets({ declared: declaredSecrets, failures });
   return { routes, longConnections, routeChannels, collisions, failures };
 }

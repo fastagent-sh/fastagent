@@ -1,7 +1,7 @@
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. */
 import { resolve } from "node:path";
-import { loadDotEnv } from "../../env.ts";
-import { discoverChannelFiles } from "../../channels/discover.ts";
+import { enterAgentEnv } from "../../env.ts";
+import { inspectChannels } from "../../channels/discover.ts";
 import {
   defaultSessionsDir,
   loadConfig,
@@ -15,6 +15,7 @@ import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
+import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -31,7 +32,7 @@ export interface InfoOptions {
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const dir = resolve(dirArg);
   const { agentDir, workspace } = placementOrExit(dir);
-  loadDotEnv(agentDir); // skills/tools may read env at load time
+  enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
   // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON (its cwd, whose
@@ -45,6 +46,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       deferred: r.deferredToolNames,
       collisions: r.toolCollisions,
       failures: r.toolFailures,
+      secrets: allSecrets(r.toolSecrets),
       error: undefined as string | undefined,
     }))
     .catch((e: unknown) => ({
@@ -52,11 +54,33 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       deferred: [] as string[],
       collisions: [],
       failures: [],
+      secrets: [] as DeclaredSecret[],
       error: (e as Error).message,
     }));
-  const channels = await discoverChannelFiles(agentDir).catch(failStartup);
+  // IMPORTED, like tools and schedules: a channel's declared secrets are part of what this command
+  // exists to report (and a channel that cannot load is what `dev` would fail on next).
+  const inspected = await inspectChannels(agentDir).catch(failStartup);
+  const channels = inspected.channels.map((c) => c.name);
   // Loaded (imported + validated), not just discovered.
   const sched = await loadSchedules(agentDir).catch(failStartup);
+  // What the definition DECLARED it needs, and which of those have no value here. `info` reports
+  // (never asserts): it is the read-only view of the same list `dev`/`start` refuse to boot without
+  // and `deploy` carries to the host.
+  // Split by CONSEQUENCE: a code-input declaration gates the boot (the same list the serving gate
+  // reads), while a config-only name is carried by deploy and never read by `dev` (it exists for
+  // values consumed outside the code inputs, e.g. a models.json header key). One ⚠ for both would
+  // misreport one of them — so the boot list is built ONCE and the full list extends it.
+  const codeInputSecrets: DeclaredSecret[] = [
+    ...tools.secrets,
+    ...allSecrets(sched.secrets),
+    ...allSecrets(inspected.secrets),
+  ];
+  const declaredSecrets: DeclaredSecret[] = [
+    ...codeInputSecrets,
+    ...(config.deploy?.secrets ?? []).map((name) => ({ name, source: "fastagent.config deploy.secrets" })),
+  ];
+  const unsetSecrets = missingSecrets(declaredSecrets);
+  const unsetAtBoot = missingSecrets(codeInputSecrets);
   const schedules = sched.schedules.map((s) => ({
     name: s.name,
     cron: s.cron,
@@ -100,6 +124,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           channels,
           schedules,
           scheduleFailures: sched.failures,
+          channelFailures: inspected.failures,
           selfSchedule: config.selfSchedule ?? false,
           stateRoot,
           sessionsDir,
@@ -108,6 +133,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
           toolFailures: tools.failures,
+          declaredSecrets,
+          unsetSecrets,
+          unsetAtBoot,
         },
         null,
         2,
@@ -137,12 +165,23 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("channels", channels.join(", ") || "(none)");
   line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");
   line("selfSchedule", config.selfSchedule ? "on (mounts the wake tool when serving)" : "off");
+  line("secrets", declaredSecrets.length > 0 ? describeSecrets(declaredSecrets) : "(none declared)");
+  // Each unset name appears in exactly ONE ⚠, by consequence: the boot-blocking ones say so, and
+  // the rest (config-only names, which `deploy` carries but `dev` never reads) say only that. Listing
+  // a name twice reads as two different problems.
+  const bootNames = new Set(unsetAtBoot.map((s) => s.name));
+  const unsetElsewhere = unsetSecrets.filter((s) => !bootNames.has(s.name));
+  if (unsetAtBoot.length > 0)
+    cont(`⚠ dev/start refuse to boot until set: ${unsetAtBoot.map((s) => s.name).join(", ")}`);
+  if (unsetElsewhere.length > 0)
+    cont(`⚠ no value here (carried by deploy only): ${unsetElsewhere.map((s) => s.name).join(", ")}`);
   line("state", stateRoot);
   line("sessions", sessionsDir);
   line("auth", authPath);
   reportToolCollisions(tools.collisions);
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);
+  reportModuleLoadFailures(inspected.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
   reportFindingsIfChanged(definition.dir, definition);
 }
