@@ -407,9 +407,16 @@ See [Channel development](channel-development.md).
 interface Schedule {
   cron: string; // 5-field cron expression
   tz?: string; // IANA timezone (default "UTC")
-  prompt: string; // the turn's text = the job's instruction
+  prompt: string; // the turn's text = the job's instruction (a builder is resolved at load)
+  secrets?: readonly string[]; // env vars this file needs, typed into the prompt builder
 }
-function defineSchedule(schedule: Schedule): Schedule;
+// what an author writes: `prompt` may be built FROM the declared secrets, keys typed from `secrets`
+function defineSchedule<const S extends readonly string[]>(schedule: {
+  cron: string;
+  tz?: string;
+  prompt: string | ((secrets: Record<S[number], string>) => string);
+  secrets?: S;
+}): Schedule;
 ```
 
 An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
@@ -422,10 +429,15 @@ import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
-  prompt: "Generate today's digest and send it to the team Telegram.",
   secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — carried by deploy, asserted at start
+  prompt: (secrets) => `Generate today's digest and send it with slack-send to channel ${secrets.SLACK_DIGEST_CHANNEL}.`,
 });
 ```
+
+**The delivery target belongs in `secrets`, not in the prompt text.** A chat/channel id is
+environment-specific, so declare it and build the prompt from it: the builder runs once at load, its
+keys are typed from the list, and `dev`/`start` refuse to boot while the name is unset — instead of a
+hardcoded id travelling to the wrong workspace.
 
 The scheduler is a time-trigger (the N axis, clock form): on each cron instant it invokes the agent
 with `prompt` — borrowing the same `Agent` contract as channels, adding none. It:

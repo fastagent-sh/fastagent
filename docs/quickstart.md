@@ -196,14 +196,18 @@ import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
-  prompt: "Summarize yesterday's activity and send it to the team Telegram.",
+  secrets: ["TEAM_CHAT_ID"],
+  prompt: (secrets) => `Summarize yesterday's activity and send it with telegram-send to chat ${secrets.TEAM_CHAT_ID}.`,
 });
 ```
 
 The prompt must say where output goes — the scheduler only fires the agent; delivery is a send tool's
 job. `fastagent add telegram` scaffolds one (`tools/telegram-send.ts` sends a message or a file); and
-because a scheduled turn runs outside any chat, the agent has no chat context — **put the target chat
-id in the prompt** ("…send it to Telegram chat -100123456"). Test it immediately (without waiting for
+because a scheduled turn runs outside any chat, the agent has no chat context — **the prompt must name
+the target chat id**. That id is environment-specific, so declare it in `secrets` and build the prompt
+from it (as above) rather than hardcoding it: same contract as a tool's secrets — `deploy` carries the
+value and `dev`/`start` refuse to boot while it is unset. Set `TEAM_CHAT_ID` in `.secrets/.env` first —
+the same gate refuses a run while the name is unset. Then test it immediately (without waiting for
 the cron, and without touching the real fire state):
 
 ```bash
