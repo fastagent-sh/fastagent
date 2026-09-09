@@ -146,14 +146,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           yield* run(session);
         }),
       );
-    // Image preparation is pure and runs after admission: a settled run must not pay for a resize nobody reads.
-    const enqueue = (p: Prompt, queue: "steer" | "followUp"): Promise<void> =>
-      command((session) =>
-        Effect.gen(function* () {
-          const opts = yield* port(() => toPiPromptOptions(p));
-          yield* port(() => session[queue](p.text, opts?.images));
-        }),
-      );
+    // Prompt preparation stays OUTSIDE admission. An await between the settled check and the enqueue would let the run
+    // end in between, and pi accepts a message for a finished run without complaint (`_steeringMessages.push`) — the
+    // command would be dropped and still reported as success. Image resizing is exactly such an await, hundreds of
+    // milliseconds of dynamic import and Photon work, and doing it here also keeps it overlapping session acquisition.
+    const enqueue = async (p: Prompt, kind: "steer" | "followUp"): Promise<void> => {
+      const opts = await toPiPromptOptions(p);
+      return command((session) => port(() => session[kind](p.text, opts?.images)));
+    };
     const controls: RunControls = {
       steer: (p) => enqueue(p, "steer"),
       followUp: (p) => enqueue(p, "followUp"),
