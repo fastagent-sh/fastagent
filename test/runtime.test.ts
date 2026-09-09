@@ -7,7 +7,7 @@ import { detectRuntime } from "../src/runtime.ts";
 describe("detectRuntime", () => {
   const freshDir = () => mkdtemp(join(tmpdir(), "fa-rt-"));
 
-  it("is bun via packageManager, with the version — and strips corepack's +hash (invalid Docker tag)", async () => {
+  it("reads bun from packageManager or a lockfile, node otherwise, and tracks hasLockfile", async () => {
     const dir = await freshDir();
     expect(detectRuntime(dir, { packageManager: "bun@1.3.13" })).toMatchObject({
       runtime: "bun",
@@ -18,18 +18,14 @@ describe("detectRuntime", () => {
       runtime: "bun",
       bunVersion: "1.3.13",
     });
-  });
-
-  it("is bun via a bun lockfile even without packageManager (version undefined → oven/bun:1)", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, "bun.lock"), "");
-    expect(detectRuntime(dir, {})).toEqual({ runtime: "bun", bunVersion: undefined, hasLockfile: true });
-  });
-
-  it("is node otherwise; hasLockfile tracks package-lock.json", async () => {
-    const dir = await freshDir();
     expect(detectRuntime(dir, {})).toEqual({ runtime: "node", hasLockfile: false });
-    await writeFile(join(dir, "package-lock.json"), "{}");
-    expect(detectRuntime(dir, { packageManager: "npm@10" })).toEqual({ runtime: "node", hasLockfile: true });
+
+    const bun = await freshDir();
+    await writeFile(join(bun, "bun.lock"), ""); // a lockfile alone → oven/bun:1
+    expect(detectRuntime(bun, {})).toEqual({ runtime: "bun", bunVersion: undefined, hasLockfile: true });
+
+    const node = await freshDir();
+    await writeFile(join(node, "package-lock.json"), "{}");
+    expect(detectRuntime(node, { packageManager: "npm@10" })).toEqual({ runtime: "node", hasLockfile: true });
   });
 });

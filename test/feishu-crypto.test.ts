@@ -13,28 +13,23 @@ function encryptEvent(encryptKey: string, plaintext: string): string {
 }
 
 describe("decryptEvent", () => {
-  it("decrypts the documented AES-256-CBC construction (sha256 key, IV-prefixed, base64)", () => {
+  it("decrypts the documented AES-256-CBC construction, and THROWS on anything malformed", () => {
     const event = JSON.stringify({ schema: "2.0", event: { message: { content: "你好 lark" } } });
     expect(decryptEvent("test-key", encryptEvent("test-key", event))).toBe(event);
-  });
-
-  it("throws on malformed ciphertext and on a payload too short to carry an IV — never a silent empty", () => {
-    const payload = Buffer.from(encryptEvent("right-key", "{}"), "base64");
     // CBC ciphertext must be block-aligned. Truncation is deterministic; unlike a wrong-key assertion,
-    // it cannot randomly land on valid PKCS#7 padding (AES-CBC is not authenticated).
-    const truncated = payload.subarray(0, -1).toString("base64");
-    expect(() => decryptEvent("right-key", truncated)).toThrow();
+    // it cannot randomly land on valid PKCS#7 padding (AES-CBC is not authenticated). Never a silent empty.
+    const payload = Buffer.from(encryptEvent("right-key", "{}"), "base64");
+    expect(() => decryptEvent("right-key", payload.subarray(0, -1).toString("base64"))).toThrow();
     expect(() => decryptEvent("k", Buffer.from("short").toString("base64"))).toThrow(/too short/);
   });
 });
 
 describe("eventSignature / verifySignature", () => {
-  it("computes sha256(timestamp + nonce + encryptKey + body) hex — the platform's exact concatenation", () => {
+  it("is sha256(timestamp + nonce + encryptKey + body) hex, and rejects a tampered body or header", () => {
+    // The platform's exact concatenation.
     const expected = createHash("sha256").update('1700000000nonceKEY{"a":1}', "utf8").digest("hex");
     expect(eventSignature("KEY", "1700000000", "nonce", '{"a":1}')).toBe(expected);
-  });
 
-  it("verifies a matching signature and rejects a tampered body or header", () => {
     const headers = { timestamp: "17", nonce: "n1", signature: eventSignature("K", "17", "n1", "body") };
     expect(verifySignature("K", headers, "body")).toBe(true);
     expect(verifySignature("K", headers, "tampered")).toBe(false);

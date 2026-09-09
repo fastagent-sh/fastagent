@@ -81,42 +81,37 @@ describe("deploy agentcore: cron translation", () => {
     return r.error;
   };
 
-  it("hourly: both wildcards → dow becomes ?", () => {
-    expect(expression("0 * * * *")).toBe("cron(0 * * * ? *)");
-  });
-
-  it("day-of-week numbering is remapped (standard 0/7=Sun → EventBridge 1=Sun)", () => {
-    expect(expression("0 9 * * 1")).toBe("cron(0 9 ? * 2 *)"); // Monday
-    expect(expression("0 9 * * 0")).toBe("cron(0 9 ? * 1 *)"); // Sunday as 0
-    expect(expression("0 9 * * 7")).toBe("cron(0 9 ? * 1 *)"); // Sunday as 7
-    expect(expression("0 9 * * 1-5")).toBe("cron(0 9 ? * 2-6 *)"); // weekday range
-  });
-
-  it("day-of-month restriction keeps dom, dow becomes ?", () => {
-    expect(expression("30 6 1 * *")).toBe("cron(30 6 1 * ? *)");
-  });
-
-  it("names pass through unmapped", () => {
-    expect(expression("0 9 * * MON")).toBe("cron(0 9 ? * MON *)");
-  });
-
-  it("steps are COUNTS, not weekdays — preserved verbatim while values/endpoints remap", () => {
+  // One pure translation, its whole mapping table: dow renumbering, dom/dow exclusivity, names,
+  // steps, lists, and the `?` field croner reads as unrestricted.
+  it("translates every 5-field cron shape into the Quartz-flavoured EventBridge form", () => {
+    expect(expression("0 * * * *")).toBe("cron(0 * * * ? *)"); // both wildcards → dow becomes ?
+    expect(expression("30 6 1 * *")).toBe("cron(30 6 1 * ? *)"); // a dom restriction keeps dom
+    // Standard 0/7 = Sunday, EventBridge 1 = Sunday.
+    expect(expression("0 9 * * 1")).toBe("cron(0 9 ? * 2 *)");
+    expect(expression("0 9 * * 0")).toBe("cron(0 9 ? * 1 *)");
+    expect(expression("0 9 * * 7")).toBe("cron(0 9 ? * 1 *)");
+    expect(expression("0 9 * * 1-5")).toBe("cron(0 9 ? * 2-6 *)");
+    expect(expression("0 9 * * MON")).toBe("cron(0 9 ? * MON *)"); // names pass through unmapped
+    // Steps are COUNTS, not weekdays: preserved verbatim while values/endpoints remap.
     expect(expression("0 9 * * */2")).toBe("cron(0 9 ? * */2 *)");
     expect(expression("0 9 * * 1-5/2")).toBe("cron(0 9 ? * 2-6/2 *)");
-  });
-
-  it("lists remap per element; a range that wraps under renumbering is refused", () => {
-    expect(expression("0 9 * * 1,3,5")).toBe("cron(0 9 ? * 2,4,6 *)");
+    expect(expression("0 9 * * 1,3,5")).toBe("cron(0 9 ? * 2,4,6 *)"); // lists remap per element
     expect(expression("0 9 * * MON,3")).toBe("cron(0 9 ? * MON,4 *)");
-    expect(error("0 9 * * 5-7")).toMatch(/wraps across the week/); // Fri–Sun → 6-1: not a valid range
-    expect(error("0 9 * * 1-")).toMatch(/malformed/);
-    expect(error("0 9 * * 1/")).toMatch(/malformed/);
+    // A `?` field is UNRESTRICTED — croner reads it as daily, so the deployed rule must say daily.
+    // Carrying MON/1 across would deploy a schedule the workspace never runs.
+    expect(expression("0 9 ? * MON")).toBe("cron(0 9 * * ? *)");
+    expect(expression("0 9 1 * ?")).toBe("cron(0 9 * * ? *)");
+    expect(expression("0 9 * * ?")).toBe("cron(0 9 * * ? *)");
+    expect(expression("0 9 ? * *")).toBe("cron(0 9 * * ? *)");
   });
 
   it("refuses what EventBridge cannot express, with the reason", () => {
     expect(error("0 9 1 * 1")).toMatch(/BOTH day-of-month and day-of-week/);
     expect(error("0 0 9 * * 1")).toMatch(/5-field/);
     expect(error("0 9 * * 5L")).toMatch(/L\/#/);
+    expect(error("0 9 * * 5-7")).toMatch(/wraps across the week/); // Fri–Sun → 6-1: not a valid range
+    expect(error("0 9 * * 1-")).toMatch(/malformed/);
+    expect(error("0 9 * * 1/")).toMatch(/malformed/);
   });
 });
 
@@ -326,33 +321,15 @@ describe("deploy agentcore: the plan", () => {
       const expression = (out as { expression: string }).expression;
       // 10 occurrences is enough to separate daily / weekly / monthly patterns.
       expect(eventBridgeDays(expression, 10)).toEqual(firingDays(cron, 10));
+      // EventBridge rejects both day fields wildcarded, and both restricted: exactly one `?`.
+      const fields = expression.slice(5, -1).split(" ");
+      expect([fields[2], fields[4]].filter((f) => f === "?")).toHaveLength(1);
     });
 
     it("refuses what EventBridge genuinely cannot express, rather than deploying a different schedule", () => {
       // Cron ORs two RESTRICTED day fields (the 15th OR any Wednesday); EventBridge has no such form.
       expect(cronError("0 9 15 * WED", undefined)).toBeUndefined();
       expect(toEventBridgeCron("0 9 15 * WED")).toMatchObject({ error: expect.stringContaining("BOTH") });
-    });
-
-    it.each([
-      ["0 9 * * MON", "cron(0 9 ? * MON *)"],
-      ["0 9 1 * *", "cron(0 9 1 * ? *)"],
-      // A `?` means daily in croner, so the deployed rule must say daily — NOT carry MON/1 across.
-      ["0 9 ? * MON", "cron(0 9 * * ? *)"],
-      ["0 9 1 * ?", "cron(0 9 * * ? *)"],
-      ["0 9 * * ?", "cron(0 9 * * ? *)"],
-      ["0 9 ? * *", "cron(0 9 * * ? *)"],
-    ])("%s → %s", (cron, expression) => {
-      expect(toEventBridgeCron(cron)).toEqual({ expression });
-    });
-
-    it("emits exactly one `?` — EventBridge rejects both fields wildcarded or both restricted", () => {
-      for (const cron of ["0 9 * * MON", "0 9 1 * *", "0 9 ? * MON", "0 9 * * ?", "*/5 * * * *"]) {
-        const out = toEventBridgeCron(cron);
-        expect("expression" in out).toBe(true);
-        const fields = (out as { expression: string }).expression.slice(5, -1).split(" ");
-        expect([fields[2], fields[4]].filter((f) => f === "?")).toHaveLength(1);
-      }
     });
   });
 

@@ -235,36 +235,39 @@ describe("createAgentService", () => {
     await expect(service.close()).resolves.toBeUndefined(); // idempotent
   });
 
-  it.each([false, true])("concurrent close calls share completion and failure (reject=%s)", async (reject) => {
-    const dir = await agentDir({
-      "channels/sock.mjs": `export let stopped = false;
-      export default { name: "sock", connect: (ctx, signal) => ({
-        ready: Promise.resolve(),
-        closed: new Promise((resolve, reject) => signal.addEventListener("abort", () => {
-          setTimeout(() => { stopped = true; ${reject ? 'reject(new Error("shutdown failed"))' : "resolve()"}; }, 30);
-        }, { once: true })),
-      }) };`,
-    });
-    const channel = await import(pathToFileURL(join(dir, "channels/sock.mjs")).href);
-    const service = await createAgentService(dir);
-    await service.ready;
-    const first = service.close().finally(() => {
-      expect(channel.stopped).toBe(true);
-    });
-    const second = service.close().finally(() => {
-      expect(channel.stopped).toBe(true);
-    });
-    const results = await Promise.allSettled([first, second]);
-    if (reject) {
-      const [a, b] = results as PromiseRejectedResult[];
-      expect(a?.status).toBe("rejected");
-      expect(b?.reason).toBe(a?.reason);
-      await expect(service.close()).rejects.toBe(a?.reason);
-    } else {
-      expect(results).toEqual([
-        { status: "fulfilled", value: undefined },
-        { status: "fulfilled", value: undefined },
-      ]);
+  it("concurrent close calls share completion and failure, resolved or rejected", async () => {
+    for (const reject of [false, true]) {
+      const dir = await agentDir({
+        "channels/sock.mjs": `export let stopped = false;
+        export default { name: "sock", connect: (ctx, signal) => ({
+          ready: Promise.resolve(),
+          closed: new Promise((resolve, reject) => signal.addEventListener("abort", () => {
+            setTimeout(() => { stopped = true; ${reject ? 'reject(new Error("shutdown failed"))' : "resolve()"}; }, 30);
+          }, { once: true })),
+        }) };`,
+      });
+      const channel = await import(pathToFileURL(join(dir, "channels/sock.mjs")).href);
+      const service = await createAgentService(dir);
+      await service.ready;
+      const first = service.close().finally(() => {
+        expect(channel.stopped).toBe(true);
+      });
+      const second = service.close().finally(() => {
+        expect(channel.stopped).toBe(true);
+      });
+      const results = await Promise.allSettled([first, second]);
+      const label = reject ? "rejected" : "resolved";
+      if (reject) {
+        const [a, b] = results as PromiseRejectedResult[];
+        expect(a?.status, label).toBe("rejected");
+        expect(b?.reason, label).toBe(a?.reason);
+        await expect(service.close(), label).rejects.toBe(a?.reason);
+      } else {
+        expect(results, label).toEqual([
+          { status: "fulfilled", value: undefined },
+          { status: "fulfilled", value: undefined },
+        ]);
+      }
     }
   });
 
@@ -399,22 +402,24 @@ describe("createAgentService", () => {
     await expect(createAgentService(dir)).rejects.toThrow("cannot dial");
   });
 
-  it.each(["ready", "closed"])("rejects an invalid %s promise and rolls back earlier connections", async (field) => {
-    const dir = await agentDir({
-      "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
-        ready: Promise.resolve(),
-        closed: new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("rollback reached first")), { once: true })),
-      }) };`,
-      "channels/b-invalid.mjs": `export default { name: "b-invalid", connect: () => ({
-        ready: Promise.resolve(), closed: Promise.resolve(), ${field}: null,
-      }) };`,
-    });
-    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
-    try {
-      await expect(createAgentService(dir)).rejects.toThrow("b-invalid connect(signal) must return");
-      expect(logged).toHaveBeenCalledWith(expect.stringContaining("rollback reached first"));
-    } finally {
-      logged.mockRestore();
+  it("rejects an invalid ready OR closed promise and rolls back earlier connections", async () => {
+    for (const field of ["ready", "closed"]) {
+      const dir = await agentDir({
+        "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
+          ready: Promise.resolve(),
+          closed: new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("rollback reached first")), { once: true })),
+        }) };`,
+        "channels/b-invalid.mjs": `export default { name: "b-invalid", connect: () => ({
+          ready: Promise.resolve(), closed: Promise.resolve(), ${field}: null,
+        }) };`,
+      });
+      const logged = vi.spyOn(log, "error").mockImplementation(() => {});
+      try {
+        await expect(createAgentService(dir), field).rejects.toThrow("b-invalid connect(signal) must return");
+        expect(logged, field).toHaveBeenCalledWith(expect.stringContaining("rollback reached first"));
+      } finally {
+        logged.mockRestore();
+      }
     }
   });
 
@@ -453,18 +458,6 @@ describe("createAgentService", () => {
     await expect(service.ready).rejects.toThrow(/dial refused/);
   });
 
-  it("a channel that ignores its abort signal cannot hang teardown", async () => {
-    // `closed` never settles here. Without a deadline `close()` waits forever — and during a failed
-    // START, the original error would never reach the caller at all.
-    const dir = await agentDir({
-      "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
-        ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
-    });
-    const service = await createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 });
-    await service.ready;
-    await expect(service.close()).rejects.toThrow(/did not stop within 200ms: deaf/);
-  });
-
   it("closing an unresponsive dialing channel also settles ready", async () => {
     const dir = await agentDir({
       "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
@@ -476,7 +469,9 @@ describe("createAgentService", () => {
     await expect(service.ready).rejects.toThrow("service closed before it became ready");
   });
 
-  it("aggregates close failures after all connections settle", async () => {
+  // `closed` carries a terminal failure by contract: swallowing one would let `close()` claim the
+  // surface is stopped over a channel that did not stop, and the caller could never tell.
+  it("reports close failures, aggregated after all connections settle", async () => {
     const dir = await agentDir(
       Object.fromEntries(
         ["a", "b"].map((name) => [
@@ -500,9 +495,10 @@ describe("createAgentService", () => {
     ]);
   });
 
-  it("names only the connection that is stuck, not the ones that stopped", async () => {
-    // A shutdown message that blames every channel because one hung sends the reader to the wrong
-    // file. The deadline reports what did not settle, individually.
+  it("a channel that ignores its abort signal cannot hang teardown, and only IT is named", async () => {
+    // `closed` never settles for `deaf`, so without a deadline `close()` waits forever. And a shutdown
+    // message that blames every channel because one hung sends the reader to the wrong file: the
+    // deadline reports what did not settle, individually.
     const dir = await agentDir({
       "channels/quick.mjs": `export default { name: "quick", connect: (ctx, signal) => ({
         ready: Promise.resolve(),
@@ -514,23 +510,9 @@ describe("createAgentService", () => {
     const service = await createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 });
     await service.ready;
     const error = await service.close().catch((e: Error) => e);
-    expect(String(error)).toMatch(/deaf/);
+    // The wording carries the deadline that fired, so `closeTimeoutMs` is pinned, not just the name.
+    expect(String(error)).toMatch(/did not stop within 200ms: deaf/);
     expect(String(error)).not.toMatch(/quick/);
-  });
-
-  it("close() reports a connection that failed to stop", async () => {
-    // `closed` carries a terminal failure by contract. Swallowing it would let `close()` claim the
-    // surface is stopped over a channel that did not stop, and the caller could never tell.
-    const dir = await agentDir({
-      "channels/stubborn.mjs": `export default { name: "stubborn", connect: (ctx, signal) => ({
-        ready: Promise.resolve(),
-        closed: new Promise((_, reject) =>
-          signal.addEventListener("abort", () => reject(new Error("shutdown failed")), { once: true })),
-      }) };`,
-    });
-    const service = await createAgentService(dir, { onChannelClosed: () => {} });
-    await service.ready;
-    await expect(service.close()).rejects.toThrow(/shutdown failed/);
   });
 
   it("closing while a connection is still dialling rejects `ready` rather than claiming success", async () => {

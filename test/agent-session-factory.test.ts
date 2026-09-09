@@ -283,15 +283,14 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     ]);
   });
 
-  it.each([
-    ["room\u0000a", '"room\\u0000a"', "json"],
-    ["room\ud800a", '"room\\ud800a"', "json"],
-    ['"room\\u0000a"', '"room\\u0000a"', ""],
-    ["room:会话/🌙", "room:会话/🌙", ""],
-    ["", "", ""],
-  ])(
-    "represents session %j in the shell environment without changing tool context",
-    async (sessionId, envId, encoding) => {
+  it("represents ANY session id in the shell environment without changing tool context", async () => {
+    for (const [sessionId, envId, encoding] of [
+      ["room\u0000a", '"room\\u0000a"', "json"],
+      ["room\ud800a", '"room\\ud800a"', "json"],
+      ['"room\\u0000a"', '"room\\u0000a"', ""],
+      ["room:会话/🌙", "room:会话/🌙", ""],
+      ["", "", ""],
+    ] as const) {
       const tools = piAllCodingTools(process.cwd());
       const bash = tools.find((tool) => tool.name === "bash")!;
       const nativeIds: unknown[] = [];
@@ -338,13 +337,13 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
           isError: false,
           content: [{ type: "text", text: `ok\n${envId}\n${encoding}` }],
         });
-        expect(nativeIds).toEqual([sessionId, sessionId]);
-        expect(callerIds).toEqual([sessionId, sessionId]);
+        expect(nativeIds, String(sessionId)).toEqual([sessionId, sessionId]);
+        expect(callerIds, String(sessionId)).toEqual([sessionId, sessionId]);
       } finally {
         vi.unstubAllEnvs();
       }
-    },
-  );
+    }
+  });
 
   it("keeps native thinkingLevel and shell effort scoped to interleaved sessions", async () => {
     let entered!: () => void;

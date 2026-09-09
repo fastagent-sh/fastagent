@@ -1370,20 +1370,14 @@ describe("session control over HTTP", () => {
   });
 });
 
-describe.each(["invoke", "events"] as const)("%s SSE lifecycle", (plane) => {
-  const respond = (source: AsyncIterable<unknown>): Promise<Response> => {
-    const headers = { authorization: `Bearer ${TOKEN}` };
-    if (plane === "invoke") {
-      return createInvokeHandler({ invoke: () => source as AsyncIterable<AgentEvent> })(
-        new Request("http://x/invoke", { method: "POST", body: '{"session":"s","text":"hi"}' }),
-      );
-    }
-    return Promise.resolve(
-      createControlPlane(handleControl({ events: () => source }), { token: TOKEN }).handler(
-        new Request("http://x/control/sessions/s/events", { headers }),
-      ),
+// Both SSE routes are one `sseResponse` (channels/sse.ts) over a different source; the routes' own
+// halves are covered above ("events stream live over SSE", "the remote data plane"), so the shared
+// lifecycle is exercised once, through the invoke route that mounts it.
+describe("SSE response lifecycle", () => {
+  const respond = (source: AsyncIterable<unknown>): Promise<Response> =>
+    createInvokeHandler({ invoke: () => source as AsyncIterable<AgentEvent> })(
+      new Request("http://x/invoke", { method: "POST", body: '{"session":"s","text":"hi"}' }),
     );
-  };
 
   it("closes the source and heartbeat when a pull fails", async () => {
     vi.useFakeTimers();

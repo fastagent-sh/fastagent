@@ -187,16 +187,7 @@ describe("agentcore adapter: lazy channel construction", () => {
 });
 
 describe("agentcore adapter: /ping", () => {
-  it("reports Healthy when idle and HealthyBusy while background work is in flight", async () => {
-    let busy = false;
-    const routes = adapter({ isBusy: () => busy });
-    const ping = routes["GET /ping"]!;
-    expect(await (await ping(new Request("http://x/ping"))).json()).toMatchObject({ status: "Healthy" });
-    busy = true;
-    expect(await (await ping(new Request("http://x/ping"))).json()).toMatchObject({ status: "HealthyBusy" });
-  });
-
-  it("always carries time_of_last_update, updated ONLY on a real status transition", async () => {
+  it("reports Healthy/HealthyBusy and carries time_of_last_update, updated ONLY on a real transition", async () => {
     // The platform's idle measurement reads ONLY this field (measured live: with it omitted, a
     // session answering HealthyBusy every ~2s was still reclaimed mid-turn at exactly the idle
     // timeout after the last invocation — the documented "the platform tracks status changes on
@@ -242,8 +233,8 @@ describe("agentcore adapter: /ping", () => {
 });
 
 describe("agentcore adapter: webhook envelope", () => {
-  it("reconstructs the original request (method/path/headers/body) and rides the reply back byte-exact", async () => {
-    const seen: { method: string; secret: string | null; body: string }[] = [];
+  it("reconstructs the original request (method/path/QUERY/headers/body) and rides the reply back byte-exact", async () => {
+    const seen: { method: string; secret: string | null; body: string; code: string }[] = [];
     const routes = adapter({
       channels: {
         routes: {
@@ -252,6 +243,8 @@ describe("agentcore adapter: webhook envelope", () => {
               method: req.method,
               secret: req.headers.get("x-telegram-bot-api-secret-token"),
               body: await req.text(),
+              // A channel reading searchParams must see the forwarder's query string.
+              code: new URL(req.url).searchParams.get("code") ?? "(none)",
             });
             return new Response('{"challenge":"pong"}', {
               status: 200,
@@ -265,6 +258,7 @@ describe("agentcore adapter: webhook envelope", () => {
       kind: "webhook",
       method: "POST",
       path: "/telegram",
+      query: "code=abc&x=1",
       headers: { "x-telegram-bot-api-secret-token": "s3cret", "content-type": "application/json" },
       bodyB64: Buffer.from('{"update_id":1}').toString("base64"),
     });
@@ -273,55 +267,36 @@ describe("agentcore adapter: webhook envelope", () => {
     expect(reply.status).toBe(200);
     expect(reply.headers["content-type"]).toBe("application/json");
     expect(Buffer.from(reply.bodyB64, "base64").toString()).toBe('{"challenge":"pong"}');
-    expect(seen).toEqual([{ method: "POST", secret: "s3cret", body: '{"update_id":1}' }]);
+    expect(seen).toEqual([{ method: "POST", secret: "s3cret", body: '{"update_id":1}', code: "abc" }]);
   });
 
-  it("enforces the original webhook-body limit even if a caller bypasses the public forwarder", async () => {
-    const routes = adapter({ channels: { routes: { "POST /hook": () => new Response("must not run") } } });
-    const res = await postEnvelope(routes, {
+  it("every refusal rides back INSIDE the envelope, and the transport stays 200", async () => {
+    // A non-2xx from the channel, a path nothing routes, and the body ceiling a caller bypassing the
+    // public forwarder would otherwise escape — each is a reply status, not a transport status.
+    const forbidden = adapter({
+      channels: { routes: { "POST /telegram": () => new Response("forbidden\n", { status: 403 }) } },
+    });
+    const denied = await postEnvelope(forbidden, { kind: "webhook", method: "POST", path: "/telegram" });
+    expect(denied.status).toBe(200);
+    expect(((await denied.json()) as WebhookReply).status).toBe(403);
+
+    const unrouted = await postEnvelope(adapter(), { kind: "webhook", method: "POST", path: "/nope" });
+    expect(((await unrouted.json()) as WebhookReply).status).toBe(404);
+
+    const tooBig = adapter({ channels: { routes: { "POST /hook": () => new Response("must not run") } } });
+    const capped = await postEnvelope(tooBig, {
       kind: "webhook",
       method: "POST",
       path: "/hook",
       bodyB64: Buffer.alloc(MAX_WEBHOOK_BODY_BYTES + 1).toString("base64"),
     });
-    expect(res.status).toBe(200);
-    const reply = (await res.json()) as WebhookReply;
-    expect(reply.status).toBe(413);
+    expect(capped.status).toBe(200);
+    expect(((await capped.json()) as WebhookReply).status).toBe(413);
   });
 
-  it("carries a non-2xx channel response inside the envelope (transport stays 200)", async () => {
-    const routes = adapter({
-      channels: { routes: { "POST /telegram": () => new Response("forbidden\n", { status: 403 }) } },
-    });
-    const res = await postEnvelope(routes, { kind: "webhook", method: "POST", path: "/telegram" });
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as WebhookReply).status).toBe(403);
-  });
-
-  it("an unrouted path rides back as a 404 reply", async () => {
-    const res = await postEnvelope(adapter(), { kind: "webhook", method: "POST", path: "/nope" });
-    expect(((await res.json()) as WebhookReply).status).toBe(404);
-  });
-
-  it("rejects a relative path", async () => {
+  it("rejects a relative path — a malformed ENVELOPE is the transport's own 400", async () => {
     const res = await postEnvelope(adapter(), { kind: "webhook", method: "POST", path: "telegram" });
     expect(res.status).toBe(400);
-  });
-
-  it("the query string survives the round trip (a channel reading searchParams sees it)", async () => {
-    const seen: string[] = [];
-    const routes = adapter({
-      channels: {
-        routes: {
-          "GET /hook": (req) => {
-            seen.push(new URL(req.url).searchParams.get("code") ?? "(none)");
-            return new Response("ok", { status: 200 });
-          },
-        },
-      },
-    });
-    await postEnvelope(routes, { kind: "webhook", method: "GET", path: "/hook", query: "code=abc&x=1" });
-    expect(seen).toEqual(["abc"]);
   });
 });
 
@@ -342,31 +317,27 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     expect(fired).toEqual([{ name: "job", slot: "2026-07-07T10:00:00.000Z" }]);
   });
 
-  it("404s when the deployment has no schedules (deploy drift stays visible)", async () => {
-    const res = await postEnvelope(adapter(), fireEnvelope);
-    expect(res.status).toBe(404);
-  });
-
-  it("404s an unknown schedule name (UnknownScheduleError from the binding)", async () => {
-    const routes = adapter({
+  it("a miss is 404 and a fault is 500 — the clock's logs must tell drift from breakage", async () => {
+    // No schedules at all, and a name the binding does not know: both are deploy drift, both 404.
+    expect((await postEnvelope(adapter(), fireEnvelope)).status).toBe(404);
+    const unknown = adapter({
       fire: async (name) => {
         throw new UnknownScheduleError(name);
       },
     });
-    const res = await postEnvelope(routes, fireEnvelope);
-    expect(res.status).toBe(404);
-    expect(await res.text()).toContain('unknown schedule "job"');
-  });
+    const missing = await postEnvelope(unknown, fireEnvelope);
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toContain('unknown schedule "job"');
 
-  it("500s a claim-state fault (fail visibly in the clock's logs)", async () => {
-    const routes = adapter({
+    // A claim-state fault is not drift — it fails visibly, with its own message.
+    const broken = adapter({
       fire: async () => {
         throw new Error("fires.json unreadable");
       },
     });
-    const res = await postEnvelope(routes, fireEnvelope);
-    expect(res.status).toBe(500);
-    expect(await res.text()).toContain("fires.json unreadable");
+    const fault = await postEnvelope(broken, fireEnvelope);
+    expect(fault.status).toBe(500);
+    expect(await fault.text()).toContain("fires.json unreadable");
   });
 
   it("a running schedule turn counts as in-flight work (/ping must hold the session)", async () => {
@@ -430,7 +401,7 @@ describe("agentcore adapter: invoke envelope", () => {
 });
 
 describe("agentcore adapter: envelope validation", () => {
-  it("rejects invalid json / a missing kind / an unknown kind", async () => {
+  it("refuses an envelope it cannot read: bad json, no kind, an unknown kind, or one over the cap", async () => {
     const routes = adapter();
     const auth = `"auth":"${SECRET}",`;
     expect((await post(routes, "{nope")).status).toBe(400);
@@ -439,10 +410,7 @@ describe("agentcore adapter: envelope validation", () => {
     // An unknown kind from an UNAUTHENTICATED caller is 403, not 400: the boundary runs first and the
     // public plane is not told which kinds exist.
     expect((await post(routes, '{"kind":"mystery"}')).status).toBe(403);
-  });
-
-  it("caps the envelope body", async () => {
-    const routes = adapter();
+    // …and the envelope itself has a ceiling.
     const huge = JSON.stringify({
       kind: "webhook",
       method: "POST",
@@ -467,17 +435,16 @@ describe("agentcore adapter: the authentication boundary", () => {
       expect(res.status).toBe(403);
     }
     expect(fire).not.toHaveBeenCalled();
-  });
 
-  it("a WRONG secret is not a secret, regardless of its byte length or type", async () => {
-    const routes = adapter({ fire: async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome });
+    // And a WRONG secret is not a secret, whatever its byte length or type.
     for (const auth of ["guessed", "x".repeat(Buffer.byteLength(SECRET)), 123]) {
       const res = await post(
         routes,
         JSON.stringify({ auth, kind: "schedule-fire", name: "d", slot: "2026-07-28T09:00:00Z" }),
       );
-      expect(res.status).toBe(403);
+      expect(res.status, String(auth)).toBe(403);
     }
+    expect(fire).not.toHaveBeenCalled();
   });
 
   it("public invoke cannot redirect the wake-alarm callback", async () => {

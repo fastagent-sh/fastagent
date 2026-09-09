@@ -357,44 +357,49 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     expect(offeredAfter).toEqual(["try_enable_bash"]);
   });
 
-  it.each([true, false])("lists skills only with an active read tool (read: %s)", async (read) => {
-    let seen: string | undefined;
-    const { faux } = makeFaux();
-    faux.setResponses([
-      (ctx) => {
-        seen = ctx.systemPrompt;
-        return fauxAssistantMessage("ok");
-      },
-    ]);
-    const { skills } = await loadAgentDefinition(fixtureDir);
-    const agent = createPiAgent({
-      providers: [faux.provider],
-      model: "faux/faux-1",
-      instructions: () => "P",
-      skills,
-      tools: read ? createReadOnlyTools(fixtureDir) : [],
-    });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    expect(seen).toContain("P");
-    expect(seen?.match(/<available_skills>/g) ?? []).toHaveLength(read ? 1 : 0);
-    expect(seen?.match(/Current working directory:/g)).toHaveLength(1);
+  it("lists skills only with an active read tool — a skill nothing can open is not offered", async () => {
+    for (const read of [true, false]) {
+      let seen: string | undefined;
+      const { faux } = makeFaux();
+      faux.setResponses([
+        (ctx) => {
+          seen = ctx.systemPrompt;
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      const { skills } = await loadAgentDefinition(fixtureDir);
+      const agent = createPiAgent({
+        providers: [faux.provider],
+        model: "faux/faux-1",
+        instructions: () => "P",
+        skills,
+        tools: read ? createReadOnlyTools(fixtureDir) : [],
+      });
+      await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+      expect(seen, `read: ${read}`).toContain("P");
+      expect(seen?.match(/<available_skills>/g) ?? [], `read: ${read}`).toHaveLength(read ? 1 : 0);
+      expect(seen?.match(/Current working directory:/g)).toHaveLength(1);
+    }
   });
 
-  it.each([undefined, "", () => ""])("empty instructions %s impose no coding identity", async (instructions) => {
-    let seen: string | undefined;
-    const { faux } = makeFaux();
-    faux.setResponses([
-      (ctx) => {
-        seen = ctx.systemPrompt;
-        return fauxAssistantMessage("ok");
-      },
-    ]);
-    const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1", instructions });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
-    // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
-    expect(seen).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
-    expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+  it("empty instructions impose no coding identity, in every form they arrive in", async () => {
+    for (const instructions of [undefined, "", () => ""]) {
+      let seen: string | undefined;
+      const { faux } = makeFaux();
+      faux.setResponses([
+        (ctx) => {
+          seen = ctx.systemPrompt;
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1", instructions });
+      await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+      // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
+      // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
+      const label = String(instructions);
+      expect(seen, label).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
+      expect(seen, label).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+    }
   });
 });
 

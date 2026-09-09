@@ -77,7 +77,7 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("long text is split by the TOOL (at newlines, ≤4096 each) — counting chars is not the model's job", async () => {
+  it("long text is split by the TOOL (newlines first, then a hard cut) — counting chars is not the model's job", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     const { calls } = stubBotApi();
     const line = `${"a".repeat(999)}\n`; // 1000 chars per line → 5000 chars total, newline-splittable
@@ -87,11 +87,9 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     for (const t of texts) expect(t.length).toBeLessThanOrEqual(4096);
     expect(texts.join("\n")).toBe(line.repeat(5).trimEnd()); // nothing lost at the seams
     expect(JSON.stringify(r.details)).toContain("sent 2 messages to chat 9");
-  });
 
-  it("a single overlong line (no newline under the cap) is hard-cut, not an infinite loop", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
-    const { calls } = stubBotApi();
+    // …and a single line with no newline under the cap is hard-cut, never an infinite loop.
+    calls.length = 0;
     await execute({ chatId: 9, text: "b".repeat(4097) });
     expect(calls.length).toBe(2);
     expect(String(calls[0]?.form.get("text"))).toHaveLength(4096);

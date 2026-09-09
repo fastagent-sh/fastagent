@@ -22,35 +22,29 @@ describe("loadEnvFile", () => {
     return file;
   };
 
-  it("loads KEY=VALUE, skips comments/blank lines, strips matched quotes", async () => {
+  it("parses KEY=VALUE: comments/blanks skipped, quotes stripped, first-= split, env-wins, last-wins", async () => {
     const key = `A_${Date.now()}`;
     const file = await write(`# a comment\n\n${key}_PLAIN=value\n${key}_DQ="quoted spaces"\n${key}_SQ='single'\n`);
     loadEnvFile(file);
     expect(process.env[`${key}_PLAIN`]).toBe("value");
     expect(process.env[`${key}_DQ`]).toBe("quoted spaces"); // surrounding quotes stripped, inner space kept
     expect(process.env[`${key}_SQ`]).toBe("single");
-  });
 
-  it("keeps a value with '=' and ':' intact (only splits on the first =)", async () => {
-    const key = `B_${Date.now()}`;
-    const file = await write(`${key}=7676:AA=bb-cc_dd\n`);
-    loadEnvFile(file);
-    expect(process.env[key]).toBe("7676:AA=bb-cc_dd");
-  });
+    // Only the FIRST `=` splits, so a value carrying `=` or `:` survives intact.
+    const b = `B_${Date.now()}`;
+    loadEnvFile(await write(`${b}=7676:AA=bb-cc_dd\n`));
+    expect(process.env[b]).toBe("7676:AA=bb-cc_dd");
 
-  it("does NOT override an already-set var — a real env var wins", async () => {
-    const key = `C_${Date.now()}`;
-    process.env[key] = "from_real_env";
-    const file = await write(`${key}=from_file\n`);
-    loadEnvFile(file);
-    expect(process.env[key]).toBe("from_real_env");
-  });
+    // A real env var wins over the file…
+    const c = `C_${Date.now()}`;
+    process.env[c] = "from_real_env";
+    loadEnvFile(await write(`${c}=from_file\n`));
+    expect(process.env[c]).toBe("from_real_env");
 
-  it("in-file duplicate key takes the LAST occurrence", async () => {
-    const key = `D_${Date.now()}`;
-    const file = await write(`${key}=first\n${key}=second\n`);
-    loadEnvFile(file);
-    expect(process.env[key]).toBe("second");
+    // …and within the file, the LAST occurrence wins.
+    const d = `D_${Date.now()}`;
+    loadEnvFile(await write(`${d}=first\n${d}=second\n`));
+    expect(process.env[d]).toBe("second");
   });
 
   // The whole Bun fix rests on loadEnvFile being equivalent to Node's process.loadEnvFile. Prove it

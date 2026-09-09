@@ -468,7 +468,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
   });
 
-  it("writes generated telegram secret to .secrets/.env, leaving only the BotFather token as a manual step", async () => {
+  it("writes a generated channel secret to .secrets/.env (kind-neutral), keeping any value already there", async () => {
     const dir = await readyWorkspace();
     const out = await cliInit(["add", "telegram"], dir);
 
@@ -479,17 +479,26 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("# --- telegram channel ---");
     expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
     expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
-  });
 
-  it("github's generated webhook secret gets the same treatment (kind-neutral), hint kept visible", async () => {
-    const dir = await readyWorkspace();
-    const out = await cliInit(["add", "github"], dir);
+    // Kind-neutral: github's generated webhook secret gets the same treatment, and its hint still
+    // prints because it carries an ACTION (paste the same value into the GitHub webhook UI). `add`
+    // says nothing about git — the .gitignore was the scaffold's job at init, once.
+    const gh = await readyWorkspace();
+    const ghOut = await cliInit(["add", "github"], gh);
+    expect(ghOut).toContain("wrote GITHUB_WEBHOOK_SECRET to .secrets/.env");
+    expect(ghOut).toMatch(/GITHUB_WEBHOOK_SECRET — generated and written to \.secrets\/\.env.*set the same value/);
+    expect(ghOut).not.toMatch(/gitignore|committed/i);
+    expect(await readFile(join(gh, ".secrets", ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=[0-9a-f]{48}$/m);
 
-    expect(out).toContain("wrote GITHUB_WEBHOOK_SECRET to .secrets/.env");
-    // The hint still prints — it carries an ACTION (paste the same value into the GitHub webhook UI),
-    // so a written var is reported, not silently absorbed.
-    expect(out).toMatch(/GITHUB_WEBHOOK_SECRET — generated and written to \.secrets\/\.env.*set the same value/);
-    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=[0-9a-f]{48}$/m);
+    // An existing non-empty value is KEPT, and not reported as written.
+    const kept = await readyWorkspace();
+    await mkdir(join(kept, ".secrets"), { recursive: true });
+    await writeFile(join(kept, ".secrets", ".env"), "TELEGRAM_SECRET_TOKEN=keep-me\n");
+    const keptOut = await cliInit(["add", "telegram"], kept);
+    expect(keptOut).not.toContain("wrote TELEGRAM_SECRET_TOKEN");
+    const keptEnv = await readFile(join(kept, ".secrets", ".env"), "utf8");
+    expect(keptEnv.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1);
+    expect(keptEnv).toContain("TELEGRAM_SECRET_TOKEN=keep-me");
   });
 
   it("a .env copied from .env.example (marker present) gets the secret slotted UNDER the marker", async () => {
@@ -527,19 +536,6 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("OPENAI_API_KEY=sk-x");
   });
 
-  it("keeps an existing non-empty telegram secret in .secrets/.env", async () => {
-    const dir = await readyWorkspace();
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await writeFile(join(dir, ".secrets", ".env"), "TELEGRAM_SECRET_TOKEN=keep-me\n");
-    const out = await cliInit(["add", "telegram"], dir);
-
-    expect(out).not.toContain("wrote TELEGRAM_SECRET_TOKEN");
-    expect(out).not.toMatch(/set TELEGRAM_SECRET_TOKEN=/);
-    const envFile = await readFile(join(dir, ".secrets", ".env"), "utf8");
-    expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1);
-    expect(envFile).toContain("TELEGRAM_SECRET_TOKEN=keep-me");
-  });
-
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {
     const dir = await readyWorkspace();
     await mkdir(join(dir, "tools"), { recursive: true });
@@ -571,17 +567,6 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
       expect(out).toMatch(msg);
       expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // nothing scaffolded
     }
-  });
-
-  it("writes the generated secret without any gitignore ceremony — that is the scaffold's job, once", async () => {
-    // `add` says nothing about git: an agent's .gitignore was written at init and is the author's from
-    // then on. readyWorkspace deliberately has none, and the secret still lands — visibly, in the
-    // reported path — instead of the command refusing or lecturing about ignore rules.
-    const exposed = await readyWorkspace();
-    const out = await cliInit(["add", "github"], exposed);
-    expect(out).not.toMatch(/gitignore|committed/i);
-    expect(await exists(join(exposed, "channels", "github.ts"))).toBe(true);
-    expect(await readFile(join(exposed, ".secrets", ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=/m);
   });
 
   it("scaffolds through an IN-workspace symlinked channels/, but rejects one that ESCAPES (no outside write)", async () => {

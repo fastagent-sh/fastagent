@@ -46,14 +46,17 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     const said: string[] = [];
     const gate = await registerWebhooks({
       baseUrl: "https://x",
-      channels: webhook("github", "slack"), // github never has a registrar; slack's is not wired here
+      // github never has a registrar; slack's and the feishu clouds' are not wired here.
+      channels: webhook("github", "slack", "feishu", "lark"),
       registrars: { telegram: vi.fn(registered) },
       log: (m) => said.push(m),
       retryHint: "re-run",
     });
-    expect(said.filter((m) => m.includes("https://x"))).toHaveLength(2);
+    expect(said.filter((m) => m.includes("https://x"))).toHaveLength(4);
     expect(said.join("\n")).toContain("Settings → Webhooks");
     expect(said.join("\n")).toContain("Event Subscriptions");
+    expect(said.join("\n")).toContain("https://x/feishu");
+    expect(said.join("\n")).toContain("https://x/lark");
     // The env-var name is the part nobody can guess, and `--tunnel` prints this line ALONE — there is
     // no runbook next to it carrying the detail.
     expect(said.join("\n")).toContain("GITHUB_WEBHOOK_SECRET");
@@ -63,14 +66,20 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
 
   it("a failed registrar gates, and one failure does not skip the rest", async () => {
     const feishu = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
+    const slack = vi.fn(registered);
     const gate = await registerWebhooks({
       baseUrl: "https://x",
-      channels: webhook("telegram", "feishu"),
-      registrars: { telegram: async () => "failed", feishu },
+      channels: webhook("telegram", "slack", "feishu", "lark"),
+      registrars: { telegram: async () => "failed", slack, feishu },
       log: () => {},
       retryHint: "re-run with --into-linked",
     });
-    expect(feishu).toHaveBeenCalledWith("https://x", "feishu");
+    // Each kind reaches its own seam, with the kind it belongs to.
+    expect(slack).toHaveBeenCalledWith("https://x");
+    expect(feishu.mock.calls).toEqual([
+      ["https://x", "feishu"],
+      ["https://x", "lark"],
+    ]);
     expect(gate).toContain("telegram");
     expect(gate).toContain("re-run with --into-linked");
   });

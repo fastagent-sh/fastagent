@@ -93,7 +93,7 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(failures).toHaveLength(1);
   });
 
-  it("surfaces a route collision (first file wins; the duplicate is dropped, never silent)", async () => {
+  it("surfaces every route collision (first file wins; the duplicate is dropped, never silent)", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     // a.mjs sorts before b.mjs → a wins "POST /webhook"; b's duplicate is dropped + surfaced.
@@ -110,33 +110,36 @@ describe("loadChannels (filesystem discovery)", () => {
     const res = await routes["POST /webhook"]!(new Request("http://x/webhook"));
     expect(await res.text()).toBe("a");
     expect(collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
-  });
 
-  it("detects a method-overlap collision (any-method vs specific, same path)", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    // a.mjs (sorts first) mounts any-method /webhook; b's POST /webhook would be shadowed by it.
-    await writeFile(join(dir, "channels", "a.mjs"), `export default () => ({ "/webhook": () => new Response("a") });`);
+    // An any-method key SHADOWS a specific one on the same path, so that is a collision too…
+    const overlap = await freshDir();
+    await mkdir(join(overlap, "channels"));
     await writeFile(
-      join(dir, "channels", "b.mjs"),
+      join(overlap, "channels", "a.mjs"),
+      `export default () => ({ "/webhook": () => new Response("a") });`,
+    );
+    await writeFile(
+      join(overlap, "channels", "b.mjs"),
       `export default () => ({ "POST /webhook": () => new Response("b") });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["/webhook"]); // a wins; b dropped, not silently shadowed
-    expect(collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
-  });
+    const shadowed = await loadChannels(overlap, fakeCtx);
+    expect(Object.keys(shadowed.routes)).toEqual(["/webhook"]); // a wins; b dropped, not silently shadowed
+    expect(shadowed.collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
 
-  it("allows two channels on one path with distinct methods (both reachable)", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "get.mjs"), `export default () => ({ "GET /x": () => new Response("g") });`);
+    // …while two DISTINCT methods on one path are both reachable, and no collision at all.
+    const distinct = await freshDir();
+    await mkdir(join(distinct, "channels"));
     await writeFile(
-      join(dir, "channels", "post.mjs"),
+      join(distinct, "channels", "get.mjs"),
+      `export default () => ({ "GET /x": () => new Response("g") });`,
+    );
+    await writeFile(
+      join(distinct, "channels", "post.mjs"),
       `export default () => ({ "POST /x": () => new Response("p") });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes).sort()).toEqual(["GET /x", "POST /x"]);
-    expect(collisions).toEqual([]);
+    const both = await loadChannels(distinct, fakeCtx);
+    expect(Object.keys(both.routes).sort()).toEqual(["GET /x", "POST /x"]);
+    expect(both.collisions).toEqual([]);
   });
 
   it("follows an IN-workspace symlinked channels/, but rejects one that ESCAPES the workspace", async () => {
@@ -233,26 +236,20 @@ describe("loadChannels (filesystem discovery)", () => {
     }
   });
 
-  it("rejects a route whose value is not a handler function", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "bad.mjs"), `export default () => ({ "POST /webhook": 42 });`);
-    const { failures } = await loadChannels(dir, fakeCtx);
-    expect(failures[0]!.message).toMatch(/must map to a handler function/);
-  });
-
-  it("rejects a malformed route key (a handler array's numeric key, or a missing leading slash)", async () => {
-    // Both pass the value-is-a-function + >=1-entry checks but mount at an unreachable path.
-    for (const body of [
-      `export default () => [() => new Response("x")];`, // array → key "0"
-      `export default () => ({ "webhook": () => new Response("x") });`, // missing leading /
-    ]) {
+  it("rejects a malformed route table: a bad key, or a value that is not a handler", async () => {
+    // A key that mounts at an unreachable path, and a value that could never answer. Both pass the
+    // >=1-entry check, so each needs its own refusal — and neither may leave a partial mount.
+    for (const [body, message] of [
+      [`export default () => [() => new Response("x")];`, /is not a valid route key/], // array → key "0"
+      [`export default () => ({ "webhook": () => new Response("x") });`, /is not a valid route key/], // no leading /
+      [`export default () => ({ "POST /webhook": 42 });`, /must map to a handler function/],
+    ] as const) {
       const dir = await freshDir();
       await mkdir(join(dir, "channels"));
       await writeFile(join(dir, "channels", "bad.mjs"), body);
       const { routes, failures } = await loadChannels(dir, fakeCtx);
       expect(routes).toEqual({}); // no partial mount
-      expect(failures[0]!.message).toMatch(/is not a valid route key/);
+      expect(failures[0]!.message).toMatch(message);
     }
   });
 });

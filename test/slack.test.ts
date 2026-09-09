@@ -181,24 +181,8 @@ describe("Slack reaction ack", () => {
     ]);
   });
 
-  it("keeps the turn's reply when the reaction API fails", async () => {
-    let ts = 100;
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const url = String(input);
-      if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
-      if (url.endsWith("/reactions.add")) return Response.json({ ok: false, error: "missing_scope" });
-      if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
-        return Response.json({ ok: true, ts: String(ts++) });
-      }
-      return Response.json({ ok: true });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const { handler } = mount(replyingAgent("still replies").agent);
-    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
-    await settle();
-    const methods = fetchMock.mock.calls.map(([url]) => String(url).split("/").pop());
-    expect(methods).toContain("chat.startStream");
-  });
+  // A failed reactions.add degrading to a no-op session is startSlackReaction's own rule, pinned in
+  // reaction.test.ts — the turn cannot be affected by a session that does nothing.
 });
 
 describe("Slack first-run welcome", () => {

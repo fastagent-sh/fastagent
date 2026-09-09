@@ -47,10 +47,21 @@ describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bu
 });
 
 describe("config: loadConfig validation", () => {
-  it("rejects the retired agentDir key (placement is structural now, never configured)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-agentdir-retired-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
-    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "agentDir"/);
+  // One rule, every shape it has to catch: a typo, a nested typo, a key that was retired, and a key
+  // that never existed. Silently degrading to zero-config is what this refusal exists to prevent.
+  it("refuses an unknown key BY NAME — typo, nested typo, retired, or never-a-config-entry", async () => {
+    const load = async (body: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-config-unknown-"));
+      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      return loadConfig(dir);
+    };
+    await expect(load(`export default { modle: "openai-codex/gpt-5.5" };`)).rejects.toThrow(/unknown key "modle"/);
+    await expect(load(`export default { http: { porrt: 9999 } };`)).rejects.toThrow(/unknown key "http\.porrt"/);
+    // Retired: placement is structural now, and a directory agent always gets the complete tool set.
+    await expect(load(`export default { agentDir: "./agent" };`)).rejects.toThrow(/unknown key "agentDir"/);
+    await expect(load(`export default { codingTools: false };`)).rejects.toThrow(/unknown key "codingTools"/);
+    // Channels are files under channels/, never a config entry.
+    await expect(load(`export default { channels: (agent) => ({}) };`)).rejects.toThrow(/unknown key "channels"/);
   });
 
   it("selfSchedule: accepts a boolean (opt-in to the wake tool), rejects a non-boolean", async () => {
@@ -61,12 +72,6 @@ describe("config: loadConfig validation", () => {
     const bad = await mkdtemp(join(tmpdir(), "fa-selfsched-bad-"));
     await writeFile(join(bad, "fastagent.config.mjs"), `export default { selfSchedule: "yes" };\n`);
     await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
-  });
-
-  it("rejects codingTools because directory agents always get the complete set", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-coding-tools-retired-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { codingTools: false };\n`);
-    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "codingTools"/);
   });
 });
 
@@ -237,12 +242,6 @@ describe("config: loadConfig", () => {
     await expect(load(`export default { thinkingLevel: 3 };`)).rejects.toThrow(/"thinkingLevel" must be one of/);
   });
 
-  it("unknown top-level keys throw instead of silently degrading to zero-config", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { modle: "openai-codex/gpt-5.5" };`);
-    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "modle"/);
-  });
-
   it("validates deploy.secrets / deploy.apt shape (env-name / package-name), rejects unknown deploy keys", async () => {
     // A fresh dir per case: ESM caches a module by URL, so re-writing one file wouldn't re-import.
     const load = async (body: string) => {
@@ -263,12 +262,6 @@ describe("config: loadConfig", () => {
     ); // unknown deploy key
   });
 
-  it("unknown http subkeys throw instead of silently falling back to the default port", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { porrt: 9999 } };`);
-    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "http\.porrt"/);
-  });
-
   it("multiple config files throw instead of silently choosing one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.js"), `export default { model: "openai-codex/gpt-5.5" };`);
@@ -281,23 +274,14 @@ describe("config: loadConfig", () => {
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { tools: [{}] };`);
     await expect(loadConfig(dir)).rejects.toThrow(/tools\[0\].*name.*execute/);
   });
-
-  it("rejects a `channels` key (channels are files under channels/, not a config entry)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { channels: (agent) => ({}) };`);
-    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "channels"/);
-  });
 });
 
 describe("config: resolveModel", () => {
-  it('parses "provider/modelId"', () => {
-    const m = resolveModel(createPiModels(), "openai-codex/gpt-5.5");
+  it('parses "provider/modelId"; a bad format or unknown model throws a clear error', () => {
+    const models = createPiModels();
+    const m = resolveModel(models, "openai-codex/gpt-5.5");
     expect(m.provider).toBe("openai-codex");
     expect(m.id).toBe("gpt-5.5");
-  });
-
-  it("bad format / unknown model throws a clear error", () => {
-    const models = createPiModels();
     expect(() => resolveModel(models, "no-slash")).toThrow(/provider\/modelId/);
     expect(() => resolveModel(models, "nope/nothing")).toThrow(/unknown model/);
   });

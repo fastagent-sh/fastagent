@@ -32,44 +32,47 @@ it("starts the first placeholder synchronously at touch", async () => {
   );
 });
 
-it.each([false, true])("finish joins an issued frame and its outcome (reject=%s)", async (reject) => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const warning = vi.fn();
-  const flush = vi.fn(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  let finished = false;
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const pump = yield* previewPump({ flush, throttleMs: 60_000, onError: warning });
-        pump.touch();
-        yield* Effect.promise(() => entered.promise);
-        pump.touch();
-        const stop = yield* Effect.forkChild(
-          pump.finish.pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                finished = true;
-              }),
+it("finish joins an issued frame and its outcome, accepted or rejected", async () => {
+  for (const reject of [false, true]) {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const warning = vi.fn();
+    const flush = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    let finished = false;
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const pump = yield* previewPump({ flush, throttleMs: 60_000, onError: warning });
+          pump.touch();
+          yield* Effect.promise(() => entered.promise);
+          pump.touch();
+          const stop = yield* Effect.forkChild(
+            pump.finish.pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  finished = true;
+                }),
+              ),
             ),
-          ),
-        );
-        yield* Effect.promise(tick);
-        expect(finished).toBe(false);
-        if (reject) release.reject(new Error("late frame failure"));
-        else release.resolve();
-        yield* Fiber.join(stop);
-        expect(warning).toHaveBeenCalledTimes(reject ? 1 : 0);
-        pump.touch();
-        yield* Effect.promise(tick);
-        expect(flush).toHaveBeenCalledTimes(1);
-      }),
-    ),
-  );
-  expect(finished).toBe(true);
+          );
+          const label = reject ? "rejected" : "accepted";
+          yield* Effect.promise(tick);
+          expect(finished, label).toBe(false);
+          if (reject) release.reject(new Error("late frame failure"));
+          else release.resolve();
+          yield* Fiber.join(stop);
+          expect(warning, label).toHaveBeenCalledTimes(reject ? 1 : 0);
+          pump.touch();
+          yield* Effect.promise(tick);
+          expect(flush, label).toHaveBeenCalledTimes(1);
+        }),
+      ),
+    );
+    expect(finished, reject ? "rejected" : "accepted").toBe(true);
+  }
 });
 
 it("scope close cancels a mutation slot without issuing or leaking the pending frame", async () => {
@@ -181,9 +184,8 @@ it("a failed writer surfaces its original cause, and closed admission fails visi
   );
 });
 
-it.each(["source", "completed"] as const)(
-  "preserves a %s failure without duplicate terminal delivery",
-  async (phase) => {
+it("preserves a source OR completed failure without duplicate terminal delivery", async () => {
+  for (const phase of ["source", "completed"] as const) {
     const primary = new Error("primary failure");
     const secondary = new Error("notice delivery failed");
     const warning = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -209,11 +211,11 @@ it.each(["source", "completed"] as const)(
         ),
       ),
     ).rejects.toBe(primary);
-    expect(settle).toHaveBeenCalledOnce();
-    if (phase === "source") expect(warning).toHaveBeenCalledWith(expect.stringContaining(secondary.message));
+    expect(settle, phase).toHaveBeenCalledOnce();
+    if (phase === "source") expect(warning, phase).toHaveBeenCalledWith(expect.stringContaining(secondary.message));
     warning.mockRestore();
-  },
-);
+  }
+});
 
 it("source failure remains primary when writer cleanup also fails", async () => {
   const primary = new Error("source failed");

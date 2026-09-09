@@ -258,27 +258,30 @@ it("reports a defective wake clock instead of silently losing its polling loop",
   );
 });
 
-it.each([false, true])("an iterator throw stays terminal even after a busy event (busy=%s)", async (busy) => {
-  const stateRoot = await freshRoot();
-  const error = new Error("iterator failed", { cause: { payload: "private-provider-data" } });
-  const logged = vi.spyOn(log, "error").mockImplementation(() => {});
-  const invoke = vi.fn(async function* (): AsyncIterable<AgentEvent> {
-    if (busy) yield { type: "failed", code: "session_busy", retryable: true, details: "busy" };
-    throw error;
-  });
-  writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
-    { id: "w", session: "s", prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
-  ]);
-  const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [], now: () => NOW }));
-  try {
-    s.start();
-    await vi.waitFor(() => expect(readRuns(stateRoot)).toHaveLength(1));
-    expect(readRuns(stateRoot)[0]).toMatchObject({ outcome: "failed", error: "Error: iterator failed" });
-    expect(listWakeups(stateRoot)).toEqual([]);
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(logged.mock.calls.flat().join(" ")).not.toContain("private-provider-data");
-  } finally {
-    s.stop();
+it("an iterator throw stays terminal, with or without a preceding busy event", async () => {
+  for (const busy of [false, true]) {
+    const stateRoot = await freshRoot();
+    const error = new Error("iterator failed", { cause: { payload: "private-provider-data" } });
+    const logged = vi.spyOn(log, "error").mockImplementation(() => {});
+    const invoke = vi.fn(async function* (): AsyncIterable<AgentEvent> {
+      if (busy) yield { type: "failed", code: "session_busy", retryable: true, details: "busy" };
+      throw error;
+    });
+    writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
+      { id: "w", session: "s", prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
+    ]);
+    const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [], now: () => NOW }));
+    try {
+      s.start();
+      const label = `busy=${busy}`;
+      await vi.waitFor(() => expect(readRuns(stateRoot), label).toHaveLength(1));
+      expect(readRuns(stateRoot)[0], label).toMatchObject({ outcome: "failed", error: "Error: iterator failed" });
+      expect(listWakeups(stateRoot), label).toEqual([]);
+      expect(invoke, label).toHaveBeenCalledOnce();
+      expect(logged.mock.calls.flat().join(" "), label).not.toContain("private-provider-data");
+    } finally {
+      s.stop();
+    }
   }
 });
 

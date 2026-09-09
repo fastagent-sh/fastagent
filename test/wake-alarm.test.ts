@@ -71,11 +71,13 @@ function fakeFetch(status = 200) {
 }
 
 describe("schedule/wake-alarm: the URL store", () => {
-  it.each(["{broken", "{}", "null", '{"url":""}'])("rejects a corrupt or malformed URL record: %s", async (content) => {
+  it("rejects every corrupt or malformed URL record", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
-    writeFileSync(scheduleFile(root, "wake-alarm-url"), content);
-    expect(() => readWakeAlarmUrl(root)).toThrow(/wake-alarm URL.*unreadable/);
+    for (const content of ["{broken", "{}", "null", '{"url":""}']) {
+      writeFileSync(scheduleFile(root, "wake-alarm-url"), content);
+      expect(() => readWakeAlarmUrl(root)).toThrow(/wake-alarm URL.*unreadable/);
+    }
   });
 
   it("reports URL read IO failure at the sink boundary without issuing a POST", async () => {

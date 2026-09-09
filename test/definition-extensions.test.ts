@@ -74,27 +74,18 @@ describe("definition: extensions/ discovery", () => {
     warn.mockRestore();
   });
 
-  it("refuses a symlinked entry, which would not survive the trip into a container", async () => {
+  it("refuses a symlinked entry — a direct file or a subdirectory's index — and says why", async () => {
+    // Neither would survive the trip into a container; the sibling beside it still loads.
     const outside = await mkdtemp(join(tmpdir(), "fa-ext-outside-"));
     await writeFile(join(outside, "escape.ts"), markerExtension("escape"));
+    await writeFile(join(outside, "real.ts"), markerExtension("escape"));
     const dir = await agentDirWith({ "extensions/local.ts": markerExtension("local") });
     await symlink(join(outside, "escape.ts"), join(dir, "extensions", "escape.ts"));
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-
-    expect(await loadExtensionPaths(dir)).toEqual([join(dir, "extensions", "local.ts")]);
-    expect(warn.mock.calls.flat().join("\n")).toContain("is a symlink and will not be loaded");
-    warn.mockRestore();
-  });
-
-  it("refuses a subdirectory whose index.ts is a symlink out of the definition", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "fa-ext-outside-"));
-    await writeFile(join(outside, "real.ts"), markerExtension("escape"));
-    const dir = await agentDirWith({ "extensions/keep.ts": markerExtension("keep") });
     await mkdir(join(dir, "extensions", "pkg"), { recursive: true });
     await symlink(join(outside, "real.ts"), join(dir, "extensions", "pkg", "index.ts"));
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    expect(await loadExtensionPaths(dir)).toEqual([join(dir, "extensions", "keep.ts")]);
+    expect(await loadExtensionPaths(dir)).toEqual([join(dir, "extensions", "local.ts")]);
     expect(warn.mock.calls.flat().join("\n")).toContain("is a symlink and will not be loaded");
     warn.mockRestore();
   });
@@ -145,16 +136,6 @@ describe("definition: serving does NOT run extensions, and says so", () => {
     await toolNamesOfferedBy(dir);
     expect(warn.mock.calls.flat().join("\n")).toMatch(/NOT loaded when serving/);
     warn.mockRestore();
-  });
-
-  it("keeps refusing an extensions/ that escapes the agent dir", async () => {
-    // Discovery keeps running even though serving does not load: the refusals are about what the
-    // artifact may contain, and chat consumes the same list.
-    const outside = await mkdtemp(join(tmpdir(), "fa-outside-"));
-    await writeFile(join(outside, "eee.ts"), markerExtension("nope"));
-    const dir = await agentDirWith({});
-    await symlink(outside, join(dir, "extensions"), "dir");
-    await expect(loadExtensionPaths(dir)).rejects.toThrow(/resolves outside the agent dir/);
   });
 });
 

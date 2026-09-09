@@ -147,45 +147,25 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(order("railway variables set")).toBeLessThan(order("railway up")); // vars before first deploy
   });
 
-  it("points the webhook at the MINTED domain (railway domain), not a precomputed URL", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) }));
-    expect(out).toContain("railway domain"); // must generate + read the domain first
-    expect(out).toContain("https://<your-domain>/telegram"); // placeholder, not a deterministic guess
-    expect(out).not.toContain(".fly.dev");
-  });
-
-  it("mints a domain and prints Slack's manual Events API Request URL", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack"]) }));
-    expect(out).toContain("railway domain");
+  // WHICH webhook steps a runbook carries is webhookRunbook's — deploy-channel-ingress owns that. What
+  // is railway's is that they are spelled against a domain minted ONCE, never a precomputed URL.
+  it("mints the domain ONCE and spells every webhook step at that placeholder", () => {
+    const out = runbook(
+      planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram", "slack", "feishu"]) }),
+    );
+    expect(out.match(/railway domain/g)).toHaveLength(1); // minted first, and not once per channel
     expect(out).toContain("SLACK_BOT_TOKEN=<value>");
+    expect(out).toContain("https://<your-domain>/telegram"); // placeholder, not a deterministic guess
     expect(out).toContain("https://<your-domain>/slack");
-  });
-
-  it("mints a domain and prints the Feishu Request URL for a feishu-only agent", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["feishu"]) }));
-    expect(out).toContain("railway domain");
-    expect(out).toContain("POST /feishu");
     expect(out).toContain("https://<your-domain>/feishu");
-    expect(out).not.toContain("https://<your-domain>/lark");
+    expect(out).not.toContain("https://<your-domain>/lark"); // only what is mounted
+    expect(out).not.toContain(".fly.dev");
   });
 
   it("separates one-time setup from release regeneration and upload", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
     expect(out).toMatch(/one-time setup/i);
     expect(out).toMatch(/fastagent deploy railway[\s\S]*railway up/);
-  });
-
-  it("mints the domain ONCE and prints every path when all webhook channels are present", () => {
-    const out = runbook(
-      planRailwayDeploy({
-        ...base,
-        modelAuth: undefined,
-        channels: declaredChannels(["telegram", "github", "feishu", "lark"]),
-      }),
-    );
-    expect(out.match(/railway domain/g)).toHaveLength(1); // not once per channel
-    expect(out).toContain("https://<your-domain>/feishu");
-    expect(out).toContain("https://<your-domain>/lark");
   });
 
   it("states App Sleeping as a manual dashboard step; forbids it for github (no replay)", () => {

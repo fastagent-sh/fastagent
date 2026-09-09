@@ -508,9 +508,8 @@ async function waitForToolStarted(control: SessionControl, session: string) {
 }
 
 describe("session control: run modulation", () => {
-  it.each(["steer", "followUp"] as const)(
-    "observes %s queued during session binding before the model starts",
-    async (method) => {
+  it("observes steer AND followUp queued during session binding, before the model starts", async () => {
+    for (const method of ["steer", "followUp"] as const) {
       const { control, observer, sessions, lease, models, faux } = await fauxControlledAgent([
         fauxAssistantMessage("first answer"),
         fauxAssistantMessage("queued answer"),
@@ -552,24 +551,25 @@ describe("session control: run modulation", () => {
         // Flush prompt preparation so the command is waiting on binding before the factory returns.
         await new Promise<void>((resolve) => setImmediate(resolve));
         binding.resolve();
-        expect(await command).toEqual({ ok: true, runId: before.activeRunId });
-        expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages()).toEqual([
+        expect(await command, method).toEqual({ ok: true, runId: before.activeRunId });
+        expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages(), method).toEqual([
           "queued during binding",
         ]);
         const pending = { steering: method === "steer" ? 1 : 0, followUp: method === "followUp" ? 1 : 0 };
-        expect((await handle.state()).pending).toEqual(pending);
-        expect(seen.filter((event) => event.type === "queue_changed")).toMatchObject([
-          { runId: before.activeRunId, data: pending },
-        ]);
+        expect((await handle.state()).pending, method).toEqual(pending);
+        expect(
+          seen.filter((event) => event.type === "queue_changed"),
+          method,
+        ).toMatchObject([{ runId: before.activeRunId, data: pending }]);
       } finally {
         binding.resolve();
         startPrompt.resolve();
         await invoked;
       }
-      expect((await control.sessions.get("binding").state()).pending).toEqual({ steering: 0, followUp: 0 });
-      expect(seen.at(-1)).toMatchObject({ type: "run_settled", data: { status: "completed" } });
-    },
-  );
+      expect((await control.sessions.get("binding").state()).pending, method).toEqual({ steering: 0, followUp: 0 });
+      expect(seen.at(-1), method).toMatchObject({ type: "run_settled", data: { status: "completed" } });
+    }
+  });
 
   it("steer joins the active run: accepted with its runId, delivered before the next model call, settle window spans it", async () => {
     const { agent, control, gate } = await makeGated([
@@ -675,9 +675,8 @@ describe("session control: run modulation", () => {
     await expect((captured as NonNullable<typeof captured>).abort()).rejects.toThrow(/already settled/);
   });
 
-  it.each(["factory", "subscribe"])(
-    "commands waiting on a failing %s get run_command_failed with the setup error",
-    async (phase) => {
+  it("commands waiting on a failing factory OR subscribe get run_command_failed with the setup error", async () => {
+    for (const phase of ["factory", "subscribe"]) {
       const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
       const { control, observer } = createPiSessionControl({ sessions });
       let releaseFactory: () => void = () => {};
@@ -710,7 +709,7 @@ describe("session control: run modulation", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       releaseFactory();
       for (const result of await pending)
-        expect(result).toEqual({
+        expect(result, phase).toEqual({
           ok: false,
           error: {
             code: RUN_COMMAND_FAILED_CODE,
@@ -719,14 +718,14 @@ describe("session control: run modulation", () => {
           },
         });
       const events = await invoked;
-      expect(events).toEqual([{ type: "failed", details: error.message, retryable: false }]);
-      expect(session.steer).not.toHaveBeenCalled();
-      expect(session.followUp).not.toHaveBeenCalled();
-      expect(session.abort).not.toHaveBeenCalled();
-      expect(session.prompt).not.toHaveBeenCalled();
-      expect(session.dispose).toHaveBeenCalledTimes(phase === "subscribe" ? 1 : 0);
-    },
-  );
+      expect(events, phase).toEqual([{ type: "failed", details: error.message, retryable: false }]);
+      expect(session.steer, phase).not.toHaveBeenCalled();
+      expect(session.followUp, phase).not.toHaveBeenCalled();
+      expect(session.abort, phase).not.toHaveBeenCalled();
+      expect(session.prompt, phase).not.toHaveBeenCalled();
+      expect(session.dispose, phase).toHaveBeenCalledTimes(phase === "subscribe" ? 1 : 0);
+    }
+  });
 
   it("a subscriber far behind is closed instead of buffering without bound", async () => {
     const { control, observer } = createPiSessionControl({
@@ -1016,15 +1015,14 @@ describe("session control: boundary mutations", () => {
       "thinking_level_change",
     );
     expect(await control.sessions.get("sNR").update({ thinkingLevel: "off" })).toEqual({ ok: true });
-  });
 
-  it("a reasoning model still rejects a level it has no mapping for (xhigh/max need one)", async () => {
-    const { control, sessions } = await makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
-    await sessions.openOrCreate("sMax");
-    expect((await control.sessions.get("sMax").state()).availableThinkingLevels).not.toContain("max");
-    const rejected = await control.sessions.get("sMax").update({ thinkingLevel: "max" });
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    // A REASONING model answers the same way about a level it has no mapping for (xhigh/max need one).
+    const reasoning = await makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
+    await reasoning.sessions.openOrCreate("sMax");
+    expect((await reasoning.control.sessions.get("sMax").state()).availableThinkingLevels).not.toContain("max");
+    const unmapped = await reasoning.control.sessions.get("sMax").update({ thinkingLevel: "max" });
+    expect(unmapped.ok).toBe(false);
+    if (!unmapped.ok) expect(unmapped.error.code).toBe(INVALID_COMMAND_CODE);
   });
 
   it("after set_model the SESSION's model is the authority: capabilities stays sessionless, set_thinking does not", async () => {
@@ -1181,13 +1179,12 @@ describe("session control: boundary mutations", () => {
     expect(() => activePath(record)).toThrow(/missing from the journal/);
   });
 
-  it.each([
-    ["openai", "off"],
-    ["openai", "minimal"],
-    ["openai-codex", "off"],
-  ] as const)(
-    "%s Astra state matches execution after navigation restores the %s default",
-    async (provider, thinkingLevel) => {
+  it("Astra state matches execution after navigation restores each provider's default", async () => {
+    for (const [provider, thinkingLevel] of [
+      ["openai", "off"],
+      ["openai", "minimal"],
+      ["openai-codex", "off"],
+    ] as const) {
       const { mkdtemp, rm } = await import("node:fs/promises");
       const { tmpdir } = await import("node:os");
       const { join } = await import("node:path");
@@ -1224,7 +1221,7 @@ describe("session control: boundary mutations", () => {
         const reported = await handle.state();
         const rebound = await sessionFactory("astra");
         try {
-          expect(reported.thinkingLevel).toBe(rebound.thinkingLevel);
+          expect(reported.thinkingLevel, `${provider}/${thinkingLevel}`).toBe(rebound.thinkingLevel);
           expect(reported.availableThinkingLevels).toContain(reported.thinkingLevel);
         } finally {
           rebound.dispose();
@@ -1232,8 +1229,8 @@ describe("session control: boundary mutations", () => {
       } finally {
         await rm(cwd, { recursive: true, force: true });
       }
-    },
-  );
+    }
+  });
 
   it("the resolve still clamps as a BACKSTOP — the case the boundary cannot see", () => {
     const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
@@ -1684,23 +1681,21 @@ describe("session control: boundary mutations", () => {
     if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
 
-  it("resolveSessionSettings: a known recorded model override wins over the default", () => {
-    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
-    const fallback = {
-      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>,
+  it("resolveSessionSettings: a known override wins, last entry wins, an unknown one falls back", () => {
+    const two = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    const base = {
+      model: two.faux.getModel("faux-a") as NonNullable<ReturnType<typeof two.faux.getModel>>,
       thinkingLevel: "medium" as const,
     };
-    const recorded = faux.getModel("faux-b") as NonNullable<ReturnType<typeof faux.getModel>>;
-    const out = resolveSessionSettings(
+    const recorded = two.faux.getModel("faux-b") as NonNullable<ReturnType<typeof two.faux.getModel>>;
+    const overridden = resolveSessionSettings(
       [{ type: "model_change", provider: recorded.provider, modelId: recorded.id }],
-      models,
-      fallback,
+      two.models,
+      base,
     );
-    expect(out.model).toBe(recorded); // the session override rides the next turn
-    expect(out.model).not.toBe(fallback.model);
-  });
+    expect(overridden.model).toBe(recorded); // the session override rides the next turn
+    expect(overridden.model).not.toBe(base.model);
 
-  it("resolveSessionSettings: last entry wins; unknown recorded model falls back with the default", () => {
     const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
     const fallback = { model: faux.getModel(), thinkingLevel: "medium" as const };
     // Unknown model → fallback (deployment registry changed); known thinking level applies.
@@ -1792,9 +1787,8 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sB4").state()).status).toBe("idle");
   });
 
-  it.each(["subscribe", "unsubscribe", "dispose", "abort"])(
-    "compaction survives a %s defect and releases before publishing its outcome",
-    async (defect) => {
+  it("compaction survives a defect at ANY pi seam and releases before publishing its outcome", async () => {
+    for (const defect of ["subscribe", "unsubscribe", "dispose", "abort"]) {
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       try {
         const { faux, models } = makeFaux();
@@ -1841,9 +1835,9 @@ describe("session control: boundary mutations", () => {
         const finished = (async () => {
           for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
         })();
-        expect(await handle.compact()).toEqual({ ok: true });
+        expect(await handle.compact(), defect).toEqual({ ok: true });
         if (defect === "abort")
-          expect(await handle.abort()).toMatchObject({
+          expect(await handle.abort(), defect).toMatchObject({
             ok: false,
             error: {
               code: RUN_COMMAND_FAILED_CODE,
@@ -1851,21 +1845,21 @@ describe("session control: boundary mutations", () => {
               retryable: false,
             },
           });
-        expect((await finished)?.data).toEqual(
+        expect((await finished)?.data, defect).toEqual(
           defect === "subscribe" ? { error: "Error: subscribe defect" } : { summary: "summary" },
         );
-        expect(disposed).toBe(true);
+        expect(disposed, defect).toBe(true);
         const release = lease.tryAcquire("cleanup");
-        expect(release).toBeTypeOf("function");
+        expect(release, defect).toBeTypeOf("function");
         release?.();
-        expect((await handle.state()).status).toBe("idle");
+        expect((await handle.state()).status, defect).toBe("idle");
         if (defect === "unsubscribe" || defect === "dispose")
           expect(warn.mock.calls.flat().join(" ")).toContain(`${defect} defect`);
       } finally {
         warn.mockRestore();
       }
-    },
-  );
+    }
+  });
 
   it("every mutation translates an initial store rejection into a command result", async () => {
     const { faux, models } = makeFaux();
@@ -2020,9 +2014,8 @@ describe("session control: boundary mutations", () => {
     expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
   });
 
-  it.each(["retained", "missing-kept", "split"])(
-    "compaction admits %s history using the coding-agent journal",
-    async (shape) => {
+  it("compaction admits every history shape using the coding-agent journal", async () => {
+    for (const shape of ["retained", "missing-kept", "split"]) {
       const requests: string[] = [];
       const { control, sessions } = await makeBoundary(
         Array.from({ length: 4 }, () => (context) => {
@@ -2053,14 +2046,14 @@ describe("session control: boundary mutations", () => {
         for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
       })();
 
-      expect(await handle.compact()).toEqual({ ok: true });
-      expect((await finished)?.data).toMatchObject({ summary: expect.stringContaining("compact summary") });
-      expect(requests.join(" ")).toContain(shape === "missing-kept" ? "after-boundary" : "carry-over");
-      if (shape !== "split") expect(requests.join(" ")).not.toContain("discarded");
-      expect(await handle.compact()).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
-      expect((await handle.state()).status).toBe("idle");
-    },
-  );
+      expect(await handle.compact(), shape).toEqual({ ok: true });
+      expect((await finished)?.data, shape).toMatchObject({ summary: expect.stringContaining("compact summary") });
+      expect(requests.join(" "), shape).toContain(shape === "missing-kept" ? "after-boundary" : "carry-over");
+      if (shape !== "split") expect(requests.join(" "), shape).not.toContain("discarded");
+      expect(await handle.compact(), shape).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+      expect((await handle.state()).status, shape).toBe("idle");
+    }
+  });
 
   it("an abort that lands the instant compaction starts still stops it", async () => {
     // A client cancels as soon as admission is announced.

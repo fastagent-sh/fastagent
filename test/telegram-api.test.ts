@@ -16,7 +16,7 @@ describe("chunkText (HTML-aware split)", () => {
     expect(chunkText(long)).toEqual(["a".repeat(4000), "b".repeat(200)]);
   });
 
-  it("(html) closes a tag that spans a boundary and reopens it, so every chunk is valid, size-capped HTML", () => {
+  it("(html) closes a spanning tag and reopens it — nested, in order, with its attributes", () => {
     const code = "line\n".repeat(1300); // ~6500 chars → forced split, inside one <pre>
     const chunks = chunkText(`<pre>${code}</pre>`, { html: true });
     expect(chunks.length).toBeGreaterThan(1);
@@ -27,63 +27,51 @@ describe("chunkText (HTML-aware split)", () => {
     }
     // the code survives LOSSLESSLY — strip each chunk's <pre>…</pre> wrapper and rejoin; boundary newlines
     // (content inside <pre>) are preserved, so this reconstructs the original exactly
-    const rejoined = chunks.map((c) => c.slice(5, -6)).join("");
-    expect(rejoined).toBe(code);
-  });
+    expect(chunks.map((c) => c.slice(5, -6)).join("")).toBe(code);
 
-  it("(html) balances NESTED tags across a boundary in the correct order (close innermost, reopen outermost)", () => {
-    const code = "print(x)\n".repeat(700); // > 4096 inside <pre><code> — the real fenced-code-with-language shape
-    const wrapped = `<pre><code class="language-python">${code}</code></pre>`;
-    const chunks = chunkText(wrapped, { html: true });
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const c of chunks) {
+    // Nested: the real fenced-code-with-language shape. Reopen outermost-first, close innermost-first.
+    const python = "print(x)\n".repeat(700); // > 4096 inside <pre><code>
+    const open = '<pre><code class="language-python">';
+    const nested = chunkText(`${open}${python}</code></pre>`, { html: true });
+    expect(nested.length).toBeGreaterThan(1);
+    for (const c of nested) {
       expect(c.length).toBeLessThanOrEqual(4096);
-      expect(c.startsWith('<pre><code class="language-python">')).toBe(true); // reopen outermost-first, attrs kept
-      expect(c.endsWith("</code></pre>")).toBe(true); // close innermost-first
+      expect(c.startsWith(open)).toBe(true); // attrs kept on every reopen
+      expect(c.endsWith("</code></pre>")).toBe(true);
     }
-    const openLen = '<pre><code class="language-python">'.length;
-    const rejoined = chunks.map((c) => c.slice(openLen, -"</code></pre>".length)).join("");
-    expect(rejoined).toBe(code); // lossless
+    expect(nested.map((c) => c.slice(open.length, -"</code></pre>".length)).join("")).toBe(python); // lossless
+
+    // An attribute-bearing inline tag is reopened the same way.
+    const link = chunkText(`<a href="https://example.com/x">${"word ".repeat(1200)}</a>`, { html: true });
+    expect(link.length).toBeGreaterThan(1);
+    for (const c of link) expect(c).toContain('href="https://example.com/x"');
   });
 
-  it("(html) reopens a spanning tag WITH its attributes", () => {
-    const long = `<a href="https://example.com/x">${"word ".repeat(1200)}</a>`; // link text > 4096
-    const chunks = chunkText(long, { html: true });
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const c of chunks) expect(c).toContain('href="https://example.com/x"'); // attr preserved on each chunk
-  });
+  it("(html) never cuts INTO a tag token or an entity, and always makes progress", () => {
+    // A `<b>` straddling the ~4032 cut moves whole to the next chunk.
+    const straddling = chunkText(`${"a".repeat(4030)}<b>${"c".repeat(300)}</b>`, { html: true });
+    expect(straddling[0]).toBe("a".repeat(4030)); // cut BEFORE the `<b`, not mid-token
+    expect(straddling[1]?.startsWith("<b>")).toBe(true);
+    for (const c of straddling) expect(/<[a-z]*$/i.test(c)).toBe(false); // no partial tag at a chunk end
 
-  it("(html) backs the cut up before a tag token that straddles the boundary", () => {
-    const long = `${"a".repeat(4030)}<b>${"c".repeat(300)}</b>`; // the `<b>` straddles the ~4032 cut
-    const chunks = chunkText(long, { html: true });
-    expect(chunks[0]).toBe("a".repeat(4030)); // cut BEFORE the `<b`, not mid-token
-    expect(chunks[1]?.startsWith("<b>")).toBe(true); // the whole tag moved to the next chunk
-    for (const c of chunks) expect(/<[a-z]*$/i.test(c)).toBe(false); // no chunk ends with a partial tag
-  });
-
-  it("(html) does not cut through an HTML entity that straddles the boundary", () => {
-    const long = `<pre>${"a".repeat(4025)}&amp;${"b".repeat(300)}</pre>`; // `&amp;` straddles the ~4032 cut
-    const chunks = chunkText(long, { html: true });
-    expect(chunks.some((c) => c.includes("&amp;"))).toBe(true); // intact somewhere, never `&am` | `p;`
+    // An entity straddling the cut stays intact — never `&am` | `p;`.
+    const entity = chunkText(`<pre>${"a".repeat(4025)}&amp;${"b".repeat(300)}</pre>`, { html: true });
+    expect(entity.some((c) => c.includes("&amp;"))).toBe(true);
     // no chunk ends with a dangling `&…` (ignoring the appended `</…>` closer)
-    expect(chunks.some((c) => /&[a-z#0-9]*$/i.test(c.replace(/<\/[a-z]+>$/i, "")))).toBe(false);
-  });
+    expect(entity.some((c) => /&[a-z#0-9]*$/i.test(c.replace(/<\/[a-z]+>$/i, "")))).toBe(false);
 
-  it("(html) does not back up to a raw `&` inside a tag token (an href with query params)", () => {
-    // The tag ends just before the ~4032 cut; the href's `&` (no `;`) sits within 12 chars of the cut —
-    // an unguarded entity back-up would move the cut INTO the tag (`…?a` | `&b">…` debris).
+    // …but the entity back-up must not reach a raw `&` INSIDE a tag: the tag ends just before the
+    // ~4032 cut and its href's `&` (no `;`) sits within 12 chars of it, so an unguarded back-up would
+    // move the cut into the tag (`…?a` | `&b">…` debris).
     const tag = '<a href="https://x.com/?a&b">';
-    const long = `${"a".repeat(4000)}${tag}link</a>${"c".repeat(300)}`;
-    const chunks = chunkText(long, { html: true });
-    expect(chunks[0]).toContain(tag); // the tag survives intact, `&` and all
-    expect(chunks.every((c) => !/<[^>]*$/.test(c))).toBe(true); // no chunk ends inside a tag token
-  });
+    const href = chunkText(`${"a".repeat(4000)}${tag}link</a>${"c".repeat(300)}`, { html: true });
+    expect(href[0]).toContain(tag); // survives intact, `&` and all
+    expect(href.every((c) => !/<[^>]*$/.test(c))).toBe(true); // no chunk ends inside a tag token
 
-  it("(html) progresses — no empty chunk / infinite loop — on an unclosed `<` at the head", () => {
-    const long = `<${"a".repeat(6000)}`; // a lone `<` then a huge run, never closed
-    const chunks = chunkText(long, { html: true });
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((c) => c.length > 0)).toBe(true); // terminates, no empty chunk
+    // A lone `<` then a huge run, never closed: terminates, no empty chunk.
+    const unclosed = chunkText(`<${"a".repeat(6000)}`, { html: true });
+    expect(unclosed.length).toBeGreaterThan(1);
+    expect(unclosed.every((c) => c.length > 0)).toBe(true);
   });
 
   it("(plain) ignores tags — a `<` is literal content, split at the limit", () => {
@@ -155,7 +143,7 @@ describe("callApi transport pipeline", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(timeoutSpy.mock.results[0]?.value);
   });
 
-  it("retries a 429 after the server's retry_after — and actually WAITS, not hammers", async () => {
+  it("retries a 429 after the server's retry_after, or its own backoff — and actually WAITS", async () => {
     vi.useFakeTimers();
     let calls = 0;
     vi.stubGlobal(
@@ -173,24 +161,22 @@ describe("callApi transport pipeline", () => {
     await vi.advanceTimersByTimeAsync(2100); // past the wait
     expect((await p).username).toBe("bot");
     expect(calls).toBe(2);
-  });
 
-  it("retries a 429 WITHOUT retry_after with a short backoff", async () => {
-    vi.useFakeTimers();
-    let calls = 0;
+    // Without `parameters`, the transport's own (attempt 0 → 1 + 1) s backoff applies instead.
+    calls = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         calls++;
-        if (calls === 1) return new Response(JSON.stringify({ ok: false }), { status: 429 }); // no parameters
+        if (calls === 1) return new Response(JSON.stringify({ ok: false }), { status: 429 });
         return ok();
       }),
     );
-    const p = callApi(API, "BOT", "getMe", {});
-    await vi.advanceTimersByTimeAsync(1000); // before the (attempt 0 → 1 + 1) s backoff elapses…
+    const bare = callApi(API, "BOT", "getMe", {});
+    await vi.advanceTimersByTimeAsync(1000);
     expect(calls).toBe(1);
     await vi.advanceTimersByTimeAsync(1100);
-    await p;
+    await bare;
     expect(calls).toBe(2);
   });
 
