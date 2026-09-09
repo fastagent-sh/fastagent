@@ -26,6 +26,7 @@ import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { isEnvKey } from "./secrets.ts";
+import { envReadWarning, undeclaredEnvReads } from "./secret-scan.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). Host-neutral advisories. */
 interface DeployMessage {
@@ -503,6 +504,15 @@ export async function preflightDeploy(input: {
   // unusable. Carried like any declared secret — listed in the runbook, taken from the local env under
   // --run, gated when absent (never minted: a value minted per deploy rotates under its holder).
   if (config.sessionControl === true) extraSecrets.push(CONTROL_TOKEN_ENV);
+  // A name the agent's own code reads but nothing carries deploys a box that fails on its first real
+  // call, with the error only in the host's logs. Asked against what this deploy WILL carry — the
+  // declared extras, the channel adapters' own secrets, and the model key when it travels as one.
+  const undeclared = await undeclaredEnvReads({
+    agentDir,
+    channels: channels.map((c) => c.name),
+    declared: [...extraSecrets, ...(isEnvKey(modelAuth) ? [modelAuth] : [])],
+  });
+  for (const finding of undeclared) messages.push({ level: "warn", text: envReadWarning(finding) });
   // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
   // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts. Don't suggest
   // --force here: it would overwrite the user's hand-written file.

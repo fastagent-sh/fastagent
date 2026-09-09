@@ -476,6 +476,32 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (pre.ok) expect(pre.modelKeyInDefinition).toBe(true);
   });
 
+  it("warns about env names the agent's code reads that no deploy secret carries", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await mkdir(join(dir, "schedules"), { recursive: true });
+    await writeFile(
+      join(dir, "tools", "x-post.ts"),
+      `const k = process.env.X_API_KEY; const s = process.env["X_API_SECRET"];\n` +
+        `const p = process.env.PORT; const a = process.env.FASTAGENT_AGENT; const g = process.env.GH_TOKEN;\n`,
+    );
+    await writeFile(join(dir, "schedules", "digest.ts"), `export default process.env.SLACK_DIGEST_CHANNEL;\n`);
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(
+      join(dir, "channels", "slack.mjs"),
+      "export default () => ({ '/slack': () => new Response(process.env.SLACK_BOT_TOKEN) });\n",
+    );
+    const pre = await call(dir, { model: "openai/gpt-4o-mini", deploy: { secrets: ["GH_TOKEN"] } });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    const warns = pre.messages.filter((m) => m.level === "warn").map((m) => m.text);
+    expect(warns).toContainEqual(expect.stringContaining("tools/x-post.ts reads X_API_KEY, X_API_SECRET"));
+    expect(warns).toContainEqual(expect.stringContaining("schedules/digest.ts reads SLACK_DIGEST_CHANNEL"));
+    // Declared (GH_TOKEN), runtime-provided (PORT, FASTAGENT_*) and adapter-declared (SLACK_BOT_TOKEN)
+    // names are carried already — warning about them would train the author to ignore the warning.
+    expect(warns.join("\n")).not.toMatch(/GH_TOKEN|PORT|FASTAGENT_AGENT|SLACK_BOT_TOKEN/);
+  });
+
   it("sessionControl carries the plane's token as a deploy secret — a minted one is unreadable off-box", async () => {
     const dir = await workspace();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });

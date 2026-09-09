@@ -151,6 +151,8 @@ src/
 │   │                       # words when nobody can. Consumed by every host AND by the serving path
 │   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
 │   ├── preflight.ts        # host-neutral pre-flight: model-travel gate, channel discovery, auth probe, warnings
+│   ├── secret-scan.ts      # WHICH env names the agent's code reads that no deploy secret carries (static
+│                           # scan of tools/ schedules/ channels/; read by the pre-flight AND `info`)
 │   ├── container.ts        # portable image + ignore files + release manifest (host-neutral)
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and

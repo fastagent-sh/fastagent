@@ -15,6 +15,7 @@ import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
+import { envReadWarning, undeclaredEnvReads } from "../../deploy/secret-scan.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -57,6 +58,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       error: (e as Error).message,
     }));
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
+  // Env names the agent's code reads that a deploy would not carry — reported here (read-only, no
+  // import) so the omission is fixed while the author is still looking at the definition, rather than
+  // by reading a deployed box's logs. See src/deploy/secret-scan.ts for what a static scan can miss.
+  const undeclaredSecrets = await undeclaredEnvReads({
+    agentDir,
+    channels,
+    declared: config.deploy?.secrets ?? [],
+  }).catch(failStartup);
   // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
   // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and
   // loading is what makes the next fire instant printable. Consistent with tools (info imports those too).
@@ -116,6 +125,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
           toolFailures: tools.failures,
+          undeclaredSecrets,
         },
         null,
         2,
@@ -149,6 +159,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("sessions", sessionsDir);
   line("auth", authPath);
   reportToolCollisions(tools.collisions);
+  for (const finding of undeclaredSecrets) log.warn(`[fastagent] ${envReadWarning(finding)}`);
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);

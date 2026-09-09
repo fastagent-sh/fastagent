@@ -80,7 +80,8 @@ Prints the assembled surface without starting a server:
 - channel files,
 - schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),
 - whether self-scheduling (`selfSchedule`) is on,
-- session directory.
+- session directory,
+- env names read by `tools/`, `schedules/` and `channels/` that no deploy secret carries (see [`deploy.secrets`](configuration.md)).
 
 `info` is read-only: it does not create sessions or modify `.state/`/`.secrets/`.
 
