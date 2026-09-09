@@ -110,7 +110,12 @@ export interface SlackChannelOptions {
   botToken: string;
   /** App signing secret used to verify the raw Events API request body. */
   signingSecret: string;
-  /** `native` (default) uses Slack Agent streams for threaded replies. */
+  /**
+   * `native` (default) uses Slack Agent streams for threaded replies; `classic` retains the compatibility renderer
+   * based on one rate-limited edited message. A top-level target necessarily uses `classic`, because Slack streams
+   * require a parent user message — a custom route reaches one either by returning `threadTs: null` or by redirecting
+   * to another channel without naming a thread.
+   */
   rendering?: SlackRendering;
   /** Optional footer for successful Agent replies. */
   aiDisclaimer?: string | false;
@@ -120,6 +125,7 @@ export interface SlackChannelOptions {
   welcome?: string | false;
   /** Lightweight emoji ack on the user's triggering message: 👀 while working, ✅ when done. */
   reactionAck?: false | { processing?: string; completed?: string };
+  /** Custom route policy. Providing it disables the default participant-model thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
   /** Customer-facing failure formatter; full details always remain in operator logs. */
   onError?: (failure: SlackFailure) => string | undefined;

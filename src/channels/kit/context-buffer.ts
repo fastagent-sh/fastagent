@@ -94,6 +94,8 @@ export function createContextBuffer<E>(options: {
       try {
         persist();
       } catch (error) {
+        // Staged on a copy, rolled back on a failed write, then rethrown: the throw becomes the webhook's 500 and the
+        // platform redelivers, so an entry left in memory here would be appended a second time.
         if (previous) buffers.set(placeKey, previous);
         else buffers.delete(placeKey);
         throw error;
