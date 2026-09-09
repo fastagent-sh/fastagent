@@ -167,6 +167,8 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     });
     expect(awsCmds()).toEqual([
       "sts get-caller-identity --output json",
+      // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
+      "bedrock-agentcore-control list-agent-runtimes --max-results 1",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       // The deployment bucket: created if absent, its safety/durability properties re-converged every
       // deploy, then the content-hashed forwarder package uploaded.
@@ -300,6 +302,53 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       fakeCli().cli,
     );
     expect(tooBigSecret).toMatchObject({ ok: false, gate: expect.stringContaining("SOME_BLOB") });
+  });
+
+  it("announces account/principal/region/image and flags an unavailable region BEFORE any side effect", async () => {
+    const logs: string[] = [];
+    const { cli: aws, calls } = fakeCli((a) => {
+      if (a[0] === "sts") {
+        return { stdout: JSON.stringify({ Account: "123456789012", Arn: "arn:aws:iam::123456789012:root" }) };
+      }
+      if (a[0] === "bedrock-agentcore-control") {
+        return { code: 254, stderr: "SSL validation failed for https://bedrock-agentcore-control.ca-west-1…" };
+      }
+      return happyAws(a);
+    });
+    const out = await deployAgentcoreRun(
+      plan({ region: "ca-west-1" }),
+      aws,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      { telegram: async () => "registered" },
+    );
+
+    expect(out).toMatchObject({ ok: true }); // the region probe WARNS, it never refuses the deploy
+    const header = logs[0]!;
+    expect(header).toBe(
+      "account 123456789012 (arn:aws:iam::123456789012:root), region ca-west-1 (from the environment), " +
+        "image fastagent/my-agent:20260728",
+    );
+    expect(logs[1]).toContain("root user");
+    expect(logs[2]).toContain("could not confirm AgentCore is available in ca-west-1");
+    expect(logs[2]).toContain("SSL validation failed"); // the CLI's own reason, not our guess
+    // "Before any side effect" is the whole point: nothing was created by the time it printed.
+    const spoken = calls.findIndex((c) => c.args[0] === "bedrock-agentcore-control");
+    expect(calls.slice(0, spoken).every((c) => c.args[0] === "sts" || c.args[0] === "configure")).toBe(true);
+  });
+
+  it("stays quiet about the principal when the identity carries no Arn", async () => {
+    const logs: string[] = [];
+    await deployAgentcoreRun(plan(), fakeCli(happyAws).cli, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
+      telegram: async () => "registered",
+    });
+    expect(logs[0]).toBe(
+      "account 123456789012, region us-west-2 (from the environment), image fastagent/my-agent:20260728",
+    );
+    expect(logs.join("\n")).not.toContain("root user");
+    expect(logs.join("\n")).not.toContain("could not confirm");
   });
 
   it("a failed cfn deploy gates with the stack-events pointer", async () => {
