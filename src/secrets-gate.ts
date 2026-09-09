@@ -21,7 +21,7 @@
  *     whose call is synchronous route it through the process boundary with `gateSecretsOrExit`
  *     (cli/fail.ts) so the author sees the one line naming the file, never a Node stack.
  */
-import { type DeclaredSecret, describeSecrets, missingSecrets } from "./declared-secrets.ts";
+import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "./declared-secrets.ts";
 import { type ModuleLoadFailure, reportModuleLoadFailures } from "./loader.ts";
 
 export function gateSecrets(input: {
@@ -33,8 +33,7 @@ export function gateSecrets(input: {
   owner?: string;
   env?: NodeJS.ProcessEnv;
 }): void {
-  const scope =
-    input.owner === undefined ? [...input.declared.values()].flat() : (input.declared.get(input.owner) ?? []);
+  const scope = input.owner === undefined ? allSecrets(input.declared) : (input.declared.get(input.owner) ?? []);
   const missing = missingSecrets(scope, input.env);
   if (missing.length === 0) return;
   reportModuleLoadFailures(input.failures);

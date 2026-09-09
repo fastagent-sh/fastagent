@@ -281,7 +281,9 @@ function template(
     const p = cfnParamName(s.name);
     params.push(`  ${p}:`, `    Type: String`);
     if (!s.required) params.push(`    Default: ""`);
-    params.push(`    NoEcho: true`, `    Description: ${s.hint}`);
+    // Quoted: the hint carries an authored `source` (a file name, a config.tools key), and a plain
+    // scalar holding `: ` is invalid YAML — the template would fail to parse in `aws cloudformation deploy`.
+    params.push(`    NoEcho: true`, `    Description: ${yamlSingleQuote(s.hint)}`);
     envLines.push(`        ${s.name}: !Ref ${p}`);
   }
   if (needsForwarder) {

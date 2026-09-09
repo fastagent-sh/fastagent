@@ -111,22 +111,22 @@ export async function loadChannels(
   const longConnections: LoadedLongConnectionChannel[] = [];
   const routeChannels: string[] = [];
   const collisions: ChannelCollision[] = [];
-  // Collected here, GATED at the end of the function: this is a serving path, so an unset declared
-  // value must stop it (a channel built from an empty credential is the failure the declaration
-  // exists to prevent — a webhook that accepts forged updates, a bot that cannot reply), while
-  // `inspectChannels` — the reporting reader — only collects.
+  // Collected from the channels that actually MOUNTED, GATED at the end of the function: this is a
+  // serving path, so an unset declared value must stop it (a channel built from an empty credential
+  // is the failure the declaration exists to prevent — a webhook that accepts forged updates, a bot
+  // that cannot reply), while `inspectChannels` — the reporting reader — only collects. A channel
+  // that failed to mount does not gate: its own failure is the report the author needs.
   const declaredSecrets = new Map<string, DeclaredSecret[]>();
-  const declaring = modules.filter(({ name, label, file, mod }) => {
-    const declaration = readSecretDeclaration(mod.default, label);
+  const declaring = modules.flatMap((entry) => {
+    const declaration = readSecretDeclaration(entry.mod.default, entry.label);
     if (declaration.error !== undefined) {
-      failures.push({ label, file, message: declaration.error });
-      return false;
+      failures.push({ label: entry.label, file: entry.file, message: declaration.error });
+      return [];
     }
-    declaredSecrets.set(name, declaration.secrets);
-    return true;
+    return [{ ...entry, secrets: declaration.secrets }];
   });
 
-  for (const { name, label, file, mod } of declaring) {
+  for (const { name, label, file, mod, secrets } of declaring) {
     try {
       if (longConnectionModule(mod.default)) {
         validateLongConnectionModule(mod.default, label);
@@ -135,6 +135,7 @@ export async function loadChannels(
           name: channel.name,
           connect: (signal) => channel.connect(ctx, signal),
         });
+        declaredSecrets.set(name, secrets);
         continue;
       }
       if (typeof mod.default !== "function") {
@@ -159,6 +160,7 @@ export async function loadChannels(
         routes[route] = handler;
       }
       routeChannels.push(name);
+      declaredSecrets.set(name, secrets);
     } catch (error) {
       failures.push({ label, file, message: (error as Error).message });
     }

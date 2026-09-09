@@ -81,7 +81,7 @@ export function readSecretDeclaration(
 
 /** Every owner's declarations as one list — what a path that runs ALL of them (a serve, a deploy)
  *  asserts or carries. A path that runs ONE reads that owner's entry instead. */
-export function allSecrets(byOwner: ReadonlyMap<string, DeclaredSecret[]>): DeclaredSecret[] {
+export function allSecrets(byOwner: ReadonlyMap<string, readonly DeclaredSecret[]>): DeclaredSecret[] {
   return [...byOwner.values()].flat();
 }
 

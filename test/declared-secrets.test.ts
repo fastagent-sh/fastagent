@@ -264,6 +264,22 @@ describe("declared secrets: only what actually runs", () => {
       warn.mockRestore();
     }
   });
+
+  it("a channel that did not MOUNT does not gate — its own failure is the report the author needs", async () => {
+    // Otherwise the first thing the author reads is "missing required secrets" for a channel that was
+    // never going to serve, and the real cause (an invalid route table) waits behind it.
+    const dir = await agent({});
+    await writeFile(
+      join(dir, "channels", "broken-routes.mjs"),
+      `export default Object.assign(() => ({}), { secrets: ["FA_TEST_UNMOUNTED"] });\n`,
+    );
+    delete process.env.FA_TEST_UNMOUNTED;
+    const loaded = await loadChannels(dir, { agent: {} as never, stateRoot: dir });
+    expect(loaded.failures.map((f) => f.message)).toEqual([
+      'channels/broken-routes.mjs declared no routes — return a non-empty { "METHOD /path": handler } object',
+    ]);
+    expect(Object.keys(loaded.routes)).toEqual([]);
+  });
 });
 
 describe("declared secrets: the serving guarantee", () => {
