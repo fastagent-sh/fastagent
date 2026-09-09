@@ -551,22 +551,23 @@ describe("session control: run modulation", () => {
         // Flush prompt preparation so the command is waiting on binding before the factory returns.
         await new Promise<void>((resolve) => setImmediate(resolve));
         binding.resolve();
-        expect(await command).toEqual({ ok: true, runId: before.activeRunId });
-        expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages()).toEqual([
+        expect(await command, method).toEqual({ ok: true, runId: before.activeRunId });
+        expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages(), method).toEqual([
           "queued during binding",
         ]);
         const pending = { steering: method === "steer" ? 1 : 0, followUp: method === "followUp" ? 1 : 0 };
-        expect((await handle.state()).pending).toEqual(pending);
-        expect(seen.filter((event) => event.type === "queue_changed")).toMatchObject([
-          { runId: before.activeRunId, data: pending },
-        ]);
+        expect((await handle.state()).pending, method).toEqual(pending);
+        expect(
+          seen.filter((event) => event.type === "queue_changed"),
+          method,
+        ).toMatchObject([{ runId: before.activeRunId, data: pending }]);
       } finally {
         binding.resolve();
         startPrompt.resolve();
         await invoked;
       }
-      expect((await control.sessions.get("binding").state()).pending).toEqual({ steering: 0, followUp: 0 });
-      expect(seen.at(-1)).toMatchObject({ type: "run_settled", data: { status: "completed" } });
+      expect((await control.sessions.get("binding").state()).pending, method).toEqual({ steering: 0, followUp: 0 });
+      expect(seen.at(-1), method).toMatchObject({ type: "run_settled", data: { status: "completed" } });
     }
   });
 
@@ -708,7 +709,7 @@ describe("session control: run modulation", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       releaseFactory();
       for (const result of await pending)
-        expect(result).toEqual({
+        expect(result, phase).toEqual({
           ok: false,
           error: {
             code: RUN_COMMAND_FAILED_CODE,
@@ -717,12 +718,12 @@ describe("session control: run modulation", () => {
           },
         });
       const events = await invoked;
-      expect(events).toEqual([{ type: "failed", details: error.message, retryable: false }]);
-      expect(session.steer).not.toHaveBeenCalled();
-      expect(session.followUp).not.toHaveBeenCalled();
-      expect(session.abort).not.toHaveBeenCalled();
-      expect(session.prompt).not.toHaveBeenCalled();
-      expect(session.dispose).toHaveBeenCalledTimes(phase === "subscribe" ? 1 : 0);
+      expect(events, phase).toEqual([{ type: "failed", details: error.message, retryable: false }]);
+      expect(session.steer, phase).not.toHaveBeenCalled();
+      expect(session.followUp, phase).not.toHaveBeenCalled();
+      expect(session.abort, phase).not.toHaveBeenCalled();
+      expect(session.prompt, phase).not.toHaveBeenCalled();
+      expect(session.dispose, phase).toHaveBeenCalledTimes(phase === "subscribe" ? 1 : 0);
     }
   });
 
@@ -1834,9 +1835,9 @@ describe("session control: boundary mutations", () => {
         const finished = (async () => {
           for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
         })();
-        expect(await handle.compact()).toEqual({ ok: true });
+        expect(await handle.compact(), defect).toEqual({ ok: true });
         if (defect === "abort")
-          expect(await handle.abort()).toMatchObject({
+          expect(await handle.abort(), defect).toMatchObject({
             ok: false,
             error: {
               code: RUN_COMMAND_FAILED_CODE,
@@ -1844,14 +1845,14 @@ describe("session control: boundary mutations", () => {
               retryable: false,
             },
           });
-        expect((await finished)?.data).toEqual(
+        expect((await finished)?.data, defect).toEqual(
           defect === "subscribe" ? { error: "Error: subscribe defect" } : { summary: "summary" },
         );
-        expect(disposed).toBe(true);
+        expect(disposed, defect).toBe(true);
         const release = lease.tryAcquire("cleanup");
-        expect(release).toBeTypeOf("function");
+        expect(release, defect).toBeTypeOf("function");
         release?.();
-        expect((await handle.state()).status).toBe("idle");
+        expect((await handle.state()).status, defect).toBe("idle");
         if (defect === "unsubscribe" || defect === "dispose")
           expect(warn.mock.calls.flat().join(" ")).toContain(`${defect} defect`);
       } finally {
@@ -2045,12 +2046,12 @@ describe("session control: boundary mutations", () => {
         for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
       })();
 
-      expect(await handle.compact()).toEqual({ ok: true });
-      expect((await finished)?.data).toMatchObject({ summary: expect.stringContaining("compact summary") });
-      expect(requests.join(" ")).toContain(shape === "missing-kept" ? "after-boundary" : "carry-over");
-      if (shape !== "split") expect(requests.join(" ")).not.toContain("discarded");
-      expect(await handle.compact()).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
-      expect((await handle.state()).status).toBe("idle");
+      expect(await handle.compact(), shape).toEqual({ ok: true });
+      expect((await finished)?.data, shape).toMatchObject({ summary: expect.stringContaining("compact summary") });
+      expect(requests.join(" "), shape).toContain(shape === "missing-kept" ? "after-boundary" : "carry-over");
+      if (shape !== "split") expect(requests.join(" "), shape).not.toContain("discarded");
+      expect(await handle.compact(), shape).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+      expect((await handle.state()).status, shape).toBe("idle");
     }
   });
 

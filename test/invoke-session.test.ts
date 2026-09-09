@@ -181,13 +181,16 @@ describe("AgentSession L0: the observation plane", () => {
         observer: (_id, event) => seen.push(event),
       });
       const events = await drain(agent.invoke({ session: "retry" }, { text: "hi" }));
-      expect(seen.find((event) => event.type === "retry_scheduled")).toEqual({
+      expect(
+        seen.find((event) => event.type === "retry_scheduled"),
+        type,
+      ).toEqual({
         type: "retry_scheduled",
         timestamp: expect.any(Number),
         runId: seen[0]?.runId,
         data: { operation, attempt: 2, maxAttempts: 3, delayMs: 125, error: "temporarily unavailable" },
       });
-      expect(events).toEqual([
+      expect(events, type).toEqual([
         { type: "retrying", attempt: 2, maxAttempts: 3, delayMs: 125, reason: "temporarily unavailable" },
         { type: "completed" },
       ]);
@@ -238,9 +241,12 @@ describe("AgentSession L0: the observation plane", () => {
       });
       try {
         const events = await drain(agent.invoke({ session: "recovery" }, { text: "hi" }));
-        expect(events.at(-1)).toEqual({ type: "completed" });
-        expect(seen.some((e) => e.type === "compaction_started" || e.type === "compaction_finished")).toBe(false);
-        expect(warn.mock.calls).toHaveLength(2);
+        expect(events.at(-1), reason).toEqual({ type: "completed" });
+        expect(
+          seen.some((e) => e.type === "compaction_started" || e.type === "compaction_finished"),
+          reason,
+        ).toBe(false);
+        expect(warn.mock.calls, reason).toHaveLength(2);
         expect(warn).toHaveBeenCalledWith(expect.stringMatching(`automatic compaction ${reason} .*: failed$`));
         expect(warn).toHaveBeenCalledWith(
           expect.stringContaining("provider diagnostic anthropic_input_transformations"),
@@ -461,8 +467,8 @@ describe("invocation execution scope", () => {
         await started.promise;
         expect(() => emit(event)).not.toThrow();
       }
-      expect(await result).toMatchObject([{ type: "failed", details: "bad callback", retryable: false }]);
-      expect(session.prompt).toHaveBeenCalledTimes(phase === "prompt" ? 1 : 0);
+      expect(await result, phase).toMatchObject([{ type: "failed", details: "bad callback", retryable: false }]);
+      expect(session.prompt, phase).toHaveBeenCalledTimes(phase === "prompt" ? 1 : 0);
     }
   });
 

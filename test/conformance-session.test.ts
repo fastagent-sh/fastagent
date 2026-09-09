@@ -370,18 +370,18 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and au
     try {
       s.start();
       await entered.promise;
-      expect(s.stop()).toBeUndefined();
-      expect(abort).not.toHaveBeenCalled();
-      expect(lease.tryAcquire(sessionId)).toBeNull();
-      expect(readRuns(stateRoot)).toEqual([]);
+      expect(s.stop(), kind).toBeUndefined();
+      expect(abort, kind).not.toHaveBeenCalled();
+      expect(lease.tryAcquire(sessionId), kind).toBeNull();
+      expect(readRuns(stateRoot), kind).toEqual([]);
       finish.resolve();
-      await vi.waitFor(() => expect(readRuns(stateRoot)).toHaveLength(1));
-      expect(readRuns(stateRoot)[0]).toMatchObject({ outcome: "completed", reply: "done" });
-      expect(abort).not.toHaveBeenCalled();
-      expect(bound).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(readRuns(stateRoot), kind).toHaveLength(1));
+      expect(readRuns(stateRoot)[0], kind).toMatchObject({ outcome: "completed", reply: "done" });
+      expect(abort, kind).not.toHaveBeenCalled();
+      expect(bound, kind).toHaveBeenCalledOnce();
       if (kind === "wake") expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);
       const release = lease.tryAcquire(sessionId);
-      expect(release).toBeTypeOf("function");
+      expect(release, kind).toBeTypeOf("function");
       release?.();
     } finally {
       s.stop();

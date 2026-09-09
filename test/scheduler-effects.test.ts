@@ -273,11 +273,12 @@ it("an iterator throw stays terminal, with or without a preceding busy event", a
     const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [], now: () => NOW }));
     try {
       s.start();
-      await vi.waitFor(() => expect(readRuns(stateRoot)).toHaveLength(1));
-      expect(readRuns(stateRoot)[0]).toMatchObject({ outcome: "failed", error: "Error: iterator failed" });
-      expect(listWakeups(stateRoot)).toEqual([]);
-      expect(invoke).toHaveBeenCalledOnce();
-      expect(logged.mock.calls.flat().join(" ")).not.toContain("private-provider-data");
+      const label = `busy=${busy}`;
+      await vi.waitFor(() => expect(readRuns(stateRoot), label).toHaveLength(1));
+      expect(readRuns(stateRoot)[0], label).toMatchObject({ outcome: "failed", error: "Error: iterator failed" });
+      expect(listWakeups(stateRoot), label).toEqual([]);
+      expect(invoke, label).toHaveBeenCalledOnce();
+      expect(logged.mock.calls.flat().join(" "), label).not.toContain("private-provider-data");
     } finally {
       s.stop();
     }

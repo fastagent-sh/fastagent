@@ -40,9 +40,10 @@ describe("deferred AgentCore initialization", () => {
     } finally {
       exit.mockRestore();
     }
-    // This is the one test here that pays a full cold engine assembly, so it needs more than the
-    // suite's 30s ceiling on a contended machine (vitest.config.ts states the reasoning).
-  }, 120_000);
+    // The one test here that pays a full cold engine assembly: ~16s idle (measured), which the suite's
+    // 30s ceiling absorbs until the machine is contended. 60s covers that without letting a genuine
+    // hang burn two minutes of CI before it reports (vitest.config.ts states the same reasoning).
+  }, 60_000);
 
   it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
     vi.stubEnv("FASTAGENT_INGRESS_SECRET", "trusted-probe");

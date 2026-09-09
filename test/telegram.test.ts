@@ -1852,19 +1852,19 @@ describe("telegram /stop command", () => {
         control,
         stateDir,
       });
-      expect((await ch(tgRequest(groupStop(text, extra)))).status).toBe(200);
+      expect((await ch(tgRequest(groupStop(text, extra)))).status, text).toBe(200);
       await flush();
-      expect(aborted).toEqual(["-100123"]);
-      expect(invoked).toEqual([]);
-      expect(existsSync(join(stateDir, "buffers.json"))).toBe(false);
-      expect(stopFeedback(fetchMock)).toEqual(["\u23f9 Stopped."]);
+      expect(aborted, text).toEqual(["-100123"]);
+      expect(invoked, text).toEqual([]);
+      expect(existsSync(join(stateDir, "buffers.json")), text).toBe(false);
+      expect(stopFeedback(fetchMock), text).toEqual(["\u23f9 Stopped."]);
     }
   });
 
   // An addressed stop reports whatever happened — the asker named this bot and must not be left
   // guessing while the run continues.
   it("answers an addressed group stop with whatever happened", async () => {
-    for (const [_case, result, expected] of [
+    for (const [label, result, expected] of [
       ["nothing is running", { code: NO_ACTIVE_RUN_CODE } as const, "Nothing is running."],
       [
         "the hub rejects the abort",
@@ -1878,7 +1878,7 @@ describe("telegram /stop command", () => {
       const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", control });
       await ch(tgRequest(groupStop("/stop@mybot")));
       await flush();
-      expect(stopFeedback(fetchMock)).toEqual([expected]);
+      expect(stopFeedback(fetchMock), label).toEqual([expected]);
     }
   });
 
@@ -1886,7 +1886,7 @@ describe("telegram /stop command", () => {
   // reply to this bot alongside it does not transfer the command — the reply is context, the mention
   // is the address.
   it("never acts on `@otherbot /stop`, alone or while replying to this bot", async () => {
-    for (const [_case, extra, turns] of [
+    for (const [label, extra, turns] of [
       ["alone", {}, 0],
       [
         "while replying to this bot",
@@ -1902,10 +1902,10 @@ describe("telegram /stop command", () => {
       const mention = { entities: [{ type: "mention", offset: 0, length: 9 }] };
       await ch(tgRequest(groupStop("@otherbot /stop", { ...mention, ...extra })));
       await flush();
-      expect(aborted).toEqual([]);
-      expect(stopFeedback(fetchMock)).not.toContain("⏹ Stopped.");
+      expect(aborted, label).toEqual([]);
+      expect(stopFeedback(fetchMock), label).not.toContain("⏹ Stopped.");
       // The reply still SUMMONS this bot — it just answers as an ordinary turn instead of stopping.
-      expect(invoked).toHaveLength(turns);
+      expect(invoked, label).toHaveLength(turns);
     }
   });
 
@@ -1928,10 +1928,10 @@ describe("telegram /stop command", () => {
       });
       await ch(tgRequest(groupStop(text)));
       await flush();
-      expect(aborted).toEqual([]);
-      expect(invoked).toEqual([]);
-      expect(stopFeedback(fetchMock)).toEqual([]);
-      expect(readFileSync(join(stateDir, "buffers.json"), "utf8")).toContain(text);
+      expect(aborted, text).toEqual([]);
+      expect(invoked, text).toEqual([]);
+      expect(stopFeedback(fetchMock), text).toEqual([]);
+      expect(readFileSync(join(stateDir, "buffers.json"), "utf8"), text).toContain(text);
     }
   });
 

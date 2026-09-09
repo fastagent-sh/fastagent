@@ -45,15 +45,15 @@ it("portJoin joins interrupted work before cleanup, however it settles", async (
       await entered.promise;
       abort.abort();
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(cleaned).toBe(false);
+      expect(cleaned, settle).toBe(false);
     } finally {
       if (settle === "resolve") pending.resolve();
       else pending.reject(new Error("late port failure"));
       await done;
     }
-    expect(cleaned).toBe(true);
+    expect(cleaned, settle).toBe(true);
     const exit = await done;
-    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause), settle).toBe(true);
   }
 });
 
@@ -66,7 +66,7 @@ it("preserves the original failure whether the port throws or rejects", async ()
         return Promise.reject(error);
       }),
     );
-    expect(Exit.isFailure(exit) && portError(exit.cause)).toBe(error);
+    expect(Exit.isFailure(exit) && portError(exit.cause), mode).toBe(error);
   }
 });
 
@@ -106,10 +106,10 @@ it("portAbort joins outstanding work even when its hook fails, however it settle
       abort.abort();
       await abortCalled.promise;
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(released).toBe(false);
+      expect(released, settle).toBe(false);
       // The label names WHICH abort could not be delivered — one tag, but distinguishable diagnostics.
-      expect(warn.mock.calls.flat().join(" ")).toContain("prompt abort failed during cleanup");
-      expect(warn.mock.calls.flat().join(" ")).toContain("abort hook failed");
+      expect(warn.mock.calls.flat().join(" "), settle).toContain("prompt abort failed during cleanup");
+      expect(warn.mock.calls.flat().join(" "), settle).toContain("abort hook failed");
     } finally {
       if (settle === "resolve") pending.resolve();
       else pending.reject(new Error("port failed after cancellation"));
@@ -117,8 +117,8 @@ it("portAbort joins outstanding work even when its hook fails, however it settle
       warn.mockRestore();
     }
     const exit = await done;
-    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    expect(released).toBe(true);
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause), settle).toBe(true);
+    expect(released, settle).toBe(true);
   }
 });
 
@@ -151,8 +151,9 @@ it("portRequest preserves a failure and closes its signal, thrown synchronously 
       if (synchronous) throw error;
       return Promise.reject(error);
     }, 10_000);
-    await expect(Effect.runPromise(work.pipe(Effect.mapError((e) => e.cause)))).rejects.toBe(error);
-    expect(signal?.aborted).toBe(true);
+    const label = synchronous ? "synchronous" : "rejected";
+    await expect(Effect.runPromise(work.pipe(Effect.mapError((e) => e.cause))), label).rejects.toBe(error);
+    expect(signal?.aborted, label).toBe(true);
   }
 });
 

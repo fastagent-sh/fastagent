@@ -160,20 +160,20 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
           }),
         ]);
       try {
-        expect(await message()).toBe("running");
+        expect(await message(), phase).toBe("running");
         if (phase === "committed") {
           const committed = message();
           child.send("complete");
-          expect(await committed).toBe("committed");
+          expect(await committed, phase).toBe("committed");
         }
       } finally {
         child.kill("SIGTERM");
         await exited;
       }
-      expect(openStore().recover()).toEqual(
+      expect(openStore().recover(), phase).toEqual(
         phase === "running" ? [{ id: "a", session: "s", text: "", attempts: 1 }] : [],
       );
-      expect(openBuffer().peek("place:s").consumed).toEqual(phase === "running" ? ["earlier"] : ["later"]);
+      expect(openBuffer().peek("place:s").consumed, phase).toEqual(phase === "running" ? ["earlier"] : ["later"]);
     }
   });
 
@@ -267,18 +267,19 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       queue.accept({ id: "a", session: "s", text: "" });
       await entered.promise;
       buffer.push("place:s", "later");
+      const label = `completed=${completed}`;
       const interrupted = Effect.runPromise(Fiber.interrupt(running));
       try {
         await new Promise<void>((resolve) => setImmediate(resolve));
-        expect(activeWork()).toBe(base + 1);
+        expect(activeWork(), label).toBe(base + 1);
       } finally {
         finish.resolve();
         await interrupted;
         await queue.idle();
       }
-      expect(activeWork()).toBe(base);
-      expect(openStore().recover()).toEqual(completed ? [] : [{ id: "a", session: "s", text: "", attempts: 1 }]);
-      expect(openBuffer().peek("place:s").consumed).toEqual(completed ? ["later"] : ["earlier", "later"]);
+      expect(activeWork(), label).toBe(base);
+      expect(openStore().recover(), label).toEqual(completed ? [] : [{ id: "a", session: "s", text: "", attempts: 1 }]);
+      expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : ["earlier", "later"]);
       if (!completed) {
         const replay = runner(openStore(), [], { buffer: openBuffer() });
         expect(replay.recover()).toHaveLength(1);

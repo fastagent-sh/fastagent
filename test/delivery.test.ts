@@ -58,19 +58,20 @@ it("finish joins an issued frame and its outcome, accepted or rejected", async (
               ),
             ),
           );
+          const label = reject ? "rejected" : "accepted";
           yield* Effect.promise(tick);
-          expect(finished).toBe(false);
+          expect(finished, label).toBe(false);
           if (reject) release.reject(new Error("late frame failure"));
           else release.resolve();
           yield* Fiber.join(stop);
-          expect(warning).toHaveBeenCalledTimes(reject ? 1 : 0);
+          expect(warning, label).toHaveBeenCalledTimes(reject ? 1 : 0);
           pump.touch();
           yield* Effect.promise(tick);
-          expect(flush).toHaveBeenCalledTimes(1);
+          expect(flush, label).toHaveBeenCalledTimes(1);
         }),
       ),
     );
-    expect(finished).toBe(true);
+    expect(finished, reject ? "rejected" : "accepted").toBe(true);
   }
 });
 
@@ -210,8 +211,8 @@ it("preserves a source OR completed failure without duplicate terminal delivery"
         ),
       ),
     ).rejects.toBe(primary);
-    expect(settle).toHaveBeenCalledOnce();
-    if (phase === "source") expect(warning).toHaveBeenCalledWith(expect.stringContaining(secondary.message));
+    expect(settle, phase).toHaveBeenCalledOnce();
+    if (phase === "source") expect(warning, phase).toHaveBeenCalledWith(expect.stringContaining(secondary.message));
     warning.mockRestore();
   }
 });

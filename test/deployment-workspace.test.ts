@@ -144,8 +144,8 @@ describe("deployed workspace lifecycle", () => {
       if (point !== "before-switch") await rename(join(base, "fastagent"), join(meta, "previous"));
       if (point === "after-new-move") await rename(join(meta, "staged"), join(base, "fastagent"));
       await applyDeploymentRelease(source, root, release("two"));
-      expect(await readFile(join(base, "fastagent/persona.md"), "utf8")).toBe("complete new definition");
-      expect(await readdir(meta)).toEqual(["applied.json"]);
+      expect(await readFile(join(base, "fastagent/persona.md"), "utf8"), point).toBe("complete new definition");
+      expect(await readdir(meta), point).toEqual(["applied.json"]);
     }
   });
 

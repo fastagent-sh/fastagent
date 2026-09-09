@@ -256,13 +256,14 @@ describe("createAgentService", () => {
         expect(channel.stopped).toBe(true);
       });
       const results = await Promise.allSettled([first, second]);
+      const label = reject ? "rejected" : "resolved";
       if (reject) {
         const [a, b] = results as PromiseRejectedResult[];
-        expect(a?.status).toBe("rejected");
-        expect(b?.reason).toBe(a?.reason);
-        await expect(service.close()).rejects.toBe(a?.reason);
+        expect(a?.status, label).toBe("rejected");
+        expect(b?.reason, label).toBe(a?.reason);
+        await expect(service.close(), label).rejects.toBe(a?.reason);
       } else {
-        expect(results).toEqual([
+        expect(results, label).toEqual([
           { status: "fulfilled", value: undefined },
           { status: "fulfilled", value: undefined },
         ]);
@@ -414,8 +415,8 @@ describe("createAgentService", () => {
       });
       const logged = vi.spyOn(log, "error").mockImplementation(() => {});
       try {
-        await expect(createAgentService(dir)).rejects.toThrow("b-invalid connect(signal) must return");
-        expect(logged).toHaveBeenCalledWith(expect.stringContaining("rollback reached first"));
+        await expect(createAgentService(dir), field).rejects.toThrow("b-invalid connect(signal) must return");
+        expect(logged, field).toHaveBeenCalledWith(expect.stringContaining("rollback reached first"));
       } finally {
         logged.mockRestore();
       }
@@ -509,7 +510,8 @@ describe("createAgentService", () => {
     const service = await createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 });
     await service.ready;
     const error = await service.close().catch((e: Error) => e);
-    expect(String(error)).toMatch(/deaf/);
+    // The wording carries the deadline that fired, so `closeTimeoutMs` is pinned, not just the name.
+    expect(String(error)).toMatch(/did not stop within 200ms: deaf/);
     expect(String(error)).not.toMatch(/quick/);
   });
 

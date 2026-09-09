@@ -376,7 +376,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
         tools: read ? createReadOnlyTools(fixtureDir) : [],
       });
       await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-      expect(seen).toContain("P");
+      expect(seen, `read: ${read}`).toContain("P");
       expect(seen?.match(/<available_skills>/g) ?? [], `read: ${read}`).toHaveLength(read ? 1 : 0);
       expect(seen?.match(/Current working directory:/g)).toHaveLength(1);
     }
@@ -396,8 +396,9 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       await collect(agent.invoke({ session: "s" }, { text: "hi" }));
       // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
       // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
-      expect(seen).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
-      expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+      const label = String(instructions);
+      expect(seen, label).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
+      expect(seen, label).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
     }
   });
 });
