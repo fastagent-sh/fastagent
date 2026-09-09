@@ -7,6 +7,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
+// This test pays a project compile plus TWO cold engine starts in child processes: ~3s on an idle
+// machine, but a full `npm test` run puts a fork on every core and has been measured past the old 30s
+// ceiling. The budget is raised, not the parallelism (vitest.config.ts states why). The child ceiling
+// stays the tighter of the two so a hung child is reported as itself, not as an opaque test timeout.
+const CHILD_TIMEOUT_MS = 45_000;
+
 it("retries interrupted installs, opens the workspace's runtime and preserves tool context and rotated credentials", async () => {
   const repo = dirname(dirname(fileURLToPath(import.meta.url)));
   const dir = await mkdtemp(join(tmpdir(), "fa-deployment-start-"));
@@ -140,12 +146,12 @@ try {
 `;
     await exec(process.execPath, ["--experimental-test-module-mocks", "--input-type=module", "-e", script, "fail"], {
       env,
-      timeout: 20_000,
+      timeout: CHILD_TIMEOUT_MS,
     });
     const out = await exec(
       process.execPath,
       ["--experimental-test-module-mocks", "--input-type=module", "-e", script],
-      { env, timeout: 20_000 },
+      { env, timeout: CHILD_TIMEOUT_MS },
     );
     const events = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as { type: string; content?: unknown }[];
     expect(events.at(-1)).toEqual({ type: "completed" });
@@ -160,4 +166,4 @@ try {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     await rm(dir, { recursive: true, force: true });
   }
-}, 30_000);
+}, 120_000);

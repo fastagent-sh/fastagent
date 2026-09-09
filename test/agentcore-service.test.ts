@@ -40,10 +40,12 @@ describe("deferred AgentCore initialization", () => {
     } finally {
       exit.mockRestore();
     }
-    // The one test here that pays a full cold engine assembly: ~16s idle (measured), which the suite's
-    // 30s ceiling absorbs until the machine is contended. 60s covers that without letting a genuine
-    // hang burn two minutes of CI before it reports (vitest.config.ts states the same reasoning).
-  }, 60_000);
+    // The one test here that pays a full cold engine assembly: ~21s idle (measured), which the suite's
+    // 30s ceiling never absorbed and 60s stopped absorbing too — a full `npm test` run puts a fork on
+    // every core, and this stage is import-bound, so contention scales it by more than 3x. Raise the
+    // budget rather than cap parallelism (vitest.config.ts states why). It still bounds a genuine hang:
+    // the file's other ten tests answer in ~10ms or less, so only THIS one can spend it.
+  }, 120_000);
 
   it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
     vi.stubEnv("FASTAGENT_INGRESS_SECRET", "trusted-probe");
