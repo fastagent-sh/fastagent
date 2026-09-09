@@ -387,7 +387,10 @@ function createFeishuRuntimeFactory(
       },
       notifyDropped,
       execute: (rec, discussion, onCompleted) => {
-        // PEEK and never commit: the room still owes this discussion to its OWN memory (§8). ponytail.
+        // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
+        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold the room's
+        // snapshot before either commits it. That fan-out loses nothing; claiming by buffer key would instead couple
+        // otherwise-independent root sessions and require failure rollback.
         const room = rec.roomBufferKey !== undefined ? buffer.peek(rec.roomBufferKey) : undefined;
         const roomBlock = room?.text
           ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`

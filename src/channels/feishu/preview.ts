@@ -1,4 +1,14 @@
-/** Canonical Feishu live-preview rendering (also reused by Lark compatibility). */
+/**
+ * Canonical Feishu live-preview rendering (also reused by Lark compatibility). The preview is ONE streaming CARD of
+ * two elements — the volatile `process` block and the append-only `answer` (card.ts explains why the split is the
+ * prefix-stability fix) — streamed as full-text snapshots per element under a strictly increasing `sequence`, then
+ * settled in place with the final answer alone. A queued turn mounts the same card early with its queue status and
+ * execution takes the entity over, so there is no second reply. Streaming rides the cardkit quota, not the 5 QPS
+ * per-chat message quota or the 20-edit cap on text messages — which is why the preview is a card.
+ *
+ * Degrade tiers (fail visibly, per turn): a card that cannot be created or mounted falls back to a TEXT placeholder
+ * with NO live updates; streaming closed mid-turn freezes the preview. The final write is authoritative either way.
+ */
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AgentEvent } from "../../agent.ts";
 import * as Effect from "effect/Effect";
@@ -176,7 +186,7 @@ export async function settleFeishuPreview(
 }
 
 /**
- * Consume one turn's event stream into a Feishu-compatible chat, live (see the module header for the preview model).
+ * Consume one turn's event stream into a Feishu-compatible chat, live.
  */
 export function feishuReply(
   events: Stream.Stream<AgentEvent, PortFailure>,

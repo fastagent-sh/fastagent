@@ -41,20 +41,25 @@ async function promptConfigTokens(): Promise<{
 }
 
 /** Keep the saved token pair, or paste a fresh one? `--replace-config` answers without asking. */
-async function chooseTokenAction(
-  forced: boolean,
-  message: string,
-  keepLabel: string,
-  replaceLabel: string,
-  replaceHint?: string,
-): Promise<"keep" | "replace-config"> {
-  if (forced) return "replace-config";
+async function chooseTokenAction(prompt: {
+  /** `--replace-config`: answer without asking. */
+  forced: boolean;
+  message: string;
+  keepLabel: string;
+  replaceLabel: string;
+  replaceHint?: string;
+}): Promise<"keep" | "replace-config"> {
+  if (prompt.forced) return "replace-config";
   const answer = await select<"keep" | "replace-config">({
-    message,
+    message: prompt.message,
     initialValue: "keep",
     options: [
-      { value: "keep", label: keepLabel },
-      { value: "replace-config", label: replaceLabel, ...(replaceHint ? { hint: replaceHint } : {}) },
+      { value: "keep", label: prompt.keepLabel },
+      {
+        value: "replace-config",
+        label: prompt.replaceLabel,
+        ...(prompt.replaceHint ? { hint: prompt.replaceHint } : {}),
+      },
     ],
   });
   if (isCancel(answer)) throw new Error("Slack onboarding cancelled");
@@ -112,13 +117,13 @@ export async function onboardSlackInternalApp(input: {
           "OAuth scopes is a migration. Keep the existing choice, or remove the app + Slack onboarding state and create a new app",
       );
     }
-    const action = await chooseTokenAction(
-      input.replaceConfig === true,
-      `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
-      "Keep the installed app",
-      "Replace App Configuration tokens",
-      "repair automatic dev/deploy Request URL updates",
-    );
+    const action = await chooseTokenAction({
+      forced: input.replaceConfig === true,
+      message: `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
+      keepLabel: "Keep the installed app",
+      replaceLabel: "Replace App Configuration tokens",
+      replaceHint: "repair automatic dev/deploy Request URL updates",
+    });
     if (action === "replace-config") {
       writeSlackOnboardingState(input.stateRoot, { ...state, ...(await promptConfigTokens()) });
       console.error("[fastagent] replaced local Slack App Configuration tokens; runtime app credentials are unchanged");
@@ -155,12 +160,12 @@ export async function onboardSlackInternalApp(input: {
   // `--replace-config` also covers the created-but-not-installed state, where a revoked token would otherwise strand
   // the resume (rotation fails and no menu offers replacement).
   if (resumed && (!state.appId || input.replaceConfig)) {
-    const action = await chooseTokenAction(
-      input.replaceConfig === true,
-      "Resume Slack onboarding with which App Configuration tokens?",
-      "Use the saved token pair",
-      "Paste a fresh token pair",
-    );
+    const action = await chooseTokenAction({
+      forced: input.replaceConfig === true,
+      message: "Resume Slack onboarding with which App Configuration tokens?",
+      keepLabel: "Use the saved token pair",
+      replaceLabel: "Paste a fresh token pair",
+    });
     if (action === "replace-config") {
       state = { ...state, ...(await promptConfigTokens()) };
       writeSlackOnboardingState(input.stateRoot, state);

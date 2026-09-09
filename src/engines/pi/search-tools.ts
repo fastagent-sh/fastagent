@@ -52,6 +52,9 @@ export function makeSearchToolsTool(): MountedTool {
       if (!ctx.tools) return "tool activation is unavailable outside a conversation turn.";
       // Search the WHOLE registered catalog: the loader is the only discovery surface, and in a long conversation the
       // model does not remember what it activated.
+      // ponytail: naive keyword match (any query token as a case-insensitive substring of name+description) under a
+      // hard per-search activation cap — the two ceilings are relevance and irreversibility; swap in
+      // scoring/embeddings if catalogs outgrow this.
       const tokens = input.query
         .toLowerCase()
         .split(/[^a-z0-9]+/)

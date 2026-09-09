@@ -1,4 +1,10 @@
-/** One-click app creation ("scan to create"). */
+/**
+ * One-click app creation ("scan to create") — the OAuth 2.0 Device Authorization Grant (RFC 8628) flow the platform
+ * provides for agent apps: `begin` returns a one-time verification URL the user opens in Feishu/Lark and confirms,
+ * then polling returns the new app's credentials. Hand-rolled on fetch because the wire protocol (two form-encoded
+ * POSTs plus RFC 8628's polling error dance) is shared verbatim by all four official SDKs; if the platform ever moves
+ * it behind something non-trivial, adopt the official SDK rather than chasing it.
+ */
 
 import { gzipSync } from "node:zlib";
 
@@ -102,8 +108,7 @@ async function post(baseUrl: string, params: Record<string, string>): Promise<Re
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Run the scan-to-create flow (module header): begin → hand the verification URL to the caller → poll until the user
- * confirms.
+ * Run the scan-to-create flow: begin → hand the verification URL to the caller → poll until the user confirms.
  */
 export async function registerFeishuApp(options: RegisterFeishuAppOptions): Promise<RegisteredFeishuApp> {
   const feishuBase = options.accountsBaseUrl ?? FEISHU_ACCOUNTS;

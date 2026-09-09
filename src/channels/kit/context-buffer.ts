@@ -1,6 +1,17 @@
 /**
  * Generic durable context buffer — the SHARED mechanics behind each stateful channel's "un-summoned group discussion"
- * module (telegram/feishu/slack `context-buffer.ts`).
+ * module (telegram/feishu/slack `context-buffer.ts`). Generic over the entry shape: the channel supplies its entry
+ * type, the shape validator, the fold-line renderer and its log label.
+ *
+ * The consume protocol every channel inherits:
+ *  - `push` persists synchronously BEFORE the transport ACK (an ACKed delivery is not redelivered, so ACK-then-persist
+ *    would be a silent-loss window): a throw becomes the webhook's 500 and the platform redelivers.
+ *  - `peek` renders WITHOUT clearing and snapshots exactly which entries it consumed.
+ *  - `commit` removes only that snapshot, by object identity, on the turn's `completed` — so a failure or crash before
+ *    `completed` leaves the discussion intact, and a message arriving mid-turn survives for the next answered turn.
+ *
+ * State files are an IO boundary: valid JSON of the WRONG shape degrades exactly like a corrupt file (warn + empty),
+ * never flowing in as trusted data.
  */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";

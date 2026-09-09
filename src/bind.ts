@@ -4,7 +4,10 @@
  */
 import { isIP } from "node:net";
 
-/** Lowercase, unbracketed, IPv4-mapped IPv6 reduced to its IPv4 form — the form the checks below read. */
+/**
+ * Lowercase, unbracketed, IPv4-mapped IPv6 reduced to its IPv4 form — the form the checks below read. Brackets come
+ * off only as a PAIR: a half-bracketed `[::1` must stay invalid, not become an address.
+ */
 function normalize(host: string): string {
   return host
     .toLowerCase()
@@ -37,7 +40,11 @@ export function classifyBind(host: string | undefined): "wildcard" | "loopback" 
   return "specific";
 }
 
-/** Does a serve bound to `host` answer a dial of the NAME `localhost`? */
+/**
+ * Does a serve bound to `host` answer a dial of the NAME `localhost`? Only the addresses that name resolves to
+ * (127.0.0.1 / ::1) and a wildcard bind do — `127.0.0.2` is loopback yet unreachable that way. That is why this is not
+ * {@link classifyBind}'s reach question: cloudflared dials by name, so `--tunnel` needs this one.
+ */
 export function answersLocalhost(host: string | undefined): boolean {
   if (classifyBind(host) === "wildcard") return true;
   const h = normalize(host as string);
