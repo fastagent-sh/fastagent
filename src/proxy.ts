@@ -6,12 +6,32 @@ import * as undici from "undici";
 const isBun = typeof process.versions.bun === "string";
 
 /**
- * What is exempt from the proxy when nobody said. `EnvHttpProxyAgent` proxies EVERYTHING while NO_PROXY is empty —
- * loopback included ("Always proxy if NO_PROXY is not set or empty") — so installing a proxy would otherwise send this
- * process's own local traffic through it: a Docker health probe on 127.0.0.1, a control-plane call to a local serve, an
- * `ssh -L` forward given to `attach --url`. None of those are what a proxy variable is asking for.
+ * What is ALWAYS exempt from the proxy. `EnvHttpProxyAgent` proxies EVERYTHING while NO_PROXY is empty — loopback
+ * included ("Always proxy if NO_PROXY is not set or empty") — so installing a proxy would otherwise send this process's
+ * own local traffic through it: a Docker health probe on 127.0.0.1, a control-plane call to a local serve, an `ssh -L`
+ * forward given to `attach --url`. None of those are what a proxy variable is asking for.
+ *
+ * APPENDED to a declared NO_PROXY rather than used as its default, because `NO_PROXY=.corp.com` is the normal shape of
+ * a corporate environment and it is not a statement about 127.0.0.1: replacing would hand exactly the users who have a
+ * proxy back the failure this exists to remove, as a probe timeout rather than an error.
  */
 const LOOPBACK = "localhost,127.0.0.1,::1";
+
+/**
+ * The exemption list the dispatcher is built with: whatever the environment declares, plus {@link LOOPBACK}.
+ *
+ * Its own function because installing happens ONCE per process, so these branches are unreachable through
+ * {@link installProxyFetch} — and the wildcard one is the kind that is silently wrong until someone reads it.
+ */
+export function noProxyList(env: NodeJS.ProcessEnv = process.env): string {
+  // Mirroring undici's own precedence (lowercase first) so our value cannot disagree with the one it would read.
+  // `||`, not `??`: a `NO_PROXY=` line in a .env is an empty string, and undici treats it as "proxy everything".
+  const declared = (env.no_proxy || env.NO_PROXY)?.trim();
+  if (!declared) return LOOPBACK;
+  // `*` is undici's "never proxy anything", matched EXACTLY (`#noProxyValue === '*'`). Appending would demote it to a
+  // hostname that matches nothing — turning "disable the proxy" into "proxy everything but loopback".
+  return declared === "*" ? declared : `${declared},${LOOPBACK}`;
+}
 
 /** The install is process-global and once is enough; a second call would only leak the first dispatcher (nothing
  *  closes it) and re-read the same environment. */
@@ -35,9 +55,8 @@ const originalFetch = globalThis.fetch;
  */
 export function installProxyFetch(): void {
   if (isBun || installed) return;
-  installed = true;
-  // Mirroring undici's own precedence (lowercase first) so our default cannot disagree with the value it would read.
-  const noProxy = process.env.no_proxy ?? process.env.NO_PROXY ?? LOOPBACK;
-  undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({ noProxy }));
+  undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({ noProxy: noProxyList() }));
+  // Skipping `install` leaves the caller's fetch in place, and with it Node 26's missing gzip decompression above.
   if (globalThis.fetch === originalFetch) undici.install();
+  installed = true; // last: a throw above must leave the latch open, or the process runs un-proxied forever
 }

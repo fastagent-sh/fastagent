@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { installProxyFetch } from "../src/proxy.ts";
+import { installProxyFetch, noProxyList } from "../src/proxy.ts";
 
 /**
  * The egress POLICY itself, in-process: which destinations the installed dispatcher sends through the proxy.
@@ -42,13 +42,31 @@ beforeAll(async () => {
   originUrl = `http://127.0.0.1:${o.port}/local`;
   process.env.HTTP_PROXY = `http://127.0.0.1:${p.port}`;
   process.env.HTTPS_PROXY = process.env.HTTP_PROXY;
-  for (const key of ["NO_PROXY", "no_proxy", "http_proxy", "https_proxy"]) delete process.env[key];
+  for (const key of ["no_proxy", "http_proxy", "https_proxy"]) delete process.env[key];
+  // The shape a corporate environment actually has: a declared exemption that says nothing about 127.0.0.1.
+  process.env.NO_PROXY = ".corp.invalid";
   installProxyFetch();
 });
 
 afterAll(async () => {
   await new Promise<void>((resolve) => proxy.close(() => resolve()));
   await new Promise<void>((resolve) => origin.close(() => resolve()));
+});
+
+describe("noProxyList: what the dispatcher is told to exempt", () => {
+  it("exempts loopback when nothing is declared, including a `NO_PROXY=` line in a .env", () => {
+    expect(noProxyList({})).toBe("localhost,127.0.0.1,::1");
+    expect(noProxyList({ NO_PROXY: "" })).toBe("localhost,127.0.0.1,::1");
+  });
+
+  it("APPENDS to a declared value instead of replacing it (lowercase wins, as in undici)", () => {
+    expect(noProxyList({ NO_PROXY: ".corp.com" })).toBe(".corp.com,localhost,127.0.0.1,::1");
+    expect(noProxyList({ no_proxy: ".a.com", NO_PROXY: ".b.com" })).toBe(".a.com,localhost,127.0.0.1,::1");
+  });
+
+  it("leaves the `*` wildcard exact — appending would turn “no proxy at all” into “proxy everything but loopback”", () => {
+    expect(noProxyList({ NO_PROXY: "*" })).toBe("*");
+  });
 });
 
 describe("installProxyFetch: what the process's fetch does with a declared proxy", () => {
@@ -58,9 +76,10 @@ describe("installProxyFetch: what the process's fetch does with a declared proxy
     expect(proxied).toContain("http://external.invalid/probe");
   });
 
-  it("leaves loopback direct even though NO_PROXY is unset", async () => {
-    // undici's EnvHttpProxyAgent proxies EVERYTHING while NO_PROXY is empty. Without our default, installing a proxy
-    // would break this process's own local traffic: health probes, control-plane calls, an `ssh -L` forward.
+  it("leaves loopback direct alongside a declared NO_PROXY", async () => {
+    // undici's EnvHttpProxyAgent proxies EVERYTHING not named in NO_PROXY. Our loopback exemption is APPENDED to the
+    // declared value, so a `NO_PROXY=.corp.com` machine keeps its own local traffic direct: health probes,
+    // control-plane calls, an `ssh -L` forward.
     const res = await fetch(originUrl);
     expect(res.status).toBe(200);
     expect(direct).toContain("/local");

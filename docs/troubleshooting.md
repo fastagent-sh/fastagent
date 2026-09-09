@@ -305,9 +305,10 @@ Then retry `fastagent login`, `fastagent dev`, or `fastagent start`. The variabl
 `.secrets/.env` — every command reads it before deciding where its requests go, so a tool's `fetch`, a channel's
 app-creation flow and a skill download all follow the same proxy.
 
-Loopback (`localhost`, `127.0.0.1`, `::1`) stays direct unless you set `NO_PROXY` yourself, so a proxy variable does
-not break local health probes, `fastagent attach`, or an `ssh -L` forward. Setting `NO_PROXY` replaces that default
-entirely — include the loopback names in your own value.
+Loopback (`localhost`, `127.0.0.1`, `::1`) always stays direct — it is added to whatever `NO_PROXY` you set, so a proxy
+variable does not break local health probes, `fastagent attach`, or an `ssh -L` forward. A LAN address is not loopback:
+if you run `fastagent dev --bind 192.168.1.5`, `fastagent attach` finds that address and sends it through the proxy —
+put it in `NO_PROXY` yourself.
 
 ## Need a machine-readable report
 

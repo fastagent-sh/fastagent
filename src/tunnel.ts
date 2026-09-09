@@ -10,7 +10,8 @@ import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { pointChannelsAt } from "./deploy/channel-ingress.ts";
-import { dotEnvPath, enterAgentEnv } from "./env.ts";
+import { dotEnvPath, loadDotEnv } from "./env.ts";
+import { installProxyFetch } from "./proxy.ts";
 import { resolveStateRoot } from "./paths.ts";
 import { log } from "./log.ts";
 
@@ -163,11 +164,13 @@ export async function announceWebhooks(
 ): Promise<{ kind: string; outcome: RegistrationOutcome }[]> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
-    enterAgentEnv(dir); // webhook registrars read channel credentials from .env
+    loadDotEnv(dir); // webhook registrars read channel credentials from .env
   } catch (error) {
-    // best-effort boundary: a MISSING .env is already tolerated by enterAgentEnv.
+    // best-effort boundary: an unreadable .env (a MISSING one is already tolerated) still leaves registrars that can
+    // report their own missing credentials, so this one names the file instead of aborting the tunnel announcement.
     log.warn(`[fastagent] could not read ${dotEnvPath(dir)}: ${(error as Error).message} — continuing without it`);
   }
+  installProxyFetch(); // the registrars' platform calls follow the proxy that .env may declare
   // Readiness is the registrar's job: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before its origin
   // connects, and each registrar absorbs that by retrying the platform call whose own URL verification reports it.
   const feishuOptions = {
