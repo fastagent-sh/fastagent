@@ -72,6 +72,7 @@ export const agentcoreHost: HostDeploy = {
       extraSecrets,
       schedules: loaded.schedules.map((s) => ({ name: s.name, cron: s.cron, tz: s.tz })),
       selfSchedule: !!config.selfSchedule,
+      idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
     for (const u of plan.untranslatableSchedules) {

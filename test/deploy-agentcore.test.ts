@@ -12,7 +12,7 @@ import {
   TEMPLATE_FILE,
   GENERATED_TEMPLATE_MARKER,
   FORWARDER_FILE,
-  IDLE_TIMEOUT_SECONDS,
+  DEFAULT_IDLE_TIMEOUT_SECONDS,
   MAX_LIFETIME_SECONDS,
   agentcoreName,
   cfnParamName,
@@ -376,16 +376,23 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("s3:ListBucket");
   });
 
-  it("holds an idle session for 3 minutes — within the platform's 60–28800 range, and only after work settles", () => {
+  it("holds an idle session for 3 minutes by default — within the platform's 60–1209600 range", () => {
     // The idle tail is what memory bills for after the agent stops working (CPU stops immediately),
     // so it is the deployment's main standing cost. HealthyBusy keeps a BUSY session alive whatever
     // this says, so shortening it cannot cut a turn short — it only shortens the wait before sleep.
-    expect(IDLE_TIMEOUT_SECONDS).toBe(180);
-    expect(IDLE_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(60);
-    expect(MAX_LIFETIME_SECONDS).toBeLessThanOrEqual(28800);
+    expect(DEFAULT_IDLE_TIMEOUT_SECONDS).toBe(180);
+    expect(DEFAULT_IDLE_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(60);
+    expect(MAX_LIFETIME_SECONDS).toBeLessThanOrEqual(1209600);
     expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).toContain(
       `LifecycleConfiguration: { IdleRuntimeSessionTimeout: 180, MaxLifetime: 28800 }`,
     );
+  });
+
+  it("lets the workload buy the tail back: the configured idle timeout reaches the template", () => {
+    const template = planAgentcoreDeploy(baseInput({ idleTimeoutSeconds: 900 })).artifacts[0]!.content;
+    expect(template).toContain(`LifecycleConfiguration: { IdleRuntimeSessionTimeout: 900, MaxLifetime: 28800 }`);
+    // The comment above it is what an operator reads when deciding whether to pay for the tail.
+    expect(template).toContain(`# Idle 900s`);
   });
 
   it("states the reset a deploy performs rather than promising durability it does not have", () => {
