@@ -1,16 +1,12 @@
 /**
- * The fastagent command registry: every command as data ({@link CommandSpec}) with a lazy-imported
- * implementation, so `fastagent <cmd>` pays only for the module graph that command actually uses.
- * This file is the CLI surface's single source of truth — the overview and every per-command help
- * render from these specs (no hand-maintained usage text).
+ * The fastagent command registry: every command as data ({@link CommandSpec}) with a lazy-imported implementation, so
+ * `fastagent <cmd>` pays only for the module graph that command actually uses.
  */
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
-
-// Shared flags — same name, same meaning, on every command that supports them (clig: consistency).
 const DIR_ARG = {
   name: "[dir]",
   description: "workspace directory (the agent is here, or in a directory inside it)",
@@ -60,8 +56,8 @@ const init: CommandSpec = {
     {
       flags: "--flat",
       description: "alias for --agent-dir . — the directory IS the agent; keeps existing files",
-      // Two spellings of ONE knob: `--flat --agent-dir bot` names the same thing twice with different
-      // values, which is a usage error, not a precedence question to settle silently.
+      // Two spellings of ONE knob: `--flat --agent-dir bot` names the same thing twice with different values, which
+      // is a usage error, not a precedence question to settle silently.
       conflicts: ["agentDir"],
     },
   ],
@@ -82,8 +78,7 @@ const init: CommandSpec = {
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       minimal: f.minimal === true,
       install: f.install !== false,
-      // `--flat` is the spelling for the common case of the same knob (they conflict, so only one is
-      // ever set); both land in ONE value, so the scaffolder never sees two ways to say ".".
+      // `--flat` is the spelling for the common case of the same knob (they conflict, so only one is ever set).
       agentDir: f.flat === true ? "." : typeof f.agentDir === "string" ? f.agentDir : undefined,
     }),
 };
@@ -589,8 +584,10 @@ const login: CommandSpec = {
     }),
 };
 
-/** Registration order = help order — the ORIGINAL usage wall's order, kept verbatim (this is a
- *  commander refactor of the same CLI, not a redesign). Exported for the kernel conformance tests. */
+/**
+ * Registration order = help order — the ORIGINAL usage wall's order, kept verbatim (this is a commander refactor of
+ * the same CLI, not a redesign).
+ */
 export const specs: readonly CommandSpec[] = [
   init,
   models,
@@ -609,10 +606,7 @@ export const specs: readonly CommandSpec[] = [
   login,
 ];
 
-/**
- * The production program assembly (specs + the top-level examples/docs). Tests build through THIS —
- * with their IO/width/color seams as overrides — so they exercise the real shape, not a lookalike.
- */
+/** The production program assembly (specs + the top-level examples/docs). */
 export function buildCliProgram(overrides: ProgramOptions = {}) {
   return buildProgram(specs, {
     examples: [
@@ -625,7 +619,7 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
   });
 }
 
-/** Parse and run one CLI invocation (`argv` = process.argv). Usage errors exit 2 via the kernel policy. */
+/** Parse and run one CLI invocation (`argv` = process.argv). */
 export async function runCli(argv: readonly string[]): Promise<void> {
   await buildCliProgram({ version: await fastagentVersion() }).parseAsync([...argv]);
 }

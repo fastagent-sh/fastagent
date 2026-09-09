@@ -1,8 +1,6 @@
 /**
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
- * `.secrets/.env.example` vars) into an existing agent. `add` checks and guides; it never
- * bootstraps an agent (that is `init`'s job). Each channel's template files live in its own bundle
- * at src/channels/<kind>/scaffold/, read here at scaffold time.
+ * `.secrets/.env.example` vars) into an existing agent.
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -14,22 +12,20 @@ import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
 export type ChannelKind = "github" | "telegram" | "slack" | "feishu" | "lark";
 
-/** Group-visibility choice shared by the slack/feishu/lark onboarding flows. Each channel keeps its
- * own channel-level type (`SlackGroupBehavior`, `FeishuGroupBehavior`) — this is the CLI-side value. */
+/** Group-visibility choice shared by the slack/feishu/lark onboarding flows. */
 export type GroupBehavior = "context" | "mentions";
 
-/** A resolved group-behavior decision plus whether the author actually chose it (flag or prompt).
- * A defaulted "context" (non-interactive, no flag) must never drive a sensitive-scope write. */
+/** A resolved group-behavior decision plus whether the author actually chose it (flag or prompt). */
 export interface GroupBehaviorChoice {
   behavior: GroupBehavior;
   explicit: boolean;
 }
 
-/** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
+/** An env var a scaffolded channel reads. */
 export interface ChannelEnv {
   name: string;
   hint: string;
-  /** Required for the channel to run. Optional values are deployed when present but never gate deploy. */
+  /** Required for the channel to run. */
   required: boolean;
   generate?: boolean;
 }
@@ -50,8 +46,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         generate: true,
       },
     ],
-    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real agent-dir-relative
-    // location — the CLI holds no channel-private filenames.
+    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real agent-dir-relative location — the
+    // CLI holds no channel-private filenames.
     steps: [
       "edit {channel} — map events to intents in on()",
       "add the webhook in your repo (Settings → Webhooks): Payload URL = <public-url>/webhook, content type application/json",
@@ -84,11 +80,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
     ],
   },
-  // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded
-  // compatibility profile. Each remains its own channel KIND: route, env, state, console, onboarding.
-  // This table is the webhook setup; continuous mode below selects only App ID/Secret. No `generate`
-  // in either: values come FROM the platform. `add feishu` scan-creates the app; Lark lacks that
-  // control-plane capability, so `add lark` guides console credential collection.
+  // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded compatibility
+  // profile.
   feishu: {
     env: [
       {
@@ -206,9 +199,8 @@ export function channelSetup(
 }
 
 /**
- * Append a channel's env vars (commented placeholders + hints) to `.env.example`, so a developer who
- * copies it to `.env` finds the vars already there. No-op when there is no `.env.example` or the block
- * is already present. Placeholders only — no real secret lands in the committable template.
+ * Append a channel's env vars (commented placeholders + hints) to `.env.example`, so a developer who copies it to
+ * `.env` finds the vars already there.
  */
 export async function appendChannelEnv(
   dir: string,
@@ -225,9 +217,7 @@ export async function appendChannelEnv(
   }
   const marker = `# --- ${kind} channel ---`;
   if (current.includes(marker)) return false;
-  // Hint on its OWN line above the placeholder (like the base env.example template) — never inline
-  // after `=`: loadEnvFile does not strip trailing comments, so an uncommented `KEY=   # hint` (or a
-  // value pasted before the `#`) would carry the hint text into the parsed value.
+  // Hint on its OWN line above the placeholder (like the base env.example template).
   const block = `\n${marker}\n${channelSetup(kind, ingress)
     .env.map((e) => `# ${e.hint}\n# ${e.name}=`)
     .join("\n")}\n`;
@@ -240,16 +230,11 @@ export interface DotEnvWriteResult {
   written: string[];
   /** Vars already present with a non-empty active value; left untouched and omitted from next steps. */
   alreadySet: string[];
-  /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no
-   *  `.gitignore`: a secret was just written into a directory fastagent does not own, so the caller
-   *  states the fact rather than dropping a `*`-ignoring file into someone else's path. */
+  /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no `.gitignore`. */
   unprotectedSecretsDir?: string;
 }
 
-/** Whether `.env` content carries a non-empty ACTIVE value for `name` — decided by THE .env parser
- *  ({@link parseEnvContent}), not a re-implementation, so this check can never disagree with what
- *  `loadEnvFile` will actually read (a missed match here would append a second assignment that
- *  last-wins over the user's working secret). */
+/** Whether `.env` content carries a non-empty ACTIVE value for `name`. */
 function hasActiveEnvValue(content: string, name: string): boolean {
   return (parseEnvContent(content).get(name)?.trim() ?? "") !== "";
 }
@@ -259,12 +244,8 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Append generated channel secrets to the agent's `.env` (`.secrets/.env` — never `.env.example`)
- * Existing non-empty values are kept — EXCEPT the names listed in
- * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
- * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
- * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is
- * ready to edit while no fake secret is committed to the user's mental model.
+ * Append generated channel secrets to the agent's `.env` (`.secrets/.env` — never `.env.example`) Existing non-empty
+ * values are kept.
  */
 export async function appendChannelDotEnv(
   dir: string,
@@ -276,23 +257,12 @@ export async function appendChannelDotEnv(
   const file = dotEnvPath(dir);
   const secretsDir = dirname(file);
   await ensureSecretsDir(secretsDir);
-  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into
-  // carries its own `.gitignore`. `init` writes it, and so does this — the reachable case where it is
-  // missing (a hand-made agent) is exactly the one where the next line mints an unrecoverable app
-  // secret. `wx`, so a file the author wrote is never touched; the accepted cost is that someone who
-  // DELETED it to track secrets deliberately gets it back once. The risk is not symmetric — that is an
-  // annoyance; the other way is a published credential.
-  //
-  // Scoped to the DEFAULT `<agentDir>/.secrets`, which is fastagent's own directory. A dir named by
-  // `FASTAGENT_SECRETS_DIR` belongs to the operator, and this template is `*` plus two negations —
-  // dropping it there would hide that directory's OTHER contents from their `git add`, which is a
-  // bigger harm than the one it prevents, and inflicted on a path they chose deliberately. They get the
-  // fact instead, and own the decision.
+  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into carries its own
+  // `.gitignore`.
   const owned = secretsDir === join(dir, SECRETS_DIRNAME);
   let unprotectedSecretsDir: string | undefined;
   if (owned) {
-    // Only EEXIST is tolerable (already protected, or a concurrent writer). A permission/disk failure on
-    // the file that keeps credentials out of git must surface, not be swallowed.
+    // Only EEXIST is tolerable (already protected, or a concurrent writer).
     await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
       (e: NodeJS.ErrnoException) => {
         if (e.code !== "EEXIST") throw e;
@@ -320,10 +290,8 @@ export async function appendChannelDotEnv(
     if (alreadySet.includes(e.name)) continue;
     const value = generated[e.name];
     if (value !== undefined) {
-      // An ACTIVE but EMPTY assignment already in the file (an uncommented, unfilled placeholder from
-      // `cp .env.example .env`) must be replaced IN PLACE: a new line written anywhere else either loses
-      // to it or wins by position under last-wins — both silently. Replace the LAST occurrence (the one
-      // the parser would honor). Line-level match uses THE parser, never a hand regex.
+      // An ACTIVE but EMPTY assignment already in the file (an uncommented, unfilled placeholder from `cp
+      // .env.example .env`) must be replaced IN PLACE.
       let idx = -1;
       for (let i = contentLines.length - 1; i >= 0; i--) {
         if (parseEnvContent(contentLines[i] as string).has(e.name)) {
@@ -350,8 +318,8 @@ export async function appendChannelDotEnv(
   if (lines.length > 0) {
     const marker = `# --- ${kind} channel ---`;
     if (current.includes(marker)) {
-      // A marker already present (e.g. a .env copied from .env.example) — slot the new lines under it
-      // instead of orphaning them at the end of the file.
+      // A marker already present (e.g. a .env copied from .env.example) — slot the new lines under it instead of
+      // orphaning them at the end of the file.
       await writeFile(file, current.replace(marker, `${marker}\n${lines.join("\n")}`));
     } else {
       const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
@@ -371,10 +339,7 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
   return exists(channelPath(dir, kind));
 }
 
-/**
- * Scaffold `channels/<kind>.ts` into {@link dir}. Never clobbers an existing file (the glue is
- * authored content). The wx write is the TOCTOU safety net behind {@link channelExists}.
- */
+/** Scaffold `channels/<kind>.ts` into {@link dir}. */
 export async function scaffoldChannel(
   dir: string,
   kind: ChannelKind,
@@ -422,11 +387,7 @@ export async function scaffoldChannel(
   return file;
 }
 
-/**
- * The bundle's companion tools (every `.ts` beside `channel.ts` → `tools/<name>`). Unlike the channel
- * file they are the package's, not authored glue, so they are written on EVERY add: re-running
- * `add <kind>` is how an upgraded tool reaches an existing agent.
- */
+/** The bundle's companion tools (every `.ts` beside `channel.ts` → `tools/<name>`). */
 export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Promise<string[]> {
   const written: string[] = [];
   for (const name of channelBundleFiles(kind)) {
@@ -440,9 +401,8 @@ export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Pr
 }
 
 /**
- * Verify the AGENT DIR is ready to host a channel: an ESM package.json that declares
- * `@fastagent-sh/fastagent` (the channel file imports it). `add` checks and guides, never bootstraps — that
- * is `init`'s job.
+ * Verify the AGENT DIR is ready to host a channel: an ESM package.json that declares `@fastagent-sh/fastagent` (the
+ * channel file imports it).
  */
 export async function assertChannelReady(dir: string): Promise<void> {
   const pkgPath = join(dir, "package.json");
@@ -451,8 +411,7 @@ export async function assertChannelReady(dir: string): Promise<void> {
     raw = await readFile(pkgPath, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it — the
-      // right remedy is the missing manifest (a --minimal init writes none), or init in the workspace.
+      // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it.
       throw new Error(
         `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
           `Add a package.json declaring @fastagent-sh/fastagent there (a --minimal init writes none), ` +

@@ -1,17 +1,4 @@
-/**
- * The AgentCore serving assembly — the same product as `mountAgentService`, built differently
- * because the host is.
- *
- * There is no public URL, and cron slots arrive through `POST /invocations` from an external clock,
- * so no resident cron timers. Native filesystems become available on invocation, so the process entry
- * defers storage preparation and the entire agent opener. The adapter initializes channels on the
- * first trusted envelope.
- *
- * That is a different assembly, not a flag on the shared one: handler shape, discovery timing, clock
- * source, long-connection support and shutdown all differ. What it is NOT is a different product —
- * it returns the same {@link AgentService}, so `start` picks an assembly once and everything after
- * that point is common.
- */
+/** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
 import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
 import { log } from "../log.ts";
@@ -41,18 +28,8 @@ import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
 import { secretEquals } from "./secret.ts";
 
 /**
- * Runtime filesystems appear on invocation, so even opening the definition must be deferred — in the
- * TWO stages that differ in what a retry would cost.
- *
- * `prepare` takes the workspace and starts nothing: a rejection means it holds nothing either (no
- * lease, no timers), so the NEXT envelope tries again. The failures it carries are the platform's
- * own transients — storage not mounted yet, a lease the outgoing session has not yet dropped — and
- * caching them would keep a healthy microVM refusing every envelope until it is reclaimed, three
- * minutes of a deploy probe hammering the same fixed session for an answer that cannot change.
- *
- * `assemble` mounts channels and starts the scheduler, so BOTH its outcomes are cached: a second
- * attempt in this process would run two schedulers over one claim state and replay durable turn
- * intent twice.
+ * Runtime filesystems appear on invocation, so even opening the definition must be deferred — in the TWO stages that
+ * differ in what a retry would cost.
  */
 export function deferAgentcoreService<T>(stages: {
   prepare: () => Promise<T>;
@@ -75,8 +52,7 @@ export function deferAgentcoreService<T>(stages: {
         throw error;
       });
       const taken = await prepared;
-      // Shutdown may have arrived while the workspace was being taken. Assembling now would start a
-      // scheduler and channels that `close()` has already come and gone for.
+      // Shutdown may have arrived while the workspace was being taken.
       if (closed) throw new Error("service closed during initialization");
       assembling ??= stages.assemble(taken);
       service = await assembling;
@@ -93,8 +69,7 @@ export function deferAgentcoreService<T>(stages: {
       if (path === "/ping" && request.method === "GET") return ping(request);
       if (path !== "/invocations" || request.method !== "POST") return new Response("not found\n", { status: 404 });
       let ready: AgentService;
-      // Only the INITIALIZATION is caught here. A failure inside the service's own handler is its
-      // business and must not be reported as an initialization failure against an unread body.
+      // Only the INITIALIZATION is caught here.
       try {
         ready = await initialize();
       } catch (error) {
@@ -106,7 +81,7 @@ export function deferAgentcoreService<T>(stages: {
           try {
             envelope = JSON.parse(body.text);
           } catch {
-            /* Invalid envelopes retain the initialization error. */
+            // Invalid envelopes retain the initialization error.
           }
           if (envelope?.kind === "probe" && secretEquals(envelope.auth, process.env.FASTAGENT_INGRESS_SECRET)) {
             return Response.json({ ok: false, error: message });
@@ -120,8 +95,7 @@ export function deferAgentcoreService<T>(stages: {
     close() {
       closed = true;
       closing ??= (async () => {
-        // A failed assembly already reached its caller. Re-raising it here would report a shutdown
-        // failure (exit 1) for a container that has nothing to close.
+        // A failed assembly already reached its caller.
         await (await assembling?.catch(() => undefined))?.close();
       })();
       return closing;
@@ -143,12 +117,11 @@ export async function mountAgentcoreService(
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
-  // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the
-  // collision rule runs again then (below) against what they actually brought.
+  // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the collision rule
+  // runs again then (below) against what they actually brought.
   const withControl = mountSessionControl({}, sessionControl, { agent });
 
-  // Started here, not deferred to an envelope: the workspace this reads its claim state from was
-  // taken before the opener ran (cli/commands/start.ts), so there is no later moment that is truer.
+  // Started here, not deferred to an envelope.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
     externalClock: true,
   });
@@ -161,8 +134,8 @@ export async function mountAgentcoreService(
           `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
       );
     }
-    // The SAME rule mountSessionControl applies, through the same function: its check ran against an
-    // empty base at boot, so it has to run again once the channels are real.
+    // The SAME rule mountSessionControl applies, through the same function: its check ran against an empty base at
+    // boot, so it has to run again once the channels are real.
     for (const plane of withControl.mounts) assertNoControlPlaneCollision(lazy.routes, plane);
     return { routes: lazy.routes, mounts: withControl.mounts };
   };
@@ -180,8 +153,7 @@ export async function mountAgentcoreService(
   return {
     handler,
     agent,
-    // The adapter IS the surface here; the channel routes arrive lazily BEHIND it. Reporting `{}`
-    // would make the startup line claim nothing is served.
+    // The adapter IS the surface here; the channel routes arrive lazily BEHIND it.
     routes: adapterRoutes,
     agentDir,
     workspace,
@@ -197,13 +169,8 @@ export async function mountAgentcoreService(
 }
 
 /**
- * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) — the deployed container's
- * ONLY reachable surface (channels/agentcore.ts). Wired by `start` when `FASTAGENT_AGENTCORE=1` (set
- * by the generated deploy artifacts, never by hand).
- *
- * The adapter IS the surface: the agent's channels live in a table INSIDE the envelope dispatch, a
- * separate namespace from these two paths, so a channel route named `/invocations` is reached
- * through the Function URL as itself and cannot shadow anything.
+ * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) — the deployed container's ONLY reachable
+ * surface (channels/agentcore.ts).
  */
 export function mountAgentcore(options: {
   agent: Agent;
@@ -219,8 +186,7 @@ export function mountAgentcore(options: {
     agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
-    // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call. Absent =
-    // no forwarder in this topology, so only the public `invoke` kind is servable.
+    // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
     fire:

@@ -1,14 +1,4 @@
-/**
- * The durable-turn LIFECYCLE the stateful chat channels share, over the kit's parts: accept
- * (persist pre-ACK, dedup, enqueue) → dequeue (settle the queue notice, count the attempt against
- * the poison ceiling, fold the buffered discussion) → execute → end (log, drop the intent). Telegram,
- * Slack and Feishu each wrote this out; the copies had already drifted in small ways that were not
- * decisions (which one deletes its notice on defer, which one logs the duration on failure).
- *
- * What stays with the platform is everything that names a platform object: how a queue notice is
- * mounted and taken over, what the prompt looks like, how attachments resolve, what a dropped turn
- * says and where. Those arrive as hooks; the ORDER they run in is this module's.
- */
+/** The durable-turn LIFECYCLE the stateful chat channels share, over the kit's parts. */
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
@@ -18,8 +8,10 @@ import type { ContextBuffer } from "./context-buffer.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
 
-/** A pending turn is the persisted intent minus its attempt count, plus live-only fields the
- *  channel adds (a notice's message id) — never persisted, reconstructed fresh on replay. */
+/**
+ * A pending turn is the persisted intent minus its attempt count, plus live-only fields the channel adds (a notice's
+ * message id).
+ */
 export type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts">;
 
 export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, E> {
@@ -36,22 +28,17 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   bufferKey(rec: R): string;
   /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
-  /** Queue feedback when a turn is scheduled BEHIND an active one. Returns what the runner awaits at
-   *  dequeue (so the turn reliably takes the notice over instead of racing it) and, optionally, how
-   *  to cancel a notice that has not fired yet. `done` may reject — posting the notice is a platform
-   *  call — and the runner logs that and runs the turn anyway. */
+  /** Queue feedback when a turn is scheduled BEHIND an active one. */
   onQueuedBehind?(rec: R): { done: Promise<void>; cancel?: () => void };
-  /** Runs before the attempt is counted. Answer false to leave the intent untouched for a later run
-   *  (Slack: its transport is known to be down, so an Agent turn now would have nowhere to answer). */
+  /** Runs before the attempt is counted. */
   beforeRun?(rec: R): Promise<boolean>;
-  /** The attempt could not be recorded (disk failure): a restart replays the turn, so say so on any
-   *  notice it holds rather than leaving it pinned at "Queued". */
+  /**
+   * The attempt could not be recorded (disk failure): a restart replays the turn, so say so on any notice it holds
+   * rather than leaving it pinned at "Queued".
+   */
   onDeferred(rec: R): void;
   /** The turn started the ceiling's worth of times without finishing: tell the asker. */
   notifyDropped(rec: R): void;
-  /** Run the turn. `onCompleted` is the durable-commit point (the turn's `completed` event): it drops
-   *  the intent and commits the folded discussion, in that order. Typed failures are logged and
-   *  settled; interruption and defects retain unfinished intent. */
   execute(
     rec: R,
     discussion: { text: string; consumed: E[] },
@@ -60,17 +47,17 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
 }
 
 export interface TurnRunner<R, S> {
-  /** Accept a turn: persist its intent (pre-ACK — a failed write throws so the platform redelivers),
-   *  record the delivery id, enqueue. Recovery re-enqueues without re-persisting. */
+  /**
+   * Accept a turn: persist its intent (pre-ACK — a failed write throws so the platform redelivers), record the
+   * delivery id, enqueue.
+   */
   submit(rec: R, persist: boolean): void;
-  /** Re-enqueue the turns a prior crash left mid-flight; returns them so a channel can continue its
-   *  arrival counter. */
+  /** Re-enqueue the turns a prior crash left mid-flight; returns them so a channel can continue its arrival counter. */
   recover(): S[];
   /** Resolve once no turn is in flight — the test/observability seam. */
   idle(): Promise<void>;
 }
 
-/** Execute a dequeued turn. Business settlement removes intent; resource cleanup never does. */
 export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E>(
   options: TurnRunnerOptions<R, S, E>,
   rec: R,

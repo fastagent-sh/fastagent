@@ -1,12 +1,6 @@
 /**
- * Open a definition directory into an agent — the single agent opener BOTH `fastagent dev` and
- * `fastagent start` drive.
- *
- * A thin command-posture composition over L2 `createPiAgentFromDefinition`: open the directory →
- * resolve model (flag > env > config) and tools (append-after-defaults) → pick session storage →
- * call L2. dev and start share the SAME assembly here (what you iterate is what you serve); they
- * differ only at the CLI — dev watches and uses the in-tree sessions default, start runs without
- * watch and can point sessions at a mounted volume.
+ * Open a definition directory into an agent — the single agent opener BOTH `fastagent dev` and `fastagent start`
+ * drive.
  */
 import { mkdir } from "node:fs/promises";
 import type { Agent } from "../../agent.ts";
@@ -31,49 +25,25 @@ import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store
 import type { ToolCollision, MountedTool } from "./tool.ts";
 
 export interface CreatePiAgentFromDirOptions {
-  /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
+  /** Model spec override (e.g. the CLI --model flag). */
   model?: string;
-  /**
-   * Session store directory. Default `<agentDir>/.state/sessions` (machine state). `start`
-   * overrides it (--sessions-dir / FASTAGENT_SESSIONS_DIR / a mounted volume) so production continuity
-   * survives redeploys.
-   */
   sessionsDir?: string;
-  /**
-   * Credentials file override. Default `<agentDir>/.secrets/auth.json` (project-level, under the
-   * `.secrets/`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
-   * the global `~/.fastagent/.secrets/auth.json` to share one credential across projects.
-   */
+  /** Credentials file override. */
   authPath?: string;
   /**
-   * This is a long-running SERVE (`dev`/`start`), where the scheduler poller runs — so a self-scheduled
-   * wake-up is actually honored. One-shot entries (`invoke`/`fire`) leave it off (they exit after the turn
-   * and never poll). The built-in `wake` tool mounts only when this is set AND `config.selfSchedule` is on.
+   * This is a long-running SERVE (`dev`/`start`), where the scheduler poller runs — so a self-scheduled wake-up is
+   * actually honored.
    */
   serving?: boolean;
-  /** Assemble the session control plane over this agent's session store and return it as
-   *  {@link sessionControl} — the store is created inside this opener, so the hub must be wired
-   *  here too (an external `createPiSessionControl` cannot exist before the store does).
-   *  Default: `config.sessionControl` AND {@link serving} — the config key means "serve the control
-   *  plane", so one-shot commands (invoke/fire) do not assemble an unused hub. Pass explicitly to
-   *  override either way. */
+  /** Assemble the session control plane over this agent's session store and return it as {@link sessionControl}. */
   sessionControl?: boolean;
-  /** Additional raw tap with the FULL vocabulary: run events composed after the
-   *  {@link sessionControl} hub's observer, plus the hub's own boundary-mutation events
-   *  (`state_changed`/`compaction_*`) via the hub's tap. TRUSTED seam: an observer receives each
-   *  run's live modulation handles (see `SessionObserver`) — for read-only consumers
-   *  use the hub's `events()` stream instead. */
+  /** Additional raw tap with the FULL vocabulary. */
   observer?: SessionObserver;
 }
 
 /**
- * The agent assembly FRONT HALF — everything that is independent of how pi consumes the
- * definition (a per-invoke session for serving vs a resident one for chat):
- * placement resolution → config → model spec → the full tool surface ({@link resolveAgentTools} — the
- * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromDir} and the
- * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two
- * consumption shapes. (Definition loading and prompt assembly stay per-consumer: serving re-reads
- * them live per invoke, the session builder snapshots at startup and lets pi append skills/env.)
+ * The agent assembly FRONT HALF — everything that is independent of how pi consumes the definition (a per-invoke
+ * session for serving vs a resident one for chat).
  */
 export interface AgentAssembly {
   config: FastagentConfig;
@@ -82,8 +52,7 @@ export interface AgentAssembly {
   modelSpec: string;
   /** Absolute agent dir — definition + config + machinery live here (resolvePlacement().agentDir). */
   agentDir: string;
-  /** Absolute workspace — the agent's cwd and the start of the ②-context walk: the agent dir's parent
-   *  when the agent sits inside it, the agent dir ITSELF when you point at the agent. */
+  /** Absolute workspace — the agent's cwd and the start of the ②-context walk. */
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
@@ -101,9 +70,7 @@ export async function resolveAgentAssembly(
   dir: string,
   options: { model?: string; authPath?: string } = {},
 ): Promise<AgentAssembly> {
-  // Placement is structural (resolvePlacement): the AGENT DIR carries definition + config + machinery;
-  // its parent — the WORKSPACE — is what the agent works on: its cwd and the start of the ②-context
-  // walk (that is where it reads the project's AGENTS.md from).
+  // Placement is structural (resolvePlacement): the AGENT DIR carries definition + config + machinery; its parent.
   const { agentDir, workspace } = resolvePlacement(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
   const modelSpec = resolveModelSpec(options.model, config);
@@ -117,11 +84,10 @@ export async function resolveAgentAssembly(
     agentDir,
     workspace,
   );
-  // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
-  // in one knob — a container points it at its volume); the finer overrides below still win.
+  // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
+  // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
-  // The credentials file: project-level by default (under `<agentDir>/.secrets`); only resolved here, never
-  // created (a missing file reads as not-configured — `fastagent login` creates it).
+  // The credentials file: project-level by default (under `<agentDir>/.secrets`).
   const authPath = resolveAuthPath(agentDir, options.authPath);
   return {
     config,
@@ -140,10 +106,8 @@ export async function resolveAgentAssembly(
 }
 
 /**
- * "Point at a directory → agent": resolve the placement (`dir` may be either end — the workspace or
- * the agent dir itself), load the config, resolve model and tools, then L2. Throws a clear error when
- * no model source is set (fail visibly at startup). Returns everything an entry point needs to report
- * what it assembled.
+ * "Point at a directory → agent": resolve the placement (`dir` may be either end — the workspace or the agent dir
+ * itself), load the config, resolve model and tools, then L2.
  */
 export async function createPiAgentFromDir(
   dir: string,
@@ -165,15 +129,15 @@ export async function createPiAgentFromDir(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
-  /** The session store in use. */
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
-  /** Whether the agent schedules its own follow-up turns — read from the config, so a caller
-   *  assembling a service does not have to reach back into it (MountableAgent). */
+  /**
+   * Whether the agent schedules its own follow-up turns — read from the config, so a caller assembling a service does
+   * not have to reach back into it (MountableAgent).
+   */
   selfSchedule: boolean;
-  /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
-   *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
+  /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
   deferredToolNames: string[];
@@ -195,8 +159,8 @@ export async function createPiAgentFromDir(
     toolCollisions,
     toolFailures,
   } = await resolveAgentAssembly(dir, options);
-  // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND
-  // the author opted into self-scheduling (config.selfSchedule). The agent's own `wake` wins if defined.
+  // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
+  // opted into self-scheduling (config.selfSchedule).
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
@@ -210,18 +174,14 @@ export async function createPiAgentFromDir(
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
   });
-  // The hub is wired HERE because the store is created here (an external `createPiSessionControl`
-  // cannot exist before the store does). Its writes contend on the assembly's own lease and validate
-  // against its own registry — the value above is what makes "same" true. An extra caller observer
-  // composes after the hub's (TRUSTED seam).
+  // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
+  // the store does).
   const caller = options.observer;
   const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
   let hub: ReturnType<typeof createPiSessionControl> | undefined;
   if (wantControl) {
-    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building
-    // the registry reads credentials and is not. Resolve it ONCE here — the opener is async anyway,
-    // and the first turn would have paid the same read — so every boundary mutation validates
-    // against the same registry the runs use.
+    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
+    // credentials and is not.
     const { modelRuntime, model } = await assembly.engine();
     hub = createPiSessionControl({
       sessions,
@@ -231,16 +191,12 @@ export async function createPiAgentFromDir(
         sessionFactory: assembly.sessionFactory,
         defaults: { model, thinkingLevel: assembly.thinkingLevel },
       },
-      // Skills ARE the names a client offers — the resolved set, after collisions were decided
-      // first-wins, which a client cannot reconstruct from the directory. Read LIVE (the directory
-      // is the agent: a skill added while serving is in play on the next turn, so it must be
-      // listable now) and SKILLS-ONLY: this is called when a composer opens its completion list,
-      // and the full load's ② context walk buys nothing here.
+      // Skills ARE the names a client offers — the resolved set, after collisions were decided first-wins, which a
+      // client cannot reconstruct from the directory.
       commands: async () => {
         const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
-        // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the
-        // author's composer with no signal anywhere. The memo is SHARED with the turn path (keyed
-        // by dir), so a finding is warned when it appears, not once per reader that notices it.
+        // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer
+        // with no signal anywhere.
         reportFindingsIfChanged(loaded.dir, loaded);
         return loaded.skills.map((skill) => ({
           name: skill.name,
@@ -248,9 +204,8 @@ export async function createPiAgentFromDir(
           source: "skill",
         }));
       },
-      // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
-      // and never cross the data plane's observer seam — without this, an audit tap wired here
-      // would miss exactly the mutations it most needs to see (`update({ model })`).
+      // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
+      // data plane's observer seam.
       tap: caller ? (session, event) => caller(session, event) : undefined,
     });
   }

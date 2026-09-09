@@ -1,20 +1,6 @@
-/** Pure Unicode-safe text slicing helpers shared by channel rendering paths (Feishu/Lark cards, the preview kit). JavaScript string
- * indexes are UTF-16 code units, so direct `slice()` can tear a surrogate pair and send replacement
- * characters after JSON/UTF-8 encoding. These helpers only cut at Unicode code-point boundaries. */
+/** Pure Unicode-safe text slicing helpers shared by channel rendering paths (Feishu/Lark cards, the preview kit). */
 
-/**
- * How much of a replied-to message is quoted back into a prompt.
- *
- * A referent is the exact text the asker is pointing AT, not a summary of it, so the bound is a
- * fidelity bound: it must clear the largest message a chat platform will accept (Telegram's 4096 is
- * the tightest of ours) or a perfectly legal message loses its tail and the agent answers about text
- * it cannot see — silently. Past that point it is only a guard against a pathological message on a
- * platform with no practical cap. One constant for every channel: the failure this replaces was two
- * channels picking their own number and drifting 14x apart.
- *
- * Distinct from a context-buffer line (see BUFFER_LINE_MAX_CHARS), which is a digest competing for a
- * shared budget — different job, different unit, must not share a number.
- */
+/** How much of a replied-to message is quoted back into a prompt. */
 export const REFERENT_MAX_CODE_POINTS = 4096;
 
 /** Take at most `maxPoints` Unicode code points from the start, without adding a marker. */
@@ -28,24 +14,36 @@ export function codePointPrefix(text: string, maxPoints: number): string {
   return out.join("");
 }
 
+/**
+ * How much of `text` survives beside `marker`, or the finished answer when the marker alone decides it: nothing to
+ * cut, no room at all, or room for less than the marker. Both truncations answer those three the same way, so they
+ * are decided once.
+ */
+function budget(
+  text: string,
+  maxPoints: number,
+  marker: string,
+): { points: string[]; keep: number } | { done: string } {
+  const points = Array.from(text);
+  if (points.length <= maxPoints) return { done: text };
+  if (maxPoints <= 0) return { done: "" };
+  const markerPoints = Array.from(marker);
+  if (markerPoints.length >= maxPoints) return { done: markerPoints.slice(0, maxPoints).join("") };
+  return { points, keep: maxPoints - markerPoints.length };
+}
+
 /** Ellipsize from the right while keeping the result within `maxPoints` Unicode code points. */
 export function truncateCodePointPrefix(text: string, maxPoints: number, marker = "…"): string {
-  const points = Array.from(text);
-  if (points.length <= maxPoints) return text;
-  if (maxPoints <= 0) return "";
-  const markerPoints = Array.from(marker);
-  if (markerPoints.length >= maxPoints) return markerPoints.slice(0, maxPoints).join("");
-  return `${points.slice(0, maxPoints - markerPoints.length).join("")}${marker}`;
+  const fit = budget(text, maxPoints, marker);
+  if ("done" in fit) return fit.done;
+  return `${fit.points.slice(0, fit.keep).join("")}${marker}`;
 }
 
 /** Ellipsize from the left while keeping the result within `maxPoints` Unicode code points. */
 export function truncateCodePointSuffix(text: string, maxPoints: number, marker = "…"): string {
-  const points = Array.from(text);
-  if (points.length <= maxPoints) return text;
-  if (maxPoints <= 0) return "";
-  const markerPoints = Array.from(marker);
-  if (markerPoints.length >= maxPoints) return markerPoints.slice(0, maxPoints).join("");
-  return `${marker}${points.slice(points.length - (maxPoints - markerPoints.length)).join("")}`;
+  const fit = budget(text, maxPoints, marker);
+  if ("done" in fit) return fit.done;
+  return `${marker}${fit.points.slice(fit.points.length - fit.keep).join("")}`;
 }
 
 /** Largest code-point-aligned prefix whose UTF-8 encoding fits `maxBytes`. */

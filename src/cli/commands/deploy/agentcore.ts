@@ -1,6 +1,6 @@
 /**
- * `deploy agentcore`: one CloudFormation stack (runtime + forwarder Lambda + EventBridge schedules);
- * no public URL and no resident process — see deploy/agentcore/plan.ts for the topology decisions.
+ * `deploy agentcore`: one CloudFormation stack (runtime + forwarder Lambda + EventBridge schedules); no public URL and
+ * no resident process.
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,9 +33,8 @@ export const agentcoreHost: HostDeploy = {
   async deploy(ctx) {
     const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
     const { modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
-    // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a
-    // reclaimed session has nothing to wake it — events in the gap are silently lost. `--run` gates
-    // (deploying a channel that can't connect); generate-only warns and prints the runbook.
+    // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session
+    // has nothing to wake it.
     if (longConnectionChannels.length > 0) {
       const msg =
         `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) cannot run on AgentCore — there is no ` +
@@ -44,10 +43,8 @@ export const agentcoreHost: HostDeploy = {
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }
-    // selfSchedule is fully supported: pending wake-ups are mirrored into one-shot EventBridge
-    // schedules via the forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts).
-    // Schedules feed EventBridge rules — parsed facts (cron/tz), not just file names, so a bad file
-    // must surface here (a schedule silently missing its rule would never fire).
+    // selfSchedule is fully supported: pending wake-ups are mirrored into one-shot EventBridge schedules via the
+    // forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts).
     const loaded = await loadSchedules(agentDir).catch(failStartup);
     if (loaded.failures.length > 0) {
       failStartup(
@@ -58,8 +55,7 @@ export const agentcoreHost: HostDeploy = {
     }
     const acName = agentcoreName(basename(workspace));
     // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name
-    // (`fastagent-<name>-forwarder` ≤ 64 chars). Gate the base instead of silently truncating —
-    // truncation would break the redeploy identity (a renamed stack starts blank state).
+    // (`fastagent-<name>-forwarder` ≤ 64 chars).
     if (acName.length > 40) {
       failStartup(
         new Error(
@@ -78,15 +74,13 @@ export const agentcoreHost: HostDeploy = {
       ...container,
     });
     for (const u of plan.untranslatableSchedules) {
-      // Same discipline as Fly's kept-toml time-trigger gate: a deploy whose schedule silently never
-      // fires is worse than a stopped deploy — nothing fails visibly when the instant passes.
+      // Same discipline as Fly's kept-toml time-trigger gate: a deploy whose schedule silently never fires is worse
+      // than a stopped deploy.
       const msg = `schedule "${u.name}" cannot be expressed as an EventBridge rule — ${u.reason}`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg} — it will NOT fire on this deployment`);
     }
-    // Host capability limit, stated at plan time. GitHub's own webhook contract is 25 MiB, but a
-    // Lambda Function URL request caps at 6 MB — so on this host a large payload cannot arrive at
-    // all. Better a sentence here than an opaque 502 the first time someone pushes a big diff.
+    // Host capability limit, stated at plan time.
     if (channels.some((channel) => channel.name === "github")) {
       console.error(
         `[fastagent] note: on AgentCore a webhook body is capped at ~${Math.round(MAX_WEBHOOK_BODY_BYTES / (1 << 20))} MiB ` +
@@ -94,10 +88,7 @@ export const agentcoreHost: HostDeploy = {
           `payloads are rejected here rather than delivered`,
       );
     }
-    // The template IS the topology (EventBridge rules, wake wiring, secrets) — a kept generated
-    // template that no longer matches the definition would deploy a stack silently missing the
-    // difference (a new schedule with no rule never fires: the exact miss the gate above stops).
-    // A hand-written template (marker removed) is the operator's own — kept, never gated.
+    // The template IS the topology (EventBridge rules, wake wiring, secrets).
     const templateArtifact = plan.artifacts.find((a) => a.path.endsWith(TEMPLATE_FILE));
     const templateHome = join(workspace, templateArtifact?.path ?? TEMPLATE_FILE);
     if (!opts.force && templateArtifact && (await exists(templateHome))) {
@@ -134,13 +125,7 @@ export const agentcoreHost: HostDeploy = {
   },
 };
 
-/**
- * `deploy agentcore --run`: drive aws + docker to completion. Mirrors the fly driver — same
- * credential carry via {@link carryCredentials}, same runner seam (spawned `aws` + `docker`, cwd = the
- * workspace so the build context is the agent). The AgentCore-specific sequence (identity → buildx →
- * ECR → CloudFormation → outputs → webhooks) lives in {@link deployAgentcoreRun}; the params temp
- * file (secret values off argv) is created here — 0600, removed after the run either way.
- */
+/** `deploy agentcore --run`: drive aws + docker to completion. */
 async function runDeployAgentcore(
   params: ResolvedPlacement & {
     agentPrefix: string;
@@ -155,15 +140,13 @@ async function runDeployAgentcore(
 ): Promise<void> {
   const { agentDir, workspace, agentPrefix, name, channels, topology } = params;
   const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
-  // The wake-alarm shared secret (container ↔ forwarder). Minted fresh each run — both sides receive
-  // the SAME parameter, so rotation is atomic; it never needs to be remembered locally.
+  // The wake-alarm shared secret (container ↔ forwarder).
   if (topology.wakeAlarms) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
-  // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM
-  // principal's. Minted fresh each run — both sides receive the SAME parameter, so rotation is atomic.
+  // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM principal's.
   if (topology.forwarder) secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
   gateOnModelCredential(needsModelCredential);
-  // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides —
-  // never argv); 0700/0600 and removed after the run, success or gate.
+  // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides — never argv);
+  // 0700/0600 and removed after the run, success or gate.
   const paramsDir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-"));
   try {
     const outcome = await deployAgentcoreRun(

@@ -1,18 +1,4 @@
-/**
- * The product, as one call: an agent directory becomes a live service.
- *
- * That phrase is the promise on the README, and until this existed only the CLI could keep it. The
- * assembly parts live here too — `routesFor`, `mountSessionControl`, `startSchedules` — because a
- * public entry may not reach into `cli/`: that directory decides process-level things (`fail.ts`
- * calls `process.exit`) which a library mounted inside someone's app does not get to decide.
- * Everything else was parts: assemble the agent, discover channels, mount the control plane, start
- * schedules, open long connections, compose a router. An embedder had to know that list and get its
- * order right, and getting it wrong is silent: a plane that 404s while advertising itself, a
- * schedule that never fires.
- *
- * `dev`/`start` call this assembly. AgentCore uses channels/agentcore-service.ts: runtime storage
- * appears on invocation, channels activate on trusted ingress, and scheduling uses an external clock.
- */
+/** The product, as one call: an agent directory becomes a live service. */
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -32,10 +18,7 @@ import { log } from "./log.ts";
 import { reportModuleLoadFailures } from "./loader.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
-/** Default wait for a channel's `closed` before reporting it stuck. A channel that ignores its
- *  abort signal must not hang a caller's teardown — or, during a failed start, keep the original
- *  error from arriving. The CLI passes a shorter one: its own forced exit must come AFTER this, or
- *  the process leaves at 0 before the failure is known. */
+/** Default wait for a channel's `closed` before reporting it stuck. */
 const CLOSE_DEADLINE_MS = 5_000;
 
 /** One deadline for all connections; a failed close must not hide a sibling that is still running. */
@@ -85,14 +68,13 @@ export interface ServingSurface {
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
   builtinInvoke: boolean;
-  /** Flip health between 200 and 503. Two-way on purpose: a long connection that dies after coming
-   *  up leaves the surface serving something it no longer has, and a load balancer should hear it. */
+  /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
 
 /**
- * The surface this deployment serves: default `GET /health` plus discovered channels, or the default
- * POST `/invoke` only when neither a route nor a long-connection channel was declared.
+ * The surface this deployment serves: default `GET /health` plus discovered channels, or the default POST `/invoke`
+ * only when neither a route nor a long-connection channel was declared.
  */
 export async function routesFor(
   agentDir: string,
@@ -136,17 +118,7 @@ export async function routesFor(
   };
 }
 
-/**
- * Refuse channel routes the control plane would swallow.
- *
- * `router` refuses this too, and would catch it a moment later; this exists for the sentence, not
- * the check — an author who lands a route under `/control` needs to hear about `sessionControl`,
- * which the host has no way to mention. Both ask {@link pathUnderPrefix}, so there is one rule with
- * two wordings, not two rules.
- *
- * Called from BOTH mount points: here at boot, and again on agentcore's lazy path, whose channels
- * load after this ran against an empty base.
- */
+/** Refuse channel routes the control plane would swallow. */
 export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: PrefixMount): void {
   const collisions = Object.keys(channelRoutes).filter((key) => pathUnderPrefix(parseRouteKey(key).path, plane.prefix));
   if (collisions.length > 0) {
@@ -164,32 +136,23 @@ export function mountSessionControl(
 ): {
   routes: Routes;
   mounts: PrefixMount[];
-  /** The plane's bearer token and prefix — how a caller distributes access (the CLI writes it to
-   *  `<stateRoot>/control.json` for local discovery; an embedder hands it out itself). */
+  /**
+   * The plane's bearer token and prefix — how a caller distributes access (the CLI writes it to
+   * `<stateRoot>/control.json` for local discovery; an embedder hands it out itself).
+   */
   control?: { token: string; prefix: string };
 } {
   if (!control) return { routes, mounts: [] };
-  // WHO OWNS the secret. Per-boot mint is right locally: discovery is `control.json` and its file
-  // permissions, which works because both holders share a filesystem. A deployment removes that
-  // premise — a token minted in the container is replaced every restart and reachable only by shelling
-  // in — so there the deployer mints it and injects it here, like the wake/ingress secrets.
-  // Trimmed on read, like `.env` values already are: a token pasted from a dashboard with a trailing
-  // newline would otherwise become the box's token verbatim, and every caller holding the clean value
-  // gets a bare 401 — the undiagnosable symptom, one character wide.
+  // WHO OWNS the secret.
   const injected = process.env[CONTROL_TOKEN_ENV]?.trim();
-  // SET BUT EMPTY is the deployed default, not an edge case: the generated Compose topology writes
-  // every secret as `NAME: "${NAME:-}"`, so an operator who skipped this one lands here. Falling back
-  // silently would leave exactly the symptom the injection exists to remove — a token the caller does
-  // not have — with nothing in the log to tell it apart from a deployment that never asked.
+  // SET BUT EMPTY is the deployed default, not an edge case.
   if (injected === "") {
     log.warn(
       `[fastagent] ${CONTROL_TOKEN_ENV} is set but empty — minting a per-boot token instead; callers holding ` +
         "the deploy-time value will get 401 (set it, or read the minted one from control.json on the box)",
     );
   } else if (injected !== undefined && injected.length < 16) {
-    // Length is a crude proxy for entropy — sixteen `a`s pass. It is aimed at `changeme`, which this
-    // change makes newly dangerous: the plane went from unusable-in-a-deployment to usable by whoever
-    // holds this string, and the empty case is the only other thing that says anything.
+    // Length is a crude proxy for entropy — sixteen `a`s pass.
     log.warn(
       `[fastagent] ${CONTROL_TOKEN_ENV} is ${injected.length} characters — it is the ONLY thing between ` +
         "/control/* (steer, stop, rewrite a session) and anyone who can reach the port; use a random value (uuidgen)",
@@ -201,12 +164,7 @@ export function mountSessionControl(
   return { routes, mounts: [plane], control: { token, prefix: plane.prefix } };
 }
 
-/**
- * Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
- * there are static schedules OR `selfSchedule` is on. Best-effort stop on process signals. Returns the
- * loaded schedules so a serving surface that needs them (the AgentCore adapter's fire binding) shares
- * ONE load instead of re-discovering. `externalClock` (AgentCore) arms no resident cron timers.
- */
+/** Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. */
 export async function startSchedules(
   agentDir: string,
   agent: Agent,
@@ -214,9 +172,8 @@ export async function startSchedules(
   selfSchedule: boolean,
   options: { externalClock?: boolean } = {},
 ): Promise<{ schedules: LoadedSchedule[]; stop: () => void }> {
-  // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library
-  // that calls process.exit takes a decision (degrade? retry? stop?) that belongs to its host. The
-  // CLI catches at its own boundary.
+  // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library that calls
+  // process.exit takes a decision (degrade? retry? stop?) that belongs to its host.
   const { schedules, failures } = await loadSchedules(agentDir);
   reportModuleLoadFailures(failures);
   if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
@@ -233,57 +190,43 @@ export async function startSchedules(
 }
 
 export interface AgentService {
-  /** The assembled Fetch handler: channel routes, the control plane, and health. Mount it wherever
-   *  your host speaks `(Request) => Response`; `nodeListener` bridges it to Node's `(req, res)`. */
+  /** The assembled Fetch handler: channel routes, the control plane, and health. */
   handler: ChannelHandler;
   /** The agent behind it — invoke it directly when you also want a programmatic path. */
   agent: Agent;
-  /** The literal routes `handler` was composed from — for a startup line naming what is served.
-   *  Mounted prefixes are not here: nothing outside the assembly needed them, and a field kept for a
-   *  hypothetical caller is a field nobody maintains. */
+  /** The literal routes `handler` was composed from — for a startup line naming what is served. */
   routes: Routes;
   agentDir: string;
   workspace: string;
-  /** What actually mounted, for a startup line: channel files serving routes, long connections, and
-   *  whether the built-in `POST /invoke` fallback is one of the routes. That last one is a FACT of
-   *  the assembly, not something to re-infer from a path — a channel may legally author
-   *  `POST /invoke` with a protocol of its own. */
+  /**
+   * What actually mounted, for a startup line: channel files serving routes, long connections, and whether the
+   * built-in `POST /invoke` fallback is one of the routes.
+   */
   channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
   schedules: readonly LoadedSchedule[];
-  /** Settles when every long connection is up — immediately when there are none. REJECTS if one
-   *  fails to come up, after closing the service: a host must not report itself serving while a
-   *  declared channel is dead, and health answers 503 until this resolves. */
+  /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
-  /** The control plane's bearer token and prefix, when `sessionControl` is on — how a caller hands
-   *  access to a client. The CLI writes it to `<stateRoot>/control.json` for `fastagent attach`; an
-   *  embedder mounted inside a larger app has no port of its own to describe and distributes it
-   *  itself. */
+  /**
+   * The control plane's bearer token and prefix, when `sessionControl` is on — how a caller hands access to a client.
+   */
   control?: { token: string; prefix: string };
-  /** Stop long connections and schedules. Idempotent; also runs when `options.signal` aborts. */
+  /** Stop long connections and schedules. */
   close(): Promise<void>;
 }
 
 /** What {@link mountAgentService} needs beyond an opened directory. */
 export interface MountAgentServiceOptions {
-  /** Wrap the agent before anything consumes it — every consumer (routes, control plane, schedules)
-   *  must get the SAME one, which is why this is a hook rather than the caller's own call. `dev`
-   *  passes `logAgentLoop`. */
+  /** Wrap the agent before anything consumes it. */
   wrapAgent?: (agent: Agent) => Agent;
   /** Aborting this closes the service, exactly like calling {@link AgentService.close}. */
   signal?: AbortSignal;
-  /** Called when a long connection ends on its own — a dropped socket-mode channel, say. The CLI
-   *  exits; an embedded host may prefer to log. Default: log an error. */
+  /** Called when a long connection ends on its own — a dropped socket-mode channel, say. */
   onChannelClosed?: (name: string, error?: unknown) => void;
-  /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). The CLI
-   *  shortens it so its own forced exit lands after this answer, not before it. */
+  /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). */
   closeTimeoutMs?: number;
 }
 
-/**
- * What the assembly needs from an opened agent directory — the whole of it. Spelled as its own type
- * rather than an engine's return shape: every field here is either the SPEC contract or a path, so
- * an engine that is not pi can satisfy it without either side knowing about the other.
- */
+/** What the assembly needs from an opened agent directory — the whole of it. */
 export interface MountableAgent {
   agent: Agent;
   /** The definition dir: where channels/, tools/ and schedules/ are read from. */
@@ -294,36 +237,27 @@ export interface MountableAgent {
   stateRoot: string;
   /** Present iff this agent published a control plane. */
   sessionControl?: SessionControl;
-  /** Whether the agent schedules its own follow-up turns. REQUIRED, not optional-with-a-default:
-   *  an engine that forgot it would turn self-scheduling off silently, which is exactly the bug
-   *  this type was introduced with. */
+  /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
 }
 
 /**
- * The assembly itself, over an already-opened directory: channels, the control plane, schedules and
- * long connections, composed into one handler.
- *
- * {@link createAgentService} is this plus opening the directory. `dev`/`start` open separately — their
- * startup report needs the opened values before anything mounts — and then arrive here, so there is
- * one assembly rather than one per caller.
+ * The assembly itself, over an already-opened directory: channels, the control plane, schedules and long connections,
+ * composed into one handler.
  */
 export async function mountAgentService(
   opened: MountableAgent,
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
-  // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the
-  // same agent, so this is a hook rather than something a caller applies afterwards.
+  // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the same agent, so
+  // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
   const withControl = mountSessionControl(routed.routes, sessionControl, { agent });
-  // Composed BEFORE anything starts. `router` re-validates what `loadChannels` and the control
-  // mount already checked, so on THIS path it should not fail — but "should not" is not an ordering
-  // guarantee, and a throw after the scheduler ticks and channels dial would leave both running
-  // with no service for the caller to close. Free to order correctly; expensive to discover later.
+  // Composed BEFORE anything starts.
   const handler = router(withControl.routes, withControl.mounts);
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -346,8 +280,7 @@ export async function mountAgentService(
         onClosed(name, error);
       };
 
-      // Scope.close alone does not join concurrent closes or retain their failure. Cache the whole
-      // shutdown so every caller waits for the same result, including startup rollback.
+      // Scope.close alone does not join concurrent closes or retain their failure.
       const shutdown = yield* Effect.cached(
         Effect.gen(function* () {
           abort.abort();
@@ -368,7 +301,6 @@ export async function mountAgentService(
 
       return yield* Effect.gen(function* () {
         // Registered first, so subscriptions and schedule timers stop before waiting for transports.
-        // Finalizers have no typed error channel; a close failure must reject the public Promise.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.tryPromise({
@@ -430,8 +362,7 @@ export async function mountAgentService(
             () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
           );
 
-        // The public readiness waiter lives outside the scope it may roll back. Its source fibers
-        // belong to the service, so closing also releases waits on an uncooperative channel.
+        // The public readiness waiter lives outside the scope it may roll back.
         const ready = Effect.runPromise(
           Effect.gen(function* () {
             yield* Effect.forEach(readiness, Fiber.join, { concurrency: "unbounded", discard: true });

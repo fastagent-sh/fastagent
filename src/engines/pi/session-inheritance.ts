@@ -1,18 +1,6 @@
 /**
- * Where a NEW thread starts from, when it names a parent — participant-model.md §5's rule ("a thread
- * starts from what the room knew"), on pi's `SessionManager`.
- *
- * Shape: copy the parent's ACTIVE PATH up to the branch point (everything — text, images, tool
- * results — because they are entries, not prompt text), then bound what the MODEL sees with one
- * mechanical compaction mark (a plain string; zero model calls). Disk keeps the full copy — storage
- * and context are different budgets — and pi honors the mark exactly as it honors a real compaction.
- *
- * Read ONLY on the create path. An existing session ignores it entirely, which is what makes
- * inheritance one-time by construction: no marker to persist, no decision to retry per turn; the
- * session existing IS the record that the decision was taken.
- *
- * Every failure lands on "start empty + warn": a thread must not lose its first turn to an
- * inheritance edge.
+ * Where a NEW thread starts from, when it names a parent — participant-model.md §5's rule ("a thread starts from what
+ * the room knew"), on pi's `SessionManager`.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompactionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -21,28 +9,25 @@ import { isPlaneMarker } from "./session-markers.ts";
 
 /** What a Caller names when a new session should start from an existing one. */
 export interface SessionInheritance {
-  /** The session to inherit from. Missing or unreadable → start empty, with a warn: context is not
-   *  the ask, and losing it must not cost the turn. */
   parentSession: string;
-  /** Opaque markers that MAY locate the branch point on the parent's active path (searched in
-   *  message content, first hit wins, most recent occurrence). No match → the parent's present. */
+  /**
+   * Opaque markers that MAY locate the branch point on the parent's active path (searched in message content, first
+   * hit wins, most recent occurrence).
+   */
   branchHints?: string[];
 }
 
 /** Inheritance window: at most this many exchanges of the parent reach the child's model context. */
 const INHERIT_MAX_EXCHANGES = 50;
-/** …and at most roughly this many tokens (~1/4 of a 200K context: generous, not everything). Both
- *  limits govern how far the window EXTENDS into older history — the newest exchange is a FLOOR,
- *  kept whole even when it alone exceeds the budget: the mark's boundary is entry-granular, and an
- *  inheritance that drops the exchange the thread branched off would be no inheritance at all. */
+/** …and at most roughly this many tokens (~1/4 of a 200K context: generous, not everything). */
 const INHERIT_MAX_TOKENS = 50_000;
-/** Branch hints are IDS, not payloads: each one costs a scan over the parent's serialized path, and
- *  the wire accepts arbitrary arrays — so the engine caps them where the cost lives. */
+/**
+ * Branch hints are IDS, not payloads: each one costs a scan over the parent's serialized path, and the wire accepts
+ * arbitrary arrays.
+ */
 const MAX_BRANCH_HINTS = 16;
 const MAX_BRANCH_HINT_CHARS = 128;
-/** A vision image is priced FLAT — what a provider bills for a resized image, roughly — because its
- *  base64 length (~1M chars for a photo) measures storage, not context: pricing it by chars would
- *  let one photo evict the whole text window. */
+/** A vision image is priced FLAT — what a provider bills for a resized image, roughly. */
 const INHERIT_IMAGE_TOKENS = 1_600;
 
 /** A pi session entry, read loosely: this module only needs the tree fields and a message payload. */
@@ -53,9 +38,7 @@ type Entry = {
   message?: AgentMessage;
   content?: string | unknown[];
   summary?: string;
-  // Bound to pi's own field so the shape change the compaction reader documents cannot land quietly:
-  // dropping `firstKeptEntryId` for a self-contained `retainedTail` (pi-agent-core's form) makes this
-  // index fail to typecheck. Adding `retainedTail` BESIDE the pointer would still compile.
+  // Bound to pi's own field so the shape change the compaction reader documents cannot land quietly.
   firstKeptEntryId?: CompactionEntry["firstKeptEntryId"];
 };
 
@@ -63,8 +46,7 @@ function isUserMessage(entry: Entry | undefined): boolean {
   return entry?.type === "message" && entry.message?.role === "user";
 }
 
-/** Rough token estimate for windowing — text at chars/4, images flat. Precision is not the point:
- *  the window is a budget, and being 20% off moves a boundary by an exchange, not correctness. */
+/** Rough token estimate for windowing — text at chars/4, images flat. */
 function estimateContentTokens(content: unknown): number {
   if (typeof content === "string") return Math.ceil(content.length / 4);
   if (!Array.isArray(content)) return 0;
@@ -77,26 +59,17 @@ function estimateContentTokens(content: unknown): number {
   return tokens;
 }
 
-/** Both entry kinds pi projects into model context from a copied path: a `custom_message` is an
- *  extension's injection INTO the conversation, so it charges the budget like any message. */
+/** Both entry kinds pi projects into model context from a copied path. */
 function estimateEntryTokens(entry: Entry): number {
   if (entry.type === "message") return estimateContentTokens((entry.message as { content?: unknown })?.content);
   if (entry.type === "custom_message") return estimateContentTokens(entry.content);
   return 0;
 }
 
-/** A compaction entry's summary AND its retained tail — the entries from `firstKeptEntryId` up to
- *  the compaction — DO reach the model. They are the floor under every window that starts above the
- *  compaction, so the budget must count them; the tail is read off the path, since pi-coding-agent's
- *  SessionManager stores it as a POINTER and not as messages on the entry (0.84: `appendCompaction`
- *  writes `firstKeptEntryId`, and both of AgentSession's compaction paths go through it).
- *
- *  pi-agent-core's harness writes the newer self-contained form instead — `retainedTail` on the entry,
- *  no pointer. If pi-coding-agent adopts it the pointer stops resolving, and this function prices the
- *  tail at zero while {@link copyBranchInto} drops it. Adopting it the way pi-agent-core did, by
- *  REPLACING the pointer, fails to typecheck at `Entry.firstKeptEntryId` rather than running quietly;
- *  a `retainedTail` added BESIDE the pointer would not, and is the case to watch on the next bump.
- *  Either way this is the place to change — not a reason to read both shapes today. */
+/**
+ * A compaction entry's summary AND its retained tail — the entries from `firstKeptEntryId` up to the compaction — DO
+ * reach the model.
+ */
 function estimateCompactionTokens(path: Entry[], compactionIdx: number): number {
   const compaction = path[compactionIdx];
   if (compaction?.type !== "compaction") return 0;
@@ -110,12 +83,7 @@ function estimateCompactionTokens(path: Entry[], compactionIdx: number): number 
   return tokens;
 }
 
-/**
- * Find the fork target on the parent's active path: the LAST message whose content carries a hint
- * (the most recent turn that talked about that message), extended forward to the end of its exchange
- * — forking mid-exchange would inherit a question without its answer. Hints are tried in caller
- * order; the first that matches anywhere wins. No match → undefined (the caller forks the present).
- */
+/** Find the fork target on the parent's active path. */
 function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
   const usable = hints
     .filter((hint) => hint.length > 0 && hint.length <= MAX_BRANCH_HINT_CHARS)
@@ -126,9 +94,7 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
     );
   }
   if (usable.length === 0) return undefined;
-  // Serialize each message ONCE — the scan is hints × entries, and stringify must not sit in the
-  // inner loop. The whole message, not just content: shape-agnostic, and a hint is a platform id —
-  // a false positive would need the id to appear outside content, which is where ids live anyway.
+  // Serialize each message ONCE — the scan is hints × entries, and stringify must not sit in the inner loop.
   const serialized = path.map((entry) => (entry.type === "message" ? JSON.stringify(entry.message) : ""));
   for (const hint of usable) {
     for (let i = path.length - 1; i >= 0; i--) {
@@ -141,12 +107,7 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
   return undefined;
 }
 
-/**
- * Bound what the child's MODEL CONTEXT starts with: keep the newest exchange unconditionally, extend
- * older while both window limits hold, and mark the boundary with a mechanical compaction entry.
- * Entries above the parent's own last compaction are already outside model context and need no mark;
- * a child whose visible history fits the window gets no mark at all.
- */
+/** Bound what the child's MODEL CONTEXT starts with. */
 function markInheritanceWindow(child: SessionManager): void {
   const path = child.getBranch() as unknown as Entry[];
   let scanFrom = 0;
@@ -157,8 +118,8 @@ function markInheritanceWindow(child: SessionManager): void {
     }
   }
   const scanned = path.slice(scanFrom);
-  // The compaction's own summary + retained tail reach the model regardless of where the window
-  // lands, so they charge the budget as a base cost — not estimating them would over-admit.
+  // The compaction's own summary + retained tail reach the model regardless of where the window lands, so they charge
+  // the budget as a base cost.
   const baseTokens = estimateCompactionTokens(path, scanFrom - 1);
   const starts: number[] = [];
   scanned.forEach((entry, i) => {
@@ -190,10 +151,7 @@ function markInheritanceWindow(child: SessionManager): void {
   );
 }
 
-/**
- * The branch point this inheritance should copy up to, and the parent's path — the decision half,
- * shared by both backends because WHERE a thread branches is policy, not storage.
- */
+/** The branch point this inheritance should copy up to, and the parent's path. */
 export function inheritanceCut(parent: SessionManager, branchHints?: string[]): { at: string } | undefined {
   const path = parent.getBranch() as unknown as Entry[];
   const leaf = path[path.length - 1];
@@ -207,22 +165,16 @@ export function inheritanceCut(parent: SessionManager, branchHints?: string[]): 
 }
 
 /**
- * Copy the parent's path up to `at` into `child`, entry by entry — what a backend with no FILE to
- * fork has to do instead. Kinds pi models as facts about an entry rather than positions (labels,
- * the session name) are not copied: they describe the parent's record, not the thread's history.
- *
- * The COPY only. Bounding what the child's model sees is {@link markInheritanceWindow}, which only
- * {@link copyBranchForInheritance} applies: a lifecycle fork that marked a window would hide the
- * exact entries its user forked to keep.
+ * Copy the parent's path up to `at` into `child`, entry by entry — what a backend with no FILE to fork has to do
+ * instead.
  */
 export function copyBranchInto(parent: SessionManager, child: SessionManager, at: string): void {
-  /** Parent entry id → the child's id for that entry: the copy mints its own, and a compaction
-   *  points BACK into the path it was appended to. */
+  /**
+   * Parent entry id → the child's id for that entry: the copy mints its own, and a compaction points BACK into the
+   * path it was appended to.
+   */
   const copied = new Map<string, string>();
-  /** Ids of entries this copy did NOT append. A compaction's `firstKeptEntryId` routinely names one:
-   *  pi walks the cut point backwards onto the metadata entries adjacent to it, which carry no
-   *  context. They resolve to the next entry that survived — the retained tail starts there — so a
-   *  dropped anchor moves the boundary by an invisible entry instead of erasing the whole tail. */
+  /** Ids of entries this copy did NOT append. */
   let unanchored: string[] = [];
   const record = (parentId: string, childId: string) => {
     for (const id of unanchored) copied.set(id, childId);
@@ -249,8 +201,8 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         }
         break;
       case "custom_message":
-        // Model-visible history, unlike the `custom` entries below it: an extension injected it INTO
-        // the conversation, and the assistant messages answering it are being copied.
+        // Model-visible history, unlike the `custom` entries below it: an extension injected it INTO the
+        // conversation, and the assistant messages answering it are being copied.
         childId = child.appendCustomMessageEntry(
           entry.customType ?? "",
           entry.content as Parameters<SessionManager["appendCustomMessageEntry"]>[1],
@@ -259,12 +211,8 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         );
         break;
       case "compaction":
-        // `firstKeptEntryId` is where the RETAINED TAIL starts — the entries pi did not summarize,
-        // which still reach the model. Translated through the copy rather than pinned to the child's
-        // leaf: pinning kept exactly ONE entry, and when that entry was a toolResult (a compaction
-        // lands wherever the turn ended) the child's first request opened with a tool result whose
-        // call had been summarized away, which every provider rejects. An id the copy never saw
-        // keeps nothing, which is what pi itself does with a pointer it cannot resolve.
+        // `firstKeptEntryId` is where the RETAINED TAIL starts — the entries pi did not summarize, which still reach
+        // the model.
         childId = child.appendCompaction(
           entry.summary ?? "",
           copied.get(entry.firstKeptEntryId ?? "") ?? "",
@@ -279,12 +227,7 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         if (entry.thinkingLevel) childId = child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
-        // The plane's markers describe the parent's RECORD, not the thread's history: a copied
-        // provenance would make a fork of a fork claim its grandparent's branch point (the
-        // idempotency check reads that value), and a copied leaf anchor would pin the child's head
-        // to a position its own history never chose. Every other custom entry is history and travels
-        // — the engine's tool-activation delta above all, since the copied assistant messages call
-        // the tools it records.
+        // The plane's markers describe the parent's RECORD, not the thread's history.
         if (entry.customType && !isPlaneMarker(entry)) {
           childId = child.appendCustomEntry(entry.customType, entry.data);
         }
@@ -297,18 +240,13 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
   }
 }
 
-/** {@link copyBranchInto} plus the inheritance window — what a new THREAD gets and a fork does not.
- *  Both backends call THIS one, so neither can drift on where a child's context begins. */
+/** {@link copyBranchInto} plus the inheritance window — what a new THREAD gets and a fork does not. */
 export function copyBranchForInheritance(parent: SessionManager, child: SessionManager, at: string): void {
   copyBranchInto(parent, child, at);
   markInheritanceWindow(child);
 }
 
-/*
- * There is deliberately NO file-level fork here. pi can copy a path into a new file
- * (`createBranchedSession` + `forkFrom`), but that pair writes the intermediate only when the copied
- * path contains an ASSISTANT message — so forking at a user entry hands `forkFrom` a path that does
- * not exist, and the failure reads as retryable for a condition no retry can change. Copying entries
- * is what a backend with no file to fork has to do anyway, so both share these functions and one
- * semantics; a fork is not hot enough to buy a second path back.
- */
+// There is deliberately NO file-level fork here. pi can copy a path into a new file (`createBranchedSession` +
+// `forkFrom`), but that pair writes the intermediate only when the copied path contains an ASSISTANT message — so
+// forking at a user entry hands `forkFrom` a path that does not exist, and the failure reads as retryable for a
+// condition no retry can change.

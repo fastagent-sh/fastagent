@@ -9,11 +9,7 @@ export interface SlackSetupServer {
   close(): Promise<void>;
 }
 
-/**
- * Temporary onboarding-only responder. Its unguessable paths live for one command: one path echoes only
- * Slack's URL-verification challenge, while the other captures one OAuth redirect. It never accepts
- * event callbacks or runs Agent work.
- */
+/** Temporary onboarding-only responder. */
 export async function startSlackSetupServer(): Promise<SlackSetupServer> {
   const nonce = randomBytes(24).toString("hex");
   const requestPath = `/slack/setup/${nonce}`;

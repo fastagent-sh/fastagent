@@ -1,33 +1,16 @@
-/**
- * The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. Not
- * "engine-neutral" in this repo's sense — that term is reserved for code with no engine import at
- * all (src/agent.ts), and the terminals here read pi's message shape. What they do not touch is how
- * a turn is driven, which is why they survived the engine change unaltered.
- *
- *   Lease       — single-writer concurrency floor (injectable port + in-process default)
- *   Terminals   — a settled pi message or a thrown error → the SPEC terminal, `retryable` included
- *   Prompt prep — SPEC images → pi's ImageContent
- *   Projection  — the rich SessionEvent stream → the narrow SPEC one
- *   Observation — the seam a control-plane hub attaches to (RunControls + SessionObserver)
- *
- * What is NOT neutral — pi's event vocabulary and how a turn is driven — stays in invoke-session.ts,
- * the L0 that owns it.
- */
+/** The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. */
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
 import type { SessionEvent } from "../../session.ts";
 
 // ── Lease: single-writer concurrency floor ──────────────────────────────────
 //
-// Corruption-prevention floor only: it does not pick a UX. Fail-fast over queueing because real
-// same-session concurrency is mostly duplicate intent or a user firing follow-ups, not two real
-// turns; a queue would also leak a slot when a waiter is cancelled. Synchronous (no awaits) so
-// nothing interleaves between acquire and entering try — cancellation always releases in finally.
+// Corruption-prevention floor only: it does not pick a UX.
 
 export type Release = () => void;
 
 export interface Lease {
-  /** Try to acquire exclusive write access for the session (fail-fast). Returns null if held. */
+  /** Try to acquire exclusive write access for the session (fail-fast). */
   tryAcquire(session: string): Release | null;
 }
 
@@ -91,13 +74,7 @@ function errorSignal(error: unknown): { status?: number; code?: unknown } {
   return { status, code: e.code ?? causeCode };
 }
 
-/**
- * Pull the structured error `code` pi records on a failed message's diagnostics. `diagnostics`
- * accumulates across attempts (`appendAssistantMessageDiagnostic`), so the terminal cause is the LAST
- * code-bearing entry — `findLast`, not `find`: an earlier attempt's transient 503 must not classify a
- * terminal 400/auth failure as retryable. (Reverse scan rather than `findLast` — the tsconfig lib is
- * ES2022.)
- */
+/** Pull the structured error `code` pi records on a failed message's diagnostics. */
 function messageSignal(message: AssistantMessage): { status?: number; code?: unknown } {
   const diagnostics = message.diagnostics ?? [];
   for (let i = diagnostics.length - 1; i >= 0; i--) {
@@ -107,14 +84,14 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
   return {};
 }
 /**
- * Terminal mapping, decided by the resolved message's stopReason: pi's prompt() resolves a message
- * with stopReason "error"/"aborted" rather than throwing, so relying on catch alone would miss this
- * entire failure class (violating SPEC MUST 1).
+ * Terminal mapping, decided by the resolved message's stopReason: pi's `prompt()` RESOLVES a message with stopReason
+ * "error"/"aborted" rather than throwing, so relying on catch alone would miss that whole failure class and violate
+ * SPEC MUST 1.
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "aborted") {
-    // A deliberate stop (a control-plane or consumer abort), not an error — see {@link ABORTED_CODE}
-    // for the consumer contract (design §6).
+    // A deliberate stop (a control-plane or consumer abort), not an error — see {@link ABORTED_CODE} for the consumer
+    // contract (design §6).
     const details = message.errorMessage ?? "run aborted";
     return { type: "failed", details, retryable: false, code: ABORTED_CODE };
   }
@@ -130,10 +107,8 @@ export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "fa
   return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
 }
 /**
- * Map prompt images to pi ImageContent, resizing each to model-friendly dimensions/size with pi's
- * Photon resizer (reused from pi-coding-agent, lazy-imported so the common no-image headless path never
- * loads the TUI module graph). A null resize (unresizable / Photon unavailable) keeps the original
- * bytes — the provider then applies its own limit.
+ * Map prompt images to pi ImageContent, resizing each to model-friendly dimensions/size with pi's Photon resizer
+ * (reused from pi-coding-agent, lazy-imported so the common no-image headless path never loads the TUI module graph).
  */
 export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageContent[] } | undefined> {
   if (!prompt.images || prompt.images.length === 0) return undefined;
@@ -152,30 +127,17 @@ export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: Imag
   );
   return { images };
 }
-/** Live modulation handles for one active run — what the control plane's `dispatch` routes to.
- *  Built inside the turn (it owns the engine instance); registered with the observer at
- *  run_started, gone after run_settled. RACE WINDOW (all three commands, symmetric): the run may
- *  resolve between the settled-check and the engine call landing — an accepted `abort` can still
- *  settle `completed`, and an accepted `steer`/`followUp` can settle without the prompt ever being
- *  consumed. Acceptance is not outcome; the settlement is the truth. */
+/** Live modulation handles for one active run — what the control plane's `dispatch` routes to. */
 export interface RunControls {
   steer(prompt: Prompt): Promise<void>;
   followUp(prompt: Prompt): Promise<void>;
   abort(): Promise<void>;
 }
 
-/** The DATA-plane observation seam: every rich event of every run, pushed as it happens. `run`
- *  carries the live {@link RunControls}, attached to the `run_started` event only. A hub
- *  (session-control.ts) implements this to serve `events()`/`state()`/`dispatch`; absent = zero
- *  overhead. Scope: RUN events only — the hub's own boundary-mutation events (`state_changed`,
- *  `compaction_*`) originate in the hub and reach full-vocabulary taps via the hub's `tap` option,
- *  not this seam. TRUST BOUNDARY: this seam hands every wired observer the run's modulation handles — it is the trusted hub seam, not a public fan-out point. Do not wire
- *  untrusted taps here; give third parties the read-only `events()` stream instead. */
+/** The DATA-plane observation seam: every rich event of every run, pushed as it happens. */
 export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
 
-/** The SPEC projection of the rich stream. Events with no `AgentEvent` counterpart (progress,
- *  message boundaries, run boundaries) project to null — the invoke terminal is produced from the
- *  resolved message ({@link toTerminal}), not from `run_settled`. */
+/** The SPEC projection of the rich stream. */
 export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
   switch (se.type) {
     case "message_delta": {
@@ -191,8 +153,7 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
       return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
     }
     case "retry_scheduled": {
-      // `operation` (compaction | branch_summary) stays session-plane vocabulary — a turn renderer
-      // only needs "transient failure, retrying"; the engine detail lives in the control plane.
+      // `operation` (compaction | branch_summary) stays session-plane vocabulary.
       const d = se.data as { attempt: number; maxAttempts: number; delayMs: number; error: string };
       return { type: "retrying", attempt: d.attempt, maxAttempts: d.maxAttempts, delayMs: d.delayMs, reason: d.error };
     }

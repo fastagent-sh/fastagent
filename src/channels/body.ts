@@ -1,7 +1,4 @@
-/**
- * Read a request body with a hard byte cap (real bytes). A streaming cap is the only robust guard
- * against an unbounded body (Content-Length is bypassable with chunked encoding). Web-streams only.
- */
+/** Read a request body with a hard byte cap (real bytes). */
 export async function readBodyCapped(req: Request, max: number): Promise<{ text: string } | { tooLarge: true }> {
   if (!req.body) return { text: "" };
   const reader = req.body.getReader();

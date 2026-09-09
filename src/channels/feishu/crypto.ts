@@ -1,26 +1,16 @@
 /**
- * Canonical Feishu webhook security (reused by Lark compatibility) — PURE: AES event decryption and request
- * signature, exactly as the open platform defines them. When an Encrypt Key is configured in the
- * developer console, every event arrives as `{"encrypt": "<base64>"}` with signature headers; without
- * one, events arrive in plaintext and carry only the verification token in the body. feishu.ts owns the
- * fail-closed policy (which checks run when); this module owns the math.
- *
- *  - Decryption: AES-256-CBC. The key is sha256(encryptKey); the base64 payload is IV (16 bytes) ‖
- *    ciphertext; the plaintext is the event JSON (PKCS#7 padding handled by the cipher).
- *  - Signature: `X-Lark-Signature = sha256(timestamp + nonce + encryptKey + rawBody)` hex, where
- *    rawBody is the VERBATIM request body (the encrypted form) — computed over bytes, so the caller
- *    must pass the raw text, never a re-serialization.
- *
- * Comparisons are constant-time (timingSafeEqual) so neither the signature check nor the verification-
- * token check leaks a timing signal.
+ * Canonical Feishu webhook security (reused by Lark compatibility) — PURE: AES event decryption and request signature,
+ * exactly as the open platform defines them.
  */
 import { createDecipheriv, createHash } from "node:crypto";
 import { secretEquals } from "../secret.ts";
 
-/** Decrypt an `{"encrypt": …}` event payload to its plaintext JSON string. Throws on malformed
- * input or invalid padding. AES-CBC is not authenticated, so a wrong key is not mathematically
- * guaranteed to fail padding; the caller verifies signed events before decrypting and JSON-parses every
- * plaintext envelope, turning wrong-key garbage into a 4xx rather than a silent drop. */
+/**
+ * Decrypt an `{"encrypt": …}` event payload to its plaintext JSON string; throws on malformed input or invalid
+ * padding. AES-CBC is NOT authenticated, so a wrong key is not mathematically guaranteed to fail padding: the caller
+ * must verify a signed event BEFORE decrypting it, and JSON-parse every plaintext envelope afterwards, so wrong-key
+ * garbage becomes a 4xx rather than a silent drop.
+ */
 export function decryptEvent(encryptKey: string, encryptB64: string): string {
   const key = createHash("sha256").update(encryptKey, "utf8").digest();
   const buf = Buffer.from(encryptB64, "base64");
@@ -29,7 +19,10 @@ export function decryptEvent(encryptKey: string, encryptB64: string): string {
   return Buffer.concat([decipher.update(buf.subarray(16)), decipher.final()]).toString("utf8");
 }
 
-/** The expected `X-Lark-Signature` for a request: sha256(timestamp + nonce + encryptKey + rawBody) hex. */
+/**
+ * The expected `X-Lark-Signature` for a request: sha256(timestamp + nonce + encryptKey + rawBody) hex. `rawBody` is
+ * the VERBATIM request body (the encrypted form) — the digest is over bytes, so a re-serialization never matches.
+ */
 export function eventSignature(encryptKey: string, timestamp: string, nonce: string, rawBody: string): string {
   return createHash("sha256").update(`${timestamp}${nonce}${encryptKey}${rawBody}`, "utf8").digest("hex");
 }

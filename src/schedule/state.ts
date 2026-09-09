@@ -1,10 +1,4 @@
-/**
- * Durable scheduler state for a SINGLE-PROCESS deployment, under `<stateRoot>/schedule/`. Small JSON
- * files, atomic (tmp+rename) so a crash never leaves a torn file:
- *  - `fires.json` — schedule name → last-fired ISO (durability for the cron catch-up-once);
- *  - `wakeups.json` — the agent's pending self-scheduled one-shot wake-ups (wakeups.ts).
- * No .gitignore is written here: the agent's own (scaffolded by `init`) excludes `.state/`.
- */
+/** Durable scheduler state for a SINGLE-PROCESS deployment, under `<stateRoot>/schedule/`. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.ts";
@@ -15,12 +9,6 @@ export function scheduleFile(stateRoot: string, name: string): string {
   return join(stateRoot, "schedule", `${name}.json`);
 }
 
-/**
- * Read a JSON state file. Missing is normal (first run → undefined); a corrupt file degrades visibly
- * (warn + undefined) — schedule state is recoverable, not worth refusing to boot over; an unreadable
- * file (permissions/IO) throws — a real environment fault the operator must fix, not hide behind empty
- * state. The caller owns shape validation (an IO boundary).
- */
 export function readScheduleFile(path: string): unknown {
   let raw: string;
   try {

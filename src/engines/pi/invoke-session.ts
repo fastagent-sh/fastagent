@@ -1,8 +1,4 @@
-/**
- * Pi's per-invoke binding over a durable session record. The execution scope owns the lease,
- * session and subscription until the consumer settles, even when the producer finishes first.
- * Events translate once into SessionEvent; AgentEvent is its projection.
- */
+/** Pi's per-invoke binding over a durable session record. */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
@@ -37,7 +33,7 @@ import {
   toTerminal,
 } from "./turn-kit.ts";
 
-/** Open or create a record and bind a session. Inheritance applies only when creating the record. */
+/** Open or create a record and bind a session. */
 export type PiAgentSessionFactory = (sessionId: string, inherit?: SessionInheritance) => Promise<AgentSession>;
 
 export interface CreatePiAgentFromSessionOptions {
@@ -236,8 +232,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                 }
                 if (event.type === "auto_retry_start" && streamedAnswer) {
                   retriedAfterAnswer = event.errorMessage;
-                  // Pi installs the retry controller after emitting this event. Tool output alone is
-                  // replay-safe: Pi resumes from persisted tool results, rather than running tools twice.
+                  // Pi installs the retry controller after emitting this event.
                   queueMicrotask(stop);
                   return;
                 }
@@ -304,8 +299,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
               : terminal,
           );
           Queue.endUnsafe(queue);
-          // Producer completion is earlier than consumer completion. Keep all resources until the
-          // consumer has drained or cancelled, including when its terminal is still buffered.
+          // Producer completion is earlier than consumer completion.
           yield* Deferred.await(consumed);
         }),
       ).pipe(

@@ -58,8 +58,9 @@ export { defaultSlackRoute, slackEnvelope };
 export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
 
 const MAX_EVENT_BYTES = 1 << 20;
-/** Slack's own documented window — it re-signs every redelivery with a current timestamp, so a tight
- *  one costs nothing. The Feishu ingress reads hours off the same helper for the opposite reason. */
+/**
+ * Slack's own documented window — it re-signs every redelivery with a current timestamp, so a tight one costs nothing.
+ */
 const MAX_SIGNATURE_AGE_S = 5 * 60;
 const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
@@ -109,23 +110,20 @@ export interface SlackChannelOptions {
   botToken: string;
   /** App signing secret used to verify the raw Events API request body. */
   signingSecret: string;
-  /** `native` (default) uses Slack Agent streams for threaded replies. Its inline tool traces carry a
-   * bounded summary of each call's first argument and cannot be retracted, so they stay in the
-   * delivered message beside the answer. `classic` retains the compatibility renderer based on one
-   * rate-limited edited message, which settles into the answer alone. A top-level target necessarily
-   * uses the classic renderer, because Slack streams require a parent user message; a custom route
-   * reaches one either by returning `threadTs: null` or by redirecting to another channel without
-   * naming a thread. */
+  /**
+   * `native` (default) uses Slack Agent streams for threaded replies; `classic` retains the compatibility renderer
+   * based on one rate-limited edited message. A top-level target necessarily uses `classic`, because Slack streams
+   * require a parent user message — a custom route reaches one either by returning `threadTs: null` or by redirecting
+   * to another channel without naming a thread.
+   */
   rendering?: SlackRendering;
-  /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
+  /** Optional footer for successful Agent replies. */
   aiDisclaimer?: string | false;
-  /** First-run direct-message welcome, sent once when a user first opens the DM (`app_home_opened`,
-   * `tab: "messages"`). A string customizes it; `false` disables it. Plain Markdown only — no interactive
-   * buttons until an interactivity endpoint exists. Defaults to a generic greeting. */
+  /**
+   * First-run direct-message welcome, sent once when a user first opens the DM (`app_home_opened`, `tab: "messages"`).
+   */
   welcome?: string | false;
-  /** Lightweight emoji ack on the user's triggering message: 👀 while working, ✅ when done. `false`
-   * disables it; an object overrides either emoji name. Requires the `reactions:write` scope; a missing
-   * scope degrades to no ack. */
+  /** Lightweight emoji ack on the user's triggering message: 👀 while working, ✅ when done. */
   reactionAck?: false | { processing?: string; completed?: string };
   /** Custom route policy. Providing it disables the default participant-model thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
@@ -149,11 +147,79 @@ export function verifySlackSignature(
   return secretEquals(signature, expected);
 }
 
-/** The (channel, ts) of the user's triggering message, encoded in the logical turn id `team:channel:ts`
- *  (Slack ids never contain a colon, so a 3-part split is exact). Used to place the reaction ack. */
+/**
+ * The (channel, ts) of the user's triggering message, encoded in the logical turn id `team:channel:ts` (Slack ids
+ * never contain a colon, so a 3-part split is exact).
+ */
 function messageRefOf(turnId: string): { channelId: string; ts: string } | undefined {
   const parts = turnId.split(":");
   return parts.length === 3 && parts[1] && parts[2] ? { channelId: parts[1], ts: parts[2] } : undefined;
+}
+
+/** How long an ingress may wait for `auth.test`: the Events API allows 3s to ACK, so this must fail well inside it. */
+const AUTH_ACK_BUDGET_MS = 2_000;
+
+/**
+ * One `auth.test` per process — the workspace and bot identity every routing decision reads. Construction cannot
+ * await Web API IO, so the promise is exposed two ways: {@link settled} for background work that can wait as long as
+ * it takes, and {@link ready} for the ingress path, which must answer inside the ACK budget.
+ */
+interface SlackAuthentication {
+  /**
+   * REJECTS when `auth.test` failed, and every consumer must await or catch it. The rejection is already reported
+   * once (an internal `catch` logs it), so this promise carries the failure for control flow, not for reporting it a
+   * second time — a consumer that neither awaits nor catches drops a turn silently.
+   */
+  readonly settled: Promise<void>;
+  /** {@link settled}, bounded by the Events API ACK budget: rejects rather than letting an ingress miss it. */
+  ready(): Promise<void>;
+  teamId(): string | undefined;
+  botUserId(): string | undefined;
+}
+
+function createSlackAuthentication(api: ReturnType<typeof createSlackApi>, label: string): SlackAuthentication {
+  let teamId: string | undefined;
+  let botUserId: string | undefined;
+  let state: "pending" | "ready" | "failed" = "pending";
+  const settled = api.authTest().then(
+    (identity) => {
+      teamId = identity.teamId;
+      botUserId = identity.userId;
+      state = "ready";
+      log.info(`${label} authenticated${identity.teamId ? ` for workspace ${identity.teamId}` : ""}`);
+    },
+    (error) => {
+      state = "failed";
+      throw new Error(`Slack auth.test failed — fix SLACK_BOT_TOKEN before accepting events: ${String(error)}`, {
+        cause: error,
+      });
+    },
+  );
+  void settled.catch((error) => log.error(`${label} ${String(error)}`));
+  return {
+    settled,
+    teamId: () => teamId,
+    botUserId: () => botUserId,
+    ready: () =>
+      state !== "pending"
+        ? settled
+        : new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(
+              () => reject(new Error("Slack auth.test did not finish inside the Events API ACK budget")),
+              AUTH_ACK_BUDGET_MS,
+            );
+            void settled.then(
+              () => {
+                clearTimeout(timeout);
+                resolve();
+              },
+              (error) => {
+                clearTimeout(timeout);
+                reject(error);
+              },
+            );
+          }),
+  };
 }
 
 export function slackChannel(options: SlackChannelOptions): ChannelModule {
@@ -189,55 +255,16 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     ensureStateHome(stateHome);
     const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
     registerSlackApi(stateRoot, api); // the send tool delivers through this one (shared-api.ts)
-    let authenticatedTeamId: string | undefined;
-    let botUserId: string | undefined;
-    let authenticationState: "pending" | "ready" | "failed" = "pending";
-    const authentication = api.authTest().then(
-      (identity) => {
-        authenticatedTeamId = identity.teamId;
-        botUserId = identity.userId;
-        authenticationState = "ready";
-        log.info(`${label} authenticated${identity.teamId ? ` for workspace ${identity.teamId}` : ""}`);
-      },
-      (error) => {
-        authenticationState = "failed";
-        throw new Error(`Slack auth.test failed — fix SLACK_BOT_TOKEN before accepting events: ${String(error)}`, {
-          cause: error,
-        });
-      },
-    );
-    // Construction cannot await Web API IO. Keep the rejection observed; recovered turns and ingress
-    // both gate on the same promise/state below and surface the failure without ACKing new work.
-    void authentication.catch((error) => log.error(`${label} ${String(error)}`));
-    const waitForAuthentication = (): Promise<void> => {
-      if (authenticationState !== "pending") return authentication;
-      return new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error("Slack auth.test did not finish inside the Events API ACK budget")),
-          2_000,
-        );
-        void authentication.then(
-          () => {
-            clearTimeout(timeout);
-            resolve();
-          },
-          (error) => {
-            clearTimeout(timeout);
-            reject(error);
-          },
-        );
-      });
-    };
+    const auth = createSlackAuthentication(api, label);
 
-    // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle. Declared
-    // ahead of its consumers so no construction-time path can reach it in the temporal dead zone.
+    // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
     const sideTasks = createTaskTracker(label);
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
-    /** A thread's participation is keyed by the SESSION it describes — "the agent answered here" is a
-     *  claim about a memory, so the two must not be re-keyable independently. What keeps the claim true
-     *  under a custom route is the `routed.session === undefined` condition on the write, not the
-     *  absence of a route: a route that supplies its own session records nothing here. */
+    /**
+     * A thread's participation is keyed by the SESSION it describes — "the agent answered here" is a claim about a
+     * memory, so the two must not be re-keyable independently.
+     */
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
       `slack:${teamId}:${channelId}:${threadTs}`;
     const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
@@ -279,7 +306,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         const nativeDmStatus = rendering === "native" && turn.threadTs && turn.channelId.startsWith("D");
         if (nativeDmStatus) turn.nativeQueueStatus = true;
         return {
-          done: authentication
+          done: auth.settled
             .then(() =>
               nativeDmStatus
                 ? api.setThreadStatus(targetOf(turn), "is queued behind an earlier request…")
@@ -290,12 +317,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
             .catch((error) => log.warn(`${label} queue preview failed (the turn stays durable): ${String(error)}`)),
         };
       },
-      // Leave the intent untouched when Slack auth failed. A fixed token + restart replays it;
-      // running now would execute an Agent turn whose only customer-facing transport is known to be
-      // unavailable.
+      // Leave the intent untouched when Slack auth failed.
       beforeRun: async (turn) => {
         try {
-          await authentication;
+          await auth.settled;
           return true;
         } catch (error) {
           log.error(`${label} deferring durable turn ${turn.id} because Slack authentication failed: ${String(error)}`);
@@ -364,14 +389,14 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     });
     let seq = runner.recover().reduce((maximum, turn) => Math.max(maximum, turn.seq), 0);
 
-    // Acceptance touches no network, so it stays synchronous inside Slack's ACK window and the
-    // delivery dedup ring alone is enough — there is no await for a duplicate delivery to race
-    // through. The minutes-long Agent turn remains fire-and-forget.
+    // Acceptance touches no network, so it stays synchronous inside Slack's ACK window and the delivery dedup ring
+    // alone is enough.
     const acceptEvent = (envelope: SlackEventEnvelope): void => {
       const event = envelope.event;
       if (!isSlackHumanMessage(event)) return;
+      const botUserId = auth.botUserId();
       if (botUserId && event.user === botUserId) return;
-      const teamId = slackTeamId(envelope) ?? authenticatedTeamId;
+      const teamId = slackTeamId(envelope) ?? auth.teamId();
       if (!teamId) {
         log.warn(`${label} ignored message ${event.ts}: event carried no workspace/enterprise identity`);
         return;
@@ -386,38 +411,29 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const direct = isSlackDirectMessage(event);
       const rootTs = event.thread_ts ?? event.ts;
       const bufferKey = slackPlaceKey(teamId, event);
-      // Listening is not speaking: every message the channel can see refines who takes part in its
-      // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
-      // are known — this channel answering.
-      // Structural facts only, never `route` — see thread-participants.ts. Slack
-      // adds no delta of its own here; its summon rule is the only consumer.
+      // Listening is not speaking: every message the channel can see refines who takes part in its thread, whether or
+      // not it is answered.
       if (group && event.thread_ts !== undefined) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
       }
 
       let routed = decide(envelope);
-      // Two different questions (see parse.ts). `addressesSomeone` is the "@-mentions only other people
-      // is discussion, never an ask" guard (§3) and counts broadcasts and user groups too;
-      // `mightBeTheBot` gates the identity-window deferral below, where only a USER mention qualifies.
+      // Two different questions (see parse.ts).
       const addressesSomeone = hasSlackMention(event.text ?? "");
       const mightBeTheBot = hasSlackUserMention(event.text ?? "");
       const structurallyMentionsBot = botUserId !== undefined && mentionsSlackUser(event.text ?? "", botUserId);
-      // app_mention and message.* subscriptions can overlap. If message.* arrives first, structural bot
-      // identity routes it now; while auth.test is still unresolved, defer any mentioned message rather
-      // than buffer+dedup it and accidentally suppress the later app_mention callback.
+      // app_mention and message.* subscriptions can overlap.
       if (!routed && route === undefined && group && event.type === "message" && structurallyMentionsBot) routed = {};
-      // The participant model's thread rule (§3): a bare message reaches the agent while it takes part
-      // and has not heard a second human. Note the ORDER — the mention guard below runs first and is
-      // structural: it reads who THIS message addresses, which is the one thing an observation-only
-      // store cannot know about someone it has never heard.
+      // The participant model's thread rule (§3): a bare message reaches the agent while it takes part and has not
+      // heard a second human.
       if (
         !routed &&
         route === undefined &&
         group &&
         event.thread_ts !== undefined &&
         event.type !== "app_mention" &&
-        // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
-        // Feishu applies with `hasMentions`.
+        // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard Feishu applies with
+        // `hasMentions`.
         !addressesSomeone &&
         threadParticipants.admitsBareMessage(threadKey(teamId, event.channel, event.thread_ts))
       ) {
@@ -445,17 +461,12 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
 
       const targetChannel = routed.channelId ?? event.channel;
       const sameChannel = targetChannel === event.channel;
-      // Answer where asked (participant model §4). Slack has no quote primitive, so the only way to
-      // attach an answer to its question is a thread on it — which then IS the place, and carries the
-      // memory (§5). Native streaming additionally REQUIRES a thread, but the shape does not depend on
-      // the renderer: `classic` attaches its answer the same way.
+      // Answer where asked (participant model §4).
       const defaultThread = event.thread_ts ?? event.ts;
       const threadTs =
         routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
       const defaultSession = threadKey(teamId, event.channel, rootTs);
-      // Explicit user stop: a control action, never a turn — it must not queue behind the run it
-      // stops. Match the bare word after stripping the bot mention; record the logical id so a Slack
-      // redelivery doesn't double-abort or double-notify.
+      // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
       if (isStopText(stripSlackMentions(event.text ?? ""))) {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
@@ -491,21 +502,8 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         true,
       );
 
-      // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the
-      // NEXT bare message address it without a mention.
-      //
-      // `group` excludes DMs, whose `threadTs` is always defined (the answer opens its assistant
-      // thread) and which no rule could ever read — safe because it is structural: a channel never
-      // becomes a DM.
-      //
-      // The two `routed` conditions keep the record describing what it claims. `session` undefined: the
-      // flag asserts "the agent answered into THIS thread's session", so a route supplying its own
-      // would record participation in a memory that never held the turn. `threadTs` undefined: a route
-      // can send the answer to a DIFFERENT thread, where the asker never spoke — recording them there
-      // would invent a participant. Feishu carries the same two conditions for the same reasons.
-      //
-      // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
-      // the thread as the agent has actually left it.
+      // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the NEXT bare message
+      // address it without a mention.
       if (
         group &&
         threadTs !== undefined &&
@@ -513,12 +511,8 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         routed.session === undefined &&
         routed.threadTs === undefined
       ) {
-        // The ASKER counts as heard in this thread too, and both halves are written together so the
-        // record can never say "the agent takes part and nobody has spoken". When the ask is top
-        // level, the answer is what CREATES the thread, so the observation above never ran for it (no
-        // `thread_ts` on the ask) — without this, a thread whose root is a human would not count them,
-        // and a stranger's first bare reply would read as a two-party exchange. `event.user` is
-        // guaranteed here (isSlackHumanMessage). Idempotent when the ask was already in the thread.
+        // The ASKER counts as heard in this thread too, and both halves are written together so the record can never
+        // say "the agent takes part and nobody has spoken".
         threadParticipants.merge(threadKey(teamId, event.channel, threadTs), {
           agentSpoke: true,
           humans: [event.user],
@@ -538,12 +532,12 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const userId = event.user;
       const channelId = event.channel;
       if (!userId || !channelId) return;
-      const teamId = slackTeamId(envelope) ?? authenticatedTeamId;
+      const teamId = slackTeamId(envelope) ?? auth.teamId();
       if (!teamId) return;
       const id = `${teamId}:${userId}`;
       if (welcomed.has(teamId, userId) || welcomeInFlight.has(id)) return;
-      // Reserve in-memory so rapid re-opens don't double-post; persist to the durable set only on a
-      // successful post, so a failed post simply retries on the next open.
+      // Reserve in-memory so rapid re-opens don't double-post; persist to the durable set only on a successful post,
+      // so a failed post simply retries on the next open.
       welcomeInFlight.add(id);
       sideTasks.track(
         api
@@ -584,7 +578,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       }
       if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
       try {
-        await waitForAuthentication();
+        await auth.ready();
       } catch (error) {
         log.error(`${label} refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
         return text("slack authentication unavailable\n", 503);

@@ -1,11 +1,4 @@
-/**
- * Render an Agent event stream to two sinks plus an exit code — the `fastagent invoke` contract, a
- * PURE function (IO injected) so it is unit-testable: text deltas → `out`; tool start + an ERRORED
- * tool_ended → `err`; `failed` → `err` + a non-zero exit code (the CI-gating guarantee).
- *
- * An errored tool inside an otherwise-completed turn still surfaces (the diagnostic the operator
- * needs); tool_ended carries no name, so it is remembered from the matching tool_started.
- */
+/** Render an Agent event stream to two sinks plus an exit code. */
 import type { AgentEvent } from "../agent.ts";
 
 export async function runInvokeStream(

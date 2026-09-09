@@ -1,8 +1,4 @@
-/**
- * Resident cron and wake polling. Each loop owns its waits; a claimed occurrence owns its execution
- * and durable settlement. stop() interrupts waits without canceling or draining a claimed turn.
- * Croner computes wall-clock instants; durable claims provide at-most-once occurrence handling.
- */
+/** Resident cron and wake polling. */
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -23,9 +19,9 @@ export function scheduleSession(name: string): string {
 }
 
 export interface Scheduler {
-  /** Arm schedules and catch up overdue work once. Call once per process. */
+  /** Arm schedules and catch up overdue work once. */
   start(): void;
-  /** Cancel pending waits. Claimed turns finish without blocking this call; no next occurrence starts. */
+  /** Cancel pending waits. */
   stop(): void;
 }
 
@@ -90,11 +86,7 @@ export interface ScheduleFireOutcome {
   ms: number;
 }
 
-/**
- * Shared resident/external claim → run → audit. An external delivery claims its cron instant, not
- * arrival time, so delayed delivery cannot suppress a later distinct slot. Claim IO failures remain
- * typed failures: the resident loop skips and audits; the external request surfaces them to its clock.
- */
+/** Shared resident/external claim → run → audit. */
 export function fireScheduleOnce(opts: {
   agent: Agent;
   stateRoot: string;
@@ -265,7 +257,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const wakeLoop = Effect.gen(function* () {
       for (;;) {
         while (yield* wakeOnce) {
-          /* Claim only after the preceding occurrence settles. */
+          // Claim only after the preceding occurrence settles.
         }
         yield* Effect.sleep(WAKEUP_POLL_MS);
       }

@@ -1,21 +1,6 @@
 /**
- * Card JSON builders — PURE: the streaming-card entity (JSON 2.0) the live preview creates, the settled
- * final card, and the message content that mounts a card entity into a chat. Kept out of preview.ts so
- * the card DSL is data-in → string-out and testable without the pump.
- *
- * The streaming card is TWO markdown elements: `process` (the volatile block — thinking tail, tool
- * lines, retry notice) and `answer` (append-only). The pump PUTs full-text snapshots per element
- * (feishu-api.ts `updateCardElement`) and the client renders the typewriter effect. The split is the
- * prefix-stability rule made structural: the client animates an element's update only when the old
- * text is a PREFIX of the new — otherwise it re-types everything after the first divergent character.
- * The process block's head changes every frame (a sliding thinking tail, `…`→`✓` status flips), so
- * sharing one element with the answer re-typed the whole card once a second; two elements confine the
- * churn to the small process block and keep the answer's typewriter smooth. Settling replaces the
- * whole entity (`updateCard`) with the answer element alone, `streaming_mode` off — one write flips
- * content and mode together and drops the process block.
- *
- * Budget: a card entity is capped at 30 KB, so the final answer's card chunk (and the live view) stay
- * well under it; longer answers overflow into follow-up messages (preview.ts owns that policy).
+ * Card JSON builders — PURE: the streaming-card entity (JSON 2.0) the live preview creates, the settled final card,
+ * and the message content that mounts a card entity into a chat.
  */
 
 import { truncateCodePointPrefix } from "../kit/text.ts";
@@ -33,11 +18,8 @@ export const CARD_MARKDOWN_MAX_BYTES = 20 * 1024;
 const SUMMARY_MAX_CHARS = 60;
 
 /**
- * The answer's first line as plain text — what the chat list and the push notification show for the
- * settled card (`config.summary.content`). Without it a card message previews as a generic "[Card]"
- * placeholder: the user's notification would never carry the actual answer. Markdown is stripped
- * lightly (this is a one-line teaser, not a renderer): fenced code dropped, links/images → their text,
- * emphasis/heading/list markers removed.
+ * The answer's first line as plain text — what the chat list and the push notification show for the settled card
+ * (`config.summary.content`).
  */
 export function cardSummary(markdown: string): string {
   const line =
@@ -68,17 +50,19 @@ function cardJson(elements: CardElement[], streaming: boolean, summary?: string)
     config: {
       streaming_mode: streaming,
       update_multi: true,
-      // Only the settled card sets a summary — while streaming, the platform's default (a localized
-      // "[Generating…]") is better than any fixed text we could pin.
+      // Only the settled card sets a summary — while streaming, the platform's default (a localized "[Generating…]")
+      // is better than any fixed text we could pin.
       ...(summary ? { summary: { content: summary } } : {}),
     },
     body: { elements },
   });
 }
 
-/** The live-preview card entity: streaming on, the process element seeded with the placeholder/queue
- *  status and the answer element seeded EMPTY (the platform accepts an empty markdown element; it
- *  renders zero-height until the first answer snapshot lands as a clean prefix extension of ""). */
+/**
+ * The live-preview card entity: streaming on, the process element seeded with the placeholder/queue status and the
+ * answer element seeded EMPTY (the platform accepts an empty markdown element; it renders zero-height until the first
+ * answer snapshot lands as a clean prefix extension of "").
+ */
 export function streamingCardJson(initialProcess: string): string {
   return cardJson(
     [
@@ -89,9 +73,11 @@ export function streamingCardJson(initialProcess: string): string {
   );
 }
 
-/** The settled card: final markdown alone (the process block was preview-only), streaming off (stops
- *  the client's streaming affordance), plus the answer-derived summary so the chat list / notification
- *  shows the reply, not "[Card]". */
+/**
+ * The settled card: final markdown alone (the process block was preview-only), streaming off (stops the client's
+ * streaming affordance), plus the answer-derived summary so the chat list / notification shows the reply, not
+ * "[Card]".
+ */
 export function finalCardJson(markdown: string): string {
   return cardJson(
     [{ tag: "markdown", content: markdown, element_id: ANSWER_ELEMENT_ID }],

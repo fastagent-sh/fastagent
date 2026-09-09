@@ -1,8 +1,4 @@
-/**
- * Lark-international compatibility adapter. Feishu is the canonical protocol/runtime implementation;
- * this module binds it to Lark's cloud profile and exposes natural Lark-branded public names. Lark's
- * weaker control-plane capabilities live in onboarding/registration, not in a fork of the turn engine.
- */
+/** Lark-international compatibility adapter. */
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { LARK_COMPAT_CLOUD } from "../feishu/cloud.ts";
 import {

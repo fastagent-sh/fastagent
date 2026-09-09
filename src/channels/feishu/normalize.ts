@@ -1,8 +1,4 @@
-/**
- * Pure Feishu/Lark message normalization. The platform sends a stable event shell but encodes the
- * actual message body as a JSON string selected by `message_type`; this module is the one decoder and
- * converts resource keys into message-scoped locators before the turn engine sees them.
- */
+/** Pure Feishu/Lark message normalization. */
 import type {
   FeishuMention,
   FeishuMessage,
@@ -22,9 +18,7 @@ export interface DecodedFeishuContent {
   resources: DecodedFeishuResource[];
 }
 
-/** One node of a post (rich text) paragraph — text/a/at/img/media/code_block and friends. A received
- *  CARD's elements are the same tagged-node shape (the platform renders a card down to this on the way
- *  out), so both decoders read one node walker. */
+/** One node of a post (rich text) paragraph — text/a/at/img/media/code_block and friends. */
 interface PostNode {
   tag?: string;
   text?: string;
@@ -41,20 +35,8 @@ interface PostNode {
 }
 
 /**
- * Render one paragraph of tagged nodes to a line, collecting any resource it carries INTO the sink
- * the caller supplies — or none, when the caller passes no sink.
- *
- * Shared by `post` and `interactive` because the platform hands both out in the same shape. Card-only
- * shapes are handled here rather than in a second walker: `note` nests its own `elements`, and the
- * widget tags (button/select/overflow/date_picker) carry their user-visible label in `text` or
- * `placeholder` — a card is read for what it SAYS, so a label is content and an unlabelled control is
- * nothing.
- *
- * The OPTIONAL sink is the whole reason this is a parameter rather than a return value: a card's
- * resources are documented as unfetchable (see the card branch), so that caller renders the same
- * `[image]` / `[video]` markers into the text while collecting nothing. The markers still tell the
- * model what is there; what must not happen is a key entering the turn's PRIMARY inputs, which load
- * fail-fast.
+ * Render one paragraph of tagged nodes to a line, collecting any resource it carries INTO the sink the caller supplies
+ * — or none, when the caller passes no sink.
  */
 function renderNodes(nodes: unknown, resources?: DecodedFeishuResource[]): string {
   if (!Array.isArray(nodes)) return "";
@@ -104,10 +86,7 @@ function restoreMentions(text: string, mentions: FeishuMention[] | undefined): s
   return out;
 }
 
-/**
- * Decode one JSON-string message body. Unknown or malformed external input degrades to a visible
- * marker rather than throwing, preserving the channel's existing fail-visible prompt behavior.
- */
+/** Decode one JSON-string message body. */
 export function decodeFeishuContent(
   message: Pick<FeishuMessage, "message_type" | "content" | "mentions">,
 ): DecodedFeishuContent {
@@ -135,18 +114,7 @@ export function decodeFeishuContent(
       }
       return { text: lines.join("\n"), resources };
     }
-    // A CARD, as the platform hands it BACK. What we send is an entity reference
-    // (`{type:"card",data:{card_id}}`, card.ts) whose text lives in cardkit — but a query API renders
-    // the card down to `title` + `elements` (paragraphs of the same tagged nodes as `post`), so the
-    // content is readable without a second remote call. This is the message type the agent's OWN
-    // answers are, so the case that matters is a user following up on one: without this branch a
-    // reply-referent that is the agent's own card decoded to the bare `[interactive message]` marker
-    // and the model was told its own answer was unreadable (field-observed).
-    //
-    // BOTH spellings on purpose: the platform's own docs disagree with themselves — the field table
-    // says `interactive` (what the receive EVENT carries) while the message-object example shows
-    // `"msg_type": "card"`. Matching one would leave the other silently on the default branch, which
-    // is exactly the symptom this fixes.
+    // A CARD, as the platform hands it BACK.
     case "interactive":
     case "card": {
       const lines: string[] = [];
@@ -154,20 +122,12 @@ export function decodeFeishuContent(
       if (title) lines.push(title);
       const paragraphs = Array.isArray(content.elements) ? (content.elements as unknown[]) : [];
       for (const paragraph of paragraphs) {
-        // NO resource sink, deliberately. The platform documents that a card's resources cannot be
-        // fetched at all: `im/v1/messages/:id/resources/:key` answers 234043 ("Unsupported message
-        // type") for a card message id, by stated limitation rather than by permission. Collecting a
-        // key here would hand the turn a PRIMARY input that is guaranteed to fail its fail-fast load
-        // — turning "the card reads as a marker" (the old behaviour) into "the whole turn errors",
-        // which is strictly worse than the gap this branch exists to close. The text still renders
-        // `[image]` / `[video]`, so the model knows what is there and that it does not have it.
-        //
-        // Tolerate both shapes: elements as paragraphs (array of arrays) and a flat element list.
+        // NO resource sink, deliberately.
         const line = Array.isArray(paragraph) ? renderNodes(paragraph) : renderNodes([paragraph]);
         if (line) lines.push(line);
       }
-      // An unrenderable card (all controls, no labels) still says something by existing — keep the
-      // marker rather than returning empty, which reads as "the message was blank".
+      // An unrenderable card (all controls, no labels) still says something by existing — keep the marker rather than
+      // returning empty, which reads as "the message was blank".
       return { text: lines.length > 0 ? lines.join("\n") : `[${rawType} message]`, resources };
     }
     case "image": {
@@ -204,7 +164,6 @@ export function decodeFeishuContent(
   }
 }
 
-/** Normalize one verified message event. Returns null only when its required identity is absent. */
 export function normalizeFeishuMessage(event: FeishuMessageEvent): NormalizedFeishuMessage | null {
   const message = event.message;
   if (!message || typeof message.message_id !== "string" || typeof message.chat_id !== "string") return null;

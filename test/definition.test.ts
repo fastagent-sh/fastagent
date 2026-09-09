@@ -104,7 +104,7 @@ describe("definition: loadAgentDefinition", () => {
 
   // Note: AGENTS.md read errors no longer throw — ② context is sourced via pi's loadProjectContextFiles,
   // which warns and continues on an unreadable file (a deliberate deviation from fastagent's fail-visibly,
-  // deferred with the ExecutionEnv/sandbox work; core.md §6). persona.md (below) still fails visibly.
+  // deferred with the ExecutionEnv/sandbox work; core.md §5). persona.md (below) still fails visibly.
 
   it("persona.md read errors other than not_found throw instead of silently dropping the persona", async () => {
     class DeniedEnv extends NodeExecutionEnv {

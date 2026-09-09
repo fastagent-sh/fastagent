@@ -1,4 +1,4 @@
-/** Per-session FIFO execution. Root fibers outlive ingress ACKs; persistence and replay belong to the runner. */
+/** Per-session FIFO execution. */
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";

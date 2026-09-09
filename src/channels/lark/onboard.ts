@@ -1,14 +1,6 @@
 import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../feishu/setup-mode.ts";
 
-/**
- * Guided Lark-international onboarding. The intl cloud cannot complete the BOUND scan-to-create flow,
- * so a new/partial setup opens its unbound one-click launcher and collects one App-scoped credential
- * set; a complete existing ID/Secret pair resumes that App directly. Then optimistically run Feishu's
- * webhook-mode + Verification-Token bootstrap against THIS app: a successful PATCH captures the token
- * and flips Subscription mode; only a definitive config-route 404 falls back to the token the console
- * displays + a manual mode switch. IO is injected so the workflow is testable without a terminal or
- * browser.
- */
+/** Guided Lark-international onboarding. */
 
 export const LARK_CONSOLE_URL = "https://open.larksuite.com/page/launcher?from=backend_oneclick";
 
@@ -31,7 +23,7 @@ interface LarkBootstrapResult {
 }
 
 export interface LarkOnboardOptions {
-  /** Existing active .env values. A complete credential pair is reused (and still validated). */
+  /** Existing active .env values. */
   existing?: Readonly<Record<string, string | undefined>>;
   ingress?: FeishuSubscriptionMode;
   groupBehavior?: FeishuGroupBehavior;
@@ -51,15 +43,13 @@ function required(value: string | undefined, name: string): string {
   return trimmed;
 }
 
-/** Open the stable app console and collect everything the runtime needs. Cancellation is a visible
- * failure: the scaffold remains and `add lark` is deliberately re-runnable to resume onboarding. */
+/** Open the stable app console and collect everything the runtime needs. */
 export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions): Promise<LarkOnboardCredentials> {
   const existingId = opts.existing?.LARK_APP_ID?.trim();
   const existingSecret = opts.existing?.LARK_APP_SECRET?.trim();
   const reuseExistingApp = Boolean(existingId && existingSecret);
 
-  // Credentials are one App-scoped set. Reuse only a COMPLETE ID/Secret pair; a partial pair starts a
-  // fresh launcher/input path, and its unrelated old Token must not be attached to the newly-entered App.
+  // Credentials are one App-scoped set.
   if (reuseExistingApp) {
     io.note(`Reusing Lark app ${existingId}; opening its Events & Callbacks configuration directly.`);
   } else {

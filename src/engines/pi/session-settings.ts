@@ -1,22 +1,10 @@
-/**
- * What a session is SET TO, and what it may be set to. Model and thinking level are ONE setting —
- * which levels exist is a property of the model — so they resolve together, here, and `state()`, the
- * `update({ thinkingLevel })` gate and the per-invoke binding all read this rather than deriving their own.
- *
- * Read-only by design. The durable record may hold a level the current model cannot do; that record
- * is the user's PREFERENCE, so resolving per read restores it when the session returns to a capable
- * model. (It could not be made unrepresentable anyway: `model_change`/`thinking_level_change` are
- * pi's entries, and pi appends them itself.)
- */
+/** What a session is SET TO, and what it may be set to. */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AnyModel } from "./models.ts";
 
-/** Which strings are levels at all — the vocabulary. What a MODEL supports is
- *  `getSupportedThinkingLevels`. The `satisfies` anchor keeps this exhaustive against pi's union: a
- *  level pi adds becomes a type error here rather than a value `update({ thinkingLevel })` silently
- *  rejects. */
+/** Which strings are levels at all — the vocabulary. */
 const ALL_THINKING_LEVELS = {
   off: true,
   minimal: true,
@@ -36,8 +24,10 @@ export interface OverrideEntryLike {
   thinkingLevel?: string;
 }
 
-/** The last entry of each kind wins, and a malformed one reads as ABSENT rather than falling through
- *  to an earlier record — which record is "the" override must not depend on who is asking. */
+/**
+ * The last entry of each kind wins, and a malformed one reads as ABSENT rather than falling through to an earlier
+ * record.
+ */
 export function lastOverrideEntries(entries: OverrideEntryLike[]): {
   model?: { provider: string; modelId: string };
   thinkingLevel?: string;
@@ -94,9 +84,8 @@ export function resolveSessionSettings(
     if (!THINKING_LEVELS.has(level as ThinkingLevel)) {
       dropped.thinkingLevel = { recorded: level, running: thinkingLevel, known: false };
     } else {
-      // pi's clamp takes the lowest supported level AT OR ABOVE the recorded one, falling back
-      // downward only when nothing is above: a gap resolves UPWARD and costs more, not less. Which is
-      // why `dropped` names both levels rather than reporting a substitution.
+      // pi's clamp takes the lowest supported level AT OR ABOVE the recorded one, falling back downward only when
+      // nothing is above.
       thinkingLevel = clampThinkingLevel(model, level as ThinkingLevel) as ThinkingLevel;
       if (thinkingLevel !== level) {
         dropped.thinkingLevel = { recorded: level, running: thinkingLevel, known: true };
@@ -111,19 +100,10 @@ export function resolveSessionSettings(
   };
 }
 
-/**
- * The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks.
- * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a leaf move,
- * and reading it flat would run the session on a setting it moved away from.
- *
- * A chain that is not intact THROWS. `getBranch()` stops where a parent is missing and answers the
- * SHORT path, which reads exactly like a short session — every override above the gap gone, the next
- * turn silently on assembly defaults. The caller decides what to do with the fault (state() reports
- * the settings as absent, dispatch answers with a code); what it must not do is guess.
- */
+/** The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks. */
 export function activePath(record: SessionManager, from?: string): OverrideEntryLike[] {
-  // `from` asks a different question: the path a leaf move is ABOUT to make active, which a caller
-  // validating a patch needs before the move exists. Absent, it is the session's current path.
+  // `from` asks a different question: the path a leaf move is ABOUT to make active, which a caller validating a patch
+  // needs before the move exists.
   const path = record.getBranch(from);
   const root = path[0] as { id?: string; parentId?: string | null } | undefined;
   if (root?.parentId != null) {

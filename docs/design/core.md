@@ -8,9 +8,9 @@ updated: 2026-07-19
 
 # Core design
 
-This document explains the architecture of FastAgent's pi reference implementation. The normative
-protocol is [Agent Handler SPEC v0.1](../SPEC.md); code in `src/` is the implementation source of
-truth. User behavior belongs in the other `docs/` guides, not here.
+Architecture of FastAgent's pi reference implementation. The normative protocol is
+[Agent Handler SPEC v0.1](../SPEC.md); code in `src/` is the implementation source of truth. User
+behavior belongs in the other `docs/` guides.
 
 ## 1. Product boundary
 
@@ -28,35 +28,31 @@ The contract separates three things that otherwise form an integration matrix:
 | Engine/model implementation | Implements `Agent` |
 | Host/runtime | Supplies process, storage, credentials, and deployment |
 
-Pi is the reference implementation. The contract does not require pi, but pi-specific assembly,
+pi is the reference implementation. The contract does not require pi, but pi-specific assembly,
 sessions, models, and tool types live under `src/engines/pi/` and the public `/pi` subpath.
 Engine-neutral consumers use `/core`.
 
 ## 2. Workspace shape and prompt assembly
 
-There is ONE agent shape and ONE marker. The shape:
+One agent shape, one marker:
 
 ```txt
 <agent dir>/                # any name — the config below is what makes it an agent
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
-├── skills/
-├── tools/
-├── channels/
-├── schedules/
+├── skills/  tools/  channels/  schedules/
 ├── fastagent.config.mjs    # THE marker
-├── models.json             # optional: custom model endpoints (pi's schema, definition-LOCAL so it
-│                           # travels into the image — pi's machine-global ~/.pi one stays unread)
-├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .state, a stray .env
-├── .secrets/               # secrets: .env + auth.json; only tracked .env.example + .gitignore travel
+├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
+│                           # travels into the image; pi's machine-global ~/.pi one stays unread)
+├── .gitignore              # scaffolded once by init, yours after
+├── .secrets/               # .env + auth.json; only the tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
 ```
 
-The other noun is the WORKSPACE — what the agent works ON: its cwd, its coding tools' root, deploy's
-build context, and whose `AGENTS.md` ancestors are ② context.
+The other noun is the **workspace** — what the agent works on: its cwd, its coding tools' root,
+deploy's build context, and whose `AGENTS.md` ancestors are ② context.
 
-**The workspace is the directory you point fastagent at.** That is the whole rule, and it means the same
-tree answers two ways depending on where you aim it:
+**The workspace is the directory you point fastagent at.** The same tree therefore answers two ways:
 
 ```txt
 repo/                       # `fastagent dev` here  → agent = repo/agent, workspace = repo
@@ -68,12 +64,10 @@ repo/                       # `fastagent dev` here  → agent = repo/agent, work
     └── .secrets/  .state/
 ```
 
-Neither reading is wrong. Point at the project and its agent serves with the project as its workspace
-(what `init` sets up, and the common case). Point at the agent directory — all a deployed box may have
-been shipped — and it works on itself; a rule insisting the workspace is always the parent would hand
-that container `/`. The same holds when the agent directory IS the project (`init --flat`: a standalone
-agent repo, a monorepo package), where the agent's `read`/`write`/`bash` tools operate on its own
-definition. That is not a separate placement mode; it is the one rule with the two directories equal.
+Point at the project and its agent serves with the project as its workspace (what `init` sets up).
+Point at the agent directory — all a deployed box may have been shipped — and it works on itself; a
+rule insisting the workspace is always the parent would hand that container `/`. `init --flat` (a
+standalone agent repo, a monorepo package) is the same rule with the two directories equal.
 
 | `dir` | Result |
 |---|---|
@@ -82,98 +76,56 @@ definition. That is not a separate placement mode; it is the one rule with the t
 | several do | `FASTAGENT_AGENT` names one, else the one named `fastagent` — else throws, naming them |
 | none | throws: not a fastagent agent, with the exit that fits the position |
 
-- **The marker is the config, at every position — and it is a DECLARATION, not configuration.** Nothing
-  in an agent directory is logically required to serve a turn (the model can come from `--model`, the
-  tools default from pi, the loop is fastagent); what a directory must do is SAY it is an agent, because
-  the alternative is guessing. `export default {}` is a signature. So the marker has to be the one
-  artifact present in EVERY agent and absent from every non-agent: `persona.md`, `skills/`, `tools/`,
-  `channels/` and `schedules/` are each optional by design, and generic enough that scanning for them
-  would read half the world's repositories as agents. Only the config qualifies — the same job
-  `package.json`, `Cargo.toml`, `go.mod` and `pyproject.toml` do for their tools, none of which sniff for
-  evidence or make the manifest optional. An agent directory needs no reserved name either
-  (`--agent-dir` calls it anything), and a directory holding nothing but a config IS a complete agent.
-- **The scan is ONE level.** Deeper is that directory's own workspace, not this one's agent: for
-  `repo/packages/reviewer/` you point at the package (or run from inside it), and it works on itself.
-- Resolution never walks UP (an agent must not be claimed from arbitrarily deep inside it), but the
-  REFUSAL reads the path so each dead end gets its own exit: inside an agent → `cd` to it; on a
-  directory holding several → point at one.
-- **The cost of aiming being load-bearing** is that `cd agent && fastagent dev` narrows the workspace to
-  the agent's own directory. Three things carry it: `dev`/`start`/`info` print `agent:` and `workspace:`
-  on every run; the explicit form (`fastagent dev ..`) is always exact; and when the parent carries an
-  `AGENTS.md` or a `.git`, the report adds a `hint:` line pointing at it. A hint may use that heuristic
-  precisely because a RULE may not.
+- **The marker is the config, at every position, and it is a declaration rather than configuration.**
+  Nothing in an agent directory is logically required to serve a turn, so the marker has to be the one
+  artifact present in every agent and absent from every non-agent. `persona.md`, `skills/`, `tools/`,
+  `channels/` and `schedules/` are each optional and generic enough that scanning for them would read
+  half the world's repositories as agents. `export default {}` is a signature — the same job
+  `package.json`, `Cargo.toml` and `pyproject.toml` do. A directory holding nothing but a config is a
+  complete agent, and `--agent-dir` calls it anything.
+- **The scan is one level.** Deeper is that directory's own workspace: for `repo/packages/reviewer/`
+  you point at the package.
+- Resolution never walks up, but the refusal reads the path so each dead end gets its own exit: inside
+  an agent → `cd` to it; on a directory holding several → point at one.
+- **The cost of aiming being load-bearing** is that `cd agent && fastagent dev` narrows the workspace.
+  Three things carry it: `dev`/`start`/`info` print `agent:` and `workspace:` on every run; the
+  explicit form (`fastagent dev ..`) is always exact; and a parent carrying an `AGENTS.md` or `.git`
+  adds a `hint:` line. A hint may use that heuristic precisely because a rule may not.
+- **Known boundary:** the workspace is `agentDir` itself or its immediate parent, never further.
 
-`init` mirrors the same discipline — it either creates, or refuses with the reason. Its one placement
-duty follows from the lookup: **the target must be an agent the lookup would return**, so `init` refuses
-when `dir` already resolves over something else (a config AT `dir` beats anything inside it; a second
-sibling agent would make `dir` name neither). Beyond that, a SUBDIRECTORY target must be empty (content
-there is an unfinished agent or something unrelated, and landing persona.md beside it would be a silent
-mix), while `--agent-dir .` is a directory being adopted — content is expected, so every existing file is
-KEPT (reported, never overwritten, never verified).
+`init` either creates or refuses with the reason. Its one placement duty follows from the lookup:
+**the target must be an agent the lookup would return**, so it refuses when `dir` already resolves over
+something else. A subdirectory target must be empty; `--agent-dir .` adopts a directory, so existing
+files are kept — reported, never overwritten.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
-store (never an image; only the tracked `.env.example` + `.gitignore` scaffolds travel), `.state/` through
-a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a container).
+store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
+container).
 
-**Git is the author's, not fastagent's — with one stated exception.** `init` scaffolds two ignore files:
-the agent's own (`node_modules`, `.state`, a stray `.env`) and `.secrets/.gitignore` (`*` minus the
-template). No command reads, verifies or rewrites an ignore file, ever. The exception is narrow and
-one-directional: **the directory fastagent writes secrets into carries its own `.gitignore`** — so
-`add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`, never over an existing
-one) when the DEFAULT `<agentDir>/.secrets` has none — the reachable case being a hand-made agent. The
-accepted cost: someone who deleted that file to track secrets deliberately gets it back once. The risk
-is not symmetric — that is an annoyance, the other way is a published credential. The two ignore files
-are split because the root one is the file an author has reason to edit: git's nested-ignore precedence
-keeps the credentials protected whatever happens to it.
+**Git is the author's, not fastagent's, with one exception.** `init` scaffolds two ignore files: the
+agent's own and `.secrets/.gitignore` (`*` minus the template). No command reads, verifies or rewrites
+an ignore file. The exception: **the directory fastagent writes secrets into carries its own
+`.gitignore`**, so `add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`,
+never over an existing one) when the *default* `<agentDir>/.secrets` has none. The risk is not
+symmetric — restoring a deliberately deleted ignore file is an annoyance, the other way is a published
+credential. A secrets dir named by `FASTAGENT_SECRETS_DIR` belongs to the operator: dropping the
+template there would hide that directory's other contents from `git add`, so `add <channel>` states
+the fact instead.
 
-The exception stops at fastagent's OWN directory. A secrets dir named by `FASTAGENT_SECRETS_DIR` belongs
-to the operator, and the template is `*` plus two negations — dropping it there would hide that
-directory's other contents from their `git add`, a bigger harm than the one it prevents and inflicted on
-a path they chose deliberately. `add <channel>` states the fact instead and lets them own it.
+**Several agents on one workspace** is a supported shape: an engineer's, a PM's and a content owner's
+agent can each drive the same repository. `FASTAGENT_AGENT` selects between them; the directory named
+`fastagent` breaks the tie.
 
-What was deleted, then, is fastagent MANAGING ignore files: unconditionally, from
-several commands, behind a decision procedure ("is this path under a directory we control?") that
-approximated git's own semantics with containment comparisons against a different anchor per command. It
-produced four reversals of the same predicate in review, and could ABORT `login` over an ignore file the
-author had edited. The question it was approximating — "will git see this?" — has exactly one authority,
-and users configure their own ignore rules. What remains is one write, from one command, at the moment a
-credential is created, and never over an existing file.
-
-(“Embedded” in fastagent's docs means one thing only: using fastagent as a LIBRARY inside your app —
-see docs/embedding.md.)
-
-**Known boundary (accepted, documented):** the workspace is `agentDir` itself or its immediate parent —
-never further, because the lookup only ever finds an agent at the directory you named or one level
-inside it. Reaching an agent two levels down means pointing at the level above it.
-
-**Several agents on ONE workspace** is a supported shape, not a collision: an engineer's, a PM's and a
-content owner's agent can each drive the same repository, all with that repository as their workspace.
-`FASTAGENT_AGENT` selects between them, and the directory named `fastagent` (the `init` default) breaks
-the tie when nothing else does.
-
-Two properties of that, both choices:
-
-- **The env selects, a file does not.** Selection is per-PERSON — that is the whole scenario — and a
-  committed workspace file is shared by construction, so it cannot express "mine". The per-repo,
-  per-person file this needs already exists and is not ours to invent: `.envrc`
-  (`export FASTAGENT_AGENT=pm`), committed for a shared default or ignored for a personal one. A
-  workspace-level REGISTRY was considered and rejected for a second reason too: the one-level scan
-  already answers "which agents are here", so a list could only drift from it — and it would centralize
-  what the scan decentralizes (adding an agent means creating a directory, not editing a file three
-  teams share).
-- **It ASSERTS, at any count.** A directory holding no agent by that name resolves to nothing, even
-  when exactly one agent is sitting there: serving a DIFFERENT agent than the one asked for is the
-  silent wrong-target refused everywhere else here, and a rule that changed meaning with the sibling
-  count would be worse than the cost it avoids. Stated cost: a value exported in a shell PROFILE
+- **The env selects, a file does not.** Selection is per-person, and a committed workspace file is
+  shared by construction. `.envrc` is the per-repo, per-person file this needs and is not ours to
+  invent. A workspace registry could only drift from the one-level scan that already answers "which
+  agents are here".
+- **It asserts, at any count.** A directory holding no agent by that name resolves to nothing even when
+  exactly one agent sits there: serving a different agent than the one asked for is the silent
+  wrong-target this codebase refuses everywhere. Stated cost: a value exported in a shell profile
   refuses in every unrelated directory it travels into — scope it per-repo, which the refusal says.
-- **`deploy` bakes it.** The container re-resolves placement at `/app`, and a workspace holding several
-  agents ships all of them (the build context is the whole tree), so the generated Dockerfile pins
-  `ENV FASTAGENT_AGENT=<name>`. Without it the image would pick by its own rules rather than by the
-  deploy — the artifact depending on the builder's environment, which is what it must never do.
-- **The default NAME breaking the tie is the one place a directory name carries weight**, and it is
-  deliberately not an identity rule: the config alone says what IS an agent, the name only decides which
-  already-identified one answers. It buys that adding a second agent to a working `<workspace>/fastagent/`
-  setup does not break the command everyone already types.
+- **`deploy` bakes it.** The container re-resolves placement at `/app`, so the generated Dockerfile
+  pins `ENV FASTAGENT_AGENT=<name>`. Otherwise the artifact would depend on the builder's environment.
 
 The pi reference prompt has four segments:
 
@@ -181,30 +133,27 @@ The pi reference prompt has four segments:
 |---|---|
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
 | ② project context | `AGENTS.md` files loaded by pi from the agent dir and the workspace ancestor walk |
-| ③ skills listing | Pi appends definition-local skills when `read` is active |
-| ④ runtime context | Pi appends cwd, without a date line that would invalidate the provider prefix cache daily |
+| ③ skills listing | pi appends definition-local skills when `read` is active |
+| ④ runtime context | pi appends cwd, without a date line that would invalidate the prefix cache daily |
 
-`persona.md` and `AGENTS.md` are deliberately different slots: persona is authored identity;
-`AGENTS.md` is project context. The definition is re-read for every invocation, so persona/context/
-skill edits take effect on the next turn. Code modules are reloaded by the dev supervisor instead.
-
-The low-level `createPiAgent({ instructions })` path is different on purpose: `instructions` is the
-prompt body without directory identity or project-context assembly. Pi appends skills and cwd on both paths.
+`persona.md` is authored identity; `AGENTS.md` is project context. The definition is re-read for every
+invocation, so persona/context/skill edits take effect on the next turn; code modules are reloaded by
+the dev supervisor instead. The low-level `createPiAgent({ instructions })` path takes the prompt body
+without directory identity or project-context assembly; pi appends skills and cwd on both paths.
 
 ### Promise ports
 
-Every contract at the edge of this codebase is Promise-shaped and none of them are ours to change:
-the SPEC fixes `Agent.invoke` as an AsyncIterable and `SessionControl` as Promises, pi's SDK is
-Promise-based, every platform client is `fetch`, and so is the filesystem. `src/effect-port.ts` is
-the single crossing into Effect execution, and it holds exactly two opinions.
+Every contract at the edge of this codebase is Promise-shaped and none of them are ours to change: the
+SPEC fixes `Agent.invoke` as an AsyncIterable and `SessionControl` as Promises, pi's SDK is
+Promise-based, every platform client is `fetch`, and so is the filesystem. `src/effect-port.ts` is the
+single crossing into Effect execution, and it holds exactly two opinions.
 
-**Interruption joins.** A Promise exposes no abort hook, so cancelling the fiber awaiting one does
-not stop the work behind it. Releasing its resources anyway is how a disposed session gets written
-to, or a lease reaches the next turn while the previous one still runs. `portJoin` waits for the
-pending promise before releasing; `portAbort` calls the port's own abort hook first and then waits;
-`portRequest` owns an `AbortController`, applies a deadline, and closes the signal on every exit
-(a settled response body has to be released too). `port` is the abandonable case, for reads and for
-writes a caller is free to walk away from.
+**Interruption joins.** A Promise exposes no abort hook, so cancelling the fiber awaiting one does not
+stop the work behind it — releasing its resources anyway is how a disposed session gets written to, or
+a lease reaches the next turn while the previous one still runs. `portJoin` waits for the pending
+promise before releasing; `portAbort` calls the port's own abort hook first and then waits;
+`portRequest` owns an `AbortController`, applies a deadline, and closes the signal on every exit. `port`
+is the abandonable case, for reads and for writes a caller is free to walk away from.
 
 **The cause survives.** `PortFailure` carries the original error verbatim, because retry
 classification, the channels' platform error types and every operator-facing message read it;
@@ -213,12 +162,9 @@ classification, the channels' platform error types and every operator-facing mes
 One module, because each layer re-derived both during the Effect migration: the channel kit, the pi
 engine, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
 join-on-interrupt combinator that differed only in the word before `Failure`. `SessionBusy` stays a
-separate tag in `engines/pi/session-effects.ts` because it is control flow (answered with
-`session_busy` and a retry), not a port failure.
+separate tag in `engines/pi/session-effects.ts` because it is control flow, not a port failure.
 
 ## 3. Assembly ladder
-
-The pi reference implementation has three reusable rungs:
 
 | Rung | Function | Responsibility |
 |---|---|---|
@@ -226,73 +172,68 @@ The pi reference implementation has three reusable rungs:
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromDir` sits above L2. It resolves the placement (`resolvePlacement`), config,
-model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
-assembly rather than carrying parallel implementations.
+`createPiAgentFromDir` sits above L2 and resolves placement, config, model, auth, tools, sessions, and
+machinery paths. `dev`, `start`, `invoke`, and `fire` share it rather than carrying parallel
+implementations.
 
-Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn. Conversation
-continuity comes from `PiSessionRecordStore`, not a resident session. That is L0's choice on the axis a
-deployment owns rather than the architecture: per-invoke state (SPEC MUST 6 — what AgentCore and every
-scaled channel host require), swappable at this rung alone;
-[conformance-levels.md](conformance-levels.md) states what each posture owes. Reopening is faithful to the whole
-record, not just the messages: pi does not read active-tool changes back (its own session is resident,
-so it never needs to), which is why `piAgentSessionFactory` resolves the active-tool set itself: the
-UNION of the initial set (every non-deferred tool;
-pi's all-active default when nothing is deferred) and the session's accumulated activation DELTAS —
-dedicated `fastagent:tool-activation` custom entries the activation bridge writes, each carrying
-exactly the names that call activated. pi's own `active_tools_change` entries are full active-set
-snapshots and are deliberately ignored: replaying a snapshot would freeze later-added tools out of old
-sessions and keep a later-`deferred` tool active in sessions that never discovered it. The corollary
-is a constraint on future writers: NARROWING the active set is not representable in this record — a
-capability that needs durable narrowing must change the resolve semantics here first, deliberately.
+Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn.
+Continuity comes from `PiSessionRecordStore`, not a resident session. That is L0's choice on the axis a
+deployment owns: per-invoke state (SPEC MUST 6, what AgentCore and every scaled channel host require),
+swappable at this rung alone — [conformance-levels.md](conformance-levels.md) states what each posture
+owes.
 
-This per-invoke assembly remains the only data plane. A client that needs mid-run control, live
-observation, or reconnectable history uses the optional [session control plane](session-control.md):
-a session's own observe/act/update calls beside `invoke`, plus the deployment's session list — never
-a second way to start work, and never resident process state as the source of continuity.
+Reopening is faithful to the whole record, not just the messages. pi does not read active-tool changes
+back (its own session is resident), so `piAgentSessionFactory` resolves the active-tool set itself: the
+union of the initial set (every non-deferred tool) and the session's accumulated activation *deltas* —
+`fastagent:tool-activation` entries carrying exactly the names that call activated. pi's own
+`active_tools_change` entries are full snapshots and are ignored: replaying one would freeze
+later-added tools out of old sessions and keep a later-`deferred` tool active in sessions that never
+discovered it. Corollary: *narrowing* the active set is not representable in this record.
+
+This per-invoke assembly is the only data plane. A client needing mid-run control, live observation, or
+reconnectable history uses the optional [session control plane](session-control.md) — never a second
+way to start work, and never resident process state as the source of continuity.
 
 ## 4. Event translation and terminal discipline
 
-Pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
+pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
 a value — a turn's outcome is the assistant message the stream ended on, never an index into session
-state (compaction and overflow recovery both rewrite that array mid-turn).
-`src/engines/pi/invoke-session.ts` combines the two into one async iterable. An Effect execution
-scope owns the shared lease, session and subscription; an Effect queue carries projected events.
-`turn-kit.ts` owns protocol projection and terminal classification. `session-effects.ts` supplies
-the scoped lease/session acquisition shared with control-plane writes; the Promise crossing itself is
-`src/effect-port.ts` (see [Promise ports](#promise-ports)):
+state (compaction and overflow recovery rewrite that array mid-turn).
+`src/engines/pi/invoke-session.ts` combines the two into one async iterable. An Effect scope owns the
+shared lease, session and subscription; an Effect queue carries projected events. `turn-kit.ts` owns
+protocol projection and terminal classification; `session-effects.ts` supplies the scoped lease/session
+acquisition shared with control-plane writes, and the Promise crossing itself is `src/effect-port.ts`
+(see [Promise ports](#promise-ports)):
 
 1. acquire the per-session lease;
-2. publish `run_started` with the run's controls — BEFORE binding, so a dispatch that races the build
+2. publish `run_started` with the run's controls — before binding, so a dispatch that races the build
    queues on it rather than finding no run;
 3. open/create the record and bind a session to it;
-4. subscribe, translating pi events ONCE into the rich `SessionEvent` vocabulary (the SPEC stream is
+4. subscribe, translating pi events once into the rich `SessionEvent` vocabulary (the SPEC stream is
    its projection), then wake waiting controls so their synchronous queue events are observed;
 5. run the prompt;
 6. queue exactly one `completed` or `failed` terminal and wait for consumer settlement;
 7. unsubscribe, dispose, publish exactly one `run_settled`, and release the lease.
 
-The scope remains alive while output is buffered or the consumer is paused at its terminal. Controls
-reject after SDK work finishes. Consumer cancellation interrupts the execution fiber, aborts and joins
-actual SDK work, and silences pending reads. Acquisition remains uninterruptible so a late-created
-session cannot publish durable state after its lease is released.
+The scope stays alive while output is buffered or the consumer is paused at its terminal. Consumer
+cancellation interrupts the execution fiber, aborts and joins actual SDK work, and silences pending
+reads. Acquisition stays uninterruptible so a late-created session cannot publish durable state after
+its lease is released.
 
-`SessionBusy` and `PortFailure` remain typed failures inside execution. Protocol boundaries
+`SessionBusy` and `PortFailure` are typed failures inside execution. Protocol boundaries
 translate failures and defects into `failed` events or existing `SessionResult` codes. Cleanup faults
 are logged independently, continue remaining finalizers, and cannot overwrite a published outcome.
-An external SDK callback defect stops the turn and becomes one failed terminal.
 
-Control mutations take the same fail-fast lease through scoped acquisition. Manual compaction owns
-its own execution scope: admission returns before model work finishes, and `compaction_finished`
-is published after cleanup and lease release. Assembly services remain explicitly injected and
-shared; sessions and subscriptions remain per-operation. These scopes do not own channel turns,
-durable replay policy, or service shutdown.
+Control mutations take the same fail-fast lease. Manual compaction owns its own scope: admission
+returns before model work finishes, and `compaction_finished` is published after cleanup and lease
+release. Assembly services are explicitly injected and shared; sessions and subscriptions stay
+per-operation. These scopes do not own channel turns, durable replay policy, or service shutdown.
 
 pi retries a failed assistant request itself. That is free resilience while the turn is silent and
 corruption once it is not — SPEC deltas are append-only, so a second attempt would concatenate its
-answer onto the first one's half-sentence. The L0 refuses the retry exactly there: once answer text
-has been streamed, never on tool events (refusing on those would push the retry out to the caller,
-who can only re-run the whole prompt and execute the tool a second time).
+answer onto the first one's half-sentence. L0 refuses the retry exactly there: once answer text has
+been streamed, never on tool events (refusing on those would push the retry out to the caller, who can
+only re-run the whole prompt and execute the tool a second time).
 
 ## 5. Tools, skills, and execution environment
 
@@ -300,77 +241,55 @@ Definition-local skills are the deployment truth. Runtime loading never scans gl
 `fastagent add skill` may copy a global or remote skill into `skills/`, after which the vendored copy is
 the source.
 
-Workspace tools are merged in this order:
+Workspace tools merge in this order: all pi coding tools
+(`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
+`tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and broken discovered tools are
+reported and skipped. The coding set is fixed for directory agents: isolation belongs around the whole
+agent process, where it also covers authored tools and channel code. Conditional built-ins
+(`search_tools` for deferred tools, `wake` for self-scheduling) keep their own policies. Reusable
+integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting.
 
-1. all pi coding tools: `read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`;
-2. `config.tools`;
-3. discovered `tools/*.ts|js|mjs`.
-
-The coding set is fixed for directory agents. Isolation belongs around the whole agent process, where
-it also covers authored tools and channel code; a built-in allowlist would not. Conditional built-ins
-(`search_tools` for deferred tools, `wake` for self-scheduling) keep their own policies. Earlier names
-win and collisions are reported. Broken discovered tools are reported and skipped.
-Reusable integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting; package
-origin does not create a second tool runtime.
-
-Every `defineTool` execution receives the same generic runtime context. Serving adapts the session it
-binds for the turn; chat adapts its resident one; both go through the same adapter onto the
-FastAgent-owned read-only port (`getSessionId`, `getHeader`, `getBranch`) — and `getSessionId` answers
-the CALLER's id, not pi's encoded record name. Sessionless direct execution provides cwd but no
-manager. Native Pi tools receive the same workspace cwd and caller session id; their `thinkingLevel`
-getter reads the bound `AgentSession`, keeping shell effort consistent with the invoking session during
-concurrent runs.
+Every `defineTool` execution receives the same runtime context. Serving adapts the session it binds for
+the turn, chat adapts its resident one, both through the same adapter onto the FastAgent-owned
+read-only port (`getSessionId`, `getHeader`, `getBranch`) — `getSessionId` answers the *caller's* id,
+not pi's encoded record name. Sessionless direct execution provides cwd but no manager. Native pi tools
+receive the same workspace cwd and caller session id; their `thinkingLevel` getter reads the bound
+`AgentSession`.
 
 **Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
-schemas stay out of the request — and the model's sight — until the built-in `search_tools` loader
-(auto-mounted whenever a deferred tool exists; an authored `search_tools` wins, the wake-pair rule)
-activates them by keyword mid-turn. The activation runs through a per-turn bridge on the turn context
-(`ToolActivation`: additive `setActiveTools`, unknown names filtered — pi throws on them), is stamped
-on that tool call's own result as `addedToolNames` — the load point that lets providers with native
-deferred loading add the definitions at the transcript position without invalidating the cached
-prompt prefix (the stamp comes from that execute's own `activate()` calls, never an active-set
-snapshot diff: batch tool calls run in parallel and a diff would misattribute a sibling's activation)
-— and is recorded in the session, which the per-invoke resolve above carries into later turns. The
-base prompt lists only non-deferred tools plus a discovery note, computed from the static mounted set,
-so activation never rewrites the prompt. The shared session builder (`session-builder.ts`, which
-`chat` consumes) emulates the same behavior over pi's AgentSession — the session is narrowed to the
-initial active set at build, and the same builtin loader activates through a session-side
-ToolActivation bridge (`sessionToolActivation`) riding the same turn context, so the author debugs
-exactly what serves.
+schemas stay out of the request until the built-in `search_tools` loader (auto-mounted whenever a
+deferred tool exists; an authored `search_tools` wins) activates them by keyword mid-turn. Activation
+runs through a per-turn bridge on the turn context (`ToolActivation`: additive `setActiveTools`,
+unknown names filtered) and is stamped on that tool call's own result as `addedToolNames` — the load
+point that lets providers with native deferred loading add definitions at the transcript position
+without invalidating the cached prompt prefix. The stamp comes from that execute's own `activate()`
+calls, never an active-set snapshot diff: batch tool calls run in parallel and a diff would
+misattribute a sibling's activation. The base prompt lists only non-deferred tools plus a discovery
+note, computed from the static mounted set, so activation never rewrites the prompt. The shared session
+builder (`session-builder.ts`, which `chat` consumes) emulates the same behavior over pi's
+AgentSession through `sessionToolActivation`, so the author debugs exactly what serves.
 
-**`ExecutionEnv` governs definition loading, not the tools.** The coding tools are
-pi-coding-agent's, using the session's workspace, and they reach `node:fs` directly. For a
-while they were pi-agent-core's look-alikes, which take the env as the turn's tool context, so that
-`env` would be the single seam a sandbox adapter implements. That was given up deliberately: the seam
-never closed anything by itself — author-written `tools/` import whatever they like — while it cost a
-167-line parity suite and a hand-built image pipeline for a `read` that ships none. All seven tools now
-come from coding-agent and bypass `ExecutionEnv` together.
-
-`env` is therefore NOT a sandbox, and the gaps are specific: the default tools bypass it, fastagent's
-OWN tools (`tools/`) are author code that can import anything, `loadProjectContextFiles` reads ②
-context through node fs directly, and `deploy`/channel machinery runs outside it entirely. A sandbox
-adapter constrains the process it runs in;
-`env` alone narrows the blast radius rather than closing it.
+**`ExecutionEnv` governs definition loading, not the tools.** All seven coding tools come from
+pi-coding-agent and reach `node:fs` directly. Routing them through `env` was tried and given up: the
+seam never closed anything by itself — author-written `tools/` import whatever they like — while it
+cost a 167-line parity suite and a hand-built image pipeline. `env` is therefore **not** a sandbox: the
+default tools bypass it, `tools/` is author code, `loadProjectContextFiles` reads ② context through
+node fs directly, and `deploy`/channel machinery runs outside it entirely. A sandbox adapter constrains
+the process it runs in.
 
 ## 6. Sessions and concurrency
 
-The reference stores are:
-
-- `piInMemorySessionRecordStore()` for embedding/tests;
-- `piSessionRecordStore({ dir })` for restart-surviving local/single-machine continuity.
+The reference stores are `piInMemorySessionRecordStore()` for embedding/tests and
+`piSessionRecordStore({ dir })` for restart-surviving local continuity.
 
 Opening an existing session reconciles a dangling leaf tool call left by an interrupted process by
 appending an explicit interrupted error result. This restores transcript validity; it does not make
 side-effecting tools exactly-once.
 
-The core lease allows one in-flight turn per session. A collision yields:
-
-```ts
-{ type: "failed", code: "session_busy", retryable: true, details: "…" }
-```
-
-Queueing is channel policy. Telegram, Slack, and Feishu/Lark serialize their own turns per session;
-HTTP and GitHub use the core fail-fast behavior.
+The core lease allows one in-flight turn per session. A collision yields
+`{ type: "failed", code: "session_busy", retryable: true, details: "…" }`. Queueing is channel policy:
+Telegram, Slack, and Feishu/Lark serialize their own turns per session; HTTP and GitHub use the
+fail-fast behavior.
 
 ## 7. Channels and hosting
 
@@ -381,101 +300,79 @@ A channel file has one of two explicit module forms:
 (ctx: { agent, stateRoot }) => Routes
 
 // Long-connection channel
-{
-  name: string,
-  connect(ctx, signal): { ready: Promise<void>, closed: Promise<void> }
-}
+{ name: string, connect(ctx, signal): { ready: Promise<void>, closed: Promise<void> } }
 ```
 
-The distinction is structural: a function is a route channel; an object with `connect` is a
+The distinction is structural: a function is a route channel, an object with `connect` is a
 `LongConnectionChannelModule`. There is no shared mount object, ingress enum, or second metadata
 declaration. Deployment imports enabled channel modules to inspect that shape without invoking route
 modules or opening connections, so top-level module construction must not require runtime secrets. The
 adapter owns reconnects; `AbortSignal` is the sole shutdown command, while `ready` and `closed` expose
 lifecycle observation without a second `close()` path.
 
-Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming a
-file to `telegram.ts.disabled` disables it without adding a second config source.
+Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming to
+`telegram.ts.disabled` disables one without adding a second config source.
 
-The loader collects all per-file diagnostics, but `dev` / `start` treats any broken enabled channel or
-route collision as fatal. A declared inbound endpoint must not silently disappear, and a broken channel
-must never cause the default `/invoke` route to appear. The default HTTP/SSE route is mounted only when there are no
+The loader collects all per-file diagnostics, but `dev`/`start` treats any broken enabled channel or
+route collision as fatal: a declared inbound endpoint must not silently disappear, and a broken channel
+must never cause the default `/invoke` route to appear. That route is mounted only when there are no
 enabled channel files.
 
 `mountAgentService` adds `GET /health`, starts long connections and schedules, and owns their shutdown.
-A long-connection channel counts as declared, so the fallback `/invoke` does not appear. Built-in health
-returns 503 until every long connection is ready and again if one closes unexpectedly. The CLI binds
-the service's handler through `channels/serve.ts` and exits on unexpected channel closure. Its
+A long-connection channel counts as declared, so the fallback `/invoke` does not appear. Health returns
+503 until every long connection is ready, and again if one closes unexpectedly. The CLI binds the
+service's handler through `channels/serve.ts` and exits on unexpected channel closure; its
 SIGINT/SIGTERM handler closes the service and listener, force-closes active HTTP streams, and bounds
-shutdown time; it does not drain Agent turns.
+shutdown time. It does not drain Agent turns.
 
 The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and
 closure observers, and the caller's abort listener. Shutdown broadcasts the transport abort before
-closing the scope, then waits for all connections under one deadline. Its result is cached so
-concurrent and repeated `close()` calls wait for the same completion or failure. Startup rollback
-uses that same shutdown, logging cleanup errors while preserving the startup failure. The public
-`ready` waiter stays outside the scope it may close; channel authors still return ordinary Promises
-and consume an `AbortSignal`. Agent turns and durable replay state remain outside this scope.
-Effect is internal to `/node` service assembly, `/pi` execution/control, and the stateful chat channels'
-execution and delivery. The contracts, `/core`, and `/session` remain dependency-free; public APIs expose
-no Effect runtime or types.
+closing the scope, then waits for all connections under one deadline; its result is cached so
+concurrent and repeated `close()` calls wait for the same completion or failure. Startup rollback uses
+that same shutdown. Effect stays internal to `/node` service assembly, `/pi` execution/control, and the
+stateful chat channels; `/core` and `/session` remain dependency-free and expose no Effect types.
 
 `channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
-eager subscription, heartbeat, serialization and iterator cleanup. The callers own their event shapes.
+eager subscription, heartbeat, serialization and iterator cleanup; callers own their event shapes.
 Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
-during body streaming close the source and heartbeat and propagate through the response body.
-The remote invoke client stops at the first terminal event; malformed control envelopes fail visibly.
+during body streaming close the source and heartbeat and propagate through the response body. The
+remote invoke client stops at the first terminal event; malformed control envelopes fail visibly.
 
 ### Shared chat execution
 
 Telegram, Slack, and Feishu/Lark use the same execution lifecycle. Acceptance persists intent before
 ACK and counts queued work as busy immediately. Each turn runs in an independent Effect root fiber;
 per-session successors wait for the preceding scope to close, while other sessions run concurrently.
-Request completion does not close these fibers, and service shutdown still does not drain them.
+Request completion does not close these fibers, and service shutdown does not drain them.
 
-Platform hooks expose no abort operation, so releasing ownership while their Promises
-still run would permit overlapping work and premature idle snapshots — `effect-port.ts` is what keeps
-that from happening (see [Promise ports](#promise-ports)). Side-task drains observe only
-the tasks tracked when called. Queue notices are observed from acceptance and joined at dequeue,
-including when a notice's cancellation hook fails.
+Platform hooks expose no abort operation, so releasing ownership while their Promises still run would
+permit overlapping work and premature idle snapshots — `effect-port.ts` is what keeps that from
+happening (see [Promise ports](#promise-ports)). Side-task drains observe only the tasks tracked when
+called.
 
 `invoke-turn-kit.ts` owns the turn itself: resolve the platform inputs, then ask the agent. A failed
-resolution becomes a `failed` EVENT (SPEC MUST 2) whose only per-channel part is whether it is worth
-a redelivery — Slack reads its API error's status, the other two say yes.
+resolution becomes a `failed` EVENT (SPEC MUST 2) whose only per-channel part is whether it is worth a
+redelivery — Slack reads its API error's status, the other two say yes.
 
 A write's rate-limit budget is the caller's to set, through `kit/transport.ts`. A live-preview frame
 passes `DROPPABLE_FRAME`: the next frame carries the same snapshot and the terminal write supersedes
-it, so waiting out a 429 for one parks the answer and every turn queued behind it (measured at 93 s /
-90 s / 6 s for Telegram / Slack / Feishu). Writes whose content exists only in that call — Telegram's
-placeholder send, Slack's ordered stream appends, every terminal write — keep the default budget. How
-a platform signals a limit and how long it asks us to wait stay in each `*-api.ts`.
+it, so waiting out a 429 for one parks the answer and every turn queued behind it. Writes whose content
+exists only in that call — Telegram's placeholder send, Slack's ordered stream appends, every terminal
+write — keep the default budget. How a platform signals a limit stays in each `*-api.ts`.
 
 `runQueuedTurn` separates business settlement from resource cleanup. The `completed` callback removes
-intent before committing the exact context snapshot consumed; later discussion remains buffered.
-Caught execution/delivery failures retain the existing intent-removal policy. Effect interruption and
-process termination preserve unfinished intent for recovery. Store formats, poison-attempt limits,
-post-ACK write policies, and at-least-once replay are unchanged.
+intent before committing the exact context snapshot consumed; later discussion stays buffered. Effect
+interruption and process termination preserve unfinished intent for recovery.
 
 The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
-first-event `session_busy` rejection closes that iterator before waiting on the Effect clock. Other
-failures never reopen the retry window. Interrupting consumption closes the actual Agent iterator
-during a quiet read and cancels the timer during backoff. Natural source exhaustion needs no
-additional `return()` call.
-
-The runner's internal `execute` hook returns an Effect, so input loading, source consumption, previews,
-terminal delivery, and Slack reaction cleanup remain children of the turn. Platform API clients retain
-ordinary Promises and their existing retry/fallback policies. Already-issued operations are joined;
-interrupting input loading does not start a model after the input resolves.
+first-event `session_busy` rejection closes that iterator before waiting on the Effect clock, and other
+failures never reopen the retry window.
 
 `delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
 its first write synchronously, cancels pending pacing at finish, and joins an issued write before the
-terminal update. Slack's mutation slot and append timer use the turn's clock. Its native stream is
-closed after accepted appends, even if error formatting fails; an attempted stop is never retried by
-scope cleanup. Status clearing follows stream cleanup. Preview callbacks capture the turn context
-when crossing a synchronous API boundary, preserving its clock without introducing a global runtime.
-Snapshot renderers share terminal ownership; formatting, continuation, and capability fallback stay
-platform-specific. Failed error notices are diagnosed without replacing the primary failure, and a
-failed final delivery does not trigger a second abnormal-turn delivery.
+terminal update. Preview callbacks capture the turn context when crossing a synchronous API boundary,
+preserving its clock without a global runtime. Snapshot renderers share terminal ownership; formatting,
+continuation, and capability fallback stay platform-specific.
 
 ### GitHub
 
@@ -485,209 +382,173 @@ post-ACK replay; an interrupted review is lost and logged.
 
 ### Telegram
 
-Telegram is the stateful channel reference. Its modules separate:
+Telegram is the stateful channel reference:
 
 | Module | Responsibility |
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
-| `invoke-turn.ts` | attachment resolution; the turn itself (busy-retry loop, load-failure event, manifest wording) is `../kit/invoke-turn-kit.ts` |
-| `../kit/turn-runner.ts` | the durable-turn lifecycle over the queue + store + buffer (shared with Slack and Feishu); `../kit/turn-queue.ts` is its per-session FIFO |
-| `turn-store.ts` | telegram's record + ordering over the shared generic `../kit/turn-store.ts` (pre-ACK persisted turn intent, crash replay) |
-| `context-buffer.ts` | telegram's entry shape + attachment selection over the shared generic `../kit/context-buffer.ts` (durable un-summoned group context, peek→completed→commit) |
+| `invoke-turn.ts` | attachment resolution; the turn itself (busy retry, load-failure event, manifest wording) is `../kit/invoke-turn-kit.ts` |
+| `../kit/turn-runner.ts` | the durable-turn lifecycle over queue + store + buffer (shared with Slack and Feishu) |
+| `turn-store.ts` | telegram's record + ordering over the generic `../kit/turn-store.ts` |
+| `context-buffer.ts` | telegram's entry shape over the generic `../kit/context-buffer.ts` |
 | `preview.ts` | live preview and terminal write policy |
 | `telegram-api.ts` | Bot API timeouts/retries and HTML-aware splitting |
-| `../kit/state.ts` | atomic small JSON state files (shared with Slack and Feishu) |
+| `../kit/state.ts` | atomic small JSON state files |
 
-Telegram turn replay is at-least-once. A crash can re-run side-effecting tools, and a narrow pre-ACK
-window can run a delivery twice. Exactly-once execution needs a different backend/resume model.
+Turn replay is at-least-once: a crash can re-run side-effecting tools, and a narrow pre-ACK window can
+run a delivery twice. Exactly-once execution needs a different backend/resume model.
 
 ### Slack
 
 Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
-`Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, generic `context-buffer`,
-the invoke-turn kit (busy retry + manifest wording), `state`, `seen`, and the
-shared turn-view reducer + preview policies (`preview-kit`). Platform-specific modules own signature verification/event acceptance, message subtype policy,
-thread participation/context, private-file resolution, Slack Web API transport, and dual native-stream /
-rate-limited edited-message rendering.
+`Agent.invoke` boundary and reuses the shared `turn-queue`, generic `turn-store`, generic
+`context-buffer`, invoke-turn kit, `state`, `seen`, and `preview-kit`. Platform-specific modules own
+signature verification/event acceptance, message subtype policy, thread participation/context,
+private-file resolution, Web API transport, and dual native-stream / rate-limited edited-message
+rendering.
 
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
-then persists the turn intent and any buffered context before returning 200. Logical dedup uses
+then persists turn intent and buffered context before returning 200. Logical dedup uses
 `(team, channel, ts)` because `app_mention` and `message.*` subscriptions may overlap; `event_id` alone
 does not identify that shared message. Sessions follow the place, not the ask: an answer goes in a
-thread on the ask and that thread IS the session, so there are no session modes to select. `context`
-group mode subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where
-the participation rule allows it (the agent has answered there and no second human has been heard —
-see participant-model.md §3, and the Feishu bullets above for the shared store), and folds other
-discussion with the same peek→completed→commit invariant as Telegram/Feishu. Answering an explicit
-summon inside an existing human thread is exactly what makes the agent a participant of it. `mentions`
-keeps the least-privilege explicit-summon surface.
+thread on the ask and that thread *is* the session, so there are no session modes. `context` group mode
+subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where the
+participation rule allows it (see [participant-model.md](participant-model.md) §3), and folds other
+discussion with the same peek→completed→commit invariant as Telegram/Feishu. `mentions` keeps the
+least-privilege explicit-summon surface.
 
-File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated downloads
-are host-restricted, timeout/cap guarded, and translated to vision images or absolute local paths. Primary
-files fail visibly; buffered files degrade individually. Outbound file delivery uses Slack's external
-upload three-step protocol and remains at-least-once across an ambiguous completion response.
+File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated
+downloads are host-restricted, timeout/cap guarded, and translated to vision images or absolute local
+paths. Primary files fail visibly; buffered files degrade individually. Outbound delivery uses Slack's
+external upload three-step protocol and stays at-least-once across an ambiguous completion response.
 
 Newly onboarded apps use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
-status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
-the stream; each engine-neutral tool start appends a compact factual Markdown trace, and a failed tool end
-appends one line naming the call. Raw model thinking and tool output stay private — reading output would
-mean guessing the engine's result shape. An append-only stream is also the one renderer whose persisted
-message keeps the process beside the answer; the others settle into the answer alone. The compatibility renderer retains one edited message with a strict
-three-second mutation interval; a custom route reaching a top-level target selects it (either way of
-getting there is listed on the `rendering` option in `slack.ts`) because native
-streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
-separate future boundary rather than entering `ChannelModule` indirectly.
+status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Markdown text events
+append to the stream; each engine-neutral tool start appends a compact factual trace, and a failed tool
+end appends one line naming the call. Raw model thinking and tool output stay private — reading output
+would mean guessing the engine's result shape. The compatibility renderer retains one edited message
+with a strict three-second mutation interval; a custom route reaching a top-level target selects it
+(both ways of getting there are listed on the `rendering` option in `slack.ts`) because native streams
+require a parent user message. HTTP Events API is the production transport; Socket Mode is a separate
+future boundary.
 
 `add slack` owns a single-workspace internal-app control plane outside `ChannelModule`: a temporary
 unguessable challenge/OAuth responder, mode-specific App Manifest creation, OAuth-v2 code exchange, and
 irreversible-boundary recovery state. The long-lived bot token + Signing Secret go to `.env` (bot-token
-rotation is left off: it is irreversible and would ship the refresh token and client secret beside the
-access token); the more powerful user/workspace App Configuration refresh token remains owner-local and
-never enters deployment secrets. `dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
-`apps.manifest.update`; missing onboarding state remains a truthful manual registration outcome. This is
-not Marketplace/multi-workspace installation storage.
+rotation is left off: it would ship the refresh token and client secret beside the access token); the
+more powerful App Configuration refresh token stays owner-local and never enters deployment secrets.
+`dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
+`apps.manifest.update`. This is not Marketplace/multi-workspace installation storage.
 
 ### Feishu (canonical) / Lark (compatibility)
 
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
-implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
-`model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
-`invoke-turn.ts` IO assembly, `preview.ts` delivery,
-shared `../kit/thread-participants.ts` thread-participation cache, `../kit/seen.ts` bounded delivery dedup,
-`feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
-automation. `shared-api.ts` gives mounted channels and proactive send tools one transport per cloud and
-state root, so credentials, gateways, token caching, retries and text splitting have one implementation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
-`invoke-turn-kit` / `state`) live in `channels/kit/`, whose defining property is that its consumers
-are only platform directories like this one — `wait-health` (deploy/) and `registration` (deploy/ and
-cli/ as well as platform dirs) sit one level up because theirs are not.
+implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy,
+`model.ts`/`normalize.ts` content decoding and resource normalization, `invoke-turn.ts` IO assembly,
+`preview.ts` delivery, `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts`
+builders, and registration automation. `shared-api.ts` gives mounted channels and proactive send tools
+one transport per cloud and state root. Shared mechanisms live in `channels/kit/`, whose defining
+property is that its consumers are only platform directories; `wait-health` and `registration` sit one
+level up because theirs are not.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
-`src/channels/lark/lark.ts` is therefore a thin branded adapter over the Feishu engine, while
-`src/channels/lark/onboard.ts` owns Lark's degraded guided/manual onboarding. The explicit profiles in
-`src/channels/feishu/cloud.ts` record those capability differences. A kind still owns its channel
-identity, env, state, logs, and onboarding: `feishuChannel` returns `POST /feishu`, while
-`feishuWebSocketChannel` returns a long-connection module; the Lark factories mirror those boundaries
-without becoming the core. Both share `channels/<kind>/` state and the same event engine. One agent
-can run both clouds. Outbound APIs and webhook protocol handling remain fetch-based; WebSocket ingress is
-isolated behind the official `@larksuiteoapi/node-sdk` because its protobuf connection protocol is not
-a stable hand-authored surface. What is platform-different:
+`src/channels/lark/lark.ts` is a thin branded adapter over the Feishu engine; `lark/onboard.ts` owns
+Lark's degraded guided/manual onboarding; `feishu/cloud.ts` records the capability differences. A kind
+still owns its channel identity, env, state, logs, and onboarding: `feishuChannel` returns
+`POST /feishu`, `feishuWebSocketChannel` returns a long-connection module, and the Lark factories mirror
+those boundaries. One agent can run both clouds. Outbound APIs and webhook handling are fetch-based;
+WebSocket ingress is isolated behind the official `@larksuiteoapi/node-sdk` because its protobuf
+connection protocol is not a stable hand-authored surface. What is platform-different:
 
-- **The live preview is a streaming CARD, not an edited text message.** The platform caps text edits at
+- **The live preview is a streaming card, not an edited text message.** The platform caps text edits at
   20 per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
   increasing `sequence`) is its designed AI-output channel. A queued turn mounts that same card early
-  with a reply-quoted `⏳ Queued` state; execution takes the entity over in place and the same card
-  settles into the final Markdown answer, so there is no recall tombstone or ambiguous second reply.
-  Per-session execution remains FIFO; quotes keep independently mounted queue cards attributable.
-  Degrade tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the
-  settle still lands.
-- **Verification is modal and fail-closed.** Encrypt Key set: ordinary events require a signature over
-  the raw body → AES decrypt, and plaintext is refused. Feishu explicitly excludes Request URL
-  verification from event signatures, so its encrypted `url_verification` challenge takes the narrow
-  decrypt → exact-type → constant-time Token path. Without an Encrypt Key, events use the same
-  constant-time verification-token match in plaintext.
-- **Turn identity and delivery dedup use `message_id`; recovery order is an explicit `seq`.** Feishu ids
-  carry no arrival order, unlike Telegram's numeric `update_id`, while Feishu/Lark document duplicate
-  pushes even after a successful ACK and recommend idempotency on `message_id`. A bounded persisted
-  `seen.ts` ring therefore filters message deliveries that already produced a durable turn intent or
-  buffered-context entry. It is post-persist, best-effort insurance rather than exactly-once execution:
-  a crash between the state and ring writes, a failed ring write, or an id beyond the cap retains L1's
-  at-least-once tail. The generic turn store still owns unfinished-run recovery and its poison ceiling.
-- **Session partitioning follows the place, not the ask.** A chat is one session
-  (`<kind>:<chat_id>`) and a thread is another (`<kind>:<chat_id>:<thread_id>`) — branded with the
-  channel kind because session ids share ONE namespace across every channel in a deployment. The id
-  becomes an escaped jsonl filename (`piSessionId`), so its real bound is the filesystem's 255 bytes, which
-  platform ids do not come close to. A room keeps one memory that everyone in it shares and a
-  side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the platform's `root_id`
-  tracks the reply chain and can differ between messages of one thread, which would split a side
-  conversation across sessions (and across context-buffer buckets). One place stays FIFO while
+  with a reply-quoted `⏳ Queued` state; execution takes the entity over in place and the card settles
+  into the final Markdown answer, so there is no recall tombstone or ambiguous second reply. Degrade
+  tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the settle
+  still lands.
+- **Verification is modal and fail-closed.** With an Encrypt Key, ordinary events require a signature
+  over the raw body → AES decrypt, and plaintext is refused. Feishu excludes Request URL verification
+  from event signatures, so its encrypted `url_verification` challenge takes the narrow decrypt →
+  exact-type → constant-time token path. Without an Encrypt Key, events use the same constant-time
+  verification-token match in plaintext.
+- **Turn identity and delivery dedup use `message_id`; recovery order is an explicit `seq`.** Feishu
+  ids carry no arrival order, unlike Telegram's numeric `update_id`, while the platform documents
+  duplicate pushes even after a successful ACK. A bounded persisted `seen.ts` ring filters deliveries
+  that already produced a durable turn intent or buffered entry. It is post-persist, best-effort
+  insurance rather than exactly-once: a crash between the state and ring writes, a failed ring write,
+  or an id beyond the cap retains the at-least-once tail.
+- **Session partitioning follows the place, not the ask.** A chat is one session (`<kind>:<chat_id>`)
+  and a thread is another (`<kind>:<chat_id>:<thread_id>`), branded with the channel kind because
+  session ids share one namespace across every channel in a deployment. A room keeps one memory
+  everyone in it shares; a side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the
+  platform's `root_id` tracks the reply chain and can differ between messages of one thread, which
+  would split a side conversation across sessions and buffer buckets. One place stays FIFO while
   different places run concurrently — the concurrency unit is the place because the causal unit is.
-  The rules, and why they are derived rather than configured, are in
-  [participant-model.md](participant-model.md); there is deliberately no session-mode option.
-- **Speaking is gated by who is in the place, listening is not.** Direct messages always answer;
-  a group's main timeline requires an @mention; inside a thread the agent answers bare messages only
-  while it takes part and has not heard a second human. Everything else it can see is buffered as context
-  (`im:message.group_msg` is what buys the hearing). An explicit mention of only other people is
-  discussion, never an ask. A message's `parent_id` referent is ALWAYS loaded — a
-  quote is the user pointing at something that may predate this session. (Skipping it inside a thread
-  the agent had answered in was tried and removed: see participant-model.md §8.) An unreadable referent
-  degrades to a marker in the prompt rather than failing the turn.
-- **Thread participation is what the channel HEARD, not a claim about the thread's membership.** Two
-  decisions:
-  - *Predicate.* The agent speaks unprompted in a thread only where it has answered before and has
-    heard at most one human. Both facts come from the messages the channel observes; nothing is read
-    back from the platform. That is a deliberate weakening: a thread joined before this deployment (or
-    before a lost state file) reads as unheard and takes one mention to re-enter — the same bootstrap
-    every thread starts with, self-healing in one message and visible to the user. The alternative was
-    built and removed: a pre-ACK `listThreadSenders` bought a membership claim its own 50-message page
-    cap made incomplete anyway, at the price of a failure taxonomy, an ACK budget, request aborts, a
-    completeness flag, and a duplicate-delivery join — where nearly every defect in the feature lived.
-    See `src/channels/kit/thread-participants.ts` and design/participant-model.md §3.
-  - *Storage.* `thread-participants.json` records, per thread, the humans heard (capped at two — the
-    rule only asks whether a second one exists) and whether this agent has spoken. Observations only
-    ever accumulate: no platform emits an event when someone stops taking part, and the error
-    directions are asymmetric — over-counting makes the agent ask to be named, under-counting makes it
-    speak into a crowd. Because nothing is fetched, acceptance stays synchronous inside the ACK
-    window and the delivery dedup ring alone keeps a re-push idempotent.
-- **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
-  (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
-  `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
-  messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
-  approval, and reports the granted capability again at serving startup. A mention arriving before the
-  startup `bot/v3/info` settles is kept as context rather than answered (fail-closed: without its own
-  open_id the channel cannot tell a mention of itself from one of someone else) and is folded into the
-  next answered turn in that place. Explicit @bot turns always invoke; bare
-  human messages invoke only under the thread-participation rule above. Other human
-  discussion is persisted in `buffers.json`, bucketed by main chat or thread, and folded into that
-  place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
-  on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.
-  Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon
-  carries only `parent_id` — the referent's content and attachments are fetched as primary input, and
-  the chain ABOVE the referent is resolved as context (oldest-first; one shared text budget;
-  ancestors' attachments join the buffered tier under its cap; a walk ending short of the root leaves
-  a visible truncation line — participant-model.md §8); buffered attachments are background input and
-  degrade per resource.
+  The rules are derived in [participant-model.md](participant-model.md); there is no session-mode
+  option.
+- **Speaking is gated by who is in the place, listening is not.** Direct messages always answer; a
+  group's main timeline requires an @mention; inside a thread the agent answers bare messages only
+  while it takes part and has not heard a second human. Everything else it can see is buffered as
+  context (`im:message.group_msg` buys the hearing). An explicit mention of only other people is
+  discussion, never an ask. A message's `parent_id` referent is always loaded — a quote is the user
+  pointing at something that may predate this session — and an unreadable referent degrades to a marker
+  rather than failing the turn.
+- **Thread participation is what the channel heard, not a claim about the thread's membership.** The
+  agent speaks unprompted in a thread only where it has answered before and has heard at most one
+  human; both facts come from observed messages and nothing is read back from the platform. That is a
+  deliberate weakening: a thread joined before this deployment reads as unheard and takes one mention
+  to re-enter, self-healing in one message. `thread-participants.json` records, per thread, the humans
+  heard (capped at two — the rule only asks whether a second exists) and whether this agent has spoken.
+  Observations only accumulate: no platform emits an event when someone stops taking part, and the
+  error directions are asymmetric — over-counting makes the agent ask to be named, under-counting makes
+  it speak into a crowd. Because nothing is fetched, acceptance stays synchronous inside the ACK window.
+- **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups` (recommended)
+  requests the sensitive `im:message.group_msg` scope; `Mention-only` is the least-privilege
+  alternative. The CLI states that the former delivers all group messages, adds it to the app draft
+  through application-v7 config when supported, opens tenant-admin approval, and reports the granted
+  capability again at startup. A mention arriving before the startup `bot/v3/info` settles is kept as
+  context rather than answered (fail-closed: without its own open_id the channel cannot tell a mention
+  of itself from one of someone else). Other human discussion is persisted in `buffers.json`, bucketed
+  by main chat or thread, and folded into that place's next answered turn under the same
+  peek→commit-on-`completed` invariant. Non-`user` senders are dropped. A reply summon carries only
+  `parent_id`: the referent is fetched as primary input and the chain above it as context (oldest-first,
+  one shared text budget, a visible truncation line when the walk ends short of the root — see
+  participant-model.md §8).
 - **Ingress is an onboarding-time app choice.** `add feishu|lark` asks for WebSocket or webhook and
-  writes the corresponding transport-specific factory into the channel module. WebSocket needs only App ID/Secret, skips token capture,
-  tunnel, Request URL registration, and platform crypto; the official SDK authenticates the outbound
-  connection, reconnects it, and converts handler throws into 500 ACK frames (preserving platform
-  re-push after a failed pre-ACK state write). Webhook retains the application-v7 PATCH/challenge flow,
-  Verification Token, optional Encrypt Key, and Lark's explicit config-route-404 manual fallback.
-  Subscription mode is app-level and mutually exclusive: changing the source factory alone does not
-  migrate the app; the console mode and published version must move with it.
+  writes the corresponding factory into the channel module. WebSocket needs only App ID/Secret and
+  skips token capture, tunnel, Request URL registration, and platform crypto; the official SDK
+  authenticates and reconnects the connection and converts handler throws into 500 ACK frames. Webhook
+  retains the application-v7 PATCH/challenge flow, Verification Token, optional Encrypt Key, and Lark's
+  config-route-404 manual fallback. Subscription mode is app-level and mutually exclusive: changing the
+  factory alone does not migrate the app.
 - **A WebSocket adapter is a long-connection channel and therefore always-on.** Fly generates
-  `min_machines_running=1`, Railway forbids App Sleeping, webhook registration is skipped, and only App ID/Secret travel as
-  channel secrets. Multiple connections for one app are cluster/load-balanced rather than broadcast.
-  Event callbacks must still finish within three seconds, so the shared acceptance boundary persists
-  and enqueues only; the Agent turn remains fire-and-forget.
+  `min_machines_running=1`, Railway forbids App Sleeping, webhook registration is skipped, and only App
+  ID/Secret travel as channel secrets. Event callbacks must still finish within three seconds, so the
+  shared acceptance boundary persists and enqueues only.
 
 ## 8. Schedules and self-scheduling
 
-Static schedules are `schedules/<name>.ts` files exporting `{ cron, tz?, prompt }`. The scheduler:
+Static schedules are `schedules/<name>.ts` files exporting `{ cron, tz?, prompt }`. The scheduler
+derives the stable session `schedule:<name>`, claims a slot before invoking, catches up one overdue
+occurrence after downtime (not every missed slot), records each run in
+`<stateRoot>/schedule/runs.jsonl`, and leaves delivery to agent tools.
 
-- derives the stable session `schedule:<name>`;
-- claims a slot before invoking;
-- catches up one overdue occurrence after downtime, not every missed slot;
-- records each run in `<stateRoot>/schedule/runs.jsonl`;
-- leaves delivery to agent tools.
-
-The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use
-the captured Effect clock; Croner still computes calendar instants, with capped waits rechecking wall
-time. Internal scheduler construction and the shared fire operation compose Effects directly; service
-and AgentCore callbacks retain ordinary TypeScript/Promise APIs. Cron claim IO failures are typed: the
-resident loop logs and audits a skipped fire, while external slot delivery receives the original error.
+The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use the
+captured Effect clock; Croner computes calendar instants, with capped waits rechecking wall time. Cron
+claim IO failures are typed: the resident loop logs and audits a skipped fire, while external slot
+delivery receives the original error.
 
 `stop()` interrupts pending waits synchronously without draining or canceling a claimed occurrence.
-That occurrence finishes execution and settlement handling before its loop exits; no next wake is
-claimed. Waiting loops do not count as business work. Wake execution keeps its busy ownership through
-one-shot deferral and audit, so the idle notification observes settled state. Boot-time cron-state
-read failures still fail startup synchronously. Wake claim/deferral errors end the current poll and
-are logged before pending stop interruption resumes.
+That occurrence finishes execution and settlement before its loop exits; no next wake is claimed.
+Waiting loops do not count as business work. Wake execution keeps its busy ownership through one-shot
+deferral and audit, so the idle notification observes settled state.
 
 With `selfSchedule: true`, the serving path mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
 minimum delay/frequency and per-session count, and fired back into the originating session. A one-shot
-wake that hits `session_busy` is deferred because the turn never started; other failures are not replayed
-because tools may already have produced side effects.
+wake that hits `session_busy` is deferred because the turn never started; other failures are not
+replayed because tools may already have produced side effects.
 
 Schedules need one continuously running process. Deploy preflight prevents scale-to-zero settings that
 would silently miss clock events.
@@ -699,145 +560,136 @@ would silently miss clock events.
 ```txt
 <stateRoot>/                # <agent dir>/.state (FASTAGENT_STATE_DIR overrides)
 ├── sessions/
-├── channels/telegram/
-├── channels/slack/
-├── channels/feishu/
+├── channels/telegram/  channels/slack/  channels/feishu/
 └── schedule/
 ```
 
-Credentials live separately, under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides):
-a different deploy lifecycle — secrets ride the host's secret store / the auth seed, state rides the
-volume; a deployed box points both env knobs at its volume so a rotated OAuth credential persists.
+Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
+the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
+volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
 
 The shipped file-backed implementations are single-process. Multiple instances require shared session,
 lease, credential, and channel-state backends; sharing one local state directory between processes is
 unsupported.
 
-`fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config, persistent-volume
-wiring, required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one
-app service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
-operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
-Quick Tunnel URL and registers webhooks. Deploy requires a nested definition. The image seeds the
-persistent workspace once; later releases replace only the definition subtree. Artifacts sit under the
-agent prefix, with the workspace-root `.dockerignore` required by host context packers. Preflight
-checks that a kept ignore file ships the definition and excludes credentials. Git history ships when
-the host packer permits it, and the image installs Git when the workspace contains `.git`. Git is an
-optional collaboration mechanism; storage preserves unfinished work without commits or pushes.
+`fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
+persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned
+`fastagent.compose.yml`; `--tunnel` can add a separate ephemeral cloudflared service, while durable
+ingress stays operator-owned. `--run` alone causes host side effects; for a tunnel topology it also
+reads the Quick Tunnel URL and registers webhooks.
 
-`deploy/workspace.ts` owns the shared lifecycle. Storage contains `base/` (cwd), `.state/`, `.secrets/`
-and `.deployment/`. A generated release manifest selects the definition. A process-lifetime lease
-precedes initialization; staged trees and a pending journal make definition replacement recoverable.
-The same release preserves agent edits; a new one removes obsolete definition files while keeping
-everything outside the definition. Credentials seed only when absent. Nothing is mounted or unmounted
-by fastagent: the host's volume is the only storage, and download caches go to `/tmp` through the
-image's package-manager environment.
+Deploy requires a nested definition. The image seeds the persistent workspace once; later releases
+replace only the definition subtree. Artifacts sit under the agent prefix, with the workspace-root
+`.dockerignore` the host context packers require; preflight checks that a kept ignore file ships the
+definition and excludes credentials. Git history ships when the host packer permits it, and the image
+installs Git when the workspace contains `.git` — git is an optional collaboration mechanism, and
+storage preserves unfinished work without commits or pushes.
 
-`start` loads the actual service from the persistent definition's installed package. Its tools and
-session context must use the same runtime module instance. The image's runtime only bootstraps storage;
-reusing its engine after copying dependencies would give tools a different AsyncLocalStorage instance.
-Dependency installation stays marked until it succeeds; an interrupted install may already have created
-the CLI link, so link existence alone cannot authorize reuse.
+`deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `base/` (cwd), `.state/`,
+`.secrets/` and `.deployment/`, and a generated release manifest selects the definition. A
+process-lifetime lease precedes initialization; staged trees and a pending journal make definition
+replacement recoverable. The same release preserves agent edits; a new one removes obsolete definition
+files while keeping everything outside the definition. Credentials seed only when absent. Nothing is
+mounted or unmounted by fastagent: the host's volume is the only storage.
 
-**AgentCore** (AWS Bedrock AgentCore Runtime) differs from the resident-box hosts in kind: the platform
-has no public URL (ingress is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute
-is per-session microVMs, reclaimed when idle). The generated CloudFormation stack therefore carries a
-forwarder Lambda (public Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`)
-fronting the webhooks, and EventBridge Scheduler rules delivering each cron slot. Inside the container,
+`start` loads the actual service from the persistent definition's installed package, because its tools
+and session context must use the same runtime module instance — reusing the image's engine after
+copying dependencies would give tools a different `AsyncLocalStorage`. Dependency installation stays
+marked until it succeeds: an interrupted install may already have created the CLI link, so link
+existence alone cannot authorize reuse.
+
+**AgentCore** (AWS Bedrock AgentCore Runtime) differs in kind: the platform has no public URL (ingress
+is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute is per-session microVMs,
+reclaimed when idle). The generated CloudFormation stack therefore carries a forwarder Lambda (public
+Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`) fronting the webhooks,
+and EventBridge Scheduler rules delivering each cron slot. Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
-unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the SAME channel routes
+unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
-reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with the
-slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as SSE.
-`GET /ping` reports `HealthyBusy` while background turns run (the shared turn-queue/task-tracker report
-into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn — and it always carries
-`time_of_last_update` (updated only on real status transitions). The field is documented as optional,
-but measured platform behavior reads ONLY it: without the field, the idle timer counts from the last
-`InvokeAgentRuntime` and reclaims mid-turn regardless of `HealthyBusy` (see the handler comment in
-`channels/agentcore.ts`). All ingress traffic shares ONE
-fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
-until the runtime is deleted.
+reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
+the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
+SSE. `GET /ping` reports `HealthyBusy` while background turns run (`channels/busy.ts`) so an idle
+reclaim cannot kill a post-ACK turn, and always carries `time_of_last_update`: the field is documented
+as optional, but measured platform behavior reads only it — without it the idle timer counts from the
+last `InvokeAgentRuntime` and reclaims mid-turn regardless of `HealthyBusy`. All ingress traffic shares
+one fixed runtime session, since channel state is single-writer by design.
 
-The two process boundaries remain two explicit log sources: Runtime application stdout/stderr and the
-forwarder Lambda's ingress log. `fastagent logs agentcore` derives the stack from the same workspace name,
-discovers the Runtime endpoint log group from its `RuntimeArn`, and tails it; `--source forwarder` selects
-the Lambda group. It applies no stream filter: AgentCore names streams `YYYY/MM/DD/[runtime-logs]<session>`,
-so the marker is an infix after the UTC date path and a `--log-stream-name-prefix` match is always empty. It changes neither
-log content nor `FASTAGENT_LOG_LEVEL` — it is discovery plus `aws logs tail`, not another logger.
+The two process boundaries stay two explicit log sources: Runtime application stdout/stderr and the
+forwarder Lambda's ingress log. `fastagent logs agentcore` derives the stack from the workspace name,
+discovers the Runtime endpoint log group from its `RuntimeArn`, and tails it; `--source forwarder`
+selects the Lambda group. It applies no stream filter: AgentCore names streams
+`YYYY/MM/DD/[runtime-logs]<session>`, so the marker is an infix after the UTC date path and a
+`--log-stream-name-prefix` match is always empty.
 
 **AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `base/`,
-`.state/`, `.secrets/` layout applies, on the platform's own mount: it survives compute stop/resume
-(so an idle-reclaimed agent resumes with its memory) and AWS wipes it on every runtime version update
-— i.e. every deploy — and after 14 idle days. That is this host's stated semantics, not a gap: AWS's
-only cross-deploy filesystems are EFS and S3 Files, both VPC-only, and VPC mode costs a NAT gateway
-for model/channel egress (~$33/mo standing) plus operator-owned network resources. The previous design
-bought cross-deploy state with an S3 snapshot of the state root instead, and paid for it in a presign
-path in the forwarder, a refresh endpoint, a `checkpoint` envelope and a save-on-idle edge — roughly
-700 lines whose failure modes were invisible until a deploy. A host without a volume promises no
-volume; Fly and Railway are where cross-deploy memory lives.
+`.state/`, `.secrets/` layout applies on the platform's own mount: it survives compute stop/resume, so
+an idle-reclaimed agent resumes with its memory, and AWS wipes it on every runtime version update — i.e.
+every deploy — and after 14 idle days. That is this host's stated semantics, not a gap: AWS's only
+cross-deploy filesystems are EFS and S3 Files, both VPC-only, and VPC mode costs a NAT gateway for
+model/channel egress (~$33/mo standing). Buying cross-deploy state with an S3 snapshot instead was
+tried and removed: it cost a presign path in the forwarder, a refresh endpoint, a `checkpoint` envelope
+and a save-on-idle edge — roughly 700 lines whose failure modes were invisible until a deploy. A host
+without a volume promises no volume; Fly and Railway are where cross-deploy memory lives.
 
 Credentials need no extra rule: `maybeSeedAuth` is absent-only, so a restart within a release keeps
 what the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Deploying IS re-authenticating.
-The caveat is OAuth's, not ours: a refresh token is single-use and shared with the builder machine, so
-the box can lose model access between deploys and the fix is another deploy.
+The caveat is OAuth's: a refresh token is single-use and shared with the builder machine, so the box
+can lose model access between deploys and the fix is another deploy.
 
-Runtime filesystems are available on invocation, so `deferAgentcoreService` exposes `/ping` before any
+Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a
-retry would cost. Taking the workspace (`prepareStartWorkspace`: storage check, release, machinery
-paths) starts nothing and releases its lease before failing, so a failed attempt is retried by the
-next envelope: an unmounted volume and a lease the outgoing session still holds clear on their own,
-and caching them would make a healthy microVM refuse every envelope until it is reclaimed. Assembling
-the service (`openPreparedWorkspace`) mounts channels and starts the scheduler, so both its outcomes
-are cached; a second attempt would run two schedulers over one claim state. Concurrent envelopes share
-one attempt at each stage. Mount or initialization failures cannot start an empty agent.
+retry would cost. Taking the workspace (`prepareStartWorkspace`) starts nothing and releases its lease
+before failing, so a failed attempt is retried by the next envelope — an unmounted volume and a lease
+the outgoing session still holds clear on their own, and caching them would make a healthy microVM
+refuse every envelope until it is reclaimed. Assembling the service (`openPreparedWorkspace`) mounts
+channels and starts the scheduler, so both its outcomes are cached; a second attempt would run two
+schedulers over one claim state. Concurrent envelopes share one attempt at each stage, and mount or
+initialization failures cannot start an empty agent.
+
 The process retains its workspace lease until exit, including failed activation and shutdown, since
-service close does not drain every background writer. Only the OPEN is caught there — a failure inside
+service close does not drain every background writer. Only the OPEN is caught there: a failure inside
 the opened service's handler is its own, and reporting it as an initialization failure would also read
-a body the handler already consumed. `flock` acquires the parent's open-file-description
-lock through an inherited fd. The kernel retains it through process pauses and releases it on exit;
-startup never infers a dead writer from a missing JavaScript heartbeat.
+a body the handler already consumed. `flock` acquires the parent's open-file-description lock through
+an inherited fd — the kernel retains it through process pauses and releases it on exit, so startup
+never infers a dead writer from a missing JavaScript heartbeat.
 
 `deploy agentcore --run` stops the fixed runtime session, then probes the new serving path through
 `/__fastagent/probe`. Authenticated initialization and channel failures use transport-200 structured
-verdicts `{ ok, error? }`, preserving their diagnostics through the forwarder. All entry points use the
-same runtime session id; the envelope session id selects the conversation. The S3 bucket contains only
-the content-hashed forwarder deployment package.
+verdicts `{ ok, error? }`, preserving their diagnostics through the forwarder — the ordinary webhook
+relay folds a non-200 into an opaque 502. All entry points use the same runtime session id; the
+envelope session id selects the conversation. The S3 bucket holds only the content-hashed forwarder
+deployment package.
 
 AgentCore IO crosses the Promise boundary through `src/effect-port.ts` like every other host port:
-activation and channel construction are cached Effects, failures included — uninterruptible, because
-a cached exit must be a success or a diagnosable failure, never a remembered interruption — and the
+activation and channel construction are cached Effects, failures included — uninterruptible, because a
+cached exit must be a success or a diagnosable failure, never a remembered interruption — and the
 alarm sink's deadlines use the captured
 Effect clock, abort the actual request and join its settlement before releasing ownership or retrying.
-Non-abortable filesystem ports are joined rather than abandoned; a transport ignoring abort may delay
-release, and a timeout does not make unfinished IO safe to leave running. The sink counts admission
+Non-abortable filesystem ports are joined rather than abandoned. The sink counts admission
 synchronously and yields before reconciling, so an empty alarm set cannot emit idle between a wake's
 claim notification and the scheduler's execution admission. A persisted alarm URL is validated: only a
 missing file reads as "not configured yet".
 
-A live session keeps its
-old compute (and the OLD image) until reclaimed — so `--run` stops the ingress session after a
-successful deploy, making the new image serve immediately (an in-flight turn is cut; channels with
-replay re-run it). Self-scheduled wake-ups are EventBridge-backed: every wakeups-store mutation
-notifies a sink (`schedule/wake-alarm.ts`) that POSTs the pending set to the forwarder's reserved
-path (shared secret), and the forwarder mirrors each into a self-deleting one-shot EventBridge
+A live session keeps its old compute (and the old image) until reclaimed, so `--run` stops the ingress
+session after a successful deploy. Self-scheduled wake-ups are EventBridge-backed: every wakeups-store
+mutation notifies a sink (`schedule/wake-alarm.ts`) that POSTs the pending set to the forwarder's
+reserved path (shared secret), and the forwarder mirrors each into a self-deleting one-shot EventBridge
 schedule that pokes it at the instant — waking the container, whose ordinary wake pump fires the due
-entry (a recurring wake re-arms itself through the same store-save → sink loop). The forwarder
-injects its own URL into every envelope, so nothing is circularly baked into the template. Structural
-limits are explicit: long-connection channels cannot run because nothing can restore their ingress
-when compute is reclaimed. Wake-alarm reconciliation begins with a trusted forwarder envelope carrying
-the current callback URL; a public invoke cannot redirect that callback.
+entry. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
+template, and wake-alarm reconciliation begins with a trusted forwarder envelope carrying the current
+callback URL: a public invoke cannot redirect it. Structural limit: long-connection channels cannot
+run, because nothing can restore their ingress when compute is reclaimed.
 
 ## 10. Current boundaries
 
-The following are explicit limits, not implied capabilities:
+Explicit limits, not implied capabilities:
 
 - pi is the reference implementation; additional engine bindings can implement the same Agent contract;
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
 - GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
-- the AgentCore target has no resident process: long-connection channels are unsupported there, and
-  a wake-up set in a direct-invoke session (outside the ingress surface) fires only while that
-  session's compute is awake;
-
+- the AgentCore target has no resident process: long-connection channels are unsupported there, and a
+  wake-up set in a direct-invoke session fires only while that session's compute is awake;
 - observability is logs/traces, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.

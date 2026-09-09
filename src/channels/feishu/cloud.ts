@@ -1,8 +1,4 @@
-/**
- * Feishu is the canonical implementation. Lark international speaks the same protocol but trails the
- * primary cloud in control-plane capabilities, so it binds the Feishu engine through this explicit
- * compatibility profile instead of becoming the engine's naming/design center.
- */
+/** Feishu is the canonical implementation. */
 export type FeishuCloudKind = "feishu" | "lark";
 
 export interface FeishuCloudProfile {

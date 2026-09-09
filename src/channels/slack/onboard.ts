@@ -10,15 +10,19 @@ import {
   updateSlackAppManifest,
 } from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
-import { currentSlackConfigToken, type SlackOnboardingState, writeSlackOnboardingState } from "./onboarding-state.ts";
+import {
+  configTokenExpiry,
+  currentSlackConfigToken,
+  type SlackOnboardingState,
+  writeSlackOnboardingState,
+} from "./onboarding-state.ts";
 
 export interface SlackOnboardIO {
   note(message: string): void;
   openUrl(url: string): void;
-  /** Wait for the one OAuth redirect. Implementations must validate only the path; core validates state. */
+  /** Wait for the one OAuth redirect. */
   waitForOAuth(): Promise<{ code?: string; state?: string; error?: string }>;
-  /** Stage the runtime secrets into the gitignored .env — the bot token and the signing secret, nothing
-   *  else: the client credentials are setup-only (the OAuth code exchange) and stay in onboarding state. */
+  /** Stage the runtime secrets into the gitignored .env. */
   writeRuntimeSecrets(values: { botToken?: string; signingSecret?: string }): Promise<void>;
 }
 
@@ -45,8 +49,10 @@ export async function onboardSlackApp(
   let state = input.state;
   const current = await currentSlackConfigToken(input.stateRoot, state);
   state = current.state;
-  /** Slack challenges request_url from ITS network during a manifest call and validates the whole
-   *  manifest before acting, so an unverifiable URL created nothing and the call is safe to repeat. */
+  /**
+   * Slack challenges request_url from ITS network during a manifest call and validates the whole manifest before
+   * acting, so an unverifiable URL created nothing and the call is safe to repeat.
+   */
   const whileUnverified = <T>(call: () => Promise<T>, onRetry?: () => void): Promise<T> =>
     retryWhile(call, isSlackRequestUrlUnverified, {
       attempts: deps.attempts,
@@ -79,10 +85,7 @@ export async function onboardSlackApp(
     try {
       created = await whileUnverified(
         () => {
-          // Record BEFORE the non-idempotent API call. A transport/internal failure may have created the
-          // app; refusing a blind retry is safer than silently producing duplicates. The marker spans
-          // exactly one in-flight call: an unverifiable URL created nothing, so it comes off again before
-          // the wait — a Ctrl-C during that wait must not wedge the next run on an app that never existed.
+          // Record BEFORE the non-idempotent API call.
           setMarker(new Date().toISOString());
           return (deps.createApp ?? createSlackApp)(current.token, manifest);
         },
@@ -141,8 +144,7 @@ export async function onboardSlackApp(
   authorize.searchParams.set("scope", slackBotScopes(state.groupBehavior).join(","));
   authorize.searchParams.set("redirect_uri", input.redirectUrl);
   authorize.searchParams.set("state", oauthState);
-  // The redirect lands on the tunnel hostname, which THIS machine may not resolve yet (#421) — a broken
-  // page beside a terminal that looks hung, unless the reload is named before it happens.
+  // The redirect lands on the tunnel hostname, which THIS machine may not resolve yet (#421).
   io.note(`Click Allow in Slack to install the app: ${authorize}\nIf the page it returns to does not load, reload it.`);
   io.openUrl(authorize.toString());
 
@@ -178,6 +180,8 @@ export function newSlackOnboardingState(input: {
   groupBehavior: SlackGroupBehavior;
   configToken: string;
   configRefreshToken: string;
+  /** When the pair was captured; pass it through rather than re-deriving the same expiry twice. */
+  configTokenExpiresAt?: number;
   now?: number;
 }): SlackOnboardingState {
   return {
@@ -186,7 +190,6 @@ export function newSlackOnboardingState(input: {
     groupBehavior: input.groupBehavior,
     configToken: input.configToken,
     configRefreshToken: input.configRefreshToken,
-    // Slack config access tokens expire in 12 hours; use 11h so registration rotates before the edge.
-    configTokenExpiresAt: (input.now ?? Date.now()) + 11 * 60 * 60_000,
+    configTokenExpiresAt: input.configTokenExpiresAt ?? configTokenExpiry(input.now),
   };
 }

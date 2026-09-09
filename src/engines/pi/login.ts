@@ -1,12 +1,7 @@
 /**
  * `fastagent login`: authenticate a MODEL PROVIDER into the resolved auth file (project-level
- * `<root>/.secrets/auth.json` by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`) via the same
- * {@link fastagentCredentialStore} the runtime uses (one writer, one lock/corruption semantics).
- *
- * Flow (pi-ai's unified `ProviderAuth` API): pick a method (OAuth or API key), then a provider that
- * offers it, then run `provider.auth.{oauth|apiKey}.login(callbacks)` and persist with `store.modify`
- * (which refuses to clobber a corrupt file). The terminal IO and providers are injected, so the
- * routing is testable without real stdin or a real auth round-trip.
+ * `<root>/.secrets/auth.json` by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`) via the same {@link
+ * fastagentCredentialStore} the runtime uses (one writer, one lock/corruption semantics).
  */
 import type {
   AuthEvent,
@@ -26,14 +21,11 @@ export interface IoOption {
   hint?: string;
 }
 
-/**
- * Terminal interaction, injectable for tests (no real stdin/stdout or browser). The CLI implements it
- * with `@clack/prompts` (a searchable list for many options, a hidden prompt for keys).
- */
+/** Terminal interaction, injectable for tests (no real stdin/stdout or browser). */
 export interface LoginIO {
-  /** Single-choice picker. Returns the chosen `value`, or undefined on cancel. */
+  /** Single-choice picker. */
   select(message: string, options: IoOption[]): Promise<string | undefined>;
-  /** Free-text or hidden input. Returns the entered string, or undefined on cancel/abort. */
+  /** Free-text or hidden input. */
   prompt(message: string, opts?: { hidden?: boolean; signal?: AbortSignal }): Promise<string | undefined>;
   /** Print an informational line (auth URL, device code, progress). */
   note(message: string): void;
@@ -43,17 +35,15 @@ export interface LoginIO {
 
 export type LoginMethod = "oauth" | "api_key";
 
-/** The user backed out of a prompt/menu — a decision, not a failure. Callers (the first-run picker,
- *  the login command) match on this to report neutrally instead of as a login "failure". */
+/** The user backed out of a prompt/menu — a decision, not a failure. */
 export class LoginCancelled extends Error {}
 
-/** What `loginFlow` can offer a provider interactively: an OAuth flow, an API-key ENTRY prompt, or
- *  nothing ("none" — the key must come from the provider's env var). */
+/**
+ * What `loginFlow` can offer a provider interactively: an OAuth flow, an API-key ENTRY prompt, or nothing ("none" —
+ * the key must come from the provider's env var).
+ */
 export type InteractiveLoginKind = LoginMethod | "none";
 
-/** The provider's {@link InteractiveLoginKind}. OAuth wins when both exist (methodForProvider still
- *  asks at login time); the first-run picker annotates with this so the hint predicts what picking
- *  actually does — a browser login ("oauth"), a key prompt ("api_key"), or neither. */
 export function interactiveLoginKind(p: Provider): InteractiveLoginKind {
   if (p.auth.oauth) return "oauth";
   return p.auth.apiKey?.login ? "api_key" : "none";
@@ -69,14 +59,7 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
   return present.length === 0 ? undefined : present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
-/**
- * Map pi-ai's `ProviderAuthInteraction` onto the injected {@link LoginIO}. `doneSignal` fires when
- * the flow resolves, cancelling a prompt the provider left pending (a manual-code paste racing a
- * callback server it just won) so the one-shot CLI exits instead of hanging on stdin.
- *
- * The signal is REQUIRED by that type (pi normalizes it before calling a provider), so a caller that
- * passes none gets one that never fires — the same "no cancellation" the optional field meant.
- */
+/** Map pi-ai's `ProviderAuthInteraction` onto the injected {@link LoginIO}. */
 function authCallbacks(
   io: LoginIO,
   userSignal: AbortSignal | undefined,
@@ -86,18 +69,7 @@ function authCallbacks(
     signal: userSignal ?? new AbortController().signal,
     prompt: async (p: AuthPrompt): Promise<string> => {
       if (p.type === "select") {
-        // This branch is UNCANCELLABLE: `LoginIO.select` takes no signal, so all three the line
-        // below composes — the provider's own, the caller's `loginFlow({ signal })`, and the
-        // pending-prompt backstop — are dropped here.
-        //
-        // It costs nothing against pi 0.84's providers, where every `select` is the FIRST call of
-        // `login()` (bedrock, vertex, openai-codex, radius — all of them asking which login method
-        // to use). Nothing is racing it: no callback server is up yet, and `doneSignal` fires when
-        // `auth.login()` RETURNS, which it cannot do while blocked on this await.
-        //
-        // That is a property of the providers, not a guarantee, and nothing here holds it. A
-        // provider that ever issues a `select` after starting its callback server shows up as the
-        // CLI parked on stdin — widen `LoginIO.select` with a signal then.
+        // This branch is UNCANCELLABLE: `LoginIO.select` takes no signal, so all three the line below composes.
         const v = await io.select(
           p.message,
           p.options.map((o) => ({ value: o.id, label: o.label, hint: o.description })),
@@ -166,19 +138,14 @@ async function selectProvider(
     }),
   );
   const id = await io.select("Select a provider", options);
-  // Answers the PROVIDER, not its id: the caller needs the object, and resolving it here means the
-  // one place that can fail to is the one that just offered the list. Cancel and an id that was
-  // never offered are the same answer — nothing was chosen — and `find` gives both, since a
-  // provider id is always a string and `undefined` matches none of them.
+  // Answers the PROVIDER, not its id: the caller needs the object, and resolving it here means the one place that can
+  // fail to is the one that just offered the list.
   const chosen = candidates.find((p) => p.id === id);
   if (!chosen) throw new LoginCancelled("no provider selected");
   return chosen;
 }
 
-/**
- * Resolve method + provider (asking only what is not given), run the login flow, and persist. A no-op
- * `modify` up front runs the refuse-corrupt check BEFORE the flow, so a known-bad file fails fast.
- */
+/** Resolve method + provider (asking only what is not given), run the login flow, and persist. */
 export async function loginFlow(
   io: LoginIO,
   options: {
@@ -208,8 +175,7 @@ export async function loginFlow(
   // Preflight: a no-op modify runs the refuse-corrupt / writability check BEFORE the flow.
   await store.modify(provider.id, async () => undefined);
 
-  // Reachable even though both branches above resolved a provider: an explicit `method` bypasses
-  // methodForProvider, so `{ provider: "openai-codex", method: "api_key" }` arrives here.
+  // Reachable even though both branches above resolved a provider.
   const auth = method === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no ${method} login`);
 

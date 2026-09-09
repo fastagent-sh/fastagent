@@ -1,8 +1,4 @@
-/**
- * `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally.
- * Compose owns container/network/volume lifecycle; this driver owns only actionable gates, secret/auth
- * carry through the child environment (never argv), and a readiness check on the published loopback port.
- */
+/** `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally. */
 import { waitForHealth } from "../../channels/wait-health.ts";
 import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
 import type { RegistrationOutcome } from "../../channels/registration.ts";
@@ -15,15 +11,13 @@ export interface DockerRunPlan {
   composeFile: string;
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
-  /** Values interpolated by Compose. Keys/values are passed in the child environment, never argv. */
+  /** Values interpolated by Compose. */
   secrets: Record<string, string>;
   /** Required names with no local value; gate before build/create. */
   missingSecrets: string[];
   /** Neither an env-key credential nor a readable auth.json is available. */
   needsModelCredential: boolean;
-  /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar
-   *  answered. REQUIRED, not optional: an absent one would delete this whole step in silence, which
-   *  is the failure this driver's gate exists to end. A topology with no tunnel never calls it. */
+  /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
   announce: DockerAnnounce;
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
   requireTunnel: boolean;
@@ -31,20 +25,21 @@ export interface DockerRunPlan {
 
 export type DockerRunOutcome =
   | { ok: true; url?: string; tunnelUrl?: string }
-  /** `url`/`tunnelUrl` travel with a gate too: Compose is up, so the operator still needs to know
-   *  where it is and what to re-run. */
+  /**
+   * `url`/`tunnelUrl` travel with a gate too: Compose is up, so the operator still needs to know where it is and what
+   * to re-run.
+   */
   | { ok: false; gate: string; url?: string; tunnelUrl?: string };
 
-/** Register the deployment's webhooks against its public URL, reporting what each registrar
- *  answered. Injected so the driver stays free of channel specifics — and so a test can fail one. */
+/** Register the deployment's webhooks against its public URL, reporting what each registrar answered. */
 type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
 
-/** `stillStarting` answers whether the agent container is still up; a probe that ignores it simply
- *  waits out its whole budget. */
+/**
+ * `stillStarting` answers whether the agent container is still up; a probe that ignores it simply waits out its whole
+ * budget.
+ */
 export type DockerHealthProbe = (healthUrl: string, stillStarting: () => Promise<boolean>) => Promise<boolean>;
-/** A published Quick Tunnel URL, and whether its tunnel ever reported an edge connection. Both, because
- *  a URL that never connected still gets served (retrying meets the same network) and the operator has
- *  to be told which of the two they are looking at. */
+/** A published Quick Tunnel URL, and whether its tunnel ever reported an edge connection. */
 export interface ComposeTunnel {
   url: string;
   connected: boolean;
@@ -65,21 +60,17 @@ export function localUrlFromComposePort(stdout: string): string | undefined {
   return port ? `http://127.0.0.1:${port}` : undefined;
 }
 
-/** The FIRST boot seeds the whole workspace onto the volume (the image's `node_modules` included)
- *  before it binds a port, so this budget covers a copy on a slow Docker Desktop disk, not a listen.
- *  Too short and a successful deploy gates before webhook registration; a container that DIED does
- *  not spend it, which is what `stillStarting` is for. */
+/**
+ * The FIRST boot seeds the whole workspace onto the volume (the image's `node_modules` included) before it binds a
+ * port, so this budget covers a copy on a slow Docker Desktop disk, not a listen.
+ */
 const defaultHealthProbe: DockerHealthProbe = (healthUrl, stillStarting) =>
   waitForHealth(healthUrl, 180_000, 500, stillStarting);
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Poll the detached cloudflared service's logs until its Quick Tunnel URL is assigned AND the tunnel
- * reports an edge connection. Waiting for the second is the same requirement `startCloudflareTunnel`
- * has and for the same reason — the hostname does not exist until then (#435), and this driver hands
- * the URL straight to `announce`. Returns a URL that never connected rather than nothing: the
- * registrars downstream report their own outcome, and a gate saying "no URL" would misname it — but it
- * says WHICH it is returning, because the caller owes the operator that sentence.
+ * Poll the detached cloudflared service's logs until its Quick Tunnel URL is assigned AND the tunnel reports an edge
+ * connection.
  */
 export async function waitForComposeTunnelUrl(
   docker: CliRunner,
@@ -107,12 +98,6 @@ export async function waitForComposeTunnelUrl(
 const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile, env) =>
   waitForComposeTunnelUrl(docker, composeFile, env);
 
-/**
- * Drive Docker Compose. A custom Compose file remains authoritative: the driver invokes it as-is and
- * only assumes the generated service contract (`agent`, config's container port) for optional URL/
- * readiness reporting. If the service intentionally has no host-published port, a successful running
- * service is still success (an operator-owned sidecar/reverse proxy may be its only ingress).
- */
 export async function deployDockerRun(
   plan: DockerRunPlan,
   docker: CliRunner,
@@ -147,8 +132,7 @@ export async function deployDockerRun(
     return gate("Docker daemon is unavailable — start Docker Engine/Desktop, then re-run");
   }
 
-  // The file on disk is authoritative. Inspect its actual services before any build/create side effect,
-  // both to protect the `agent` run contract and to catch `--tunnel` against a kept non-tunnel topology.
+  // The file on disk is authoritative.
   const configured = await docker([...compose, "config", "--services"], { capture: true, env });
   if (configured.code !== 0) {
     return gate(
@@ -168,9 +152,7 @@ export async function deployDockerRun(
     );
   }
 
-  // Quick Tunnel logs are the control-plane output (the assigned URL). Remove its old container first so
-  // a rerun cannot read a stale URL from accumulated logs; `up` below creates one fresh tunnel, then the
-  // CLI registers that URL. The app container/volume are untouched.
+  // Quick Tunnel logs are the control-plane output (the assigned URL).
   if (hasTunnel) {
     log("recreating the ephemeral tunnel service…");
     if ((await docker([...compose, "rm", "-s", "-f", "tunnel"], { env })).code !== 0) {
@@ -183,8 +165,7 @@ export async function deployDockerRun(
     return gate(`\`docker compose up\` failed — see the Docker output above; fix ${plan.composeFile} and re-run`);
   }
 
-  // Detached `up` can return 0 just before a bad command exits. Verify the expected service is actually
-  // running so a broken custom Dockerfile/CMD cannot look deployed. Compose restart loops are excluded.
+  // Detached `up` can return 0 just before a bad command exits.
   const running = await docker([...compose, "ps", "--status", "running", "--services"], {
     capture: true,
     env,
@@ -202,16 +183,14 @@ export async function deployDockerRun(
   }
 
   // A user-owned topology may deliberately remove the host port and expose only through its own ingress.
-  // In that case Compose `port` is absent/non-zero: service-running is the available readiness floor.
   const published = await docker([...compose, "port", "agent", String(plan.port)], { capture: true, env });
   const url = published.code === 0 ? localUrlFromComposePort(published.stdout) : undefined;
   if (!url) {
     log("agent is running (no host-published port found; using the Compose ingress readiness floor)");
   } else {
     const healthUrl = `${url}/health`;
-    // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a
-    // second, and a `compose ps` per poll would cost more than the wait it shortens — while a docker
-    // hiccup must not cut a boot that is progressing. The probe stays the authority on success.
+    // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a second, and a
+    // `compose ps` per poll would cost more than the wait it shortens.
     let lastCheck = Date.now();
     const stillStarting = async (): Promise<boolean> => {
       if (Date.now() - lastCheck < 5_000) return true;
@@ -234,10 +213,7 @@ export async function deployDockerRun(
       `tunnel did not publish a Quick Tunnel URL — inspect \`docker compose -f ${plan.composeFile} logs tunnel\``,
     );
   }
-  // The same sentence `startCloudflareTunnel` prints for the same state, and needed MORE here: this
-  // cloudflared runs in a container, so the author cannot see the logs that would explain the
-  // registration failures about to follow. Silence sends them to debug the platform for what is a
-  // local tunnel that never came up.
+  // The same sentence `startCloudflareTunnel` prints for the same state, and needed MORE here.
   if (!tunnel.connected) {
     log(
       `warn: the tunnel service never reported an edge connection for ${tunnel.url} — announcing it anyway. ` +
@@ -246,9 +222,8 @@ export async function deployDockerRun(
     );
   }
   const tunnelUrl = tunnel.url;
-  // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer
-  // that owns the outcome, so it is the layer that can gate on one. While it sat above, docker was
-  // the one target whose `--run` could exit 0 with a webhook that never registered.
+  // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer that owns the
+  // outcome, so it is the layer that can gate on one.
   const reg = registrationGate(log, `re-run this deploy to retry registration (Compose is already up)`);
   for (const { kind, outcome } of await plan.announce(tunnelUrl)) reg.track(kind, outcome);
   const blocked = reg.gate();

@@ -1,23 +1,17 @@
-/**
- * Channel discovery (the N axis, filesystem form). A channel file default-exports either the existing
- * route factory `(ctx) => Routes`, or an explicit long-connection module `{ name, connect(ctx, signal) }`.
- *
- * Engine-neutral, and living here rather than under `engines/` because of it: reading `channels/*.ts`
- * is the Channel contract plus a directory, with no engine in sight.
- */
+/** Channel discovery (the N axis, filesystem form). */
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
 import { assertRouteKey, routeKeysConflict } from "./serve.ts";
 import { type ModuleLoadFailure, loadModuleDir, moduleInventory } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 
-/** A dropped route: two channels claim the same key. Surfaced, never silent. */
+/** A dropped route: two channels claim the same key. */
 export interface ChannelCollision {
   route: string;
   source: string;
 }
 
-/** A long-connection module bound to the same context route factories receive. Internal serving shape. */
+/** A long-connection module bound to the same context route factories receive. */
 export interface LoadedLongConnectionChannel {
   name: string;
   connect(signal: AbortSignal): LongConnection;
@@ -33,40 +27,21 @@ function validateLongConnectionModule(value: LongConnectionChannelModule, label:
   }
 }
 
-/**
- * HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in.
- *
- * A webhook channel is reached at a URL someone must set; a long-connection channel dials out, so
- * there is no URL and setting one breaks it (Telegram answers `getUpdates` with 409 once a webhook
- * exists). Everything downstream — which secrets to carry, what the runbook says, what `--run` and
- * `--tunnel` register — is a question about THIS.
- *
- * It is one list because it used to be three (`channels` + `routeChannels` + `longConnectionChannels`,
- * two of them including custom channels and one not), and every consumer re-derived the answer from
- * whichever pair it happened to hold. Two deploys shipped a webhook for a long-connection channel
- * that way. A list of pairs cannot be recombined wrongly, and a consumer that needs a subset asks for
- * it here rather than trusting its caller to have filtered.
- */
+/** HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in. */
 export type ChannelIngress = "webhook" | "long-connection";
 
-/** One channel a directory declares, with the ingress its module shape says it has. `name` is the
- *  basename, which is a {@link ChannelKind} for the first-party ones and anything for a custom one. */
+/** One channel a directory declares, with the ingress its module shape says it has. */
 export interface DeclaredChannel {
   name: string;
   ingress: ChannelIngress;
 }
 
-/** Declared channels from basenames that share one ingress: the serving surface's mounted route list
- *  (a long-connection channel mounts no HTTP route, so every route IS a webhook channel), and fixtures. */
+/** Declared channels from basenames that share one ingress. */
 export function declaredChannels(names: readonly string[], ingress: ChannelIngress = "webhook"): DeclaredChannel[] {
   return names.map((name) => ({ name, ingress }));
 }
 
-/**
- * Import channel files without mounting route factories or opening connections. Deployment needs only
- * the authored structural fact: function exports are webhook channels; `{ connect() }` exports are
- * long-connection channels. There is no second ingress/lifecycle declaration to keep in sync.
- */
+/** Import channel files without mounting route factories or opening connections. */
 export async function inspectChannels(dir: string): Promise<{
   channels: DeclaredChannel[];
   failures: ModuleLoadFailure[];
@@ -94,8 +69,8 @@ export async function inspectChannels(dir: string): Promise<{
 }
 
 /**
- * Channel file basenames under `<dir>/channels/` — the authoring view (`fastagent info`), which lists
- * WITHOUT importing. A symlinked channels directory must remain inside the agent dir.
+ * Channel file basenames under `<dir>/channels/` — the authoring view (`fastagent info`), which lists WITHOUT
+ * importing.
  */
 export async function discoverChannelFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "channels");
@@ -120,7 +95,6 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
   return routes;
 }
 
-/** Discover, validate, and bind all channel modules. No long connection is opened here; the CLI owns it. */
 export async function loadChannels(
   dir: string,
   ctx: ChannelContext,

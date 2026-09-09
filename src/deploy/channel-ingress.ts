@@ -1,32 +1,9 @@
-/**
- * HOW A RUNNING CHANNEL IS REACHED — the URL-neutral half of "point this channel at the agent": its
- * default route, whether anything can set that URL end-to-end, and the words an operator needs when
- * nothing can. Only the base URL varies, which is the argument every function here takes — a deploy
- * host's (`<app>.fly.dev`, a minted Railway domain, a Function URL) or `dev --tunnel`'s Quick Tunnel.
- * It lives under `deploy/` because that is where its answers are mostly consumed and where the gate
- * policy it composes with lives; the serving path reads the same answers through `tunnel.ts`.
- *
- * It exists because that knowledge belongs to the CHANNEL and was written per HOST: three runbook
- * plans, three `--run` drivers, a path table in the docker plan and the `--tunnel` announcer each
- * hand-wrote the same five-branch if-chain. A rule spelled seven times drifts, and it did — the
- * long-connection exception reached only the feishu/lark branches, so a long-connection Telegram
- * deploy printed `setWebhook` in its runbook, which makes `getUpdates` return 409 and stops the
- * channel the operator just deployed.
- *
- * Every function here takes the {@link DeclaredChannel} list and filters it ITSELF. Taking a
- * pre-filtered list would put the rule back at the call sites, which is where it drifted from: the
- * `--tunnel` announcer trusted its caller that way and had a default that passed every channel,
- * long-connection ones included.
- *
- * A host adds its base URL and its own asides; it does not restate which channels have a webhook.
- */
+/** HOW A RUNNING CHANNEL IS REACHED — the URL-neutral half of "point this channel at the agent". */
 import type { DeclaredChannel } from "../channels/discover.ts";
 import type { RegistrationOutcome } from "../channels/registration.ts";
 import type { ChannelKind } from "../scaffold/add-channel.ts";
 import { registrationGate } from "./registration-gate.ts";
 
-/** The registrars a host can drive. `telegram` is always available (fastagent holds the token and the
- *  URL); the others are optional so a caller without their credentials falls back to a manual step. */
 export interface Registrars {
   telegram: (baseUrl: string) => Promise<RegistrationOutcome>;
   slack?: (baseUrl: string) => Promise<RegistrationOutcome>;
@@ -34,11 +11,12 @@ export interface Registrars {
 }
 
 interface ChannelIngress {
-  /** The channel's DEFAULT route key. Reading the real one would mean executing the channel factory
-   *  (getMe, state-dir creation) — wrong at plan time — so every message states the assumption. */
+  /** The channel's DEFAULT route key. */
   path: string;
-  /** Runs this channel's registration end-to-end, or undefined when the caller wired no registrar for
-   *  it. github never has one: it is a repo settings screen only a human can reach. */
+  /**
+   * Runs this channel's registration end-to-end, or undefined when the caller wired no registrar for it. github never
+   * has one.
+   */
   register?: (registrars: Registrars, baseUrl: string) => Promise<RegistrationOutcome> | undefined;
   /** The one line a driver prints when no registrar runs it. */
   manual: (baseUrl: string) => string;
@@ -73,8 +51,8 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
   },
   github: {
     path: "/webhook",
-    // The env-var name is the part a first-time operator cannot guess, and this line is all `--tunnel`
-    // prints — there is no runbook beside it to carry the detail.
+    // The env-var name is the part a first-time operator cannot guess, and this line is all `--tunnel` prints — there
+    // is no runbook beside it to carry the detail.
     manual: (baseUrl) =>
       `github: set the webhook in the repo (Settings → Webhooks) → ${baseUrl}/webhook (content type application/json, secret = GITHUB_WEBHOOK_SECRET)`,
     runbook: (baseUrl) => [
@@ -98,10 +76,8 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
 };
 
 /**
- * The first-party channels this deployment must point at a URL: webhook ingress, and a kind this tool
- * knows how to instruct. ONE answer for every host and every path — the runbooks, the `--run`
- * drivers, the docker ingress note, `--tunnel`. A custom channel is skipped here and reported by the
- * pre-flight instead: its URL is its author's to set.
+ * The first-party channels this deployment must point at a URL: webhook ingress, and a kind this tool knows how to
+ * instruct.
  */
 export function webhookKinds(channels: readonly DeclaredChannel[]): ChannelKind[] {
   const declared = new Set(channels.filter((c) => c.ingress === "webhook").map((c) => c.name));
@@ -113,19 +89,15 @@ export function webhookPaths(channels: readonly DeclaredChannel[]): string[] {
   return webhookKinds(channels).map((kind) => INGRESS[kind].path);
 }
 
-/** The runbook block for every channel that needs a URL set by hand, `baseUrl` spelled the host's way
- *  (a literal `https://app.fly.dev`, or a placeholder like `<your-domain>` the operator fills in). */
+/**
+ * The runbook block for every channel that needs a URL set by hand, `baseUrl` spelled the host's way (a literal
+ * `https://app.fly.dev`, or a placeholder like `<your-domain>` the operator fills in).
+ */
 export function webhookRunbook(baseUrl: string, channels: readonly DeclaredChannel[]): string[] {
   return webhookKinds(channels).flatMap((kind) => INGRESS[kind].runbook(baseUrl));
 }
 
-/**
- * Point every channel that has a webhook at `baseUrl`, reporting what each one ended as. All channels
- * are attempted — one failure does not skip the rest — and a channel whose registrar the caller did
- * not wire reports `manual` with the operator's instruction. The two callers differ in what they do
- * with the outcomes, not in how they are produced: a deploy gates on them, a long-running serve
- * cannot ({@link registerWebhooks} is the gating half).
- */
+/** Point every channel that has a webhook at `baseUrl`, reporting what each one ended as. */
 export async function pointChannelsAt(input: {
   baseUrl: string;
   channels: readonly DeclaredChannel[];
@@ -148,11 +120,7 @@ export async function pointChannelsAt(input: {
   return outcomes;
 }
 
-/**
- * {@link pointChannelsAt} plus the shared gate policy, for a command that EXITS: an exit 0 claims the
- * deployment is reachable, so a failed registration has to become a non-zero one. Returns the gate
- * message, or undefined when nothing gates.
- */
+/** {@link pointChannelsAt} plus the shared gate policy, for a command that EXITS. */
 export async function registerWebhooks(input: {
   baseUrl: string;
   channels: readonly DeclaredChannel[];

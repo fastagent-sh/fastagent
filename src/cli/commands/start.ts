@@ -1,4 +1,4 @@
-/** Production serving. Deployed storage is prepared before the active definition is opened. */
+/** Production serving. */
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -63,8 +63,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       deferred.handler,
       { port, host: bindFlag },
       {
-        // The assembly report waits for the first envelope, so this line is the only sign of life a
-        // booted container gives — an empty log otherwise reads the same as a container that died.
+        // The assembly report waits for the first envelope, so this line is the only sign of life a booted container
+        // gives.
         onListening: (port) => {
           for (const line of readyAddressLines(bindFlag, port, false)) log.info(line);
           log.info("[fastagent] agentcore: the definition opens on the first invocation");
@@ -77,8 +77,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     );
     return;
   }
-  // Deployed storage refusals (no mount, a held lease, a missing `flock`, a failed install) are the
-  // operator's only clue in a crash-looping container; they must not arrive as a Node stack trace.
+  // Deployed storage refusals (no mount, a held lease, a missing `flock`, a failed install) are the operator's only
+  // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
   const tunnel = opts.tunnel ?? false;
   const host = resolveBindHost(bindFlag, service.bindHost, tunnel);
@@ -98,12 +98,8 @@ export interface PreparedWorkspace {
 }
 
 /**
- * Stage one — TAKE the workspace: verify the storage is mounted, apply the release, and point the
- * machinery at the volume.
- *
- * It starts nothing, and on failure it holds nothing (`prepareDeployment` releases its lease before
- * it throws), so a caller may retry it. AgentCore does, per envelope: an unmounted volume and a
- * lease the outgoing session still holds are exactly the failures that clear on their own.
+ * Stage one — TAKE the workspace: verify the storage is mounted, apply the release, and point the machinery at the
+ * volume.
  */
 export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWorkspace> {
   const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
@@ -113,8 +109,8 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   const root = resolve(storage);
   const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
   const dir = await prepareDeployment(resolve(dirArg), root, manifest);
-  // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and
-  // silently relocating their state is the one failure they could not diagnose from the logs.
+  // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and silently relocating
+  // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   process.env.FASTAGENT_AGENT = manifest.agent;
@@ -123,9 +119,8 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
 }
 
 /**
- * Stage two — RUN in the prepared workspace: install the agent's dependencies, then open through the
- * workspace's own FastAgent install. Mounts channels and starts the scheduler, so it runs at most
- * once per process.
+ * Stage two — RUN in the prepared workspace: install the agent's dependencies, then open through the workspace's own
+ * FastAgent install.
  */
 export async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: StartOptions): Promise<StartedService> {
   let open = openPreparedStartService;
@@ -143,8 +138,8 @@ export async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: S
             : [hasLockfile ? "ci" : "install"];
         writeFileAtomic(installing, "");
         log.info(`[fastagent] installing the agent's dependencies (${runtime} ${args.join(" ")})…`);
-        // stdio inherited: a five-minute install with no output reads as a hang, and the default
-        // 1 MB capture would kill a noisy one outright.
+        // stdio inherited: a five-minute install with no output reads as a hang, and the default 1 MB capture would
+        // kill a noisy one outright.
         const [code, signal] = (await once(
           spawn(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, stdio: "inherit" }),
           "exit",
@@ -157,8 +152,8 @@ export async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: S
       const local = (await import(
         new URL("./cli/commands/start.js", pathToFileURL(entry)).href
       )) as typeof import("./start.ts");
-      // A version-skewed dependency resolves and imports fine, then fails as "open is not a function"
-      // with nothing naming the two versions.
+      // A version-skewed dependency resolves and imports fine, then fails as "open is not a function" with nothing
+      // naming the two versions.
       if (typeof local.openPreparedStartService !== "function") {
         throw new Error(
           `${entry} does not export openPreparedStartService — align the agent's @fastagent-sh/fastagent version with the deploy CLI`,
@@ -174,13 +169,7 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
   return openPreparedWorkspace(await prepareStartWorkspace(dirArg), opts);
 }
 
-/**
- * Internal entry loaded from the active workspace's installed package after storage initialization.
- *
- * REJECTS rather than exiting: on AgentCore this runs as the `assemble` stage of an envelope already
- * in flight, where the deferred service turns a failure into the probe's structured verdict. The
- * CLI's own `.catch(failStartup)` sits at `runStart`, so a local `start` still prints one line.
- */
+/** Internal entry loaded from the active workspace's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
   await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
@@ -227,9 +216,8 @@ async function maybeSeedAuth(authPath: string): Promise<void> {
 }
 
 /**
- * Install the wake-ALARM sink before the scheduler starts: the first wake poll may advance a
- * recurring entry, and that save must already re-arm its alarm. Returns the reconcile the adapter
- * runs on activation, once an envelope has named the forwarder this deployment answers through.
+ * Install the wake-ALARM sink before the scheduler starts: the first wake poll may advance a recurring entry, and that
+ * save must already re-arm its alarm.
  */
 function armWakeAlarms(stateRoot: string): (() => void) | undefined {
   const secret = process.env.FASTAGENT_WAKE_SECRET;

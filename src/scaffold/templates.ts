@@ -1,9 +1,6 @@
 /**
- * Scaffold template ACCESS (data, not logic): readers for the real files `init`/`add` write into an
- * agent dir, plus the parametric pieces. Base agent templates live under ./templates/; each
- * channel's bundle lives WITH the channel at ../channels/<kind>/scaffold/ (so a channel owns its
- * starter kit and could ship as its own package). Both trees are excluded from this package's tsc +
- * biome (they import the published @fastagent-sh/fastagent, not this source) and copied into dist/ by the build.
+ * Scaffold template ACCESS (data, not logic): readers for the real files `init`/`add` write into an agent dir, plus
+ * the parametric pieces.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -22,8 +19,7 @@ export const channelTemplate = (kind: string, name: string): string =>
 export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
-/** package.json for the complete agent. The @fastagent-sh/fastagent range tracks THIS build's
- *  version, and tool authors use its `z` re-export rather than installing a second zod copy. */
+/** package.json for the complete agent. */
 export function packageJson(name: string, version: string): string {
   return `${JSON.stringify(
     {

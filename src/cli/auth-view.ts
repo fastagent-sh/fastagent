@@ -1,25 +1,11 @@
-/**
- * CLI presenter for the auth-status line `reportAuth` prints (invoke/dev/start). Kept out of cli.ts —
- * which self-executes on import — so the expired-vs-missing DECISION is unit-testable without a real
- * credential round-trip, mirroring models-view.ts.
- */
+/** CLI presenter for the auth-status line `reportAuth` prints (invoke/dev/start). */
 
 /** A stored credential as `reportAuth` needs it: just its kind, for the status line. */
 export interface StoredCredentialInfo {
   type: string;
 }
 
-/**
- * Format the auth status for `spec`'s provider. `source` is {@link probeAuthSource}'s label (an env-var
- * name, "OAuth", a stored-key label) or undefined when nothing currently SATISFIES auth. Undefined has
- * TWO causes probeAuthSource can't distinguish (it swallows the throw): nothing stored, OR a credential
- * that IS stored but couldn't be made usable (an expired/revoked OAuth whose refresh failed). `stored`
- * — a refresh-FREE store read the caller does only in that case — tells them apart, so an expired login
- * reports "expired/unusable → `fastagent login`" instead of a misleading "(none found)" (which would then
- * be contradicted by the actual "OAuth refresh failed"). A malformed/unreadable store also reads as
- * undefined `stored` and lands in "(none found)" — but the store's own read warns about the corrupt file,
- * so the real signal is surfaced there; this line stays about credential PRESENCE.
- */
+/** Format the auth status for `spec`'s provider. */
 export function formatAuthReport(
   provider: string,
   authPath: string,

@@ -1,6 +1,6 @@
 /**
- * `fastagent add <channel>|skill` — scaffold channel glue (`channels/<kind>.ts`) or vendor an Agent
- * Skills skill. slack/feishu/lark additionally CREATE OR RESUME the platform app.
+ * `fastagent add <channel>|skill` — scaffold channel glue (`channels/<kind>.ts`) or vendor an Agent Skills skill.
+ * slack/feishu/lark additionally CREATE OR RESUME the platform app.
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -32,27 +32,20 @@ export async function runAddChannel(
   dirArg: string,
   opts: { ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
-  // The channel (glue + companion tool + secrets) is agent surface — everything lands in the
-  // AGENT DIR (`fastagent/`), the same place dev/start discover channels/.
-  // Flag conflicts first: a bad combination is a USAGE error (exit 2), and reporting it must not depend
-  // on the directory being an agent (a runtime/environment failure, exit 1) — the same order start/tool
-  // follow.
+  // The channel (glue + companion tool + secrets) is agent surface — everything lands in the AGENT DIR
+  // (`fastagent/`), the same place dev/start discover channels/.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
-  // Paths are printed to someone standing in their CWD, usually the workspace, while every file
-  // belongs to the AGENT dir — prefix them, or they point at nothing. `displayPath` owns the
-  // relative-vs-absolute policy (shared with `init`). The `.env` label names the file actually
-  // WRITTEN (FASTAGENT_SECRETS_DIR relocates it, possibly out of the agent), never the default spelling.
+  // Paths are printed to someone standing in their CWD, usually the workspace, while every file belongs to the AGENT
+  // dir — prefix them, or they point at nothing.
   const agentFromCwd = displayPath(process.cwd(), target);
   const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
   const envPath = dotEnvPath(target);
   const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
-  // An existing channel file is authored glue: kept, never rewritten. The add continues past it — the
-  // companion tools below are refreshed, and slack/feishu/lark resume a failed/cancelled app or OAuth
-  // flow — so re-running `add <kind>` never requires hand-deleting the glue.
+  // An existing channel file is authored glue: kept, never rewritten.
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
@@ -64,16 +57,14 @@ export async function runAddChannel(
     await scaffoldChannel(target, channelKind, { ingress }).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
   }
-  // Companion tools are the package's, not authored glue: written on every add, so an upgraded
-  // package reaches an existing agent by re-running `add <kind>` (slack: `--no-onboard` skips the prompts).
+  // Companion tools are the package's, not authored glue.
   for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] wrote ${relative(target, tool)}`);
   }
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
   }
-  // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
-  // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
+  // Stateful app onboarding is re-runnable after the scaffold boundary.
   let created: Record<string, string> | undefined;
   if (channelKind === "slack" && opts.onboard !== false) {
     const { onboardSlackInternalApp } = await import("../add-slack.ts");
@@ -93,8 +84,8 @@ export async function runAddChannel(
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and
-          // FastAgent sets that URL itself when the agent first runs.
+          // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and FastAgent sets
+          // that URL itself when the agent first runs.
           "invite the app to each channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
         ]
@@ -102,9 +93,8 @@ export async function runAddChannel(
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
-  // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
-  // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
-  // Feishu's irreversible credentials were already staged inside add-feishu.ts before bootstrap.
+  // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is the same class
+  // of value as telegram's).
   const dotEnv = await appendChannelDotEnv(
     target,
     channelKind,
@@ -131,8 +121,8 @@ export async function runAddChannel(
   for (const e of env) {
     if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
     if (dotEnv.written.includes(e.name)) {
-      // Written, but its hint may still carry an action (github: paste the same value into the webhook
-      // UI) — keep the variable visible instead of silently absorbing it.
+      // Written, but its hint may still carry an action (github: paste the same value into the webhook UI) — keep the
+      // variable visible instead of silently absorbing it.
       console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to ${envLabel}   # ${e.hint}`);
       continue;
     }
@@ -140,8 +130,8 @@ export async function runAddChannel(
     const action = e.required ? "set" : "optionally set";
     console.error(`    ${action} ${e.name}${value} in ${envLabel}   # ${e.hint}`);
   }
-  // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
-  // knowledge) — resolve them to the real agent-dir-relative locations here.
+  // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private knowledge) —
+  // resolve them to the real agent-dir-relative locations here.
   for (const s of steps) {
     console.error(
       `    ${s.replace("{channel}", inAgent(relative(target, file))).replace("{tools}", inAgent("tools"))}`,
@@ -158,8 +148,8 @@ export async function runAddChannel(
   } else if (channelKind !== "lark") {
     console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
   }
-  // App-creation flows leave platform/tunnel sockets behind that would otherwise hold the one-shot
-  // scaffold command open after all durable boundaries have completed — exit crisply.
+  // App-creation flows leave platform/tunnel sockets behind that would otherwise hold the one-shot scaffold command
+  // open after all durable boundaries have completed.
   process.exit(0);
 }
 
@@ -209,9 +199,7 @@ async function resolveIngress(
   }
   const answer = await select<FeishuSubscriptionMode>({
     message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
-    // The default must match the non-interactive branch above. Webhook is the cheaper side to be
-    // wrong on: its credentials are a superset of websocket's (App ID/Secret plus the Verification
-    // Token), and that token has no read API — a websocket app moving to webhook must re-acquire it.
+    // The default must match the non-interactive branch above.
     initialValue: "webhook",
     options: [
       {
@@ -275,8 +263,7 @@ export async function runAddSkill(
 ): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   if (!source) {
-    // A missing source is a usage error (exit 2), but the guide is worth more than a bare
-    // missing-argument line — the common path (writing your own skill) needs no command at all.
+    // A missing source is a usage error (exit 2), but the guide is worth more than a bare missing-argument line.
     failUsage(
       `add a skill — two ways:\n` +
         `  1. write your own (vibe): create skills/<name>/SKILL.md with name + description\n` +

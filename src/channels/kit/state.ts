@@ -1,16 +1,6 @@
 /**
- * Durable channel state for a SINGLE-PROCESS deployment (the supported production shape — no
- * cross-instance locking; two processes must not share a state dir). Small JSON files, written
- * atomically (tmp + rename), so a crash leaves the previous version on disk, never a torn file.
- * Writes are synchronous: the files are KB-sized and a write that completes BEFORE the transport ACK
- * is what makes the state actually durable (an ACKed delivery is not redelivered).
- * Channel-neutral: every stateful channel (Telegram, Feishu/Lark, Slack) derives its home from the ctx state root
- * and persists through these three primitives.
- *
- * Failure split: a CORRUPT file (bad JSON) degrades visibly — log.warn + start empty — because channel
- * state is recoverable context, not worth refusing to boot over. An unreadable file (permissions, IO)
- * is an ENVIRONMENT error the operator must fix: it throws, and construction fails loudly — booting
- * with silently-empty state would hide real data behind a config mistake.
+ * Durable channel state for a SINGLE-PROCESS deployment (the supported production shape — no cross-instance locking;
+ * two processes must not share a state dir).
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { writeFileAtomic } from "../../atomic-write.ts";
@@ -21,8 +11,7 @@ export function ensureStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
 
-/** Returns `unknown` on purpose — no generic pretending otherwise: the file is an IO boundary, and the
- *  caller owns shape validation (a `<T>` here would be an unchecked cast wearing a type). */
+/** Returns `unknown` on purpose — no generic pretending otherwise. */
 export function loadStateFile(path: string): unknown {
   let raw: string;
   try {

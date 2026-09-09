@@ -4,6 +4,14 @@ import { writeFileAtomic } from "../../atomic-write.ts";
 import { rotateSlackConfigToken } from "./config-api.ts";
 import type { SlackGroupBehavior } from "./manifest.ts";
 
+/** Slack config access tokens expire in 12 hours; use 11h so registration rotates before the edge. */
+const CONFIG_TOKEN_TTL_MS = 11 * 60 * 60_000;
+
+/** When a token pair captured `now` stops being usable — the ONE place that answers it. */
+export function configTokenExpiry(now = Date.now()): number {
+  return now + CONFIG_TOKEN_TTL_MS;
+}
+
 export interface SlackOnboardingState {
   version: 1;
   appName: string;
@@ -60,11 +68,7 @@ export function readSlackOnboardingState(stateRoot: string): SlackOnboardingStat
   }
 }
 
-/** Atomic replacement with owner-only permissions: this file carries a workspace-wide config refresh
- *  token. Synchronous, through the shared writer, like every other piece of state this repo keeps
- *  (kit/state.ts): the file is ~1 KB and its writers are `fastagent add slack` and one config-token
- *  rotation at tunnel startup, so the async spelling bought nothing and cost a fifth set of temp-name
- *  and permission rules to keep true. */
+/** Atomic replacement with owner-only permissions: this file carries a workspace-wide config refresh token. */
 export function writeSlackOnboardingState(stateRoot: string, state: SlackOnboardingState): void {
   writeFileAtomic(slackOnboardingStatePath(stateRoot), `${JSON.stringify(state, null, 2)}\n`, 0o600);
 }

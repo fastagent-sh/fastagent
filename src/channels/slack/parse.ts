@@ -6,39 +6,25 @@ export type { SlackEventEnvelope, SlackFile, SlackMessageEvent, SlackRoute } fro
 
 const HUMAN_MESSAGE_SUBTYPES = new Set(["file_share", "thread_broadcast"]);
 
-/**
- * Both forms Slack writes a mention in: `<@U123>` and the labelled `<@U123|name>`. ONE definition,
- * because the forms have to agree across every site that reads them — the "@-mentions only other
- * people is discussion" guard, the structural bot-summon check, the stop-command strip, and the
- * assistant-thread title. They drifted once: widening the first two while the strip still matched only
- * the bare form turned `<@bot|name> stop` into an ordinary turn, queued behind the run it meant to stop.
- */
+/** Both forms Slack writes a mention in: `<@U123>` and the labelled `<@U123|name>`. */
 const mentionSource = (idPattern: string): string => String.raw`<@${idPattern}(?:\|[^>]*)?>`;
 const USER_MENTION = mentionSource("[A-Z0-9]+");
-/** Broadcasts and user groups address people too: `<!here>`, `<!channel>`, `<!everyone>`,
- *  `<!subteam^S123|@team>`. Feishu's twin guard counts every mention, and the summon rule is supposed
- *  to be the same on both — without these, "@here can someone look at this" in a thread the agent takes
- *  part in reads as a bare message addressed to IT, and gets answered. */
+/** Broadcasts and user groups address people too: `<!here>`, `<!channel>`, `<!everyone>`, `<!subteam^S123|@team>`. */
 const ANY_MENTION = String.raw`(?:${USER_MENTION}|<!(?:here|channel|everyone)(?:\|[^>]*)?>|<!subteam\^[^>]*>)`;
 
-/** Does this text address ANYONE — a user, a broadcast, or a user group? The §3 discussion guard. */
+/** Does this text address ANYONE — a user, a broadcast, or a user group? */
 export function hasSlackMention(text: string): boolean {
   return new RegExp(ANY_MENTION, "i").test(text);
 }
 
-/** Does this text mention a USER? Distinct from the above because only a user mention can be the bot:
- *  a broadcast never is, so it must not make a message look like a possible summon. */
 export function hasSlackUserMention(text: string): boolean {
   return new RegExp(USER_MENTION, "i").test(text);
 }
 
-/** Escape a platform-supplied id before it becomes part of a pattern. Slack ids are alphanumeric in
- *  practice, but `auth.test`'s value is not validated here, and this runs on every group message: an
- *  unescaped metacharacter would either mis-answer the summon question or throw on the acceptance
- *  path, which Slack answers with an endless redelivery. */
+/** Escape a platform-supplied id before it becomes part of a pattern. */
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Does this text mention this specific user (either form)? The id is MATCHED, not interpreted. */
+/** Does this text mention this specific user (either form)? */
 export function mentionsSlackUser(text: string, userId: string): boolean {
   return new RegExp(mentionSource(escapeRegExp(userId)), "i").test(text);
 }
@@ -65,7 +51,7 @@ export function isSlackGroupMessage(event: SlackMessageEvent): boolean {
   return !isSlackDirectMessage(event) && (event.type === "app_mention" || event.channel_type !== undefined);
 }
 
-/** Stable install identity. Events API normally supplies team_id; the fallbacks cover Grid envelopes. */
+/** Stable install identity. */
 export function slackTeamId(envelope: SlackEventEnvelope): string | undefined {
   return (
     envelope.team_id ??
@@ -94,13 +80,7 @@ export function slackSenderLabel(event: SlackMessageEvent): string {
   return `user ${event.user ?? "unknown"}`;
 }
 
-/** Main-channel discussion and each concrete thread are independent context buckets.
- *
- *  The `:root:` segment carries `thread_ts`, which in Slack IS the thread's parent message and is
- *  stable for the life of the thread — unrelated to the `<chat>:root:<root_id>` shape Feishu retired
- *  (its `root_id` moves with the reply chain, so it could not identify a side conversation at all).
- *  Same token, different platform meaning; the key is left as-is because renaming it would discard
- *  live context buckets for no semantic gain. */
+/** Main-channel discussion and each concrete thread are independent context buckets. */
 export function slackPlaceKey(teamId: string, event: Pick<SlackMessageEvent, "channel" | "thread_ts">): string {
   const base = `${teamId}:${event.channel ?? "unknown-channel"}`;
   return event.thread_ts ? `${base}:root:${event.thread_ts}` : base;
@@ -110,7 +90,6 @@ export function slackBufferText(text: string): string {
   return truncateCodePointPrefix(text.replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
 
-/** Canonical prompt envelope. The channel/thread ids also give slack-send an explicit delivery target. */
 export function slackEnvelope(envelope: SlackEventEnvelope): string {
   const event = envelope.event;
   if (!event?.channel) return "";

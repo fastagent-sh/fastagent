@@ -1,8 +1,4 @@
-/**
- * GitHub webhook channel: verify → route via `on(event)` → fire-and-forget agent turns, ACK 202.
- * The developer writes only `on`. Concurrency safety is the engine's per-session lease. A turn that
- * fails after the 202, or an in-flight turn on shutdown, is lost (server log only).
- */
+/** GitHub webhook channel: verify → route via `on(event)` → fire-and-forget agent turns, ACK 202. */
 import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
 import { collect } from "../../collect.ts";
@@ -15,7 +11,7 @@ import { text } from "../respond.ts";
 /** Raw body cap before verification — GitHub caps webhook payloads at 25 MB; reject larger early. */
 const MAX_WEBHOOK_BYTES = 25 << 20;
 
-/** A verified GitHub webhook event. Header fields plus the official typed payload. */
+/** A verified GitHub webhook event. */
 export interface GithubEvent {
   /** `X-GitHub-Event` (e.g. "pull_request", "issue_comment"). */
   event: string;
@@ -40,12 +36,7 @@ export interface GithubChannelOptions {
   on: (event: GithubEvent) => Intent[];
 }
 
-/**
- * Build a GitHub webhook channel: policy options in, a {@link ChannelModule} out (mounts
- * `POST /webhook`). `agent` arrives via the mount context. The adapter owns that route key; to serve
- * it elsewhere, re-key the returned module:
- * `(ctx) => ({ "POST /gh": githubChannel(opts)(ctx)["POST /webhook"]! })`.
- */
+/** Build a GitHub webhook channel: policy options in, a {@link ChannelModule} out (mounts `POST /webhook`). */
 export function githubChannel({ secret, on }: GithubChannelOptions): ChannelModule {
   const channel: ChannelModule = ({ agent }) => ({
     "POST /webhook": async (req) => {
@@ -83,21 +74,18 @@ export function githubChannel({ secret, on }: GithubChannelOptions): ChannelModu
         payload: payload as unknown as Schema, // trust boundary: the verified body is a GitHub event
       };
 
-      // Fire each turn, return 202; the process runs them to completion. The lifecycle is logged to
-      // stderr — after the 202 there is no response body, so these lines are the operator's only signal
-      // (and the sink that keeps a post-ACK error from going unhandled).
+      // Fire each turn, return 202; the process runs them to completion.
       const intents = on(event);
       const label = event.action ? `${event.event}.${event.action}` : event.event;
       for (let i = 0; i < intents.length; i++) {
         const { session, text } = intents[i] as Intent;
-        // Per-turn correlation id (deliveryId is unique per webhook; the index disambiguates fan-out),
-        // threaded through start/done/failed so a terminal line joins back to its start.
+        // Per-turn correlation id (deliveryId is unique per webhook; the index disambiguates fan-out), threaded
+        // through start/done/failed so a terminal line joins back to its start.
         const turn = `${event.deliveryId}#${i}`;
         log.info(`[github] turn start: turn=${turn} session=${session} event=${label}`);
         const startedAt = Date.now();
-        // Post-ACK turns are process-wide in-flight work (busy.ts): a serving surface that must not
-        // idle mid-turn (the AgentCore /ping's HealthyBusy) has no other way to see them — and github
-        // turns have NO replay, so an idle reclaim here loses the review outright.
+        // Post-ACK turns are process-wide in-flight work (busy.ts): a serving surface that must not idle mid-turn
+        // (the AgentCore /ping's HealthyBusy) has no other way to see them.
         const workDone = beginWork();
         void collect(agent.invoke({ session }, { text }))
           .then(
