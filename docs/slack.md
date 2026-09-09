@@ -115,16 +115,21 @@ without touching the installed app or its runtime credentials.
 
 ```ts
 import { slackChannel } from "@fastagent-sh/fastagent/slack";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default slackChannel({
-  botToken: process.env.SLACK_BOT_TOKEN ?? "",
-  signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
-  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
-  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-  // No session modes: an answer attaches to its question with a thread, and that thread is the session.
-  onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+export default defineChannel({
+  secrets: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
+  channel: (secrets) =>
+    slackChannel({
+      botToken: secrets.SLACK_BOT_TOKEN,
+      signingSecret: secrets.SLACK_SIGNING_SECRET,
+      rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
+      // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+      // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+      // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
+      // No session modes: an answer attaches to its question with a thread, and that thread is the session.
+      onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+    }),
 });
 ```
 

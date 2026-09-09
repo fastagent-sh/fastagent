@@ -11,7 +11,9 @@ import { isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists, readTextIfExists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
-import { discoverScheduleFiles } from "../schedule/discover.ts";
+import { loadSchedules } from "../schedule/discover.ts";
+import { resolveAgentTools } from "../engines/pi/create.ts";
+import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
@@ -41,12 +43,14 @@ interface DeployFacts {
    * gating on it would strand a correctly configured agent.
    */
   modelKeyInDefinition: boolean;
+  /** The declared secrets — config `deploy.secrets`, the control token, and every tool/schedule
+   *  declaration — carried to the host and listed in the runbook by their declaring file. */
+  extraSecrets: DeclaredSecret[];
   /** The project-level auth file `--run` reads to carry the credential (probed with the same path). */
   authPath: string;
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
   container: ContainerInput;
   port: number;
-  extraSecrets: string[];
 }
 
 /** Done (facts for the host branch), or a hard gate the CLI stops on (a model that won't reach the box). */
@@ -143,8 +147,8 @@ export async function preflightDeploy(input: {
     });
   }
 
-  // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; note and let the author wire
-  // them.
+  // Known channel kinds only — a custom channel's webhook (and, unless it declared them, its secrets) are unknown to
+  // us; note and let the author wire them.
   const inspected = await inspectChannels(agentDir);
   if (inspected.failures.length > 0) {
     throw new Error(
@@ -152,20 +156,35 @@ export async function preflightDeploy(input: {
     );
   }
   const channels = inspected.channels;
+  // A custom channel that used `defineChannel({ secrets })` HAS told us its credentials, and they are
+  // carried below with every other declaration — telling its author to configure them by hand would
+  // send them to copy a list into deploy.secrets, which is the duplicate list this replaced.
+  const declaresSecrets = new Set(
+    [...inspected.secrets].flatMap(([owner, declared]) => (declared.length > 0 ? [owner] : [])),
+  );
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
+    const declares = declaresSecrets.has(name);
+    const secretsPart = declares
+      ? `its declared secrets travel with the deploy`
+      : `configure its secrets yourself (declare them with defineChannel to have deploy carry them)`;
     messages.push({
       level: "note",
       text:
         ingress === "long-connection"
-          ? `long-connection channel "${name}" is custom — configure its secrets yourself; generated deploy plans keep the process running and skip webhook registration`
-          : `route channel "${name}" is custom — configure its secrets and webhook yourself`,
+          ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
+          : `route channel "${name}" is custom — ${secretsPart}; configure its webhook yourself`,
     });
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
   // Time triggers (static schedules or self-scheduling) need a machine kept running.
-  const hasTimeTriggers = (await discoverScheduleFiles(agentDir)).length > 0 || !!config.selfSchedule;
+  // Loaded, not just listed: the same load answers "are there time triggers" AND "what did they declare they need".
+  // A file that FAILED to load still counts as a trigger — the author will fix it, and a plan that scaled to zero
+  // because a cron was broken on deploy day would sleep through it afterwards.
+  const loadedSchedules = await loadSchedules(agentDir);
+  const hasTimeTriggers =
+    loadedSchedules.schedules.length + loadedSchedules.failures.length > 0 || !!config.selfSchedule;
   if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({
       level: "note",
@@ -384,10 +403,28 @@ export async function preflightDeploy(input: {
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   }
-  // What the agent declared it needs on the box (fastagent.config deploy.secrets).
-  const extraSecrets = [...(config.deploy?.secrets ?? [])];
+  // EVERYTHING the definition declared it needs, from wherever it was declared. `deploy.secrets` is now only the list
+  // for what no code declares. Read through the SAME resolver dev/start mount with, so "which tool declarations
+  // count" has one answer (config.tools declare too; a shadowed file's declaration is dropped in both places).
+  const resolvedTools = await resolveAgentTools(config, agentDir, workspace);
+  for (const failure of [...resolvedTools.toolFailures, ...loadedSchedules.failures]) {
+    messages.push({
+      level: "warn",
+      text: `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried to the host`,
+    });
+  }
+  const extraSecrets: DeclaredSecret[] = [
+    ...(config.deploy?.secrets ?? []).map((name) => ({ name, source: "fastagent.config deploy.secrets" })),
+    ...allSecrets(resolvedTools.toolSecrets),
+    ...allSecrets(loadedSchedules.secrets),
+    // A CUSTOM channel's credentials exist nowhere else: the first-party table can only name the channels fastagent
+    // ships, and guessing a custom one's variables is impossible.
+    ...allSecrets(inspected.secrets),
+  ];
   // The plane's bearer token is the DEPLOYMENT's secret, not the container's.
-  if (config.sessionControl === true) extraSecrets.push(CONTROL_TOKEN_ENV);
+  if (config.sessionControl === true) {
+    extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
+  }
   // deploy.apt only shapes the GENERATED Dockerfile.
   const dockerfileHome = join(agentDir, "Dockerfile");
   if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {

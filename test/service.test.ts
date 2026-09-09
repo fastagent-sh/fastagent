@@ -562,6 +562,17 @@ describe("createAgentService", () => {
     await expect(createAgentService(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
   });
 
+  it("refuses to serve while a schedule's declared secret has no value", async () => {
+    // A schedule reads its env at IMPORT time, so an unset value has already produced a broken
+    // prompt by the time the scheduler starts — this is the last point it is still a startup failure
+    // rather than a wrong turn at 9am.
+    const dir = await agentDir({
+      "schedules/digest.mjs": `export default { cron: "0 9 * * *", prompt: "d", secrets: ["FA_TEST_DIGEST_CHANNEL"] };`,
+    });
+    delete process.env.FA_TEST_DIGEST_CHANNEL;
+    await expect(createAgentService(dir)).rejects.toThrow(/FA_TEST_DIGEST_CHANNEL \(schedules\/digest\.mjs\)/);
+  });
+
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
     await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);

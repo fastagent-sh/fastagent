@@ -190,7 +190,6 @@ describe("the assembly's parts stay out of the public surface", () => {
     "loadTools",
     "loadChannels",
     "loadSchedules",
-    "discoverScheduleFiles",
     "createScheduler",
     "scheduleSession",
     // pi-ai's own runtime function: forwarding it makes us answerable for an API we do not own.

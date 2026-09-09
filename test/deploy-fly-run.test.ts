@@ -328,7 +328,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: [],
-      extraSecrets: ["GH_TOKEN"],
+      extraSecrets: [{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }],
       env: { OPENAI_API_KEY: "k", GH_TOKEN: "ghp_x" },
     });
     expect(present.secrets.GH_TOKEN).toBe("ghp_x"); // value from the local env
@@ -337,7 +337,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: [],
-      extraSecrets: ["GH_TOKEN"],
+      extraSecrets: [{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }],
       env: { OPENAI_API_KEY: "k" },
     });
     expect(absent.missingSecrets).toEqual(["GH_TOKEN"]); // declared but no local value → gates --run
@@ -347,7 +347,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: declaredChannels(["telegram"]),
-      extraSecrets: ["TELEGRAM_BOT_TOKEN"],
+      extraSecrets: [{ name: "TELEGRAM_BOT_TOKEN", source: "fastagent.config deploy.secrets" }],
       env: { OPENAI_API_KEY: "k" },
     });
     expect(dup.missingSecrets.filter((n) => n === "TELEGRAM_BOT_TOKEN")).toHaveLength(1);
@@ -360,17 +360,25 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       channels: [] as const,
       env: { OPENAI_API_KEY: "k" },
     };
-    const absent = assembleSecrets({ ...base, channels: [], extraSecrets: [CONTROL_TOKEN_ENV] });
+    const absent = assembleSecrets({
+      ...base,
+      channels: [],
+      extraSecrets: [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
+    });
     expect(absent.missingSecrets).toEqual([]); // a deploy that worked before this existed still runs
     const present = assembleSecrets({
       ...base,
       channels: [],
-      extraSecrets: [CONTROL_TOKEN_ENV],
+      extraSecrets: [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
       env: { OPENAI_API_KEY: "k", [CONTROL_TOKEN_ENV]: "t0ken" },
     });
     expect(present.secrets[CONTROL_TOKEN_ENV]).toBe("t0ken");
     // The runbook lists it as optional for the same reason — required would gate every host.
-    const listed = deploymentSecrets("OPENAI_API_KEY", [], [CONTROL_TOKEN_ENV]);
+    const listed = deploymentSecrets(
+      "OPENAI_API_KEY",
+      [],
+      [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
+    );
     expect(listed.find((s) => s.name === CONTROL_TOKEN_ENV)?.required).toBe(false);
   });
 });

@@ -22,6 +22,7 @@ import { type ResolvedPlacement, exists } from "../../../paths.ts";
 import { loadSchedules } from "../../../schedule/discover.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
+import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 /** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
 function shellArg(value: string): string {
@@ -134,7 +135,7 @@ async function runDeployAgentcore(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: string[];
+    extraSecrets: readonly DeclaredSecret[];
     topology: AgentcoreTopology;
   },
 ): Promise<void> {

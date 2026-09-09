@@ -23,4 +23,9 @@ export type {
   Routes,
 } from "./channel.ts";
 // Mounting only.
-export { defineSchedule, type LoadedSchedule, type Schedule } from "./schedule/schedule.ts";
+export { defineSchedule, type DefineScheduleOptions, type LoadedSchedule, type Schedule } from "./schedule/schedule.ts";
+// What a `channels/*.ts` file is written against when it needs credentials: declaring them is what
+// lets `deploy` carry them and the serve refuse to start without them.
+export { defineChannel, type DefineChannelOptions } from "./channels/define-channel.ts";
+// The one shape "which env vars does this agent need" travels in, from every authoring surface.
+export type { DeclaredSecret } from "./declared-secrets.ts";

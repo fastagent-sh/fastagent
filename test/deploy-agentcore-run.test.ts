@@ -524,6 +524,22 @@ describe("deploy/agentcore/run: helpers", () => {
 });
 
 describe("the post-deploy probe (verify restore + construction before registration)", () => {
+  it("names the secrets it carries — the list is no longer only what the author typed", async () => {
+    // A mounted tool/channel/schedule declares its own names, so what `--run` reads from THIS machine
+    // and puts on the runtime has to be visible on this host too.
+    const logs: string[] = [];
+    await deployAgentcoreRun(
+      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
+    );
+    expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
+  });
+
   it("POSTs the reserved probe path with the ingress secret BEFORE registration and proceeds on ok:true", async () => {
     const requests: { url: string; body: string }[] = [];
     vi.stubGlobal(

@@ -208,6 +208,10 @@ export async function deployAgentcoreRun(
       return gate(`secret ${k} is ${v.length} chars — AgentCore environment values cap at 2048; shorten it`);
     }
   }
+  // Name what travels from THIS machine's environment onto the runtime: the list is no longer only
+  // what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  const secretNames = Object.keys(plan.secrets);
+  if (secretNames.length > 0) log(`carrying ${secretNames.length} secret(s): ${secretNames.join(", ")}`);
 
   // 3c. Say what this deploy is ABOUT TO TOUCH while it can still be stopped for free: until here the account and
   // region only surfaced several hundred log lines in, inside the ECR image URI.

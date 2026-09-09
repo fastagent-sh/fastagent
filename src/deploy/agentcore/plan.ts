@@ -8,6 +8,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 /** The one schedule fact the plan needs (from loadSchedules) — name + cron + tz. */
 export interface ScheduleFact {
@@ -26,8 +27,8 @@ export interface AgentcorePlanInput extends ContainerInput {
    * forwarder is needed at all (ANY webhook channel requires it, customs included).
    */
   channels: readonly DeclaredChannel[];
-  /** Extra secret env-var names (fastagent.config deploy.secrets). */
-  extraSecrets?: string[];
+  /** Everything the definition declared it needs (deploy.secrets + tool/schedule declarations). */
+  extraSecrets?: readonly DeclaredSecret[];
   /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
   schedules: ScheduleFact[];
   /** Mirror the wake tool's pending work into EventBridge alarms. */

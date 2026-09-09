@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
+import { deploymentSecrets } from "../src/deploy/secrets.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
@@ -346,9 +347,28 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       expect(pre.channels).toEqual([{ name: "discord", ingress: "webhook" }]);
       expect(pre.messages).toContainEqual({
         level: "note",
-        text: expect.stringContaining('route channel "discord" is custom'),
+        text: expect.stringContaining('route channel "discord" is custom — configure its secrets yourself'),
       });
     }
+  });
+
+  it("a custom channel that DECLARED its secrets is not told to configure them by hand", async () => {
+    // They are carried with every other declaration below; repeating "configure its secrets yourself"
+    // would send the author to copy the names into deploy.secrets — the duplicate list this replaced.
+    const dir = await workspace();
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(
+      join(dir, "channels", "discord.mjs"),
+      `export default Object.assign(() => ({}), { secrets: ["DISCORD_TOKEN"] });\n`,
+    );
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.messages).toContainEqual({
+      level: "note",
+      text: expect.stringContaining('route channel "discord" is custom — its declared secrets travel with the deploy'),
+    });
+    expect(pre.extraSecrets).toContainEqual({ name: "DISCORD_TOKEN", source: "channels/discord.mjs" });
   });
 
   it("recognizes a long-connection module structurally and reports its always-on requirement", async () => {
@@ -476,6 +496,43 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (pre.ok) expect(pre.modelKeyInDefinition).toBe(true);
   });
 
+  it("carries what tools and schedules DECLARED, without a second list to keep in sync", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await mkdir(join(dir, "schedules"), { recursive: true });
+    await writeFile(
+      join(dir, "tools", "x-post.mjs"),
+      `export default { name: "x-post", description: "post", parameters: {},
+         secrets: ["X_API_KEY", "X_API_SECRET"], execute: async () => ({ content: [] }) };\n`,
+    );
+    await writeFile(
+      join(dir, "schedules", "digest.mjs"),
+      `export default { cron: "0 9 * * *", prompt: "digest", secrets: ["SLACK_DIGEST_CHANNEL"] };\n`,
+    );
+    const pre = await call(dir, { model: "openai/gpt-4o-mini", deploy: { secrets: ["GH_TOKEN"] } });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.extraSecrets).toEqual([
+      { name: "GH_TOKEN", source: "fastagent.config deploy.secrets" },
+      { name: "X_API_KEY", source: "tools/x-post.mjs" },
+      { name: "X_API_SECRET", source: "tools/x-post.mjs" },
+      { name: "SLACK_DIGEST_CHANNEL", source: "schedules/digest.mjs" },
+    ]);
+    // The runbook names the file to open, not a fixed "declared in fastagent.config" sentence.
+    const listed = deploymentSecrets(undefined, [], pre.extraSecrets);
+    expect(listed.find((s) => s.name === "X_API_KEY")?.hint).toBe("required by tools/x-post.mjs");
+  });
+
+  it("warns when a code input cannot be loaded — its declarations cannot be carried", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(join(dir, "tools", "broken.mjs"), `throw new Error("boom");\n`);
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.messages.some((m) => m.level === "warn" && /tools\/broken\.mjs failed to load/.test(m.text))).toBe(true);
+  });
+
   it("sessionControl carries the plane's token as a deploy secret — a minted one is unreadable off-box", async () => {
     const dir = await workspace();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });
@@ -488,7 +545,10 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     });
     expect(on.ok).toBe(true);
     if (on.ok) {
-      expect(on.extraSecrets).toEqual(["GH_TOKEN", "FASTAGENT_CONTROL_TOKEN"]);
+      expect(on.extraSecrets).toEqual([
+        { name: "GH_TOKEN", source: "fastagent.config deploy.secrets" },
+        { name: "FASTAGENT_CONTROL_TOKEN", source: "fastagent.config sessionControl" },
+      ]);
       expect(on.messages.some((m) => m.level === "warn" && /FASTAGENT_CONTROL_TOKEN/.test(m.text))).toBe(true);
     }
   });

@@ -9,7 +9,7 @@ import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { scheduleSession } from "../../schedule/scheduler.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, gateSecretsOrExit } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface FireOptions {
@@ -23,7 +23,9 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   const placement = await enterAgentCommand(dirArg, opts);
   // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent dir), so `fire` sees
   // the same set the scheduler serves.
-  const { schedules, failures } = await loadSchedules(placement.agentDir).catch(failStartup);
+  const { schedules, secrets, failures } = await loadSchedules(placement.agentDir).catch(failStartup);
+  // Reported BEFORE the name is looked up: a schedule file that failed to import is missing from
+  // `schedules`, so "unknown schedule" is the case where the author most needs to hear about it.
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
@@ -36,6 +38,14 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
       ),
     );
   }
+  // `fire` RUNS this schedule, so it takes the serving path's guarantee: a prompt built from an
+  // unset declared value is the degraded turn this feature exists to prevent (`Post the digest to `
+  // — sent and executed), and the loader resolved it into a string before anything could notice.
+  // THIS schedule only (`owner`): firing one job by hand must not fail because a sibling needs a
+  // credential this machine has no reason to hold. The failures go to the gate too, even though they
+  // were printed above — its guarantee must not depend on this call site remembering (a repeated
+  // line on the refusal path is the cheaper failure).
+  gateSecretsOrExit({ declared: secrets, failures, owner: name });
   const { agent, modelSpec, authPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)

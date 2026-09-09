@@ -15,6 +15,7 @@ import { spawnRunner } from "../../../deploy/runner.ts";
 import { type ResolvedPlacement, readTextIfExists } from "../../../paths.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
+import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
@@ -106,7 +107,7 @@ async function runDeployFly(
     authPath: string;
     channels: readonly DeclaredChannel[];
     flyTomlPath: string;
-    extraSecrets: string[];
+    extraSecrets: readonly DeclaredSecret[];
   },
 ): Promise<void> {
   const { agentDir, workspace, agentPrefix, appName, channels, flyTomlPath } = params;
