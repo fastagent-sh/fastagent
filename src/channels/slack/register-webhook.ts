@@ -42,8 +42,7 @@ export async function registerSlackWebhook(
   const consoleFallback = `set ${publicBaseUrl}/slack as the Event Subscriptions Request URL in the Slack console`;
   let current: Awaited<ReturnType<typeof currentSlackConfigToken>>;
   try {
-    // Rotation is not retried with the manifest below: each rotate invalidates the previous pair, so a
-    // repeat would spend tokens on a failure that is about the URL, not about the credential.
+    // Rotation is not retried with the manifest below.
     current = await currentSlackConfigToken(options.stateRoot, state, {
       apiBaseUrl: options.apiBaseUrl,
       fetch: options.fetch,
@@ -56,9 +55,7 @@ export async function registerSlackWebhook(
     return "failed";
   }
 
-  // Slack verifies the new request_url with a challenge DURING apps.manifest.update, from Slack's own
-  // network — that verdict IS the readiness signal, so it is retried while a fresh tunnel/container
-  // warms up. No local `/health` poll precedes it: this machine's reach is the wrong question (#421).
+  // Slack verifies the new request_url with a challenge DURING apps.manifest.update, from Slack's own network.
   try {
     await retryWhile(
       () =>
@@ -69,8 +66,8 @@ export async function registerSlackWebhook(
             name: current.state.appName,
             groupBehavior: current.state.groupBehavior,
             requestUrl: `${publicBaseUrl}/slack`,
-            // A manifest update replaces the whole manifest and redirect_urls may not be empty, so a
-            // placeholder is declared; a reinstall replaces it with its one-shot local setup callback.
+            // A manifest update replaces the whole manifest and redirect_urls may not be empty, so a placeholder is
+            // declared.
             redirectUrl: `${publicBaseUrl}/slack/oauth/callback`,
           }),
           { apiBaseUrl: options.apiBaseUrl, fetch: options.fetch },

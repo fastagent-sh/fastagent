@@ -42,8 +42,8 @@ async function productionClient(
   options: FeishuWsConnectionOptions,
   callbacks: FeishuWsClientCallbacks,
 ): Promise<FeishuWsClient> {
-  // Webhook-only users stay on the lightweight fetch path; load the proprietary-protocol SDK only
-  // when a WebSocket connection is actually opened.
+  // Webhook-only users stay on the lightweight fetch path; load the proprietary-protocol SDK only when a WebSocket
+  // connection is actually opened.
   const { EventDispatcher, LoggerLevel, WSClient } = await import("@larksuiteoapi/node-sdk");
   const label = `[${options.kind}:ws]`;
   const logger = sdkLogger(label);
@@ -70,8 +70,7 @@ async function productionClient(
   };
 }
 
-/** Open Feishu/Lark's official-SDK WebSocket connection. The SDK ACKs only after `onEvent` settles;
- * a persistence throw therefore becomes a 500 response frame and the platform re-pushes the event. */
+/** Open Feishu/Lark's official-SDK WebSocket connection. */
 export function connectFeishuWs(options: FeishuWsConnectionOptions, signal: AbortSignal): LongConnection {
   const label = `[${options.kind}:ws]`;
   // The SDK only logs + returns for this case (no onError), which would leave readiness pending forever.
@@ -97,8 +96,7 @@ export function connectFeishuWs(options: FeishuWsConnectionOptions, signal: Abor
     if (signal.aborted || closedSettled) return;
     // Settle-then-close: closedSettled first makes a close()-triggered SDK callback re-entry a no-op.
     closedSettled = true;
-    // Terminal failure must release the transport here: the abort listener's close() no-ops once
-    // closedSettled is set, and only close() destroys SDK-held resources (e.g. its cache sweep timer).
+    // Terminal failure must release the transport here.
     if (client) closeClient(client);
     const failure = error instanceof Error ? error : new Error(String(error));
     if (!readySettled) {
@@ -143,8 +141,8 @@ export function connectFeishuWs(options: FeishuWsConnectionOptions, signal: Abor
     closedSettled = true; // before closeClient, so a callback re-entry from close() is a no-op
     if (client) closeClient(client);
     if (!readySettled) {
-      // Abort before the first connection: `ready` still settles, and resolution here means
-      // cancellation, not readiness (the LongConnection contract; serve skips ready-side effects).
+      // Abort before the first connection: `ready` still settles, and resolution here means cancellation, not
+      // readiness (the LongConnection contract; serve skips ready-side effects).
       readySettled = true;
       resolveReady();
     }

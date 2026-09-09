@@ -1,32 +1,7 @@
 /**
- * Auth for the pi engine: a read-WRITE {@link CredentialStore} over a fastagent credentials file,
- * consumed by the `Models` collection (models.ts). The path is project-level by default
- * (`<agentDir>/.secrets/auth.json`, resolved by the opener); {@link GLOBAL_AUTH_PATH} is the
- * global location used as the override target / login default, not an implicit per-provider fallback.
- *
- * Project-level default + NO implicit project↔global fallback, for two reasons: (1) isolation — each
- * agent can use a different account/subscription; (2) fail-visibly — a missing credential surfaces at
- * startup instead of being masked by a machine-global one that won't exist on a fresh deploy box. A
- * *fallback* specifically is refused because the only safe shape (read global, write the rotated token
- * back to the project file) would diverge: OAuth refresh tokens are single-use, so consuming global's
- * token and persisting the new one elsewhere leaves global stale for every other consumer.
- *
- * Sharing is still SAFE the right way: point everything at ONE file (`FASTAGENT_AUTH_PATH` → the
- * global path). One file means one refresh lifecycle under the store's cross-process write lock
- * (refresh re-reads the latest token under the lock), the documented same-machine pattern.
- * fastagent's store stays SEPARATE from the pi CLI's `~/.pi/agent/auth.json` for the same single-
- * lifecycle reason: two uncoordinated files over one grant would each rotate and break the other.
- *
- * Locking is vendored here on `proper-lockfile`, with the same parameters pi's file backend used
- * before pi 0.80.8 stopped exporting it (upstream's stated migration path for SDK consumers is a
- * custom pi-ai `CredentialStore`, which this file is). The lock guards the WRITE path only. `read`
- * is pi-ai's per-request hot path, so it stays UNLOCKED — safe because every write that carries a
- * CREDENTIAL publishes by rename ({@link writeFileAtomic}): a reader sees one whole version of the
- * file or another, never a partial one, so a rotation has no torn-read window for an unlocked read
- * to absorb. The one in-place write left is the `{}` bootstrap below, whose window an unlocked read
- * observes as an empty file — reported as corrupt, which for a zero-byte auth.json is the right
- * answer either way. The write path refuses to overwrite a corrupt file (never clobbering other
- * providers' credentials).
+ * Auth for the pi engine: a read-WRITE {@link CredentialStore} over a fastagent credentials file, consumed by the
+ * `Models` collection (models.ts). The write path refuses to overwrite a corrupt file, so a torn read never clobbers
+ * the other providers' credentials.
  */
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -38,18 +13,13 @@ import type { Credential, CredentialInfo, CredentialStore } from "@earendil-work
 import lockfile from "proper-lockfile";
 
 /**
- * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`), under the user-global machinery
- * home `~/.fastagent/` — which carries the same unified shape as a workspace (`.secrets/auth.json`).
- * The project-level default is `<agentDir>/.secrets/auth.json` (computed by the opener and by
- * `fastagent login`); this is only the `loginFlow()` PROGRAMMATIC fallback (when a caller omits
- * `authPath`) and the path to point `--auth-path`/`FASTAGENT_AUTH_PATH` at to deliberately share ONE
- * credential file across projects (safe — one file, one lock-serialized refresh lifecycle). The
- * `fastagent login` CLI is project-level by default, never this.
+ * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`), under the user-global machinery home
+ * `~/.fastagent/`.
  */
 export const GLOBAL_AUTH_PATH = join(homedir(), GLOBAL_HOME_DIR, SECRETS_DIRNAME, "auth.json");
 
 export interface FastagentAuthOptions {
-  /** Sink for non-fatal auth anomalies (unreadable/corrupt file). Defaults to the process logger (warn). */
+  /** Sink for non-fatal auth anomalies (unreadable/corrupt file). */
   warn?: (message: string) => void;
 }
 
@@ -69,30 +39,20 @@ interface LockResult<T> {
   next?: string;
 }
 
-/**
- * Serialized cross-process read-modify-write of the credentials file: exponential-backoff retries,
- * 30s staleness, and compromise detection (the parameters pi's `FileAuthStorageBackend` used).
- * Ensures the file exists first (0700 dir, 0600 file, EXCLUSIVE create: a concurrent first write
- * must never be clobbered by the init) because `proper-lockfile` locks an existing path. A
- * compromised lock aborts before the write rather than clobbering a concurrent writer, and a
- * failed unlock after a successful operation rejects instead of leaving a stale lock silently.
- */
+/** Serialized cross-process read-modify-write of the credentials file. */
 async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
-  // 0700 unconditionally, including on a directory an operator named with `--auth-path`: pointing a
-  // credential file somewhere is asking for that somewhere to hold a credential. Where the process
-  // cannot chmod (a mount it does not own), this raises — the write fails visibly instead of
-  // quietly leaving the directory readable, which is the trade this repo takes everywhere else.
+  // 0700 unconditionally, including on a directory an operator named with `--auth-path`.
   await ensureSecretsDir(dirname(authPath));
   if (!existsSync(authPath)) {
     try {
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
       chmodSync(authPath, SECRET_FILE_MODE);
     } catch (error) {
-      // EEXIST: another process created the file between the existence check and this exclusive
-      // create; its content (possibly already-written credentials) must not be clobbered.
+      // EEXIST: another process created the file between the existence check and this exclusive create; its content
+      // (possibly already-written credentials) must not be clobbered.
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
   }
@@ -115,10 +75,8 @@ async function withLockedAuthFile<T>(
     const current = existsSync(authPath) ? readFileSync(authPath, "utf8") : undefined;
     const out = await fn(current);
     throwIfCompromised();
-    // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only
-    // spelling that applies the mode before the content is reachable — `writeFileSync`'s `mode` is
-    // a no-op on an existing file, so a chmod after it leaves the new credential briefly readable
-    // at whatever mode the old file carried.
+    // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
+    // the mode before the content is reachable.
     if (out.next !== undefined) writeFileAtomic(authPath, out.next, SECRET_FILE_MODE);
     throwIfCompromised();
     result = out.result;
@@ -131,10 +89,8 @@ async function withLockedAuthFile<T>(
     }
     throw error;
   }
-  // Success path: a failed release is a real cleanup failure (the leftover auth.json.lock stalls
-  // the next writer for the staleness window with zero diagnostics), so it surfaces instead of
-  // resolving a silently degraded operation. A compromise detected after the last in-band check
-  // surfaces here too.
+  // Success path: a failed release is a real cleanup failure (the leftover auth.json.lock stalls the next writer for
+  // the staleness window with zero diagnostics), so it surfaces instead of resolving a silently degraded operation.
   try {
     await release();
   } catch (releaseError) {
@@ -144,12 +100,7 @@ async function withLockedAuthFile<T>(
   return result;
 }
 
-/**
- * Decode the credentials JSON, shared by the read and write paths. The root must be a plain
- * non-null, non-array object: `[]`, `null`, and scalar roots pass JSON.parse but break the record
- * semantics (an array root even swallows writes, since JSON.stringify drops string keys on arrays).
- * Structurally invalid = corrupt, exactly like unparsable text.
- */
+/** Decode the credentials JSON, shared by the read and write paths. */
 function decodeCreds(raw: string): Creds | undefined {
   let parsed: unknown;
   try {
@@ -161,13 +112,7 @@ function decodeCreds(raw: string): Creds | undefined {
   return parsed as Creds;
 }
 
-/**
- * UNLOCKED read of the whole credentials file, shared by `read` and `list`. ONE read: the write
- * publishes by rename, so this observes one whole version or another and has nothing to absorb by
- * re-reading. A missing file reads as undefined silently (normal not-configured); anything that
- * does not decode is a real corruption — a hand-edit — and says so immediately, rather than after
- * retrying a race that cannot happen.
- */
+/** UNLOCKED read of the whole credentials file, shared by `read` and `list`. */
 function readCreds(authPath: string, warn: (message: string) => void): Creds | undefined {
   let raw: string;
   try {
@@ -184,9 +129,8 @@ function readCreds(authPath: string, warn: (message: string) => void): Creds | u
 }
 
 /**
- * Parse the credentials JSON for a WRITE: a corrupt file must THROW, because serializing `{}` over
- * it would wipe every other provider's credentials. The throw aborts the locked write, leaving the
- * file intact.
+ * Parse the credentials JSON for a WRITE: a corrupt file must THROW, because serializing `{}` over it would wipe every
+ * other provider's credentials.
  */
 function parseForWrite(raw: string | undefined, where: string): Creds {
   if (!raw) return {};
@@ -197,8 +141,10 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
   return creds;
 }
 
-/** A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH};
- *  the directory opener passes the project-level `<root>/.secrets/auth.json`). */
+/**
+ * A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH}; the directory
+ * opener passes the project-level `<root>/.secrets/auth.json`).
+ */
 export function fastagentCredentialStore(
   authPath: string = GLOBAL_AUTH_PATH,
   options: FastagentAuthOptions = {},
@@ -211,8 +157,7 @@ export function fastagentCredentialStore(
       return creds ? pick(creds, providerId) : undefined;
     },
     async list() {
-      // Metadata only, never secrets (the pi-ai `list` contract). Foreign/old entries are filtered
-      // with the same validation as `read`, so both surfaces agree on what "configured" means.
+      // Metadata only, never secrets (the pi-ai `list` contract).
       const creds = readCreds(authPath, warn);
       if (!creds) return [];
       const infos: CredentialInfo[] = [];
@@ -233,8 +178,8 @@ export function fastagentCredentialStore(
       });
     },
     async delete(providerId) {
-      // No-op when nothing is stored: do NOT take the lock (which would create the file) on a
-      // machine that never stored this provider.
+      // No-op when nothing is stored: do NOT take the lock (which would create the file) on a machine that never
+      // stored this provider.
       if (!existsSync(authPath)) return;
       await withLockedAuthFile(authPath, async (current) => {
         const creds = parseForWrite(current, authPath);

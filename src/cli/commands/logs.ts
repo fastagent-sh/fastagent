@@ -13,8 +13,7 @@ export interface AgentcoreLogsOptions {
 }
 
 export async function runLogs(host: string, dirArg: string, opts: AgentcoreLogsOptions): Promise<void> {
-  // The host argument is DISPATCHED here, as in runDeploy — the parser's `choices` happens to have a
-  // single member today, and a future second host must land on its own reader, not silently on this one.
+  // The host argument is DISPATCHED here, as in runDeploy.
   if (host !== "agentcore") failUsage(`logs: unsupported host "${host}" — only agentcore has remote logs`);
   const placement = placementOrExit(resolve(dirArg));
   loadDotEnv(placement.agentDir); // AWS_PROFILE/region/proxy may be definition-local, as on deploy

@@ -1,70 +1,44 @@
 /**
- * Generic durable context buffer — the SHARED mechanics behind each stateful channel's
- * "un-summoned group discussion" module (telegram/feishu/slack `context-buffer.ts`): recent
- * un-summoned messages per conversation "place", kept under a char budget and folded into the next
- * answered turn in that place, so a summoned agent has the discussion it didn't see turn-by-turn.
- *
- * Channel-neutral and generic over the entry shape (like ../kit/turn-store.ts): the channel supplies its
- * entry type, the shape validator (state files are an IO boundary — valid JSON of the WRONG shape
- * must degrade exactly like a corrupt file: warn + empty, never flow in as trusted data), the
- * fold-line renderer, and its log label. What stays per channel: the entry type itself, place-key
- * derivation, and buffered-attachment selection (platform resource shapes are real differences).
- *
- * DURABLE, with the consume protocol every channel inherits:
- *  - `push` persists synchronously BEFORE the transport ACK (an ACKed delivery is not redelivered,
- *    so ACK-then-persist would be a silent-loss window): a throw becomes the webhook's 500 and the
- *    platform redelivers once the disk recovers — staged on a copy and rolled back on a failed
- *    write, so the redelivery does not double-append the entry already in memory.
- *  - `peek` renders WITHOUT clearing and snapshots exactly which entries it consumed.
- *  - `commit` removes only that snapshot, by object identity, on the turn's `completed` — so a
- *    failure or crash before `completed` leaves the discussion intact for the next summon, and a
- *    message that arrives while the turn runs survives for the next answered turn (a whole-bucket
- *    delete would lose it).
+ * Generic durable context buffer — the SHARED mechanics behind each stateful channel's "un-summoned group discussion"
+ * module (telegram/feishu/slack `context-buffer.ts`).
  */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
-/** Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded
- *  the OLDEST un-summoned messages are dropped (not a time window: a quiet group keeps its
- *  sparse-but-relevant lines, a busy burst is capped). The `line` renderer is the eviction cost
- *  basis: the budget must price what the fold actually renders, or it would systematically overrun. */
+/**
+ * Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded the OLDEST
+ * un-summoned messages are dropped. Not a time window: a quiet group keeps its sparse-but-relevant lines.
+ */
 const BUFFER_MAX_CHARS = 4000;
 
-/** Per-message bound INSIDE that budget. The fold is a digest of many messages competing for one
- *  allowance, so the job here is fairness, not fidelity: one rambler must not price out everyone who
- *  spoke after them. 280 against 4000 keeps at least ~14 messages in a full buffer. A referent — the
- *  single message the asker points at — is the opposite job and takes REFERENT_MAX_CODE_POINTS. */
+/** Per-message bound INSIDE that budget. */
 export const BUFFER_LINE_MAX_CHARS = 280;
 
-/** How many buffered files and images (each, most recent first) a summon pulls in with the folded
- *  discussion — bounds the latency/token cost of "summarize the file from earlier" against a chatty
- *  group posting many attachments between summons. Skipped ones must be counted into the prompt
- *  note, so the model never sees an attachment reference it silently cannot open. Shared policy:
- *  each channel's attachment collector caps against this. */
+/** How many buffered files and images (each, most recent first) a summon pulls in with the folded discussion. */
 export const BUFFER_ATTACH_MAX = 3;
 
 /**
- * The folded discussion as it reaches the model — the prompt block, or nothing when the buffer is
- * empty. One renderer for every channel: what the agent is told about un-summoned discussion should
- * not depend on which chat platform delivered it, and three copies of the literal is how that drifts.
- *
- * A channel that folds a SECOND source (feishu's originating room) labels that one itself — it is a
- * different claim about a different place, not this block with another name.
+ * Keep the newest {@link BUFFER_ATTACH_MAX} refs of one kind. The overflow is COUNTED, not silently dropped: the
+ * prompt note tells the model what it is not holding, so it cannot pretend to have read it.
  */
+export function capBufferedRefs<R>(refs: R[]): { kept: R[]; skipped: number } {
+  return { kept: refs.slice(-BUFFER_ATTACH_MAX), skipped: Math.max(0, refs.length - BUFFER_ATTACH_MAX) };
+}
+
+/** The folded discussion as it reaches the model — the prompt block, or nothing when the buffer is empty. */
 export function discussionBlock(text: string): string {
   return text ? `[recent group discussion:\n${text}\n]\n\n` : "";
 }
 
 export interface ContextBuffer<E> {
-  /** Record an un-summoned message. Persists BEFORE returning (pre-ACK; see the module header). */
+  /** Record an un-summoned message. */
   push(placeKey: string, entry: E): void;
   /** Render the fold text and snapshot the consumed entries (see the module header's consume protocol). */
   peek(placeKey: string): { text: string; consumed: E[] };
-  /** Remove exactly `consumed` (by identity) — call on the turn's `completed` event, when the folded
-   *  discussion provably lives in the durable session. Consumes entries WHOLE, including ones whose
-   *  attachments failed to load or were cap-skipped: their text is in the session (keeping them would
-   *  re-fold duplicate text), and the prompt note said what is missing; re-post an attachment to use
-   *  it. Post-ACK: a failed write is logged, never thrown (it must not abort the turn's delivery). */
+  /**
+   * Remove exactly `consumed` (by identity) — call on the turn's `completed` event, when the folded discussion
+   * provably lives in the durable session.
+   */
   commit(placeKey: string, consumed: E[]): void;
 }
 

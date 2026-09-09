@@ -1,12 +1,6 @@
 /**
- * The turn trace: wrap an Agent to tee each turn's loop — prompt, reasoning, tool calls (name + args)
- * with results, reply, terminal — to the log at DEBUG level. Pass-through: events are forwarded
- * untouched; this only adds a readable line per step. Engine-neutral (the contract only).
- *
- * It is wired in BOTH `dev` and `start`; the level decides visibility. dev runs at debug, so the trace
- * (including end-user content — prompt, tool args/results, reply) shows; start runs at info, so the
- * trace is gated out entirely, keeping that content and its volume out of production logs. That gating
- * is why the trace is debug-level rather than a switch soldered to the command path.
+ * The turn trace: wrap an Agent to tee each turn's loop — prompt, reasoning, tool calls (name + args) with results,
+ * reply, terminal — to the log at DEBUG level.
  */
 import type { Agent, AgentEvent, Json, Prompt, Scope } from "./agent.ts";
 import { log } from "./log.ts";

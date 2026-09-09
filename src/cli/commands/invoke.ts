@@ -18,8 +18,8 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
-  // BOTH directories, like dev/start: from the workspace, `placement.workspace` alone equals the dir you
-  // typed, so it cannot tell you which agent actually ran.
+  // BOTH directories, like dev/start: from the workspace, `placement.workspace` alone equals the dir you typed, so it
+  // cannot tell you which agent actually ran.
   console.error(`[fastagent] invoke: ${placement.agentDir} (workspace ${placement.workspace}, ${modelSpec})`);
   await reportAuth(placement.agentDir, modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
@@ -30,7 +30,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
     (line) => console.error(line),
   );
   process.stdout.write("\n");
-  // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the
-  // event loop open after a successful one-shot turn.
+  // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
+  // after a successful one-shot turn.
   process.exit(exitCode);
 }

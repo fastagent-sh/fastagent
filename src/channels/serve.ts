@@ -1,24 +1,6 @@
 /**
- * How a {@link Routes} table becomes a running server: the path rule, dispatch, the totality
- * boundary, and the node:http binding.
- *
- * Shared ground, not a deployment target — every host in `src/deploy/` runs this same process; what
- * differs between them is process, storage, credentials and deployment (core.md §1), none of it
- * here.
- *
- * Dispatch is a Map lookup rather than a router because a deployment mounts a handful of LITERAL
- * paths. A routing library would answer through a pattern language we do not use, and its extra
- * semantics (decode-before-match, HEAD fallback, wildcard precedence) would have to be predicted by
- * every collision check.
- *
- * The types a channel author or an embedder writes stay pure Fetch — SPEC §11 fixes the gateway
- * contract as `(Request) => Response`, and an embedding app may already run its own framework.
- * `overrideGlobalObjects: false` is part of that: the adapter otherwise swaps
- * `globalThis.Request`/`Response` process-wide, which breaks a channel holding a `Response`
- * captured before mount (it fails `instanceof` in {@link totalFetch} and is answered 500).
- *
- * Post-ACK work (a webhook channel's fire-and-forget turns) runs on this event loop and is lost on
- * shutdown — the accepted tradeoff until durable execution (the K axis) exists.
+ * How a {@link Routes} table becomes a running server: the path rule, dispatch, the totality boundary, and the
+ * node:http binding.
  */
 import { serve, getRequestListener } from "@hono/node-server";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -26,40 +8,25 @@ import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
-/** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method).
- *  An empty method (`" /x"`) parses as `""`, which {@link assertRouteKey} refuses — see there. */
+/** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {
   const sp = key.indexOf(" ");
   return sp === -1 ? { path: key } : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1) };
 }
 
-/**
- * A route key is `"METHOD /path"` or `"/path"`, with a literal path.
- *
- * Every rule here exists because breaking it costs SOMEONE ELSE. Two keys naming one route, a route
- * under a mount, a path a URL rewrites (`/a/../x` and `/x` are one route spelled two ways, while
- * the conflict check compares strings) — in each case a channel goes dark and its author did
- * nothing wrong.
- *
- * Mistakes that only cost their own author a debugging session are NOT policed: `:id` and `*` are
- * literal path characters here, so such a key simply never matches, and an unusual method is the
- * same. Refusing those would trade a working capability for a lecture.
- */
+/** A route key is `"METHOD /path"` or `"/path"`, with a literal path. */
 export function assertRouteKey(key: string, describe: (problem: string) => string): void {
   const { method, path } = parseRouteKey(key);
   if (method === "") throw new Error(describe('a leading space is not a method — write "/path" for any method'));
   if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
-  // Asked of `URL` rather than by listing what it rewrites (`?`/`#`, `.`/`..`, `\`, `%2e`). A key it
-  // rewrites is unreachable AND compares as a different string, hiding that `/a/../x` and `/x` are
-  // one route.
+  // Asked of `URL` rather than by listing what it rewrites (`?`/`#`, `.`/`..`, `\`, `%2e`).
   const arrives = new URL(path, "http://x").pathname;
   if (arrives !== path) {
     throw new Error(describe(`is not the path a request would carry — that request arrives as "${arrives}"`));
   }
 }
 
-/** Do these two keys fight over the same request? Equal paths, and a method each answers; a key
- *  with no method answers all of them. */
+/** Do these two keys fight over the same request? */
 export function routeKeysConflict(a: string, b: string): boolean {
   const ka = parseRouteKey(a);
   const kb = parseRouteKey(b);
@@ -67,40 +34,24 @@ export function routeKeysConflict(a: string, b: string): boolean {
   return ka.method === undefined || kb.method === undefined || ka.method === kb.method;
 }
 
-/** A handler owning a path prefix and everything beneath it — the session control plane is the one
- *  user. Kept out of {@link Routes} so a key is always a literal path and collision checks stay
- *  comparisons. */
+/** A handler owning a path prefix and everything beneath it — the session control plane is the one user. */
 export interface PrefixMount {
-  /** Absolute, no trailing slash, and not `/` (`/control`). Owns `/control` and everything below it.
-   *  The root is excluded deliberately: a handler owning every path is that handler, and routing to
-   *  it through here would only add a table nothing can reach. */
+  /** Absolute, no trailing slash, and not `/` (`/control`). */
   prefix: string;
   handler: ChannelHandler;
 }
 
-/** Same status and headers, no content (RFC 9110's HEAD). The discarded body is cancelled, or a
- *  streaming producer keeps running with no reader. Shared with the control plane, which answers
- *  HEAD too. */
+/** Same status and headers, no content (RFC 9110's HEAD). */
 export function withoutBody(res: Response): Response {
   void res.body?.cancel().catch(() => {});
   return new Response(null, { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 
-/** Is `path` inside `prefix`? Segment-wise, so `/controlled` is not inside `/control`. */
 export function pathUnderPrefix(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
-/**
- * Compose a {@link Routes} table and its {@link PrefixMount}s into one handler.
- *
- * Refuses at assembly anything that could not receive a request: a key naming the same route as
- * another (`"/x"` and `"GET /x"`), a route inside a mount, two mounts claiming the same ground. A
- * channel must never go dark unannounced.
- *
- * 404 and 405 stay distinct: a remote client reads 404 as "this serve predates the route" (version
- * skew) rather than as a fault.
- */
+/** Compose a {@link Routes} table and its {@link PrefixMount}s into one handler. */
 export function router(routes: Routes, mounts: readonly PrefixMount[] = []): ChannelHandler {
   for (const [i, mount] of mounts.entries()) {
     assertRouteKey(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
@@ -131,8 +82,8 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
     if (shadowed) {
       throw new Error(`route "${key}" conflicts with "${shadowed}" — one of them would never receive a request`);
     }
-    // Stored normalised: `parseRouteKey` upper-cases the method, so `"get /x"` validates under
-    // `GET` and would otherwise be looked up under a name nothing stores.
+    // Stored normalised: `parseRouteKey` upper-cases the method, so `"get /x"` validates under `GET` and would
+    // otherwise be looked up under a name nothing stores.
     const { method } = parseRouteKey(key);
     byKey.set(method ? `${method} ${path}` : path, handler);
     paths.add(path);
@@ -151,22 +102,15 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
       }
       return paths.has(path) ? text("method not allowed\n", 405) : text("not found\n", 404);
     };
-    // ONE exit, so the HEAD rule holds for every reply — a mount's, a route's, the GET fallback's,
-    // and the 404/405 this router writes itself. RFC 9110: HEAD is GET without the content.
+    // ONE exit, so the HEAD rule holds for every reply — a mount's, a route's, the GET fallback's, and the 404/405
+    // this router writes itself.
     const res = answer();
     if (req.method !== "HEAD") return res;
     return res instanceof Promise ? res.then(withoutBody) : withoutBody(res);
   };
 }
 
-/**
- * The totality boundary every serving path shares. `loadChannels` imports arbitrary author code, so
- * a channel that throws — or forgets to return — must become a logged 500 rather than escape as an
- * unhandled rejection. Both `nodeListener` and `serveNode` route through it.
- *
- * The message stays internal: an adapter's default error page would echo exception text (a stack, a
- * path, a key inside an error string) to whoever made the request. Visibility is the LOG's job.
- */
+/** The totality boundary every serving path shares. */
 function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response> {
   return async (req) => {
     try {
@@ -180,31 +124,16 @@ function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response
   };
 }
 
-/**
- * Has upstream middleware already drained the request body?
- *
- * Node's `req` is one-shot, so a body parser mounted ahead of this route consumes it — a property of
- * the Node/Fetch seam, not of this adapter. What is avoidable is the diagnosis: undici answers
- * `TypeError: Body is unusable`, naming neither the cause nor the fix, and for a webhook channel
- * that reads as "the integration is broken and the platform keeps retrying".
- *
- * Answers only when CERTAIN — a positive `content-length`. `readableEnded` alone is true for any
- * request something upstream merely touched, and an empty chunked body is legal, arrives drained,
- * and is indistinguishable from an eaten one. Guessing there rejects valid requests, making this
- * guard the outage it explains.
- */
+/** Has upstream middleware already drained the request body? */
 function bodyAlreadyRead(req: IncomingMessage): boolean {
   const length = Number(req.headers["content-length"]);
   return Number.isFinite(length) && length > 0 && req.readableEnded;
 }
 
-/** The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting
- *  fastagent on its OWN node:http server can too.
- *
- *  Takes the same {@link ChannelHandler} `serveNode` does, so both doors accept the same thing: a
- *  handler may answer synchronously, and `router()` returns exactly that. Requiring a Promise here
- *  made the most natural mount — `nodeListener(router(routes))`, the whole agent on the app's own
- *  server — a type error. */
+/**
+ * The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting fastagent on its
+ * OWN node:http server can too.
+ */
 export function nodeListener(handler: ChannelHandler): (req: IncomingMessage, res: ServerResponse) => void {
   const listener = getRequestListener(totalFetch(handler), { overrideGlobalObjects: false });
   return (req, res) => {
@@ -222,12 +151,6 @@ export function nodeListener(handler: ChannelHandler): (req: IncomingMessage, re
   };
 }
 
-/**
- * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, let the caller stop
- * accepting or force-close active connections — no logging/signals/exit (the CLI owns those).
- * `listening` resolves with the bound port (useful for port 0) or rejects on a bind error.
- * `host` is the bind address; unset means all interfaces (what containers need).
- */
 export function serveNode(
   handler: ChannelHandler,
   options: { port: number; host?: string },
@@ -238,9 +161,7 @@ export function serveNode(
     onListening = resolve;
     onBindError = reject;
   });
-  // serve() types its return as the union of every server it CAN build (incl. http2). We never pass
-  // a createServer/http2 option, so it is always node:http's Server — the one carrying
-  // closeAllConnections, which the caller-owned force-close depends on.
+  // serve() types its return as the union of every server it CAN build (incl. http2).
   const server = serve(
     {
       fetch: totalFetch(handler),
@@ -249,11 +170,8 @@ export function serveNode(
       ...(options.host !== undefined ? { hostname: options.host } : {}),
     },
     (info) => {
-      // Detach before resolving: this listener answers the BIND, and leaving it attached would let
-      // a later runtime error call reject() on a settled promise — swallowed, with nothing raised
-      // anywhere. Detached, an error after bind is an unhandled 'error' event, which is loud.
-      // (Not reachable from a test without forging an event on a server this function does not
-      // expose; the bind-failure half below is covered.)
+      // Detach before resolving: this listener answers the BIND, and leaving it attached would let a later runtime
+      // error call reject() on a settled promise.
       server.off("error", onBindError);
       onListening(info.port);
     },

@@ -1,15 +1,4 @@
-/**
- * A minimal, DETERMINISTIC single-file ZIP writer — just enough to package the forwarder Lambda.
- *
- * WHY NOT A DEPENDENCY: this runs in the deploy path of a tool whose whole promise is "no build
- * step"; pulling an archiver in for ~40 lines of well-specified format would be the wrong trade.
- * WHY NOT `zip(1)`: it is absent on plenty of machines (and on Windows), and its output embeds the
- * current time — the forwarder's S3 key is CONTENT-HASHED, so identical source must produce
- * identical bytes or every deploy would look like a code change to CloudFormation.
- *
- * STORE (no compression) on purpose: the payload is a few KB of JavaScript, and the format's stored
- * form is trivially verifiable. Fixed 1980-01-01 timestamps keep the output byte-stable.
- */
+/** A minimal, DETERMINISTIC single-file ZIP writer — just enough to package the forwarder Lambda. */
 import { Buffer } from "node:buffer";
 import { crc32 } from "node:zlib";
 
@@ -17,9 +6,7 @@ import { crc32 } from "node:zlib";
 const DOS_DATE = 0x0021;
 const DOS_TIME = 0x0000;
 
-/**
- * Build a ZIP archive containing exactly one stored entry. Byte-identical for identical inputs.
- */
+/** Build a ZIP archive containing exactly one stored entry. */
 export function zipSingleFile(name: string, content: Buffer): Buffer {
   const nameBytes = Buffer.from(name, "utf8");
   const sum = crc32(content);
@@ -53,8 +40,7 @@ export function zipSingleFile(name: string, content: Buffer): Buffer {
   centralHeader.writeUInt16LE(0, 32); // file comment length
   centralHeader.writeUInt16LE(0, 34); // disk number start
   centralHeader.writeUInt16LE(0, 36); // internal attributes
-  // External attributes: regular file, rw-r--r-- in the high 16 bits. `>>> 0` because JS bitwise
-  // operators are 32-bit SIGNED — the shifted value is negative without it.
+  // External attributes: regular file, rw-r--r-- in the high 16 bits.
   centralHeader.writeUInt32LE((0o100644 << 16) >>> 0, 38);
   centralHeader.writeUInt32LE(0, 42); // local header offset (single entry: always 0)
 

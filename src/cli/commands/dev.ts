@@ -1,7 +1,6 @@
 /**
- * `fastagent dev`: a SUPERVISOR that spawns a worker (this command with FASTAGENT_DEV_WORKER set) to
- * assemble + serve, restarting it on agent edits. A fresh process per reload means what is served
- * is always the latest code, including modules a tool/config imports.
+ * `fastagent dev`: a SUPERVISOR that spawns a worker (this command with FASTAGENT_DEV_WORKER set) to assemble + serve,
+ * restarting it on agent edits.
  */
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
@@ -28,17 +27,14 @@ export interface DevOptions {
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
-  // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both); a spawned
-  // worker inherits the choice through FASTAGENT_MODEL and must not prompt even when the pick was
-  // cancelled.
+  // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
   const placement = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
     await serveOnce(placement, opts);
     return;
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
-  // The --bind/--tunnel conflict is decidable from flags alone: refuse it HERE, before a worker and a
-  // tunnel exist. The worker repeats the check because `http.host` can supply the address instead.
+  // The --bind/--tunnel conflict is decidable from flags alone: refuse it HERE, before a worker and a tunnel exist.
   assertTunnelBindable(parseBind(opts.bind), opts.tunnel ?? false, "flag");
   await runDevSupervisor(placement, { tunnel: opts.tunnel ?? false });
 }
@@ -56,11 +52,8 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
   await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
   const host = resolveBindHost(bindFlag, a.config.http?.host, tunnel);
-  // The SAME assembly an embedder gets from `createAgentService` — channels, control plane,
-  // schedules, long connections. `dev` opens the directory itself only because its startup report
-  // prints the opened values before anything mounts. The turn trace (tool calls + reply) logs at
-  // debug level: shown here, gated out in start (level info), keeping end-user content out of
-  // production logs.
+  // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
+  // connections.
   const service = await mountAgentService(a, cliMountOptions(logAgentLoop)).catch(failStartup);
   serveService(
     service,

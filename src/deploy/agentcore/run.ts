@@ -1,19 +1,4 @@
-/**
- * `fastagent deploy agentcore --run` — drive the AWS CLI + Docker to completion. The middle of the
- * deploy the plain runbook hands to the operator; `--run` executes it so a coding agent runs ONE
- * command. Idempotent (ECR check-then-act; `cloudformation deploy` converges the stack) and
- * resumable: it STOPS at a human gate with one actionable line and a non-zero exit.
- *
- * TWO runners, one seam ({@link CliRunner}): `aws` (identity, ECR, CloudFormation) and `docker`
- * (buildx). AgentCore is the ONE host whose image builds on the operator's machine — the platform
- * requires linux/arm64 in the account's ECR and has no remote builder — so a missing Docker/buildx
- * is a first-class gate, not an incidental failure.
- *
- * Secrets ride CloudFormation NoEcho parameters. `--parameter-overrides` on argv would put the
- * values in the process listing (the same reason Fly imports secrets over stdin), so they go through
- * a caller-provided temp parameters file (`file://…`, mode 0600, deleted by the caller) — the write
- * is injected to keep this module pure and the security-sensitive wiring testable.
- */
+/** `fastagent deploy agentcore --run` — drive the AWS CLI + Docker to completion. */
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
@@ -36,47 +21,35 @@ export interface AgentcoreRunPlan {
   name: string;
   /** Template path relative to the run cwd (kit layout: `agent/agentcore.template.yaml`). */
   templatePath: string;
-  /** Dockerfile path for `-f`. Always set: the artifacts live under the agent prefix, and the build
-   *  context is the workspace above it, so the default context Dockerfile is never the right one. */
+  /** Dockerfile path for `-f`. */
   dockerfilePath: string;
-  /** Image tag for this deploy — the CALLER mints it unique (a timestamp): CloudFormation only rolls
-   *  the runtime when the ImageUri value changes, so a reused tag would deploy nothing. */
+  /** Image tag for this deploy — the CALLER mints it unique (a timestamp). */
   tag: string;
-  /** AWS region from the caller's environment (AWS_REGION/AWS_DEFAULT_REGION), else resolved via
-   *  `aws configure get region` — an unset region is a gate (the ECR registry hostname needs it). */
+  /**
+   * AWS region from the caller's environment (AWS_REGION/AWS_DEFAULT_REGION), else resolved via `aws configure get
+   * region`.
+   */
   region?: string;
-  /** Secret env-var name → value (model key or FASTAGENT_AUTH_SEED + channel secrets). Mapped to the
-   *  template's parameter names via {@link cfnParamName}; delivered via the params file, never argv. */
+  /** Secret env-var name → value (model key or FASTAGENT_AUTH_SEED + channel secrets). */
   secrets: Record<string, string>;
   /** Required secret names with NO local value — gated before any side effect. */
   missingSecrets: string[];
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
-  /** What the stack contains — the plan's own reading, so this driver cannot disagree with the
-   *  template about whether a forwarder (and its artifact bucket parameters) exists. */
+  /**
+   * What the stack contains — the plan's own reading, so this driver cannot disagree with the template about whether a
+   * forwarder (and its artifact bucket parameters) exists.
+   */
   topology: AgentcoreTopology;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
-/** Budget for image pull, storage initialization and channel construction — this one envelope is
- *  where a first boot seeds the whole workspace (the image's `node_modules` included) onto
- *  `/mnt/data`, the same copy docker's health probe budgets 180s for, plus the pull before it. */
+/** Budget for image pull, storage initialization and channel construction. */
 const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
 
-/**
- * Drive the forwarder's reserved probe path until it answers, and read the runtime's
- * STRUCTURED verdict. The path answers on every forwarder topology (a schedule-only URL refuses
- * ordinary public traffic, so a plain `GET /health` would 404 there), and the verdict rides a
- * transport-200 JSON body `{ ok, error? }` — the ordinary webhook relay folds a non-200 transport
- * into an opaque 502, which would strip the very diagnostics this probe exists to carry.
- *
- * Outcome policy: `ok:true` verifies the deploy; `ok:false` gates IMMEDIATELY with the runtime's own
- * error text (construction rejections are cached per session, so polling cannot change the answer);
- * anything else (unroutable URL, forwarder 4xx/5xx, malformed body) is retried to the deadline —
- * that budget's job is absorbing cold-start provisioning — and then gates with the last answer seen.
- */
+/** Drive the forwarder's reserved probe path until it answers, and read the runtime's STRUCTURED verdict. */
 async function probeRuntime(
   probeUrl: string,
   auth: string,
@@ -100,7 +73,7 @@ async function probeRuntime(
         try {
           verdict = JSON.parse(bodyText) as { ok?: unknown; error?: unknown };
         } catch {
-          /* malformed — fall through to retry with it as the last answer */
+          // malformed — fall through to retry with it as the last answer
         }
         if (verdict?.ok === true) return { ok: true };
         if (verdict?.ok === false) {
@@ -111,7 +84,7 @@ async function probeRuntime(
       const firstLine = bodyText.trim().split("\n")[0] ?? "";
       last = `${res.status}${firstLine ? ` ${firstLine}` : ""}`;
     } catch {
-      /* not routable yet (Function URL DNS, cold start) — keep polling until the deadline */
+      // not routable yet (Function URL DNS, cold start) — keep polling until the deadline
     }
     if (Date.now() >= deadline) {
       return {
@@ -140,10 +113,7 @@ export function parseStackOutputs(stdout: string): Record<string, string> {
   }
 }
 
-/** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. The auth seed
- *  is CHUNKED across FastagentAuthSeed(2…) — AgentCore env values cap at 2048 chars and a real OAuth
- *  auth.json's base64 exceeds it; `start` reassembles (collectAuthSeed). Every chunk is emitted on
- *  every deploy, including empty trailing chunks, so CloudFormation cannot retain stale values. */
+/** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
 export function paramsFileContent(
   imageUri: string,
   secrets: Record<string, string>,
@@ -162,11 +132,7 @@ export function paramsFileContent(
   return `${JSON.stringify(params)}\n`;
 }
 
-/**
- * Run the deploy through `aws` + `docker`. `log` reports progress; the injected registrars perform
- * post-deploy webhook steps from the builder machine against the forwarder's Function URL. Every
- * gate is fail-visible; `writeSecretFile` is the caller's 0600-temp-file seam (see the header).
- */
+/** Run the deploy through `aws` + `docker`. */
 export async function deployAgentcoreRun(
   plan: AgentcoreRunPlan,
   aws: CliRunner,
@@ -182,8 +148,7 @@ export async function deployAgentcoreRun(
   const stack = `fastagent-${plan.name}`;
   const repo = `fastagent/${plan.name}`;
 
-  // 1. Identity + region — the two facts everything downstream (registry hostname, stack region)
-  //    hangs on. `sts get-caller-identity` succeeds with any working credential source.
+  // 1.
   const identity = await aws(["sts", "get-caller-identity", "--output", "json"], { capture: true });
   if (identity.code === 127) {
     return gate("aws CLI not found — install AWS CLI v2: https://docs.aws.amazon.com/cli/, then re-run");
@@ -208,10 +173,7 @@ export async function deployAgentcoreRun(
     return gate("no AWS region configured — set AWS_REGION (or `aws configure set region <region>`), then re-run");
   }
 
-  // 2. Docker + buildx — this host builds LOCALLY (linux/arm64 into the account's ECR; AgentCore has
-  //    no remote builder), so their absence is a first-class gate with the install pointer. ANY
-  //    non-zero gates BEFORE side effects: `docker version` with the daemon down exits non-127, and
-  //    letting it through would create the ECR repo and then fail the build with a generic error.
+  // 2.
   const dockerVersion = await docker(["version"], { capture: true });
   if (dockerVersion.code === 127) {
     return gate("docker not found — install Docker (https://docs.docker.com/get-docker/), then re-run");
@@ -231,9 +193,7 @@ export async function deployAgentcoreRun(
       `no local value for: ${plan.missingSecrets.join(", ")} — set them in .env (or the environment) and re-run`,
     );
   }
-  // 3b. AgentCore env values cap at 2048 chars. The auth seed is chunked (paramsFileContent) up to
-  //     its ceiling; any OTHER oversized value has no chunk lane — gate it instead of a cryptic
-  //     CloudFormation "maxLength" failure mid-deploy.
+  // 3b.
   const seed = plan.secrets.FASTAGENT_AUTH_SEED;
   if (seed && seed.length > AUTH_SEED_CHUNK_SIZE * AUTH_SEED_MAX_CHUNKS) {
     return gate(
@@ -247,9 +207,7 @@ export async function deployAgentcoreRun(
     }
   }
 
-  // 4. ECR repository — check-then-act. A FAILED describe that isn't "not found" would misreport the
-  //    create, but ECR's not-found also exits non-zero — so try describe, and on failure attempt the
-  //    create; a create failing for a REAL reason (permissions) still gates with its own message.
+  // 4.
   const registry = `${account}.dkr.ecr.${region}.amazonaws.com`;
   const image = `${registry}/${repo}:${plan.tag}`;
   const described = await aws(["ecr", "describe-repositories", "--repository-names", repo], { capture: true });
@@ -292,9 +250,8 @@ export async function deployAgentcoreRun(
     ) {
       return gate(`could not block public access on ${bucket}; fix and re-run`);
     }
-    // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so
-    // identical source must map to an identical key (hence the deterministic zip) and changed source
-    // to a new one.
+    // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so identical source
+    // must map to an identical key (hence the deterministic zip) and changed source to a new one.
     const zip = zipSingleFile("index.js", Buffer.from(forwarderSource()));
     const key = `forwarder/${createHash("sha256").update(zip).digest("hex").slice(0, 16)}.zip`;
     const zipPath = await writeForwarderZip(zip);
@@ -322,12 +279,7 @@ export async function deployAgentcoreRun(
     return gate("`docker buildx build` failed — see the output above; fix and re-run");
   }
 
-  // 7. Deploy the stack. Secret values ride the temp params file (file://), never argv.
-  //    --no-fail-on-empty-changeset: a re-run whose only change already applied must not gate.
-  //    Self-heal the one un-resumable state first: a FAILED first create leaves the stack in
-  //    ROLLBACK_COMPLETE, which CloudFormation refuses to update — without this, "fix and re-run"
-  //    (our own gate advice) would dead-end on a different error. Nothing real is lost by deleting:
-  //    a ROLLBACK_COMPLETE stack holds no live resources.
+  // 7.
   const status = await aws(
     [
       "cloudformation",
@@ -396,13 +348,10 @@ export async function deployAgentcoreRun(
     ];
     const stopped = await aws(stopCommand, { capture: true, captureStderr: true });
     if (stopped.code !== 0) {
-      // Classify, don't guess: "no session yet" (first deploy — expected, quiet note) vs a REAL stop
-      // failure (permissions/CLI/network), which must stop verification against the previous image.
+      // Classify, don't guess: "no session yet" (first deploy — expected, quiet note) vs a REAL stop failure
+      // (permissions/CLI/network), which must stop verification against the previous image.
       const stderr = stopped.stderr ?? "";
-      // The message follows the ANSWER (no session to stop vs a real failure); the gate below follows
-      // the TOPOLOGY, since only a forwarder deployment has a probe whose verdict a stale session
-      // could forge. Without one a failed stop costs immediacy alone — the platform's reclaim
-      // converges — and gating an applied deploy over it would be a failure a re-run reproduces.
+      // The message follows the ANSWER (no session to stop vs a real failure).
       const noSession = /ResourceNotFound|not\s*found|does not exist/i.test(stderr);
       if (noSession || !plan.topology.forwarder) {
         log(
@@ -411,10 +360,8 @@ export async function deployAgentcoreRun(
             : `note: could not stop the ingress session (${stderr.trim().split("\n")[0]}) — the previous image may keep serving until it is reclaimed`,
         );
       } else {
-        // A GATE, not a warning: the probe below reaches the SAME fixed session id, so a session
-        // still running the previous image would answer it and the deploy would claim to have
-        // verified a serving path it never touched. Unable to guarantee the session is fresh =
-        // unable to verify = stop.
+        // A GATE, not a warning: the probe below reaches the SAME fixed session id, so a session still running the
+        // previous image would answer it and the deploy would claim to have verified a serving path it never touched.
         const firstLine = stderr.trim().split("\n")[0];
         return gate(
           `could not stop the ingress session — it may still be serving the PREVIOUS image, so the ` +
@@ -425,11 +372,7 @@ export async function deployAgentcoreRun(
     }
   }
 
-  // 8c. Every forwarder topology MUST carry the ForwarderUrl output — schedule-only and
-  //     selfSchedule-only deployments included, since the probe below is their only construction
-  //     check (there is no boot-time failStartup on this host). A missing output means an edited
-  //     template; skipping the probe silently would let such a deploy report success unverified.
-  //     Only a pure-invoke deployment (no forwarder) legitimately has no URL and nothing to probe.
+  // 8c.
   if (plan.topology.forwarder && !url) {
     return gate(
       "this deployment needs the forwarder but the stack has no ForwarderUrl output — regenerate the " +
@@ -451,10 +394,7 @@ export async function deployAgentcoreRun(
     log("runtime verified (workspace ready, channels constructed)");
   }
 
-  // 9. Post-deploy webhook registration — same registrar seam as every host, pointed at the
-  //    forwarder's Function URL. Gate policy is the shared registration-gate kernel.
-  // No long-connection channels reach here: `deploy.ts` gates them before the driver runs (AgentCore
-  // has no resident process to hold a connection), so the deploy's channels are all webhook ones.
+  // 9.
   const registrationGateMsg = url
     ? await registerWebhooks({
         baseUrl: url,

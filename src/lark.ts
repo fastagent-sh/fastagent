@@ -1,5 +1,4 @@
-/** `@fastagent-sh/fastagent/lark` — the Lark-international compatibility surface over the canonical
- *  Feishu engine. Feishu tenants use `@fastagent-sh/fastagent/feishu`. */
+/** `@fastagent-sh/fastagent/lark` — the Lark-international compatibility surface over the canonical Feishu engine. */
 export {
   larkChannel,
   larkWebSocketChannel,

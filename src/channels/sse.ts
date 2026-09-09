@@ -1,4 +1,4 @@
-/** Shared SSE response lifecycle for invoke and session observation. Fetch-only, with no Node dependencies. */
+/** Shared SSE response lifecycle for invoke and session observation. */
 
 /** The remote client's idle watchdog allows three missed heartbeats. */
 export const SSE_HEARTBEAT_MS = 30_000;

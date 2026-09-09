@@ -105,9 +105,7 @@ export function buildSlackManifest(input: {
       org_deploy_enabled: false,
       socket_mode_enabled: false,
       // Off, and Slack makes the alternative permanent: an app with rotation on can never turn it off
-      // (`cannot_disable_once_enabled`, verified against the API). Rotation would ship the refresh token
-      // and the client secret to every host beside the access token — the same blast radius as one
-      // long-lived bot token, plus a 12-hour refresh lineage to keep single and durable.
+      // (`cannot_disable_once_enabled`, verified against the API).
       token_rotation_enabled: false,
     },
   };

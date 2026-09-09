@@ -1,9 +1,4 @@
-/**
- * `fastagent deploy docker` — the local-Docker plan. The application image stays ingress-neutral:
- * this target generates only the shared Dockerfile plus a small Compose service for the FastAgent
- * process, its loopback port, exact environment-variable names, and one persistent state volume.
- * `--tunnel` can add an ephemeral Cloudflare Quick Tunnel service; durable ingress remains operator-owned.
- */
+/** `fastagent deploy docker` — the local-Docker plan. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
@@ -12,13 +7,13 @@ import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 export interface DockerPlanInput extends ContainerInput {
   /** Stable Compose project name, sanitized by {@link toDockerProjectName}. */
   projectName: string;
-  /** Container + default host port. The host binding is loopback-only by default. */
+  /** Container + default host port. */
   port: number;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /** Every declared channel and its ingress — the source of the secret list and the ingress note. */
   channels: readonly DeclaredChannel[];
-  /** Generate an optional Cloudflare Quick Tunnel service in Compose. Generation only; `--run` starts it. */
+  /** Generate an optional Cloudflare Quick Tunnel service in Compose. */
   tunnel: boolean;
   /** Extra environment-variable names declared in config.deploy.secrets. */
   extraSecrets?: string[];
@@ -68,12 +63,11 @@ function composeInterpolation(name: string): string {
 
 function composeYaml(input: DockerPlanInput): string {
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
-  // Always leave the auth-seed seam in the committed topology. `--run` uses it for OAuth/stored auth;
-  // it is empty otherwise. Values never land in this file — Compose interpolates them at invocation.
+  // Always leave the auth-seed seam in the committed topology.
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
-  // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the
-  // WORKSPACE, so it climbs back out of the one-level prefix deploy requires.
+  // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the WORKSPACE, so it
+  // climbs back out of the one-level prefix deploy requires.
   const context = "..";
   const dockerfile = `${input.agentPrefix}Dockerfile`;
   const tunnelService = input.tunnel

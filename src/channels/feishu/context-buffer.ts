@@ -1,11 +1,6 @@
-/**
- * Feishu/Lark's half of the shared context buffer (mechanics + consume protocol:
- * ../kit/context-buffer.ts): the entry shape, its fold-line rendering, place-key derivation, and
- * buffered-resource selection. Entries are bucketed by conversation place (main chat, or one
- * concrete thread root) and folded into the next answered turn in that place.
- */
+/** Feishu/Lark's half of the shared context buffer (mechanics + consume protocol: ../kit/context-buffer.ts). */
 import {
-  BUFFER_ATTACH_MAX,
+  capBufferedRefs,
   BUFFER_LINE_MAX_CHARS,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
@@ -40,25 +35,14 @@ function bufferLine(entry: FeishuBufferEntry): string {
   return `${entry.sender} (${meta}): ${entry.body}`;
 }
 
-/**
- * The place a message belongs to: the main chat, or a thread within it. Keyed by `thread_id`, the
- * platform's own identity for a side conversation — NOT `root_id`, which tracks the reply chain and
- * can differ between messages of one thread (which would split a thread's context across buckets).
- * A quoted reply outside a thread carries a root but is main-chat discussion, so it buckets there.
- *
- * Its own namespace, deliberately: this names a BUCKET of undelivered text, while `parse.ts`'s
- * `placeKey` names a SESSION. Nothing here claims anything about that session — unlike thread
- * participation, which asserts "the agent answered into this memory" and is therefore keyed by the
- * session itself. Re-keying either one leaves the other correct, and converging them now would strand
- * live buckets for no gain (Slack keeps its own shape for the same reason).
- */
+/** The place a message belongs to: the main chat, or a thread within it. */
 export function feishuBufferPlaceKey(
   conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "threadId">,
 ): string {
   return conversation.threadId ? `${conversation.chatId}:thread:${conversation.threadId}` : conversation.chatId;
 }
 
-/** One-line, bounded background text. Resource-only messages already carry a visible decoder marker. */
+/** One-line, bounded background text. */
 export function feishuBufferText(text: string): string {
   return truncateCodePointPrefix(text.replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
@@ -67,10 +51,7 @@ function resourceIdentity(resource: FeishuBufferedResource): string {
   return `${resource.messageId}\u0000${resource.key}`;
 }
 
-/**
- * Select the most recent background resources, excluding resources already primary on this turn. A
- * resource is message-scoped in Feishu/Lark, so identity is `message_id + key`, never the bare key.
- */
+/** Select the most recent background resources, excluding resources already primary on this turn. */
 export function collectFeishuBufferedAttachments(
   consumed: FeishuBufferEntry[],
   primary: { files: FeishuBufferedResource[]; images: FeishuBufferedResource[] },
@@ -92,13 +73,9 @@ export function collectFeishuBufferedAttachments(
     }
     return out;
   };
-  const files = refs((entry) => entry.files, primary.files);
-  const images = refs((entry) => entry.images, primary.images);
-  return {
-    files: files.slice(-BUFFER_ATTACH_MAX),
-    images: images.slice(-BUFFER_ATTACH_MAX),
-    skipped: Math.max(0, files.length - BUFFER_ATTACH_MAX) + Math.max(0, images.length - BUFFER_ATTACH_MAX),
-  };
+  const files = capBufferedRefs(refs((entry) => entry.files, primary.files));
+  const images = capBufferedRefs(refs((entry) => entry.images, primary.images));
+  return { files: files.kept, images: images.kept, skipped: files.skipped + images.skipped };
 }
 
 export type FeishuContextBuffer = ContextBuffer<FeishuBufferEntry>;

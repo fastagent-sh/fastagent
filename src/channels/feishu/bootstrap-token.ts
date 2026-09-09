@@ -1,16 +1,6 @@
 /**
- * Verification-Token bootstrap — the token has NO read API (field-tested 2026-07: the v6 app detail
- * never returns `encryption`, and the v7 config route only supports PATCH). The platform's only
- * programmatic delivery is the `url_verification` challenge it POSTs to the request URL while an
- * event-subscription PATCH is verified — the challenge body carries `token`, the app's Verification
- * Token. So `add feishu`'s create flow finishes the job by: standing up a throwaway local responder,
- * exposing it on an ephemeral quick tunnel, PATCHing the app's event subscription at it, capturing
- * the token from the challenge, and tearing everything down. `dev --tunnel` / `deploy … --run`
- * re-PATCH the request URL onto the real server later (the token is app-level and survives that).
- *
- * Security: the serving path keeps its strict non-empty-token requirement — no bootstrap mode there.
- * The throwaway URL is random (unguessable), lives for seconds, and only the FIRST challenge is
- * accepted, immediately after our own credential-authenticated PATCH.
+ * Verification-Token bootstrap — the token has NO read API (field-tested 2026-07: the v6 app detail never returns
+ * `encryption`, and the v7 config route only supports PATCH).
  */
 import { createServer } from "node:http";
 import type { FeishuCloudKind } from "./cloud.ts";
@@ -29,30 +19,23 @@ export interface FeishuBootstrapTokenOptions {
   startTunnel: (port: number) => Promise<{ url: string; close(): void } | undefined>;
   /** Budget for the whole capture (the challenge normally lands within the PATCH round-trip). */
   timeoutMs?: number;
-  /** PATCH attempts × delay — the PATCH is the one and only readiness probe (see below). */
+  /** PATCH attempts × delay — the PATCH is the one and only readiness probe. */
   patchAttempts?: number;
   patchRetryMs?: number;
-  /** Retry classifier. Default: retry every PATCH failure (Feishu edge warm-up compatibility).
-   * Lark onboarding rejects a definitive config-route 404 immediately so it can fall back by hand. */
   shouldRetryPatch?: (error: unknown) => boolean;
   /** Progress hooks: production prints the assigned URL/retries; tests keep transport IO injected. */
   onTunnelReady?: (url: string) => void;
   onPatchRetry?: (info: { error: unknown; attempt: number; attempts: number; retryMs: number }) => void;
 }
 
-/**
- * Run the bootstrap (module header). Resolves with the app's Verification Token; rejects with a
- * plain, actionable Error (tunnel unavailable, PATCH refused, challenge never arrived) — the caller
- * degrades to the manual console instruction.
- */
 export async function bootstrapFeishuVerificationToken(options: FeishuBootstrapTokenOptions): Promise<string> {
   let capturedToken: ((token: string) => void) | undefined;
   const token = new Promise<string>((resolve) => {
     capturedToken = resolve;
   });
 
-  // The throwaway responder: answers /health (diagnostics) and the url_verification challenge
-  // (echo `challenge` back), capturing `token` from the FIRST challenge only.
+  // The throwaway responder: answers /health (diagnostics) and the url_verification challenge (echo `challenge`
+  // back), capturing `token` from the FIRST challenge only.
   const server = createServer((req, res) => {
     if (req.method === "GET") {
       res.end("ok");
@@ -73,7 +56,7 @@ export async function bootstrapFeishuVerificationToken(options: FeishuBootstrapT
           return;
         }
       } catch {
-        /* not the challenge — fall through to the empty ACK */
+        // not the challenge — fall through to the empty ACK
       }
       res.end("{}");
     });
@@ -86,9 +69,8 @@ export async function bootstrapFeishuVerificationToken(options: FeishuBootstrapT
   try {
     if (!tunnel) throw new Error("no tunnel came up (is cloudflared installed?)");
     options.onTunnelReady?.(tunnel.url);
-    // Do NOT health-poll the edge here: "can WE reach it" says nothing about platform→edge, the path
-    // the challenge uses (field-tested: local negative-DNS caching failed while that path worked).
-    // PATCH immediately; it is the real probe because success requires the challenge round-trip.
+    // Do NOT health-poll the edge here: "can WE reach it" says nothing about platform→edge, the path the challenge
+    // uses (field-tested: local negative-DNS caching failed while that path worked).
     const attempts = options.patchAttempts ?? 8;
     for (let attempt = 1; ; attempt++) {
       try {

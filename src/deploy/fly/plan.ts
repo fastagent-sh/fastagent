@@ -1,50 +1,32 @@
-/**
- * `fastagent deploy fly` — the Fly.io deploy PLAN, computed from the resolved definition. Pure: facts
- * in, artifact contents + an ordered runbook out; the CLI (deploy side effects live there) writes the
- * files and prints the runbook.
- *
- * fastagent owns the two ends only it can know — generate definition-aware artifacts (state root →
- * volume, autostop tuned to the turn model, the exact secret list) and the post-deploy webhook step —
- * and GUIDES the middle (flyctl app/volume/secrets/deploy) as a precise, values-resolved runbook. By
- * default a coding agent (or you) runs flyctl from that runbook; `deploy fly --run` drives it from the
- * CLI instead. This module stays pure either way — it produces the plan, never runs flyctl. The runbook
- * is a FIRST-deploy sequence: `apps`/`volumes create` are one-time (marked so — re-running would make a
- * second volume, splitting the persistent workspace). Each definition release needs a fresh manifest.
- *
- * autostop = "suspend": the machine snapshots and suspends when idle (Fly Proxy sees inbound load 0),
- * resumes on the next webhook in ~hundreds of ms. A long turn interrupted by an idle-suspend whose
- * snapshot is discarded replays on the next start (the Telegram L1 turn store) — at-least-once, the
- * documented floor. State on the /data volume survives stop/suspend on the same machine.
- */
+/** `fastagent deploy fly` — the Fly.io deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
-  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
-  // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
+  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
   /** Fly app name — globally unique, lowercase; the CLI sanitizes it from the dir basename. */
   appName: string;
   /** The port the app listens on (config.http.port ?? 8787); fly.toml routes to it. */
   port: number;
-  /**
-   * What satisfies model auth locally ({@link probeAuthSource}): an env-var name (`OPENAI_API_KEY`),
-   * `"OAuth"`/`"stored credential"` (a local login the server can't use), or undefined (unconfigured).
-   */
+  /** What satisfies model auth locally ({@link probeAuthSource}). */
   modelAuth: string | undefined;
-  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
-   *  whether a machine must stay up for an outbound connection. */
+  /**
+   * Every declared channel and its ingress — the source of the secret list, the webhook steps, and whether a machine
+   * must stay up for an outbound connection.
+   */
   channels: readonly DeclaredChannel[];
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
-  /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). CLI `--stop`. */
+  /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). */
   autostop: "suspend" | "stop";
-  /** Allow scaling to zero when idle (default true → `min_machines_running=0`). CLI `--no-scale-to-zero`
-   *  forces one machine up; a github channel forces it too (fire-and-forget turns have no replay). */
+  /** Allow scaling to zero when idle (default true → `min_machines_running=0`). */
   scaleToZero: boolean;
-  /** Time triggers present (schedules/ or selfSchedule) — forces one machine up: cron/wake has no
-   *  external wake-up, so a scaled-to-zero box would sleep through them. */
+  /**
+   * Time triggers present (schedules/ or selfSchedule) — forces one machine up: cron/wake has no external wake-up, so
+   * a scaled-to-zero box would sleep through them.
+   */
   hasTimeTriggers: boolean;
 }
 
@@ -64,11 +46,8 @@ function flyToml(
   hasTimeTriggers: boolean,
   hasLongConnectionChannel: boolean,
 ): string {
-  // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, OR the
-  // operator opted out of scale-to-zero. GitHub's is a SAFETY default — its fire-and-forget turns have no
-  // replay, so scaling to zero could drop an in-flight review. Time triggers (schedules/wake) have no
-  // external wake-up at all — a scaled-to-zero box sleeps through the cron instant. Reason-tagged so the
-  // comment is honest.
+  // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, OR the operator
+  // opted out of scale-to-zero.
   const min = hasGithub
     ? `  min_machines_running = 1         # github turns have no replay — don't scale to zero (an in-flight review would be lost)`
     : hasTimeTriggers
@@ -110,11 +89,9 @@ ${min}
 `;
 }
 
-/** First line of a generated `fly.toml`, and the predicate that reads it back. Ownership is what decides
- *  whether `--force` may reset the file (app/region/vm state a user tuned by hand is theirs). */
+/** First line of a generated `fly.toml`, and the predicate that reads it back. */
 const GENERATED_FLY_TOML_MARKER = "# Generated by `fastagent deploy fly`";
 
-/** Did fastagent generate this `fly.toml`? */
 export function isGeneratedFlyToml(content: string): boolean {
   return content.startsWith(GENERATED_FLY_TOML_MARKER);
 }
@@ -122,9 +99,7 @@ export function isGeneratedFlyToml(content: string): boolean {
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const { appName, port, modelAuth, channels } = input;
-  // Artifacts sit under the agent prefix, so a NESTED agent never touches the workspace's own deploy
-  // files; the runbook passes explicit -c/--dockerfile flags either way (unambiguous across flyctl
-  // versions — no reliance on config-relative path resolution).
+  // Artifacts sit under the agent prefix, so a NESTED agent never touches the workspace's own deploy files.
   const flyTomlPath = `${input.agentPrefix}fly.toml`;
   const artifacts: Artifact[] = [
     {
@@ -142,10 +117,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     ...containerArtifacts(input),
   ];
 
-  // The exact secret list the deployed machine needs, computed from the definition (host-neutral): the
-  // model key (when local auth is an env key) + every discovered channel's secrets. Names + hints as
-  // COMMENT lines (a `#` inside a `\`-continued command would break the shell), then one flat, executable
-  // `fly secrets set` the coding agent fills — `<value>` placeholders, never inline comments.
+  // The exact secret list the deployed machine needs, computed from the definition (host-neutral).
   const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
@@ -205,9 +177,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
   );
 
-  // Model-auth guidance: an env key becomes a secret above. Otherwise the plan can't read the local
-  // credential's VALUE to set as a secret — true for OAuth AND a stored API key (both are
-  // `AuthResult.source` non-env labels), so the wording doesn't prejudge whether it's migratable.
+  // Model-auth guidance: an env key becomes a secret above.
   if (!isEnvKey(modelAuth)) {
     runbook.push(
       ``,
@@ -218,14 +188,12 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     );
   }
 
-  // The fastagent-only post-step: point each channel at the live URL. WHICH channels and in what words
-  // is the shared channel-ingress kernel's answer; Fly's contribution is that its URL is deterministic.
+  // The fastagent-only post-step: point each channel at the live URL.
   const steps = webhookRunbook(`https://${appName}.fly.dev`, channels);
   const post = steps.length > 0 ? [`# After deploy:`, ...steps] : [];
   if (post.length > 0) runbook.push(``, ...post);
 
-  // Single-machine tier: state lives on ONE volume tied to ONE machine. Scaling to multiple machines
-  // splits state (each gets its own volume) — that needs a shared/external backend, not this recipe.
+  // Single-machine tier: state lives on ONE volume tied to ONE machine.
   runbook.push(
     ``,
     `# Keep this a SINGLE machine: the /data volume (and all state on it) is tied to one machine.`,
@@ -235,23 +203,17 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   return { artifacts, runbook };
 }
 
-/**
- * The `app` name from an existing fly.toml's `app = "…"` line, or undefined if absent — the KEEP-mode
- * single source (a user who renamed the app is not overridden by the basename guess). Accepts TOML's
- * double OR single quotes; anything else (or no `app`) is undefined → the caller falls back to basename.
- */
+/** The `app` name from an existing fly.toml's `app = "…"` line, or undefined if absent. */
 export function parseFlyAppName(toml: string): string | undefined {
   return toml.match(/^\s*app\s*=\s*["']([^"']+)["']/m)?.[1];
 }
 
-/** The `primary_region` from a fly.toml, or undefined — `--run` passes it to `fly volumes create` so the
- *  volume lands in the machine's region (fly.toml is the single source; see {@link parseFlyAppName}). */
+/** The `primary_region` from a fly.toml, or undefined. */
 export function parseFlyRegion(toml: string): string | undefined {
   return toml.match(/^\s*primary_region\s*=\s*["']([^"']+)["']/m)?.[1];
 }
 
-/** The `min_machines_running` from a fly.toml, or undefined — the KEEP-mode check reads it so a kept
- *  file that still scales to zero can be warned about when time triggers (schedules/wake) exist. */
+/** The `min_machines_running` from a fly.toml, or undefined. */
 export function parseFlyMinMachines(toml: string): number | undefined {
   const m = toml.match(/^\s*min_machines_running\s*=\s*(\d+)/m)?.[1];
   return m === undefined ? undefined : Number(m);

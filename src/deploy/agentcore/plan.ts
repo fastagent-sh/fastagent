@@ -1,28 +1,4 @@
-/**
- * `fastagent deploy agentcore` — the AWS Bedrock AgentCore deploy PLAN, computed from the resolved
- * definition. Pure: facts in, artifact contents + an ordered runbook out; the CLI writes the files
- * and prints the runbook. AgentCore is the fourth target, and its shape differs from Fly/Railway in
- * kind, not degree:
- *
- *  1. **No public URL, no resident process.** The Runtime's only ingress is the SigV4
- *     `InvokeAgentRuntime` API, and compute is per-session microVMs that stop when idle. So the
- *     topology carries TWO extra pieces a Fly box never needs: a forwarder Lambda (public Function
- *     URL → envelope → InvokeAgentRuntime) fronting the webhooks, and EventBridge Scheduler rules
- *     delivering each cron slot (the container arms no resident timers — serve's externalClock mode).
- *  2. **One template is the whole topology.** CloudFormation (`AWS::BedrockAgentCore::Runtime` is a
- *     first-class resource type) declares Runtime + roles + forwarder + schedules in one stack —
- *     unlike Railway, identity DOES live in a committed file; the stack name pins it.
- *  3. **One fixed runtime session writes one SessionStorage workspace.** All entry points use
- *     ingressSessionId; conversation ids remain separate. Startup acquires a workspace lease before
- *     initializing storage, applying a release or opening the agent. SessionStorage survives
- *     stop/resume but is RESET on every runtime version update (i.e. every deploy) and after 14 idle
- *     days, so this host promises no cross-deploy memory — see {@link MOUNT}.
- *
- *  The image is the SAME portable container every host ships (containerArtifacts) — AgentCore's
- *  extras (PORT=8080, FASTAGENT_AGENTCORE=1, the state dir) ride the Runtime resource's environment,
- *  never a forked Dockerfile. The build must be linux/arm64 (the platform requirement) — the ONE
- *  host where the build runs on the operator's machine (docker buildx) instead of remotely.
- */
+/** `fastagent deploy agentcore` — the AWS Bedrock AgentCore deploy PLAN, computed from the resolved definition. */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
@@ -45,8 +21,10 @@ export interface AgentcorePlanInput extends ContainerInput {
   name: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
-   *  whether the forwarder is needed at all (ANY webhook channel requires it, customs included). */
+  /**
+   * Every declared channel and its ingress — the source of the secret list, the webhook steps, and whether the
+   * forwarder is needed at all (ANY webhook channel requires it, customs included).
+   */
   channels: readonly DeclaredChannel[];
   /** Extra secret env-var names (fastagent.config deploy.secrets). */
   extraSecrets?: string[];
@@ -67,17 +45,11 @@ export interface AgentcorePlan {
   topology: AgentcoreTopology;
 }
 
-/**
- * Which resources the definition puts in the stack. Read in one place because it was computed in
- * three — the template, the plan and the CLI — and the third disagreed with the first about a
- * schedule EventBridge cannot express (counted by the CLI, not by the template), which is a
- * `cloudformation deploy` rejecting parameters the template never declared.
- */
+/** Which resources the definition puts in the stack. */
 export interface AgentcoreTopology {
   /** A webhook channel: the forwarder relays public Function URL traffic to it. */
   webhooks: boolean;
-  /** The forwarder serves webhooks, scheduled fires or wake alarms. Its URL also exposes an
-   *  authenticated deployment probe; schedule-only deployments reject ordinary public traffic. */
+  /** The forwarder serves webhooks, scheduled fires or wake alarms. */
   forwarder: boolean;
   /** The forwarder mirrors the agent's wake-ups into one-shot EventBridge schedules. */
   wakeAlarms: boolean;
@@ -96,57 +68,34 @@ function agentcoreTopology(
   };
 }
 
-/**
- * The platform's managed SessionStorage mount (AgentCore requires exactly `/mnt/<one-level>`). It
- * holds the whole workspace — `base/`, `.state/`, `.secrets/` — and survives compute stop/resume, so
- * an idle-reclaimed session resumes with its memory intact. It is RESET on every runtime version
- * update (i.e. every deploy) and after 14 idle days.
- *
- * That reset is this host's stated semantics, not a gap to engineer around: cross-deploy persistence
- * on AgentCore requires EFS or S3 Files, both of which need VPC mode and therefore a NAT gateway for
- * model/channel egress (~$33/mo standing) plus operator-owned network resources. A deploy replaces
- * the image, and here it replaces the state with it. Credentials follow the same rule for free —
- * `maybeSeedAuth` is absent-only, so a restart keeps what the box rotated and a deploy re-seeds from
- * FASTAGENT_AUTH_SEED. Hosts with a real volume (Fly, Railway, Docker) keep everything.
- */
+/** The platform's managed SessionStorage mount (AgentCore requires exactly `/mnt/<one-level>`). */
 export const MOUNT = "/mnt/data";
 
 /** Beside the state root on the one mount, as every volume-backed host does. */
 export const SECRETS_DIR = `${MOUNT}/${SECRETS_DIRNAME}`;
 
-/**
- * How long an idle session keeps its microVM. Memory is billed per second across the WHOLE session
- * — idle included, at the peak level reached — so this tail is the standing cost of every burst of
- * activity, while CPU stops billing the moment the agent stops working. 3 minutes rather than the
- * platform's 15: the tail shrinks 5×, and the cost is a cold start (image + storage + Node)
- * for anyone who returns after a longer gap. `/ping` reports HealthyBusy + time_of_last_update while
- * work is in flight (the FIELD is what the platform's idle measurement actually reads — agentcore.ts),
- * so this timer only ever starts once the agent has genuinely settled — a long turn is never cut short.
- * AWS accepts 60–28800.
- */
+/** How long an idle session keeps its microVM. */
 export const IDLE_TIMEOUT_SECONDS = 180;
 
-/** The platform ceiling on one session's compute (8 h). The session ID outlives it: the next invoke
- *  simply gets fresh compute with the same storage. */
+/** The platform ceiling on one session's compute (8 h). */
 export const MAX_LIFETIME_SECONDS = 28800;
 
-/** The forwarder artifact. Named `index.js` because it IS the Lambda deployment package's entry:
- *  zipping it as-is produces a valid package (`Handler: index.handler`), with nothing to rename. */
 export const FORWARDER_FILE = "lambda/index.js";
 
-/** Account-suffixed artifact bucket for S3's global namespace. Created before the runtime stack. */
+/** Account-suffixed artifact bucket for S3's global namespace. */
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
-/** AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so the seed is
- *  CHUNKED across FASTAGENT_AUTH_SEED + _2… (collectAuthSeed reassembles at boot). 2000 keeps margin. */
+/**
+ * AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so the seed is CHUNKED across
+ * FASTAGENT_AUTH_SEED + _2… (collectAuthSeed reassembles at boot).
+ */
 export const AUTH_SEED_CHUNK_SIZE = 2000;
 export const AUTH_SEED_MAX_CHUNKS = 4;
 /** The generated template's filename (namespaced under the kit in the agentDir layout). */
 export const TEMPLATE_FILE = "agentcore.template.yaml";
 
-/** The generated template's first-line marker — the ONE source for both the generator and the
- *  "did fastagent generate this?" check (deploy's drift gate), so they cannot drift apart. */
+/** The generated template's first-line marker. */
 export const GENERATED_TEMPLATE_MARKER = "# Generated by `fastagent deploy agentcore`";
 
 /** Whether an on-disk template is fastagent-generated (vs hand-written — kept, never gated). */
@@ -170,14 +119,15 @@ export function toRuntimeName(basename: string): string {
   return (/^[a-zA-Z]/.test(slug) ? slug : `agent_${slug || "fastagent"}`).slice(0, 48);
 }
 
-/** The ONE fixed ingress session id (webhooks + schedule fires) — ≥ 33 chars (the API minimum),
- *  deterministic (the Lambda holds it in env), padded so any name clears the floor. */
+/** The ONE fixed ingress session id (webhooks + schedule fires). */
 export function ingressSessionId(name: string): string {
   return `fastagent-ingress-${name}`.padEnd(33, "0").slice(0, 128);
 }
 
-/** CFN parameter logical id for a secret env-var name: TELEGRAM_BOT_TOKEN → TelegramBotToken
- *  (parameter names must be alphanumeric). Deterministic — run.ts builds the same mapping. */
+/**
+ * CFN parameter logical id for a secret env-var name: TELEGRAM_BOT_TOKEN → TelegramBotToken (parameter names must be
+ * alphanumeric).
+ */
 export function cfnParamName(envName: string): string {
   return envName
     .toLowerCase()
@@ -186,14 +136,7 @@ export function cfnParamName(envName: string): string {
     .join("");
 }
 
-/**
- * Remap ONE day-of-week field from standard cron numbering (0–7, 0/7 = Sunday) to EventBridge's
- * (1–7, 1 = Sunday). Parsed, not regex-replaced: only VALUES and RANGE ENDPOINTS are renumbered — a
- * step divisor (`*\/2`, `1-5/2`) is a count, not a weekday, and must pass through untouched. Names
- * (SUN..SAT) pass through. A numeric range whose endpoints INVERT under renumbering (`5-7` → `6-1`)
- * wraps across the week — not expressible as an EventBridge range — and is refused, never silently
- * reordered.
- */
+/** Remap ONE day-of-week field from standard cron numbering (0–7, 0/7 = Sunday) to EventBridge's (1–7, 1 = Sunday). */
 function mapDowField(dow: string): { value: string } | { error: string } {
   const items: string[] = [];
   for (const item of dow.split(",")) {
@@ -230,16 +173,7 @@ function mapDowField(dow: string): { value: string } | { error: string } {
   return { value: items.join(",") };
 }
 
-/**
- * Translate a 5-field cron into EventBridge Scheduler's `cron(m h dom mon dow *)`, or say why it
- * can't be. The two dialects disagree exactly where silent translation would misfire:
- *  - EventBridge numbers day-of-week 1–7 (1 = Sunday); standard cron uses 0–6 (0/7 = Sunday) —
- *    numeric dow values and range endpoints are remapped ({@link mapDowField}); steps and names
- *    pass through; a range that wraps under renumbering is refused.
- *  - EventBridge requires `?` in dom or dow: a `*` on either side becomes `?`; BOTH restricted is
- *    standard cron's OR semantics, which EventBridge cannot express — refused, never approximated.
- *  - A 6-field (seconds) expression and L/# day-of-week forms are refused for the same reason.
- */
+/** Translate a 5-field cron into EventBridge Scheduler's `cron(m h dom mon dow *)`, or say why it can't be. */
 export function toEventBridgeCron(cron: string): { expression: string } | { error: string } {
   const fields = cron.trim().split(/\s+/);
   if (fields.length !== 5) {
@@ -249,13 +183,7 @@ export function toEventBridgeCron(cron: string): { expression: string } | { erro
   if (/[L#]/i.test(dow) || /[L#]/i.test(dom)) {
     return { error: "L/# day forms don't translate to EventBridge numbering — set this schedule up manually" };
   }
-  // `?` FIRST, and not as a synonym for `*`. Croner treats it as a day field that matches everything
-  // and — unlike `*` — does NOT trigger cron's "one field is unrestricted, so the other governs"
-  // special case. It therefore ORs with the other field to mean EVERY DAY, whatever that field says.
-  // Measured against croner: `0 9 ? * MON` and `0 9 1 * ?` both fire daily, while `0 9 * * MON`
-  // fires on Mondays. Translating `?` to `*` would deploy a rule that fires on a DIFFERENT set of
-  // days than the same file fires on locally — the silent divergence this whole target exists to
-  // avoid — so a `?` in either field becomes an explicitly daily EventBridge rule.
+  // `?` FIRST, and not as a synonym for `*`.
   if (dom === "?" || dow === "?") {
     return { expression: `cron(${min} ${hour} * ${mon} ? *)` };
   }
@@ -278,38 +206,20 @@ function logicalId(name: string): string {
   return slug.charAt(0).toUpperCase() + slug.slice(1) || "Schedule";
 }
 
-/** YAML single-quoted scalar (the one escape: `'` doubles). Used for values carrying user input. */
+/** YAML single-quoted scalar (the one escape: `'` doubles). */
 function yamlSingleQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
 /**
- * The forwarder Lambda source — `forwarder.js` beside this file, the ONE text both the deployment
- * package and the readable `lambda/index.js` artifact are generated from. A real file, not a template
- * literal: it is linted, and it needs no interpolation — the one value it once took from here
- * (`MAX_WEBHOOK_BODY_BYTES`) rides in as a Lambda environment variable. Zero-dependency: the
- * Lambda Node runtime bundles AWS SDK v3. CommonJS ON PURPOSE: the package's entry lands as
- * `index.js` ({@link zipSingleFile}), where ESM `import` is a syntax error. Two
- * event shapes: a Function URL webhook (reconstructed verbatim into a `webhook` envelope; the
- * channel's REAL response rides back inside the transport reply and is re-emitted byte-exact —
- * Feishu's URL-verification challenge depends on it), and an EventBridge Scheduler fire
- * (`{ scheduleFire }`, slot = the scheduled instant — the container's idempotency key).
- *
- * It ships as an S3 object rather than inline `ZipFile`, so there is no 4096-byte ceiling on it — a
- * constraint this comment asserted for long after the template stopped inlining, which is the kind
- * of stale rule that stops the next person making a correct change.
+ * The forwarder Lambda source — `forwarder.js` beside this file, the ONE text both the deployment package and the
+ * readable `lambda/index.js` artifact are generated from.
  */
 export function forwarderSource(): string {
   return readFileSync(new URL("./forwarder.js", import.meta.url), "utf8");
 }
 
-/**
- * The EventBridge physical name for a schedule. A schedule's local name is an arbitrary MODULE FILE
- * NAME (`schedules/晨报.ts`, `schedules/deploy check.ts`), while AWS requires `[0-9A-Za-z-_.]+` within
- * 64 chars — and the `fa-<agent>-` prefix already eats up to 44 of them. So: sanitize, bound the
- * readable part, and end with a hash of the ORIGINAL name, which keeps distinct schedules distinct
- * where sanitizing or truncation would have merged them (one rule silently firing for two).
- */
+/** The EventBridge physical name for a schedule. */
 export function scheduleResourceName(agent: string, schedule: string): string {
   const prefix = `fa-${agent}-`;
   const hash = createHash("sha256").update(schedule).digest("hex").slice(0, 8);
@@ -329,9 +239,7 @@ function template(
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
-  // Secret env vars ride CFN NoEcho parameters. FASTAGENT_AUTH_SEED is always declared (Default "")
-  // so a `--run` OAuth carry has a slot; required secrets have NO default — `cloudformation deploy`
-  // fails loudly without a value instead of booting a half-configured box.
+  // Secret env vars ride CFN NoEcho parameters.
   const params: string[] = [
     `  ImageUri:`,
     `    Type: String`,
@@ -354,8 +262,8 @@ function template(
     `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
   ];
-  // The auth seed is chunked (env values max 2048 chars — see AUTH_SEED_CHUNK_SIZE): N parameters,
-  // each riding its own env var; `start` reassembles them (collectAuthSeed). Empty defaults = unused.
+  // The auth seed is chunked (env values max 2048 chars — see AUTH_SEED_CHUNK_SIZE): N parameters, each riding its
+  // own env var; `start` reassembles them (collectAuthSeed).
   for (let i = 1; i <= AUTH_SEED_MAX_CHUNKS; i++) {
     const param = i === 1 ? "FastagentAuthSeed" : `FastagentAuthSeed${i}`;
     const envName = i === 1 ? "FASTAGENT_AUTH_SEED" : `FASTAGENT_AUTH_SEED_${i}`;
@@ -386,8 +294,7 @@ function template(
     envLines.push(`        FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret`);
   }
   if (input.selfSchedule) {
-    // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder
-    // with it. Required (no default) — a selfSchedule deployment without it would silently degrade.
+    // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder with it.
     params.push(
       `  FastagentWakeSecret:`,
       `    Type: String`,
@@ -654,8 +561,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const repo = `fastagent/${name}`;
   const prefix = input.agentPrefix;
 
-  // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings —
-  // a schedule silently missing from the template would be the worst failure mode (nothing ever fires).
+  // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings.
   const translated: { fact: ScheduleFact; expression: string }[] = [];
   const untranslatable: { name: string; reason: string }[] = [];
   for (const fact of input.schedules) {
@@ -664,10 +570,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     else untranslatable.push({ name: fact.name, reason: result.error });
   }
 
-  // Identifier collisions: the author-side → AWS-side name mappings are lossy (logical ids strip
-  // punctuation; parameter names collapse underscores), so two DISTINCT legal inputs can land on one
-  // CloudFormation key — which would generate a silently wrong stack. Fail visibly at plan time; a
-  // rename is the fix (a hash-mangled allocator would trade readability for an edge case).
+  // Identifier collisions: the author-side → AWS-side name mappings are lossy (logical ids strip punctuation;
+  // parameter names collapse underscores), so two DISTINCT legal inputs can land on one CloudFormation key — which
+  // would generate a silently wrong stack.
   const logicalIds = new Map<string, string>();
   for (const { fact } of translated) {
     const id = `Schedule${logicalId(fact.name)}`;
@@ -777,8 +682,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       : []),
   );
 
-  // Model-auth guidance mirrors the other hosts: an env key became a parameter above; OAuth/stored
-  // can't be read at plan time — `--run` carries it as FastagentAuthSeed.
+  // Model-auth guidance mirrors the other hosts: an env key became a parameter above; OAuth/stored can't be read at
+  // plan time — `--run` carries it as FastagentAuthSeed.
   if (!isEnvKey(input.modelAuth)) {
     runbook.push(
       ``,
@@ -789,16 +694,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     );
   }
 
-  // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's
-  // Function URL (read from the stack outputs). `--run` REFUSES a long-connection channel here, but
-  // generate-only only warns and still prints this runbook, so the steps are filtered on ingress like
-  // every other host's rather than on the CLI having gated.
+  // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's Function URL
+  // (read from the stack outputs).
   const post = webhookRunbook(`<ForwarderUrl>`, channels);
-  // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and
-  // nothing else has a compute ceiling.
-  // Named rather than positional: the asides land after ALL the steps, so "the console" has to say
-  // WHICH console. One line for both kinds — an agent that declares feishu AND lark reads the same
-  // fact twice otherwise and looks for a second step that does not exist.
+  // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and nothing else has a
+  // compute ceiling.
   if (webhookKinds(channels).some((kind) => kind === "feishu" || kind === "lark")) {
     post.push(
       `# NOTE: the Feishu/Lark console's challenge rides through the forwarder to the channel and back`,

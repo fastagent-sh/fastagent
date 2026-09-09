@@ -1,5 +1,4 @@
-/** Lightweight Slack emoji ack on the user's triggering message: 👀 while working, ✅ when done.
- *  Every failure is non-fatal — the turn's threaded reply is the real deliverable. */
+/** Lightweight Slack emoji ack on the user's triggering message: 👀 while working, ✅ when done. */
 import { log } from "../../log.ts";
 import type { SlackApi } from "./slack-api.ts";
 

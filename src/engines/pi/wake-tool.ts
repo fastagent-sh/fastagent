@@ -1,26 +1,11 @@
-/**
- * The built-in `wake` tool: the agent's self-scheduling surface. Calling it records a one-shot wake-up
- * (wakeups.ts); the scheduler fires it back into the SAME session, so the agent resumes THIS
- * conversation after a delay ("check the deploy in 10 minutes"). The session comes from the turn
- * context (ToolContext.sessionManager, set around the turn); the state root is closed over at build
- * time (where it is known — the workspace opener), never read from the turn.
- *
- * Mounted by the opener ONLY when `config.selfSchedule` is on AND on the serving path (`dev`/`start`, where
- * the scheduler poller honors a wake-up) — never on the one-shot `invoke`/`fire` (they exit and never poll).
- * To opt OUT: leave `selfSchedule` off (the default), or override the built-in by defining your own
- * `tools/wake.ts` (a same-name collision wins — see {@link withWakeTool}). There is no name-based tool
- * exclusion config today.
- */
+/** The built-in `wake` tool: the agent's self-scheduling surface. */
 import { z } from "zod";
 import { addWakeup, removeWakeup } from "../../schedule/wakeups.ts";
 import { defineTool, type MountedTool } from "./tool.ts";
 
 /**
- * Parse a delay to milliseconds: a number is SECONDS; a string MUST carry a unit — `"<n><s|m|h|d>"`
- * ("30m", "2h", "1d"). Undefined for anything else, INCLUDING a bare numeric string like "120": one
- * encoding, one scale. Deliberate — an LLM freely emits a number OR a numeral-string, so letting a
- * unitless string alias to a different unit than a number (120s vs 120min, 60x apart) is a silent
- * footgun the guardrail (min 60s) would mask. A rejected value comes back to the model to fix.
+ * Parse a delay to milliseconds: a number is SECONDS; a string MUST carry a unit — `"<n><s|m|h|d>"` ("30m", "2h",
+ * "1d").
  */
 export function parseDelayMs(input: string | number): number | undefined {
   if (typeof input === "number") return Number.isFinite(input) && input > 0 ? input * 1000 : undefined;
@@ -30,16 +15,9 @@ export function parseDelayMs(input: string | number): number | undefined {
   return Number(m[1]) * mult;
 }
 
-/**
- * Append the built-in `wake` tool to `tools` — but only when `enabled` (the serving path, where the
- * scheduler poller honors a wake-up) and only when the workspace hasn't defined its own `wake` (that
- * wins, like any tool collision). The single place the mount decision + collision rule run.
- */
 export function withWakeTool(tools: MountedTool[], stateRoot: string, enabled: boolean): MountedTool[] {
   if (!enabled) return tools;
   // wake/unwake are a PAIR over one store: if the workspace defines EITHER name, mount NEITHER built-in.
-  // Mixing halves would mislead — an author's wake doesn't write our wakeups store, so our unwake could
-  // never cancel what it returns ("not yours" forever); the author owns the whole concept or none of it.
   if (tools.some((t) => t.name === "wake" || t.name === "unwake")) return tools;
   return [...tools, makeWakeTool(stateRoot), makeUnwakeTool(stateRoot)];
 }
@@ -90,8 +68,10 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
   });
 }
 
-/** Build the `unwake` tool: cancel one of THIS conversation's pending wake-ups by id (a wake/recurring
- *  that is no longer needed). Session-scoped — a conversation can never cancel another's. */
+/**
+ * Build the `unwake` tool: cancel one of THIS conversation's pending wake-ups by id (a wake/recurring that is no
+ * longer needed).
+ */
 function makeUnwakeTool(stateRoot: string): MountedTool {
   return defineTool({
     name: "unwake",

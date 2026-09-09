@@ -1,30 +1,4 @@
-/**
- * AWS AgentCore Runtime adapter: serve fastagent's whole HTTP surface through the Runtime's service
- * contract. AgentCore gives a container exactly TWO paths — `POST /invocations` (the only ingress,
- * reached via the SigV4 `InvokeAgentRuntime` API) and `GET /ping` (health) — and no public URL, so
- * the deployment fronts webhooks with a thin forwarder Lambda and delivers cron slots from
- * EventBridge Scheduler; both arrive here as an ENVELOPE in the /invocations payload:
- *
- *  - `{ kind: "webhook", method, path, headers?, bodyB64? }` — a verbatim webhook request captured
- *    by the forwarder. Reconstructed into a real `Request` and dispatched to the SAME channel routes
- *    a direct deployment serves — signature verification (Telegram secret token, Feishu signatures)
- *    runs unchanged inside the channel. The channel's HTTP response travels back INSIDE the
- *    transport reply (`{ status, headers, bodyB64 }`, transport always 200): AgentCore folds a
- *    container non-2xx into its own 424 RuntimeClientError, so riding the real status inside the
- *    envelope is the only way the forwarder can re-emit it verbatim (a Feishu URL-verification
- *    challenge needs the exact body + content-type back).
- *  - `{ kind: "schedule-fire", name, slot }` — one cron instant from the external clock. Dispatched
- *    to the bound `fire` callback with the slot as the idempotency key (EventBridge
- *    delivery is at-least-once; a duplicate slot must not double-fire).
- *  - `{ kind: "invoke", session, text }` — the programmatic data plane; streams the invoke back as
- *    SSE (AgentCore's streaming response form), reusing the HTTP channel's handler wholesale.
- *
- * `/ping` reports `HealthyBusy` (+ `time_of_last_update`, required — see the handler) while
- * process-wide background work is in flight (busy.ts) — webhook
- * channels ACK fast and run turns fire-and-forget, and AgentCore ends an idle session, so without
- * this signal a long turn would be killed mid-flight right after its ACK. `Healthy` when idle lets
- * the platform reclaim the microVM (that idle-to-zero IS the point of this deployment).
- */
+/** AWS AgentCore Runtime adapter: serve fastagent's whole HTTP surface through the Runtime's service contract. */
 import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
 import { PortFailure, portJoin } from "../effect-port.ts";
@@ -42,27 +16,26 @@ import { text } from "./respond.ts";
 import { secretEquals } from "./secret.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
-/** What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control
- *  plane), so the adapter's INNER dispatch is assembled exactly like a direct host's. */
+/**
+ * What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control plane), so the adapter's
+ * INNER dispatch is assembled exactly like a direct host's.
+ */
 export interface RouteSurface {
   routes: Routes;
   mounts?: readonly PrefixMount[];
 }
 
 export interface AgentcoreAdapterOptions {
-  /** The channel surface. Construction may replay durable turn intent and runs once on trusted ingress. */
+  /** The channel surface. */
   channels: () => Promise<RouteSurface> | RouteSurface;
   agent: Agent;
   /** Where the forwarder URL from envelopes is persisted for the wake-alarm sink (the state root). */
   stateRoot: string;
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
   isBusy: () => boolean;
-  /** Slot-idempotent schedule fire, bound to this workspace's schedules;
-   *  undefined when the workspace has none — a schedule-fire envelope then 404s (deploy drift: an
-   *  external clock still firing for a schedule this definition no longer has). */
+  /** Slot-idempotent schedule fire, bound to this workspace's schedules; undefined when the workspace has none. */
   fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
-  /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's.
-   *  Undefined = nothing can be trusted, so only the public `invoke` kind is served. */
+  /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */
   ingressSecret?: string;
   /** Runs once on activation, after accepting the current forwarder callback URL. */
   onStateReady?: () => void;
@@ -72,7 +45,9 @@ const jsonHeaders = { "content-type": "application/json" } as const;
 const json = (body: unknown, status: number): Response =>
   new Response(`${JSON.stringify(body)}\n`, { status, headers: jsonHeaders });
 
-/** Channel construction may already have replayed work before failing; cache either outcome to avoid replaying twice. */
+/**
+ * Channel construction may already have replayed work before failing; cache either outcome to avoid replaying twice.
+ */
 function createActivation(deps: {
   stateRoot: string;
   onStateReady: (() => void) | undefined;
@@ -106,8 +81,7 @@ function createActivation(deps: {
   return {
     prepare: (envelope) =>
       Effect.gen(function* () {
-        // Use the current callback URL rather than the one persisted by an earlier deployment. A write
-        // failure propagates: alarms would keep calling the previous deployment's forwarder.
+        // Use the current callback URL rather than the one persisted by an earlier deployment.
         if (typeof envelope.wake?.url === "string") {
           const url = envelope.wake.url;
           yield* Effect.try({
@@ -138,11 +112,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
       return text(`need { "kind": ${ENVELOPE_KINDS.map((k) => `"${k}"`).join(" | ")}, ... }\n`, 400);
     }
-    // AUTHENTICATION BOUNDARY. `InvokeAgentRuntime` is an ordinary IAM action, so "reached this
-    // handler" proves nothing about the sender. Only an envelope carrying the shared secret is the
-    // forwarder's; anything else is the PUBLIC data plane, which may run exactly one kind (`invoke`)
-    // and may NOT redirect the alarm callback, which carries the wake secret.
-    // Internal fields are DROPPED rather than rejected: a public caller has no business knowing them.
+    // AUTHENTICATION BOUNDARY.
     const trusted = secretEquals(envelope.auth, ingressSecret);
     if (!trusted) {
       if (envelope.kind !== "invoke") {
@@ -155,14 +125,12 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       if (trusted) await Effect.runPromise(activation.prepare(envelope).pipe(Effect.mapError((e) => e.cause)));
     } catch (e) {
       log.error(`[agentcore] activation failed: ${String(e)}`);
-      // The probe is the deploy driver's verification channel: its diagnostics must survive the
-      // forwarder, which folds a non-200 transport into an opaque 502 — so for it the failure
-      // rides a transport-200 structured verdict; every other kind keeps the plain 503.
+      // The probe is the deploy driver's verification channel: its diagnostics must survive the forwarder, which
+      // folds a non-200 transport into an opaque 502.
       if (envelope.kind === "probe") return json({ ok: false, error: `activation failed: ${String(e)}` }, 200);
       return text(`activation failed: ${String(e)}\n`, 503);
     }
-    // Public invokes do not activate channels. A broken channel fails webhook/wake traffic and
-    // the deployment probe, while independent scheduled work can still proceed.
+    // Public invokes do not activate channels.
     let constructionError: string | undefined;
     let dispatch: ChannelHandler | undefined;
     if (trusted && envelope.kind !== "invoke") {
@@ -201,12 +169,12 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
                 : undefined,
           },
         );
-        // A construction failure is the request's failure (503 through the forwarder, so the
-        // platform retries and the operator sees the message), never a silently-empty channel.
+        // A construction failure is the request's failure (503 through the forwarder, so the platform retries and the
+        // operator sees the message), never a silently-empty channel.
         if (!dispatch) return text(`channel construction failed: ${constructionError ?? "unavailable"}\n`, 503);
         const response = await dispatch(inner);
-        // Buffer the channel's ACK (webhook ACKs are small by design — the turn itself runs
-        // fire-and-forget) and ride it inside the transport reply, byte-exact.
+        // Buffer the channel's ACK (webhook ACKs are small by design — the turn itself runs fire-and-forget) and ride
+        // it inside the transport reply, byte-exact.
         const replyBody = Buffer.from(await response.arrayBuffer());
         const replyHeaders: Record<string, string> = {};
         response.headers.forEach((value, key) => {
@@ -224,21 +192,19 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         if (typeof name !== "string" || typeof slot !== "string" || Number.isNaN(Date.parse(slot))) {
           return text('schedule-fire envelope needs { "name": string, "slot": ISO-date }\n', 400);
         }
-        // No fire capability (no schedules in this definition) or an unknown name is deploy drift —
-        // an external clock rule outliving the schedule it fired for. 404 keeps it VISIBLE in the
-        // clock's logs (a 200 would silently absorb every future fire).
+        // No fire capability (no schedules in this definition) or an unknown name is deploy drift — an external clock
+        // rule outliving the schedule it fired for.
         if (!fire) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
-        // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may
-        // time out and drop the connection while the turn keeps running server-side. Count it as
-        // in-flight work so /ping holds the session (HealthyBusy) for the remainder.
+        // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may time out and drop
+        // the connection while the turn keeps running server-side.
         const workDone = beginWork();
         try {
           const outcome = await fire(name, new Date(slot));
           return json(outcome, 200);
         } catch (e) {
           if (e instanceof UnknownScheduleError) return text(`${e.message}\n`, 404);
-          // A claim-state fault (unreadable/unwritable fires.json) — surface it as the request's
-          // failure so the external clock's logs carry it (fail visibly, never a silent absorb).
+          // A claim-state fault (unreadable/unwritable fires.json) — surface it as the request's failure so the
+          // external clock's logs carry it (fail visibly, never a silent absorb).
           log.error(`[agentcore] schedule-fire ${name} failed: ${String(e)}`);
           return text(`schedule-fire failed: ${String(e)}\n`, 500);
         } finally {
@@ -246,17 +212,13 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         }
       }
       case "wake-poke": {
-        // The poke's job is DONE by arriving: the invocation woke (or kept awake) the container, and
-        // the wake pump (boot drain + 30s poll) fires whatever is due. Nothing to dispatch — the
-        // initialization above already resolved construction (replaying durable turn intent),
-        // and its failure is this request's failure so the alarm's log line names it.
+        // The poke's job is DONE by arriving: the invocation woke (or kept awake) the container, and the wake pump
+        // (boot drain + 30s poll) fires whatever is due.
         if (constructionError !== undefined) return text(`channel construction failed: ${constructionError}\n`, 503);
         return json({ ok: true }, 200);
       }
       case "probe": {
-        // The structured verdict (transport-200 — see the envelope doc): the deploy driver reads it
-        // through the forwarder's reserved path, so the error text survives the hop that turns any
-        // non-200 transport into an opaque 502.
+        // The structured verdict (transport-200 — see the envelope doc).
         return json(
           constructionError === undefined
             ? { ok: true }
@@ -265,8 +227,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         );
       }
       case "invoke": {
-        // Reuse the HTTP channel's handler wholesale (SSE, cancellation, backpressure) by handing it
-        // the shape it already validates — one protocol, one implementation.
+        // Reuse the HTTP channel's handler wholesale (SSE, cancellation, backpressure) by handing it the shape it
+        // already validates — one protocol, one implementation.
         const inner = new Request("http://agentcore.local/invoke", {
           method: "POST",
           headers: jsonHeaders,
@@ -283,17 +245,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
 }
 
 export function agentcorePing(isBusy: () => boolean): ChannelHandler {
-  // The Runtime ping contract: Healthy = reclaimable, HealthyBusy = keep the session alive
-  // (background turns in flight). `time_of_last_update` is REQUIRED for the keep-alive to work,
-  // despite the contract documenting it as optional ("If you omit the field, the platform tracks
-  // status changes on its own"): measured on a live Runtime (us-east-1, 2026-08-04), the platform's
-  // idle measurement reads ONLY this field — with it omitted, a session polling every ~2s and
-  // receiving HealthyBusy 200s was still reclaimed at exactly IdleRuntimeSessionTimeout after the
-  // last InvokeAgentRuntime, mid-turn, 2s after the last HealthyBusy answer; with the field present
-  // the same turn survived 3.5× the idle timeout with zero invocations and completed. The value
-  // updates ONLY on a real status change: a timestamp advancing on every ping declares a perpetual
-  // status change, so the idle timeout never fires and dead-idle sessions live to MaxLifetime
-  // (quota exhaustion — the failure mode the contract's warning describes).
+  // The Runtime ping contract: Healthy = reclaimable, HealthyBusy = keep the session alive (background turns in
+  // flight).
   let lastStatus = "Healthy";
   let lastTransition = Math.floor(Date.now() / 1000);
   return () => {
@@ -307,8 +260,7 @@ export function agentcorePing(isBusy: () => boolean): ChannelHandler {
   };
 }
 
-/** Thrown by the mount-site `fire` binding when the envelope names a schedule this workspace does
- *  not have — the adapter maps it to 404 (deploy drift stays visible in the external clock's logs). */
+/** Thrown by the mount-site `fire` binding when the envelope names a schedule this workspace does not have. */
 export class UnknownScheduleError extends Error {
   constructor(name: string) {
     super(`unknown schedule "${name}"`);

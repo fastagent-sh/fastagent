@@ -1,8 +1,4 @@
-/**
- * `fastagent schedule history|list|cancel` — the operator's surface over schedule state. history and
- * list are read-only; cancel is the kill switch for a pending wake-up (the agent's own is the `unwake`
- * tool). All three read the SAME state root the scheduler writes (FASTAGENT_STATE_DIR may live in .env).
- */
+/** `fastagent schedule history|list|cancel`. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -14,9 +10,8 @@ import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 /**
- * `fastagent schedule history <name> [dir]`: print the run audit for one schedule (or "wake") — fired
- * time, outcome, duration, reply/error. Read-only (reads `<stateRoot>/schedule/runs.jsonl`); the answer
- * to "did last night's run silently fail?". Text mode previews the reply/error; --json is the full record.
+ * `fastagent schedule history <name> [dir]`: print the run audit for one schedule (or "wake") — fired time, outcome,
+ * duration, reply/error.
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
@@ -30,8 +25,8 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     console.error(`no recorded runs for "${name}" (state: ${resolveStateRoot(target)})`);
     return;
   }
-  // The question is "did LAST NIGHT's run fail?" — so text mode tails the most recent runs (chronological
-  // within the tail); --json above returns the full history.
+  // The question is "did LAST NIGHT's run fail?" — so text mode tails the most recent runs (chronological within the
+  // tail); --json above returns the full history.
   const TAIL = 20;
   const shown = runs.slice(-TAIL);
   if (runs.length > shown.length) {
@@ -44,8 +39,7 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   }
 }
 
-/** `fastagent schedule list [dir]`: everything that will fire — BOTH producers: the static `schedules/`
- *  files (with their next instant) and the agent's pending self-scheduled wake-ups. Read-only. */
+/** `fastagent schedule list [dir]`: everything that will fire. */
 export async function runScheduleList(dirArg: string, json: boolean): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target);
@@ -79,15 +73,16 @@ export async function runScheduleList(dirArg: string, json: boolean): Promise<vo
   }
 }
 
-/** `fastagent schedule cancel <id> [dir]`: remove a pending wake-up — the operator's kill switch (the
- *  agent's own is the `unwake` tool). Unlike unwake it is NOT session-scoped: the operator owns the box. */
+/**
+ * `fastagent schedule cancel <id> [dir]`: remove a pending wake-up — the operator's kill switch (the agent's own is
+ * the `unwake` tool).
+ */
 export function runScheduleCancel(id: string, dirArg: string): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target);
   if (removeWakeup(resolveStateRoot(target), id)) {
-    // ponytail: the store's load→save is lock-free — a serving scheduler's claim-advance can race this
-    // write (window = ms around each fire). Tell the operator to verify; a lockfile/CAS is the upgrade
-    // path if it ever bites.
+    // ponytail: the store's load→save is lock-free — a serving scheduler's claim-advance can race this write (window
+    // = ms around each fire).
     console.error(
       `[fastagent] cancelled wake-up ${id} — if a server is running, verify with \`fastagent schedule list\``,
     );

@@ -1,10 +1,9 @@
 /**
- * Slack's half of the shared context buffer (mechanics + consume protocol: ../kit/context-buffer.ts):
- * the entry shape, its fold-line rendering, and buffered-file selection. Durable, bounded
- * unsummoned Slack discussion folded into the next answered turn in the same place.
+ * Slack's half of the shared context buffer (mechanics + consume protocol: ../kit/context-buffer.ts): the entry shape,
+ * its fold-line rendering, and buffered-file selection.
  */
 import {
-  BUFFER_ATTACH_MAX,
+  capBufferedRefs,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
 } from "../kit/context-buffer.ts";
@@ -43,7 +42,8 @@ export function collectSlackBufferedFiles(
       files.push({ id, from: entry.sender, messageId: entry.messageId });
     }
   }
-  return { files: files.slice(-BUFFER_ATTACH_MAX), skipped: Math.max(0, files.length - BUFFER_ATTACH_MAX) };
+  const capped = capBufferedRefs(files);
+  return { files: capped.kept, skipped: capped.skipped };
 }
 
 export type SlackContextBuffer = ContextBuffer<SlackBufferEntry>;

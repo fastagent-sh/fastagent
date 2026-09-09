@@ -1,9 +1,6 @@
 /**
- * `fastagent add skill <source>`: vendor an Agent Skills skill into `<agent dir>/skills/<name>/` —
- * copy-in, git-tracked, never a runtime registry. Source is a giget ref (github default), a local
- * path, or a bare name (resolved against the local global skill dirs as an add-time copy source only).
- * Fetch → staging → validate → rollback-protected replace, so a bad fetch never destroys an existing
- * skill.
+ * `fastagent add skill <source>`: vendor an Agent Skills skill into `<agent dir>/skills/<name>/` — copy-in,
+ * git-tracked, never a runtime registry.
  */
 import { cp, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -20,8 +17,8 @@ function skillNameFromSource(source: string): string {
 }
 
 /**
- * The skills/ path must be safe to write through: never follow a symlink that escapes the agent dir
- * (mkdir would), and reject a plain file with one clear message.
+ * The skills/ path must be safe to write through: never follow a symlink that escapes the agent dir (mkdir would), and
+ * reject a plain file with one clear message.
  */
 async function assertSkillsDirUsable(agentDir: string): Promise<void> {
   await assertInsideAgentDir(agentDir, "skills");
@@ -42,8 +39,10 @@ function isBareName(source: string): boolean {
   return !source.includes("/") && !/^[a-z][a-z0-9+.-]*:/i.test(source);
 }
 
-/** Local "global" skill dirs, used ONLY as an add-time vendoring source (a bare `add skill <name>`
- *  copies the match in, git-tracked) — nothing is loaded from here at run time. */
+/**
+ * Local "global" skill dirs, used ONLY as an add-time vendoring source (a bare `add skill <name>` copies the match in,
+ * git-tracked).
+ */
 function findGlobalSkillSource(name: string): string | undefined {
   for (const root of [join(homedir(), ".agents", "skills"), join(homedir(), ".pi", "agent", "skills")]) {
     if (existsSync(join(root, name, "SKILL.md"))) return join(root, name);
@@ -66,11 +65,8 @@ export interface VendoredSkill {
 }
 
 /**
- * Vendor an Agent Skills skill into `<agent dir>/skills/<name>/` from a giget ref (github default), a
- * local path, or a bare name (resolved against the local global skill dirs). Copy-in, git-tracked.
- * Refuses to overwrite unless `options.update` (then a plain git-tracked overwrite, never a merge).
- * Validates a staging copy with the runtime loader BEFORE replacing, so a bad fetch never destroys an
- * existing skill.
+ * Vendor an Agent Skills skill into `<agent dir>/skills/<name>/` from a giget ref (github default), a local path, or a
+ * bare name (resolved against the local global skill dirs).
  */
 export async function vendorSkill(
   agentDir: string,
@@ -84,8 +80,7 @@ export async function vendorSkill(
   const skillsDir = join(agentDir, "skills");
   await assertSkillsDirUsable(agentDir);
   const dest = join(skillsDir, name);
-  // A process can die between moving the old skill aside and installing staging. Never guess that an
-  // arbitrary hidden directory is ours or delete it: stop with the exact backup path for manual restore.
+  // A process can die between moving the old skill aside and installing staging.
   const skillEntries = await readdir(skillsDir).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -96,8 +91,8 @@ export async function vendorSkill(
       `found an interrupted skill update backup (${interrupted.join(", ")}) — inspect it, then restore it to skills/${name} or remove it before retrying`,
     );
   }
-  // Refuse to clobber unless --update; a git-tracked overwrite is safe (review with `git diff`, undo
-  // with `git checkout`).
+  // Refuse to clobber unless --update; a git-tracked overwrite is safe (review with `git diff`, undo with `git
+  // checkout`).
   const overwritten = existsSync(dest);
   if (overwritten && !options.update) {
     throw new Error(
@@ -106,9 +101,8 @@ export async function vendorSkill(
   }
   await mkdir(skillsDir, { recursive: true });
 
-  // Fetch into a STAGING dir (same filesystem → atomic rename), validate, and only THEN replace dest,
-  // so a failed/invalid fetch never destroys an existing skill. The leading "." keeps the loader from
-  // treating staging as a skill.
+  // Fetch into a STAGING dir (same filesystem → atomic rename), validate, and only THEN replace dest, so a
+  // failed/invalid fetch never destroys an existing skill.
   const staging = join(skillsDir, `.${name}.vendoring`);
   await rm(staging, { recursive: true, force: true }); // clear any leftover from a prior crash
   try {
@@ -129,9 +123,7 @@ export async function vendorSkill(
       }
       await cp(src, staging, { recursive: true });
     } else {
-      // giget defaults a BARE ref to its own template registry, not github — so default the provider to
-      // github for a plain `owner/repo/path` (an explicit `github:`/`gh:`/`gitlab:`… scheme is kept).
-      // Supports a subdir + #ref, fetched via the tar API (no git binary).
+      // giget defaults a BARE ref to its own template registry, not github.
       const ref = /^[a-z][a-z0-9+.-]*:/i.test(source) ? source : `github:${source}`;
       // Lazy import: giget is only needed for a git ref, so the serve path (index.ts → init.ts) and the
       // local/bare-name sources never load it.
@@ -145,9 +137,7 @@ export async function vendorSkill(
     await rm(staging, { recursive: true, force: true }); // failed/invalid: drop staging, leave dest intact
     throw error;
   }
-  // Install with rollback: move the old skill to a unique backup, then put staging in place. A failed
-  // second rename restores it; a process crash leaves a backup the next invocation reports without
-  // touching it.
+  // Install with rollback: move the old skill to a unique backup, then put staging in place.
   const previous = join(skillsDir, `.${name}.previous-${randomUUID()}`);
   if (overwritten) await rename(dest, previous);
   try {
@@ -164,8 +154,8 @@ export async function vendorSkill(
   }
   if (overwritten) await rm(previous, { recursive: true, force: true });
 
-  // Report via the runtime loader, matching THIS skill by EXACT directory (a substring match would
-  // prefix-pollute a sibling `<name>-x` and break on Windows path separators).
+  // Report via the runtime loader, matching THIS skill by EXACT directory (a substring match would prefix-pollute a
+  // sibling `<name>-x` and break on Windows path separators).
   const def = await loadAgentDefinition(agentDir);
   const rel = join("skills", name);
   const skill = def.skills.find((sk) => relative(agentDir, dirname(sk.filePath)) === rel);

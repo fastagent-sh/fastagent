@@ -6,7 +6,11 @@ import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
 import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
-import { readSlackOnboardingState, writeSlackOnboardingState } from "../channels/slack/onboarding-state.ts";
+import {
+  CONFIG_TOKEN_TTL_MS,
+  readSlackOnboardingState,
+  writeSlackOnboardingState,
+} from "../channels/slack/onboarding-state.ts";
 import { startSlackSetupServer } from "../channels/slack/setup-server.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
@@ -20,10 +24,49 @@ async function promptValue(message: string, hidden = false, initialValue?: strin
   return value;
 }
 
-/** Interactive single-workspace internal-app creation + installation. Safe to re-run after interruption. */
+/** The one place an App Configuration token pair is asked for and validated. */
+async function promptConfigTokens(): Promise<{
+  configToken: string;
+  configRefreshToken: string;
+  configTokenExpiresAt: number;
+}> {
+  console.error(`[fastagent] generate an App Configuration Token pair at ${CONFIG_TOKEN_URL}`);
+  openExternalUrl(CONFIG_TOKEN_URL);
+  const configToken = await promptValue("Slack configuration access token (xoxe.xoxp-…)", true);
+  const configRefreshToken = await promptValue("Slack configuration refresh token (xoxe-…)", true);
+  if (!configToken.startsWith("xoxe.") || !configRefreshToken.startsWith("xoxe-")) {
+    throw new Error("invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh)");
+  }
+  return { configToken, configRefreshToken, configTokenExpiresAt: Date.now() + CONFIG_TOKEN_TTL_MS };
+}
+
+/** Keep the saved token pair, or paste a fresh one? `--replace-config` answers without asking. */
+async function chooseTokenAction(
+  forced: boolean,
+  message: string,
+  keepLabel: string,
+  replaceLabel: string,
+  replaceHint?: string,
+): Promise<"keep" | "replace-config"> {
+  if (forced) return "replace-config";
+  const answer = await select<"keep" | "replace-config">({
+    message,
+    initialValue: "keep",
+    options: [
+      { value: "keep", label: keepLabel },
+      { value: "replace-config", label: replaceLabel, ...(replaceHint ? { hint: replaceHint } : {}) },
+    ],
+  });
+  if (isCancel(answer)) throw new Error("Slack onboarding cancelled");
+  return answer;
+}
+
+/** Interactive single-workspace internal-app creation + installation. */
 export async function onboardSlackInternalApp(input: {
-  /** The AGENT DIR — credentials land in its `.env` ({@link dotEnvPath}: `FASTAGENT_SECRETS_DIR` moves
-   *  it, so messages print the resolved path rather than the default spelling). */
+  /**
+   * The AGENT DIR — credentials land in its `.env` ({@link dotEnvPath}: `FASTAGENT_SECRETS_DIR` moves it, so messages
+   * print the resolved path rather than the default spelling).
+   */
   target: string;
   stateRoot: string;
   groupBehavior: GroupBehaviorChoice;
@@ -69,37 +112,15 @@ export async function onboardSlackInternalApp(input: {
           "OAuth scopes is a migration. Keep the existing choice, or remove the app + Slack onboarding state and create a new app",
       );
     }
-    let action: "keep" | "replace-config" = "replace-config";
-    if (!input.replaceConfig) {
-      const answer = await select<"keep" | "replace-config">({
-        message: `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
-        initialValue: "keep",
-        options: [
-          { value: "keep", label: "Keep the installed app" },
-          {
-            value: "replace-config",
-            label: "Replace App Configuration tokens",
-            hint: "repair automatic dev/deploy Request URL updates",
-          },
-        ],
-      });
-      if (isCancel(answer)) throw new Error("Slack onboarding cancelled");
-      action = answer;
-    }
+    const action = await chooseTokenAction(
+      input.replaceConfig === true,
+      `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
+      "Keep the installed app",
+      "Replace App Configuration tokens",
+      "repair automatic dev/deploy Request URL updates",
+    );
     if (action === "replace-config") {
-      console.error(`[fastagent] generate a fresh App Configuration Token pair at ${CONFIG_TOKEN_URL}`);
-      openExternalUrl(CONFIG_TOKEN_URL);
-      const configToken = await promptValue("Slack configuration access token (xoxe.xoxp-…)", true);
-      const configRefreshToken = await promptValue("Slack configuration refresh token (xoxe-…)", true);
-      if (!configToken.startsWith("xoxe.") || !configRefreshToken.startsWith("xoxe-")) {
-        throw new Error("invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh)");
-      }
-      writeSlackOnboardingState(input.stateRoot, {
-        ...state,
-        configToken,
-        configRefreshToken,
-        configTokenExpiresAt: Date.now() + 11 * 60 * 60_000,
-      });
+      writeSlackOnboardingState(input.stateRoot, { ...state, ...(await promptConfigTokens()) });
       console.error("[fastagent] replaced local Slack App Configuration tokens; runtime app credentials are unchanged");
     } else {
       console.error("[fastagent] keeping the installed Slack app and local configuration tokens");
@@ -113,14 +134,7 @@ export async function onboardSlackInternalApp(input: {
       "Slack's configuration refresh token can manage apps owned by your user in this workspace. " +
         "FastAgent stores it only in owner-readable local state; it is never deployed.",
     );
-    console.error(`[fastagent] generate an App Configuration Token at ${CONFIG_TOKEN_URL}`);
-    openExternalUrl(CONFIG_TOKEN_URL);
-    const configToken = await promptValue("Slack configuration access token (xoxe.xoxp-…)", true);
-    const configRefreshToken = await promptValue("Slack configuration refresh token (xoxe-…)", true);
-    if (!configToken.startsWith("xoxe.")) throw new Error("Slack configuration access token must start with xoxe.");
-    if (!configRefreshToken.startsWith("xoxe-")) {
-      throw new Error("Slack configuration refresh token must start with xoxe-");
-    }
+    const { configToken, configRefreshToken } = await promptConfigTokens();
     state = newSlackOnboardingState({
       appName,
       groupBehavior: input.groupBehavior.behavior,
@@ -138,34 +152,17 @@ export async function onboardSlackInternalApp(input: {
         `inspect ${CONFIG_TOKEN_URL}; delete any incomplete app and ${input.stateRoot}/channels/slack/onboarding.json before retrying`,
     );
   }
-  // `--replace-config` also covers the created-but-not-installed state, where a revoked token would
-  // otherwise strand the resume (rotation fails and no menu offers replacement).
+  // `--replace-config` also covers the created-but-not-installed state, where a revoked token would otherwise strand
+  // the resume (rotation fails and no menu offers replacement).
   if (resumed && (!state.appId || input.replaceConfig)) {
-    let action: "keep" | "replace-config" = "replace-config";
-    if (!input.replaceConfig) {
-      const answer = await select<"keep" | "replace-config">({
-        message: "Resume Slack onboarding with which App Configuration tokens?",
-        initialValue: "keep",
-        options: [
-          { value: "keep", label: "Use the saved token pair" },
-          { value: "replace-config", label: "Paste a fresh token pair" },
-        ],
-      });
-      if (isCancel(answer)) throw new Error("Slack onboarding cancelled");
-      action = answer;
-    }
+    const action = await chooseTokenAction(
+      input.replaceConfig === true,
+      "Resume Slack onboarding with which App Configuration tokens?",
+      "Use the saved token pair",
+      "Paste a fresh token pair",
+    );
     if (action === "replace-config") {
-      console.error(`[fastagent] generate a fresh App Configuration Token pair at ${CONFIG_TOKEN_URL}`);
-      openExternalUrl(CONFIG_TOKEN_URL);
-      state = {
-        ...state,
-        configToken: await promptValue("Slack configuration access token (xoxe.xoxp-…)", true),
-        configRefreshToken: await promptValue("Slack configuration refresh token (xoxe-…)", true),
-        configTokenExpiresAt: Date.now() + 11 * 60 * 60_000,
-      };
-      if (!state.configToken.startsWith("xoxe.") || !state.configRefreshToken.startsWith("xoxe-")) {
-        throw new Error("invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh)");
-      }
+      state = { ...state, ...(await promptConfigTokens()) };
       writeSlackOnboardingState(input.stateRoot, state);
     }
   }
@@ -180,9 +177,8 @@ export async function onboardSlackInternalApp(input: {
   const redirectUrl = `${tunnel.url}${server.redirectPath}`;
   console.error(`[fastagent] temporary Slack setup tunnel ready → ${tunnel.url}`);
   try {
-    // No local readiness probe: Slack challenges requestUrl from ITS network during app creation, and
-    // that is the reachability that matters (#421) — this machine often cannot reach a fresh tunnel
-    // hostname for a minute. onboardSlackApp retries the create while Slack cannot verify it yet.
+    // No local readiness probe: Slack challenges requestUrl from ITS network during app creation, and that is the
+    // reachability that matters (#421).
     await onboardSlackApp(
       { stateRoot: input.stateRoot, state, requestUrl, redirectUrl },
       {

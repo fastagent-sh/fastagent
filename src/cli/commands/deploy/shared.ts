@@ -1,7 +1,6 @@
 /**
- * What every host's deploy command shares: the context the dispatcher hands a host, the artifact
- * writer with its ownership rule, and the `--run` credential carry. Host facts live in
- * `cli/commands/deploy/<host>.ts`; this file holds nothing that names one.
+ * What every host's deploy command shares: the context the dispatcher hands a host, the artifact writer with its
+ * ownership rule, and the `--run` credential carry.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -33,8 +32,10 @@ export interface DeployOptions {
   input?: boolean;
 }
 
-/** What the dispatcher resolved before handing off: the placement, the flags, the config and the
- *  host-neutral pre-flight, plus the channel lists every host asks about. */
+/**
+ * What the dispatcher resolved before handing off: the placement, the flags, the config and the host-neutral
+ * pre-flight, plus the channel lists every host asks about.
+ */
 interface DeployContext {
   opts: DeployOptions;
   agentDir: string;
@@ -44,40 +45,25 @@ interface DeployContext {
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];
   longConnectionChannels: readonly DeclaredChannel[];
-  /** Write this host's planned artifacts into the workspace under the ownership rule. The dispatcher
-   *  binds {@link HostDeploy.isOurs} — a host cannot name a predicate here, because every host's has
-   *  the same type: passing a neighbour's, or forgetting a new host's, type-checks and then silently
-   *  turns `--force` into a no-op for that host's own artifact. */
+  /** Write this host's planned artifacts into the workspace under the ownership rule. */
   write(
     artifacts: { path: string; content: string }[],
     options: { force: boolean; alwaysWrite?: string[] },
   ): Promise<void>;
 }
 
-/** One deploy target, as the dispatcher sees it. A new host is a `deploy/<host>/` (plan + driver)
- *  plus one of these beside it, and a row in `HOSTS` (cli/commands/deploy.ts). */
+/** One deploy target, as the dispatcher sees it. */
 export interface HostDeploy {
-  /** Did this host generate the file at `path`? Only the host's OWN artifacts — the container's
-   *  (Dockerfile, .dockerignore) are answered by {@link writeArtifacts} itself. Read only through the
-   *  {@link DeployContext.write} the dispatcher binds from it. */
+  /** Did this host generate the file at `path`? */
   isOurs(path: string, content: string): boolean;
-  /** Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive
-   *  the host CLI (`--run`) or print the runbook. Exits through `failStartup` on a gate. */
+  /**
+   * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
+   * (`--run`) or print the runbook.
+   */
   deploy(ctx: DeployContext): Promise<void>;
 }
 
-/** The registrars every host driver gets. One wiring: a channel's credentials are the channel's, not
- *  the host's, so which of them can run end-to-end never varies by deployment target.
- *
- *  All three get {@link DEPLOY_REGISTRATION_ATTEMPTS} rather than the default: a host CLI returns
- *  before the deployment answers, and a registration that gives up first GATES the deploy — reporting
- *  a working deployment as one to re-run. `dev --tunnel` keeps the shorter default; it is a resident
- *  process whose URL is live when it is printed, as does `deploy docker --run` — it reuses that same
- *  announcer, having already health-probed the container and waited for the Quick Tunnel URL.
- *
- *  Accepted cost: pointChannelsAt registers serially, so a deployment whose channels are ALL
- *  unreachable spends the budget once per channel (3 x 180s) before it gates. Registering in parallel
- *  would not shorten a single failing channel, and the failing case is the one nobody is waiting on. */
+/** The registrars every host driver gets. */
 export function registrarsFor(agentDir: string): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   return {
@@ -88,8 +74,8 @@ export function registrarsFor(agentDir: string): Registrars {
 }
 
 /**
- * The `--run` credential carry, for every host: the local model credential (an env key, or the whole
- * auth.json as a `FASTAGENT_AUTH_SEED`) plus channel secrets. Four drivers assembled this identically.
+ * The `--run` credential carry, for every host: the local model credential (an env key, or the whole auth.json as a
+ * `FASTAGENT_AUTH_SEED`) plus channel secrets.
  */
 export async function carryCredentials(params: {
   modelAuth: string | undefined;
@@ -109,9 +95,7 @@ export async function carryCredentials(params: {
   });
 }
 
-/** Gate a `--run` that has no model credential to carry. Its remediation is `fastagent login`, which
- *  is why it is separate from `missingSecrets` (a `.env` fix) rather than folded into it. Docker states
- *  the same gate inside its driver, where it belongs after the daemon check. */
+/** Gate a `--run` that has no model credential to carry. */
 export function gateOnModelCredential(needsModelCredential: boolean): void {
   if (!needsModelCredential) return;
   failStartup(
@@ -121,26 +105,7 @@ export function gateOnModelCredential(needsModelCredential: boolean): void {
   );
 }
 
-/**
- * Write each generated artifact under `target`, under ONE ownership rule: **deploy only ever overwrites
- * its own output.** Each generated file opens with a marker, so a file on disk is either OURS (a previous
- * `deploy` wrote it) or the author's — and `--force` means "my generated artifact is authoritative",
- * which never licenses clobbering a file we did not write. To hand a path back to fastagent, delete it.
- *
- * That single rule replaced a second mechanism (a per-host list of paths exempt from `--force`), which
- * only described one shape: with the agent inside the workspace, the root `.dockerignore` is the
- * WORKSPACE's file and was listed; with the agent flat, the list was empty — so `--force` would have
- * overwritten a hand-written root `Dockerfile` in a repository `init --flat` had explicitly adopted.
- * Ownership is a property of the file, not of where the agent sits.
- *
- * A KEPT file of OURS that no longer matches what deploy would generate now (config/channel/lockfile/
- * version drift — or the author's edits, which we cannot tell apart) is flagged stale; `--force`
- * regenerates that one.
- *
- * Exported for its own test — this is a four-branch state machine over (exists, ours, force) that used
- * to be proven by spawning the CLI eight times, which is command LOGIC re-run through a subprocess
- * (see vitest.config.ts) and the suite's slowest test.
- */
+/** Write each generated artifact under `target`, under ONE ownership rule. */
 export async function writeArtifacts(
   target: string,
   artifacts: { path: string; content: string }[],
@@ -158,8 +123,7 @@ export async function writeArtifacts(
     const existing = (await exists(abs)) ? await readFile(abs, "utf8") : undefined;
     const ours = existing !== undefined && isOurArtifact(a.path, existing, options.isOurs);
     if (existing !== undefined && !ours) {
-      // Only the `.dockerignore` has content checks in preflight — pointing at "the preflight warnings"
-      // for the other kinds would send the reader looking for output that is never printed.
+      // Only the `.dockerignore` has content checks in preflight.
       console.error(
         `[fastagent] kept ${a.path} — not generated by fastagent, so --force does not touch it ` +
           `(delete it to let deploy own the path)` +
@@ -186,9 +150,7 @@ export async function writeArtifacts(
   }
 }
 
-/** Did fastagent generate the file at `path`? The container's two artifacts are every host's; the
- *  rest is the host's own answer. A kind neither names is permanently classified as the author's,
- *  which silently turns `--force` into a no-op for that file. */
+/** Did fastagent generate the file at `path`? */
 function isOurArtifact(path: string, content: string, host: HostDeploy["isOurs"]): boolean {
   if (path.endsWith("Dockerfile")) return isGeneratedDockerfile(content);
   if (path.endsWith(".dockerignore")) return isGeneratedDockerignore(content);

@@ -1,49 +1,28 @@
-/**
- * `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. Pure:
- * facts in, artifact contents + an ordered runbook out; the CLI writes the files and prints the runbook.
- *
- * Railway is the second target, and it is NOT a copy of Fly — three asymmetries drive this module:
- *
- *  1. The config file is thin. `railway.json` (config-as-code) holds ONLY build/deploy settings; the
- *     volume, the variables (state root + secrets), and App Sleeping are Railway service settings applied
- *     by CLI/dashboard, not the file. So Fly's "one committed file is the single source" does not carry:
- *     Railway's source of truth is the linked project's platform state, not a file we generate.
- *
- *  2. Scale-to-zero is not scriptable. Railway's App Sleeping is a dashboard-only toggle (no CLI/API),
- *     so unlike Fly's `auto_stop_machines`, we cannot generate it — the runbook states the manual step.
- *     This is a real capability downgrade vs Fly, named rather than hidden.
- *
- *  3. The public URL is minted, not deterministic. Fly gives `<app>.fly.dev` up front; Railway mints a
- *     `*.up.railway.app` domain that must be read back (`railway domain`), so the webhook step points at
- *     "the domain from `railway domain`" rather than a precomputed URL.
- *
- * What IS shared with Fly comes from the neutral modules: the container (Dockerfile + .dockerignore) and
- * the required-secret list. `railway.json`'s `healthcheckPath=/health` also fixes the "routed before the
- * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
- */
+/** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
-  // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's
-  // internal_port) — the server binds $PORT at runtime. Nothing here would use it.
-  /** The service name to create (`railway add --service`). Railway service names are project-scoped, not
-   *  globally unique (unlike a Fly app), so the CLI derives it from the dir basename — any value works. */
+  // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's internal_port) —
+  // the server binds $PORT at runtime.
+  /** The service name to create (`railway add --service`). */
   serviceName: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Every declared channel and its ingress — the source of the secret list, the webhook steps, and
-   *  whether App Sleeping must stay off for an outbound connection. */
+  /**
+   * Every declared channel and its ingress — the source of the secret list, the webhook steps, and whether App
+   * Sleeping must stay off for an outbound connection.
+   */
   channels: readonly DeclaredChannel[];
-  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
-  // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
+  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
-  /** Time triggers present (schedules/ or selfSchedule) — the runbook forbids App Sleeping: cron/wake has
-   *  no external wake-up, so a sleeping service sleeps through them. Required (like FlyPlanInput's) so a
-   *  caller can't silently omit it and degrade the sleeping guidance to "optional". */
+  /**
+   * Time triggers present (schedules/ or selfSchedule) — the runbook forbids App Sleeping: cron/wake has no external
+   * wake-up, so a sleeping service sleeps through them.
+   */
   hasTimeTriggers: boolean;
 }
 
@@ -54,29 +33,21 @@ export interface RailwayPlan {
   runbook: string[];
 }
 
-/** State root = the volume mount path, kept in lockstep. `/data` matches the Fly recipe. */
+/** State root = the volume mount path, kept in lockstep. */
 const MOUNT = "/data";
 
-/** The `RAILWAY_DOCKERFILE_PATH` value for an agent under `prefix` — repo-root-anchored with a leading
- *  slash, the form Railway's builds/dockerfiles docs use for a Dockerfile in another directory. The
- *  config file's `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own
- *  convention); two mechanisms, two documented spellings, one fact each. */
+/** The `RAILWAY_DOCKERFILE_PATH` value for an agent under `prefix`. */
 export const dockerfilePathVar = (prefix: string): string => `/${prefix}Dockerfile`;
 
-/** The name this tool gives BOTH the project and the service, derived from the workspace directory.
- *  Railway names are project-scoped (not globally unique like a Fly app), so this only has to survive
- *  the command — slug anything that would break `railway add --service <name>`, and name the fallback
- *  rather than emitting an empty argument. Shared so the live probe tears down what the CLI creates. */
+/** The name this tool gives BOTH the project and the service, derived from the workspace directory. */
 export function toRailwayName(basename: string): string {
   return basename.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
 }
 
-/** railway.json is JSON, so its ownership marker is a KEY rather than a comment line. Railway ignores
- *  unknown keys; the predicate below is what lets `--force` reset OUR file and keep a hand-written one. */
+/** railway.json is JSON, so its ownership marker is a KEY rather than a comment line. */
 const GENERATED_RAILWAY_KEY = "x-generated-by";
 const GENERATED_RAILWAY_VALUE = "fastagent deploy railway";
 
-/** Did fastagent generate this `railway.json`? Unparseable or unmarked reads as the author's. */
 export function isGeneratedRailwayJson(content: string): boolean {
   try {
     return (JSON.parse(content) as Record<string, unknown>)[GENERATED_RAILWAY_KEY] === GENERATED_RAILWAY_VALUE;
@@ -85,8 +56,7 @@ export function isGeneratedRailwayJson(content: string): boolean {
   }
 }
 
-/** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
- *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
+/** railway.json — build/deploy only (Railway's config-as-code scope). */
 function railwayJson(prefix: string): string {
   return `${JSON.stringify(
     {
@@ -104,12 +74,8 @@ function railwayJson(prefix: string): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, modelAuth, channels } = input;
-  // railway.json is namespaced under the agent dir too (the workspace may carry its own
-  // railway.toml/json for the product). Railway reads config-as-code from the repo root by default and
-  // pointing it at a custom path is DASHBOARD-ONLY — so the BUILD entry travels as the scriptable
-  // RAILWAY_DOCKERFILE_PATH service variable instead (Railway's documented non-root-Dockerfile route),
-  // and the config-as-code pointer degrades to an OPTIONAL enhancement: the /health gate (Railway's
-  // default restart policy already matches the file's ON_FAILURE).
+  // railway.json is namespaced under the agent dir too (the workspace may carry its own railway.toml/json for the
+  // product).
   const configPath = `${input.agentPrefix}railway.json`;
   const artifacts: Artifact[] = [
     { path: configPath, content: railwayJson(input.agentPrefix) },
@@ -120,10 +86,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
-  // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and
-  // variables are service-scoped and `railway up` deploys THE service — so the service must exist first
-  // (`railway add --service`), and variables must be set BEFORE the first `up` or the box boots without a
-  // model key / FASTAGENT_STATE_DIR and crash-loops against restartPolicy ON_FAILURE + the healthcheck.
+  // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and variables are
+  // service-scoped and `railway up` deploys THE service.
   const runbook: string[] = [
     `# Deploy to Railway. ${configPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
@@ -164,8 +128,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
 
-  // Model-auth guidance: an env key becomes a variable above. Otherwise the plan can't read the local
-  // credential's value (OAuth or a stored key) to set it — same wording discipline as the Fly plan.
+  // Model-auth guidance: an env key becomes a variable above.
   if (!isEnvKey(modelAuth)) {
     runbook.push(
       modelAuth === undefined
@@ -198,10 +161,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
   );
 
-  // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
-  // channel's webhook uses that domain (mint once even when both channels are present).
-  // Mint only when something below needs it: with nothing to point at the domain (no channels, or only
-  // long-connection ones), "use it in the step(s) below" would refer to steps that do not follow.
+  // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev).
   const steps = webhookRunbook(`https://<your-domain>`, channels);
   if (steps.length > 0) {
     runbook.push(
@@ -214,8 +174,6 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   }
 
   // Scale-to-zero: App Sleeping is dashboard-only (no CLI/API) — a manual step, not a generated setting.
-  // A github channel should NOT enable it: fire-and-forget reviews have no replay (unlike Telegram's L1
-  // turn store), so a sleep mid-review would drop it — the same floor the Fly plan enforces via config.
   runbook.push(
     ``,
     channels.some((channel) => channel.name === "github")

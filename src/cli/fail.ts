@@ -5,18 +5,14 @@ function stderrHasColors(): boolean {
   return process.stderr.isTTY === true && (process.stderr.hasColors?.() ?? false);
 }
 
-/**
- * The ONE error prefix every error message carries — bold red when stderr renders color, plain
- * otherwise. Errors are the only place the CLI uses color at all.
- */
+/** The ONE error prefix every error message carries — bold red when stderr renders color, plain otherwise. */
 export function errorPrefix(colors: boolean = stderrHasColors()): string {
   return colors ? "\x1b[1;31mError:\x1b[0m" : "Error:";
 }
 
 /**
- * User-fixable startup problems (missing model / bad config / broken definition) are thrown as plain
- * `Error` — print just the message. Anything else (TypeError, non-Error) is a bug: keep the stack.
- * Shared by the kernel and the command modules; exit 1 (runtime failure).
+ * User-fixable startup problems (missing model / bad config / broken definition) are thrown as plain `Error` — print
+ * just the message. Anything else (a TypeError, a non-Error throw) is a bug: keep the stack.
  */
 export function failStartup(error: unknown): never {
   if (error instanceof Error && error.constructor === Error) console.error(`${errorPrefix()} ${error.message}`);
@@ -24,21 +20,7 @@ export function failStartup(error: unknown): never {
   process.exit(1);
 }
 
-/**
- * THE placement entry point for commands: resolve `dir`, or exit 1 with the one-line refusal. Every
- * command that needs an agent goes through this — the try/catch was hand-repeated at sixteen call
- * sites, which is sixteen chances to forget it (`dev`'s supervisor did, and surfaced a raw stack).
- *
- * The catch is what makes it a function at all: placement resolves SYNCHRONOUSLY, before any promise
- * exists, so it cannot ride the `.catch(failStartup)` every async startup chain carries — and its
- * refusals ("not a fastagent agent", plus the two dead ends with their own exits) are user-fixable,
- * which means a one-line `Error:` and exit 1, never a stack.
- *
- * Not every command calls it — and the exceptions are the useful part of this note. `init` CREATES the
- * agent (it must run where there is none). `models` is directory-independent. `login` needs one only for
- * the project-level credential and falls back to the global one, and `attach --url/--token` reads
- * nothing local. Everything else needs an agent, so it comes through here.
- */
+/** THE placement entry point for commands: resolve `dir`, or exit 1 with the one-line refusal. */
 export function placementOrExit(dir: string): ResolvedPlacement {
   try {
     return resolvePlacement(dir);
@@ -48,9 +30,8 @@ export function placementOrExit(dir: string): ResolvedPlacement {
 }
 
 /**
- * A usage error the parser could not catch (a bad value shape, an invalid flag/argument combination
- * discovered in a command body): print the message and exit 2 — the same class as a parse error.
- * Exit codes follow responsibility, not the layer that happens to discover the problem.
+ * A usage error the parser could not catch (a bad value shape, an invalid flag/argument combination discovered in a
+ * command body): print the message and exit 2.
  */
 export function failUsage(message: string): never {
   console.error(`${errorPrefix()} ${message}`);

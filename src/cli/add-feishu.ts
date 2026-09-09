@@ -1,13 +1,6 @@
 /**
- * `fastagent add feishu|lark` app onboarding — the cloud-facing half of runAdd, kept out of cli.ts
- * (which self-executes on import), mirroring models-view.ts/auth-view.ts. The POLICY already lives in
- * testable modules (register-app.ts, bootstrap-token.ts, lark/onboard.ts); this layer is the terminal
- * wiring: clack prompts, .env staging, browser opens, progress lines.
- *
- * Feishu (scan-to-create): the device flow creates the app and persists App ID/Secret at the
- * irreversible boundary. WebSocket stops there; webhook additionally captures the Verification Token
- * over a throwaway tunnel. Lark uses the unbound launcher + credential validation, then either stops
- * for WebSocket or probes the same webhook/token bootstrap with the config-route-404 manual fallback.
+ * `fastagent add feishu|lark` app onboarding — the cloud-facing half of runAdd, kept out of cli.ts (which
+ * self-executes on import), mirroring models-view.ts/auth-view.ts.
  */
 import { readFile } from "node:fs/promises";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
@@ -46,8 +39,7 @@ export async function configureGroupBehavior(input: {
   apiBase: string;
   api: Pick<FeishuApi, "listAppScopes" | "addAppScopes">;
   behavior: FeishuGroupBehavior;
-  /** Whether the author chose the behavior (flag or prompt). A defaulted "context" inspects and
-   * reports only — it must never PATCH the sensitive scope into the app draft. */
+  /** Whether the author chose the behavior (flag or prompt). */
   explicit: boolean;
   note?: (message: string) => void;
   openUrl?: (url: string) => void;
@@ -71,15 +63,12 @@ export async function configureGroupBehavior(input: {
       (scope) =>
         scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
     );
-  // Same type filter as `granted`: a user-type entry is not the tenant scope this path needs, so
-  // treating one as "on the app" would report an approval that can never arrive and skip the PATCH
-  // that would actually add it.
+  // Same type filter as `granted`: a user-type entry is not the tenant scope this path needs, so treating one as "on
+  // the app" would report an approval that can never arrive and skip the PATCH that would actually add it.
   const onApp = (name: string): boolean =>
     scopes.some((scope) => scope.name === name && (scope.type === undefined || scope.type === "tenant"));
-  // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages)
-  // and reading a quoted message (so a thread's opening ask carries what it replies to).
-  // The read capability has two spellings and `im:message` is the superset, so an app holding it needs
-  // nothing added — asking anyway would cost the author a second tenant-admin approval round.
+  // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages) and reading a
+  // quoted message (so a thread's opening ask carries what it replies to).
   const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
   const missingNames = missing.map((entry) => entry.request);
 
@@ -120,10 +109,7 @@ export async function configureGroupBehavior(input: {
     return { publishReady: true };
   }
   const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
-  // A missing scope is in one of two states, and they need different actions: already on the app but
-  // not yet approved (nothing to add — wait for the admin), or absent from the draft entirely.
-  // Same superset rule as `missing`: a draft already requesting `im:message` is awaiting approval, not
-  // missing something to add.
+  // A missing scope is in one of two states, and they need different actions.
   const awaitingApproval = missing.filter((entry) => scopeSatisfied(entry, onApp)).map((entry) => entry.request);
   const toRequest = missing.filter((entry) => !scopeSatisfied(entry, onApp)).map((entry) => entry.request);
   if (toRequest.length === 0) {
@@ -134,11 +120,8 @@ export async function configureGroupBehavior(input: {
     return { publishReady: false };
   }
   if (!explicit) {
-    // Defaulted, not chosen: report the gap and how to opt in, but leave the app's requested
-    // permission set untouched (a scripted re-run must not silently escalate a mention-only app).
-    // Name what is ACTUALLY missing: the common upgrade has the delivery scope already granted and
-    // only the read scope absent, and pointing at a granted permission sends the author looking in
-    // the wrong place.
+    // Defaulted, not chosen: report the gap and how to opt in, but leave the app's requested permission set untouched
+    // (a scripted re-run must not silently escalate a mention-only app).
     note(
       `[fastagent] ${missingNames.join(" + ")} not granted (or could not be verified) — group behavior was ` +
         `defaulted, so nothing was requested. Re-run with --group-behavior context to add ${missing.length > 1 ? "them" : "it"} ` +
@@ -160,16 +143,7 @@ export async function configureGroupBehavior(input: {
   return { publishReady: false };
 }
 
-/**
- * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the AGENT DIR;
- * credentials land in its `.env` — whose real path is {@link dotEnvPath}, printed rather than spelled,
- * because `FASTAGENT_SECRETS_DIR` moves it and a hardcoded `.secrets/.env` would name a file this run
- * did not write. Returns credentials for the
- * caller's generic .env write (the guided Lark path), or undefined when nothing remains to write —
- * the feishu path persists its own two credential stages internally (the App ID/Secret boundary is
- * irreversible and must not wait for the caller). Throws on refusal (a non-interactive lark run);
- * the caller surfaces that as a startup failure.
- */
+/** Create or resume the platform app behind `add feishu` / `add lark`. */
 export async function onboardFeishuCloudApp(
   target: string,
   kind: "feishu" | "lark",
@@ -186,8 +160,7 @@ export async function onboardFeishuCloudApp(
   const existing = await activeDotEnvValues(target, requiredNames);
   if (Object.keys(existing).length === requiredNames.length) {
     console.error(`[fastagent] ${requiredNames.join("/")} already set in ${env} — keeping them`);
-    // WebSocket still needs its console mode/publish guidance. A complete webhook can skip the rest of
-    // onboarding, but group visibility must still be inspected/configured on every explicit re-run.
+    // WebSocket still needs its console mode/publish guidance.
     if (ingress === "webhook") {
       const appId = existing[`${envPrefix}_APP_ID`] as string;
       const appSecret = existing[`${envPrefix}_APP_SECRET`] as string;
@@ -249,8 +222,7 @@ export async function onboardFeishuCloudApp(
               console.error(
                 `[fastagent] Lark could not validate the fresh tunnel yet (${String(error)}); retrying PATCH ${attempt + 1}/${attempts} in ${Math.round(retryMs / 1000)}s…`,
               ),
-            // A route-level 404 is definitive, not edge weather: fall back immediately. Retry only
-            // actual edge/network weather; scope/auth/config failures remain immediate.
+            // A route-level 404 is definitive, not edge weather: fall back immediately.
             shouldRetryPatch: (error) => !isFeishuConfigApiMissing(error) && isTransientFeishuRegistrationError(error),
           });
           console.error(
@@ -285,17 +257,7 @@ export async function onboardFeishuCloudApp(
   );
 }
 
-/**
- * The scan-to-create flow `add feishu` runs by default. The device-authorization grant
- * creates a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the
- * user confirms a link, then persists App ID/Secret at the irreversible boundary. That completes
- * WebSocket credentials; webhook continues through challenge-captured Token persistence. The throwaway
- * Request URL is later replaced by `dev --tunnel` / `deploy --run`.
- *
- * Feishu is the reference cloud and the only kind that runs this BOUND device flow. Lark is an explicit
- * compatibility profile: its lagging control plane uses the unbound launcher + guided credentials,
- * then probes the canonical token/mode bootstrap with a manual fallback.
- */
+/** The scan-to-create flow `add feishu` runs by default. */
 async function createFeishuAppFlow(
   target: string,
   existing: Readonly<Record<string, string>>,
@@ -317,8 +279,7 @@ async function createFeishuAppFlow(
     const app = await registerFeishuApp({
       name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
       desc: "Served by fastagent",
-      // The agent template alone is not enough to SERVE (see feishuAppAddons). Sensitive group
-      // permission approval and version publishing remain explicit console work.
+      // The agent template alone is not enough to SERVE (see feishuAppAddons).
       addons: feishuAppAddons(),
       onVerificationUrl: ({ url, expiresInS }) => {
         console.error(
@@ -328,9 +289,7 @@ async function createFeishuAppFlow(
       },
     });
     console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
-    // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's
-    // code) — but if the platform ever reports one, the credentials would land in the WRONG kind's env
-    // namespace and serve the wrong cloud. Fail visibly instead of writing them.
+    // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's code).
     if (app.tenantBrand && app.tenantBrand !== "feishu") {
       throw new Error(
         `the confirming account is a ${app.tenantBrand} tenant, but this is \`add feishu\` — run \`fastagent add ${app.tenantBrand}\` instead`,
@@ -339,9 +298,7 @@ async function createFeishuAppFlow(
     appId = app.appId;
     appSecret = app.appSecret;
 
-    // IRREVERSIBLE BOUNDARY: the remote app now exists and its one-time Secret is in memory. Persist
-    // both before any config read, temporary tunnel, or Token bootstrap can be interrupted. Partial old
-    // lines are overwritten because these newly-minted credentials are authoritative as one pair.
+    // IRREVERSIBLE BOUNDARY: the remote app now exists and its one-time Secret is in memory.
     const staged = {
       FEISHU_APP_ID: appId,
       FEISHU_APP_SECRET: appSecret,
@@ -382,10 +339,6 @@ async function createFeishuAppFlow(
   }
 
   // The webhook channel authenticates plaintext events by the platform-generated Verification Token.
-  // Try the cheap read first (the v6 detail MAY someday return `encryption`), then the real path: the
-  // token's only programmatic delivery is the url_verification challenge during registration — capture
-  // it over a throwaway tunnel (bootstrap-token.ts). Failing both is a one-line manual copy; the staged
-  // ID/Secret pair makes a re-run resume this App rather than mint another one.
   const tokenVar = "FEISHU_VERIFICATION_TOKEN";
   const api = createFeishuApi({ baseUrl: apiBase, appId, appSecret });
   let token: string | undefined;
@@ -394,7 +347,7 @@ async function createFeishuAppFlow(
     const cfg = await api.getAppConfig(appId);
     token = cfg.verificationToken;
   } catch {
-    /* the read surface is best-effort — the bootstrap below is the real path */
+    // the read surface is best-effort — the bootstrap below is the real path
   }
   if (!token) {
     console.error(
@@ -409,16 +362,14 @@ async function createFeishuAppFlow(
       webhookModeChanged = true;
       console.error(`[fastagent] Verification Token captured`);
     } catch (e) {
-      // Transient tunnel weather is the usual cause. Do NOT suggest re-running `add feishu` as a new
-      // scan: the staged pair makes the re-run resume THIS app; manual copy completes it too.
+      // Transient tunnel weather is the usual cause.
       console.error(
         `[fastagent] warn: could not capture the Verification Token: ${String(e)} — usually a transient tunnel issue; finish this app with the manual copy below`,
       );
     }
   }
   if (token) {
-    // Persist the second credential stage immediately too — opening the publish page and generic
-    // scaffold finalization happen only after the complete runtime credential set is durable.
+    // Persist the second credential stage immediately too.
     const staged = await appendChannelDotEnv(target, "feishu", { [tokenVar]: token }, [tokenVar]);
     console.error(`[fastagent] wrote ${staged.written.join(", ")} to ${env}`);
   } else {
@@ -427,8 +378,7 @@ async function createFeishuAppFlow(
     );
   }
   if (webhookModeChanged) {
-    // The bootstrap's PATCH flipped event mode in the DRAFT. It takes effect only after a version
-    // publish, which has no API; later dev/deploy runs change only the Request URL immediately.
+    // The bootstrap's PATCH flipped event mode in the DRAFT.
     const versionUrl = `${apiBase}/app/${appId}/version`;
     if (groupSetup.publishReady) {
       console.error(
@@ -443,8 +393,10 @@ async function createFeishuAppFlow(
   }
 }
 
-/** Active agent `.env` (`.secrets/.env`) values for the requested names — decided by THE .env
- * parser, so this check can never disagree with what `loadEnvFile` reads. Empty/commented values are absent. */
+/**
+ * Active agent `.env` (`.secrets/.env`) values for the requested names — decided by THE .env parser, so this check can
+ * never disagree with what `loadEnvFile` reads.
+ */
 async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
   let content: string;
   try {

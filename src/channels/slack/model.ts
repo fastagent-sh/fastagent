@@ -1,4 +1,4 @@
-/** Minimal Slack Events/Web API shapes used by the first-party channel. Unknown fields remain ignored. */
+/** Minimal Slack Events/Web API shapes used by the first-party channel. */
 
 export interface SlackFile {
   id?: string;
@@ -55,7 +55,6 @@ export interface SlackEventEnvelope {
   authorizations?: Array<{ team_id?: string; enterprise_id?: string; user_id?: string; is_bot?: boolean }>;
 }
 
-/** A routed Slack turn. `threadTs:null` explicitly sends at channel top level. */
 export interface SlackRoute {
   session?: string;
   channelId?: string;

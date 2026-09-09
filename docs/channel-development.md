@@ -52,6 +52,8 @@ degrade visibly, never silently.
 
 Deployment preflight also imports every enabled channel to inspect this function/object shape, but it does not call a route module or open a connection. Module top-level code must therefore be import-safe when runtime secrets are absent: capture options in the adapter factory, then validate credentials when the route module is activated or `connect()` runs. An import failure remains fatal because the same enabled channel would fail after deployment.
 
+### Route keys
+
 Route keys are either:
 
 ```txt

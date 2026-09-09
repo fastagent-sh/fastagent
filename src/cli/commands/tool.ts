@@ -9,15 +9,14 @@ import { turnContext } from "../../engines/pi/tool-context.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
-  // Argument shape first: malformed JSON is a USAGE error (exit 2), independent of whether the
-  // directory is an agent (a runtime failure, exit 1).
+  // Argument shape first: malformed JSON is a USAGE error (exit 2), independent of whether the directory is an agent
+  // (a runtime failure, exit 1).
   const args = parseToolArgs(argsJson);
   const { agentDir, workspace } = placementOrExit(resolve(dirArg));
   loadDotEnv(agentDir); // a tool may read a key from .env
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The same tool set dev/start mount (all coding tools + config.tools + discovered, deduped), so the runner
-  // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve the
-  // placement like the openers, so `fastagent tool` finds the SAME tools/ as dev/start.
+  // exercises exactly what gets served.
   const { tools, toolCollisions, toolFailures } = await resolveAgentTools(config, agentDir, workspace).catch(
     failStartup,
   );

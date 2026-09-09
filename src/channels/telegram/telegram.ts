@@ -1,26 +1,6 @@
 /**
- * Telegram bot channel: verify the webhook secret token → decide via `route(update)` → run the turn →
- * stream the agent's reply back to the chat, ACK 200. Reply model A: the channel holds the bot token
- * and posts the reply itself (chat UX), unlike the github channel's fire-and-forget. No SDK — inbound
- * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `route` (policy); the
- * channel owns transport + format + attachments.
- *
- * This file is the Telegram WIRING: ingress (secret/body cap/JSON) + the per-turn lifecycle + composition.
- * Every other concern lives in its own module, each owning its invariants:
- *   - parse.ts          pure message parsing: field extraction, prompt envelope, summon/route policy
- *   - invoke-turn.ts    run one turn: assemble inputs (resolve attachments) + stream `agent.invoke`
- *   - kit/turn-runner.ts the durable-turn lifecycle (accept → dequeue → execute → end) over the queue + store
- *   - turn-store.ts     durable turn intent (L1): pre-ACK persist, replay a crash-surviving turn
- *   - context-buffer.ts un-summoned group discussion, folded into the next answered turn
- *   - preview.ts        the live-preview pump ("💭 Thinking…" → edits → final answer) + terminal writes
- *   - telegram-api.ts   the single Bot API pipeline (timeouts, 429, ok-gating, HTML-aware split)
- *   - state.ts          atomic state files under the channel-state home
- *
- * Threaded Mode (topics in private chats, a @BotFather toggle) is auto-adapted: an update carrying
- * message_thread_id replies into that thread; without one the chat is linear. Same code, both modes.
- *
- * Authored against the public `@fastagent-sh/fastagent` surface only (the contract + the channel-authoring
- * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
+ * Telegram bot channel: verify the webhook secret token → decide via `route(update)` → run the turn → stream the
+ * agent's reply back to the chat, ACK 200.
  */
 import { isAbsolute, join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
@@ -61,13 +41,9 @@ export type { TelegramFailure, TelegramMessage, TelegramRoute, TelegramUpdate };
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
 
-/** One accepted turn: everything the runner needs to execute it. The executable intent is the persisted
- *  {@link StoredTurn} (so a new field the runner needs is durable by construction); PendingTurn adds only
- *  live-object fields that are NOT persisted — a restart's queue notice is gone, so `previewId` is
- *  reconstructed fresh on replay. */
+/** One accepted turn: everything the runner needs to execute it. */
 interface PendingTurn extends Omit<StoredTurn, "attempts"> {
-  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. Live
-   *  only; never persisted (a replayed turn sends a fresh preview). */
+  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. */
   previewId?: number;
 }
 
@@ -76,31 +52,17 @@ export interface TelegramChannelOptions {
   secretToken: string;
   /** Bot token — used to send the agent's reply via the Bot API. */
   botToken: string;
-  /** Policy: whether/where to answer an update (return null to ignore). Defaults to {@link defaultTelegramRoute}. */
+  /** Policy: whether/where to answer an update (return null to ignore). */
   route?: (update: TelegramUpdate) => TelegramRoute | null;
-  /**
-   * Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
-   * log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
-   * on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``.
-   */
+  /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator log). */
   onError?: (failed: TelegramFailure) => string | undefined;
   /** Bot @username for group @mention summon by the default route (else resolved via getMe). */
   botUsername?: string;
-  /** Bot API base, for tests. Defaults to the public Telegram endpoint. */
+  /** Bot API base, for tests. */
   apiBaseUrl?: string;
 }
 
-/**
- * Build a Telegram bot channel: policy options in, a {@link ChannelModule} out. The framework (or an
- * embedder) mounts it with the context — `telegramChannel(opts)` in `channels/telegram.ts` is the whole
- * glue; `agent` and the state root arrive via ctx, never through user code. Mounts `POST /telegram`
- * (the path `--tunnel` webhook registration expects). The adapter owns that route key; to serve the
- * SAME instance at a different path (e.g. behind a rewriting proxy), re-key the returned module:
- *   `(ctx) => ({ "POST /bot": telegramChannel(opts)(ctx)["POST /telegram"]! })`.
- * This re-routes ONE instance — it is not a way to run two telegram bots in one workspace: the state
- * home is derived from the channel kind (`<stateRoot>/channels/telegram`), so a second instance would
- * share the first's turn-store/context-buffer. One telegram instance per workspace (single-process).
- */
+/** Build a Telegram bot channel: policy options in, a {@link ChannelModule} out. */
 export function telegramChannel({
   secretToken,
   botToken,
@@ -120,10 +82,9 @@ export function telegramChannel({
       throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
     }
     const formatError = onError ?? defaultErrorMessage;
-    // One getMe at startup: the bot's @username (for the default route's group @mention summon and for
-    // recognising an addressed `/stop`, only when not supplied) and the group-privacy flag — privacy
-    // mode off is required to receive the un-summoned group messages that feed the context buffer, so
-    // warn if it is on.
+    // One getMe at startup: the bot's @username (for the default route's group @mention summon and for recognising an
+    // addressed `/stop`, only when not supplied) and the group-privacy flag — privacy mode off is required to receive
+    // the un-summoned group messages that feed the context buffer, so warn if it is on.
     let mentionName = botUsername;
     void callApi(apiBaseUrl, botToken, "getMe", {}).then(
       (me) => {
@@ -135,18 +96,15 @@ export function telegramChannel({
           );
         }
       },
-      // Name every capability the missing username costs, so "the bot ignores /stop@name" is
-      // diagnosable from this ONE line — the alternative, a warn per undecidable message, repeats a
-      // single startup fact on every update.
+      // Name every capability the missing username costs, so "the bot ignores /stop@name" is diagnosable from this
+      // ONE line.
       (e) =>
         log.warn(
           `[telegram] getMe failed; @mention summon, addressed /stop, and the privacy check are skipped: ${String(e)}`,
         ),
     );
-    // A bot token is "<bot_id>:<secret>" — the bot's own id is knowable synchronously, so reply-to-bot
-    // targeting is precise from the first update (no getMe race; getMe only resolves the @username).
-    // Every real token parses; one that doesn't (a mock/test token) degrades visibly: reply summon stays
-    // off (fail-closed in repliesToBot) until getMe supplies the username tier.
+    // A bot token is "<bot_id>:<secret>" — the bot's own id is knowable synchronously, so reply-to-bot targeting is
+    // precise from the first update (no getMe race; getMe only resolves the @username).
     const tokenId = Number(botToken.split(":")[0]);
     const botId = Number.isSafeInteger(tokenId) && tokenId > 0 ? tokenId : undefined;
     if (botId === undefined) {
@@ -155,27 +113,21 @@ export function telegramChannel({
     const decide =
       route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
-    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/telegram`
-    // (engine state at the root, channel state under `channels/<kind>/`) — derived, not an option, so
-    // the operator's ONE state knob (FASTAGENT_STATE_DIR) can never be silently bypassed by glue.
-    // The ctx contract says stateRoot is absolute (loadChannels enforces it); re-assert for embedders
-    // that mount without the loader — a silent cwd re-anchor is the bug this contract exists to kill,
-    // and every derived path (incl. attachment paths) relies on DownloadedFile's absolute-path contract.
+    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/telegram` (engine state at
+    // the root, channel state under `channels/<kind>/`).
     if (!isAbsolute(stateRoot)) {
       throw new Error(`telegramChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", "telegram");
     ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const buffer = createContextBuffer(join(stateHome, "buffers.json"));
-    // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash
-    // leaves it for replay on the next start. See turn-store.ts for the at-least-once semantics.
+    // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
+    // replay on the next start.
     const store = createTurnStore(join(stateHome, "turns.json"));
     const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
 
-    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not
-    // just an operator log line. Take over the ⏳ "Queued" notice in place if the turn had one (else send
-    // fresh) — leaving it pinned at "Queued" while sending a separate failure would double-post. Best-
-    // effort, like the queue notices.
+    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
+    // operator log line.
     const notifyDropped = (r: PendingTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
       const sent =
@@ -195,11 +147,8 @@ export function telegramChannel({
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, previewId: undefined }),
       bufferKey: (rec) => rec.placeKey,
       where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
-      // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the
-      // bot ignored me" once the current turn runs long — tell the asker NOW (reply-quoted, so it is
-      // clear whose ask is queued). Best-effort and post-ACK: a failed notice is a log line, never a
-      // failed update. The turn's live preview then edits this same message in place. The runner holds
-      // this same `rec` object, so mutating it here (awaited at dequeue) hands the turn its preview id.
+      // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the bot ignored
+      // me" once the current turn runs long.
       onQueuedBehind: (rec) => ({
         done: sendMessage(
           apiBaseUrl,
@@ -216,8 +165,7 @@ export function telegramChannel({
           (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
         ),
       }),
-      // Its ⏳ notice (if any) now falsely reads "Queued": delete it best-effort — the eventual replay
-      // sends a fresh preview, and leaving it would orphan a stale message above that.
+      // Its ⏳ notice (if any) now falsely reads "Queued": delete it best-effort.
       onDeferred: (rec) => {
         if (rec.previewId !== undefined) {
           void callApi(apiBaseUrl, botToken, "deleteMessage", {
@@ -267,26 +215,22 @@ export function telegramChannel({
         return text("invalid json\n", 400);
       }
 
-      // Decide whether/where to answer, then run the turn. ACK 200 immediately (the turn may outlast the
-      // webhook timeout); lifecycle goes to stderr — after the 200 there is no response body, so those
-      // lines are the operator's only signal.
+      // Decide whether/where to answer, then run the turn.
       const m = pickMessage(update);
       if (!m) return new Response(null, { status: 200 });
       const placeKey = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
       const r = decide(update);
       if (!r) {
-        // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy
-        // off to be delivered here at all). Empty/service messages and non-group chats keep no buffer.
+        // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be
+        // delivered here at all).
         const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
         const content = messageText(m);
         if (isGroup && content) {
-          // OWN attachments only: each message is its own buffer entry, so a reply's referenced
-          // attachment is already (or will be) the other entry's — recounting it here would duplicate
-          // downloads and squeeze the attachment cap.
+          // OWN attachments only: each message is its own buffer entry, so a reply's referenced attachment is already
+          // (or will be) the other entry's.
           const fileIds = ownFiles(m);
           const imageIds = ownImages(m);
-          // A captioned attachment renders as its caption — append the attachment marker so the fold
-          // ALWAYS labels attachments (that label + sender is all the attribution a photo gets).
+          // A captioned attachment renders as its caption.
           const summary = attachmentSummary(m);
           const bodyLine = summary && content !== summary ? `${content} ${summary}` : content;
           buffer.push(placeKey, {
@@ -302,22 +246,11 @@ export function telegramChannel({
       }
       const session = r.session ?? placeKey;
       const chatId = r.chatId ?? m.chat.id;
-      // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no
-      // reply-quote. Only when the RESOLVED target is the message's own chat+thread: a route that
-      // redirects elsewhere must not carry a reply_parameters that resolves in the wrong place (fail, or
-      // quote a same-id message there). Compare VALUES, not whether the route touched the field — a route
-      // that explicitly returns the same chat/thread still quotes.
+      // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
       const threadId = r.threadId ?? m.message_thread_id;
       const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
       const replyTo = m.chat.type !== "private" && sameTarget ? m.message_id : undefined;
-      // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the
-      // run it stops. Awaited before the ACK: dispatch + one sendMessage is fast, and a delivery failure
-      // logs instead of failing the webhook. Read AFTER the route, on the route's own session: the route
-      // is both the gate (a route that ignores this chat must not have the bot abort or answer in it) and
-      // the session authority (a route that remaps `session` would otherwise have its stop abort a
-      // session nobody runs). The default route summons an ADDRESSED `/stop` in a group for this reason:
-      // the general slash-command refusal would leave it buffered as discussion while the run kept going.
-      // An unaddressed one is not a command at all (see telegramStop) and never reaches here.
+      // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the run it stops.
       if (telegramStop(update, { botUsername: mentionName, botId })) {
         const feedback = await dispatchStop(control, session, "[telegram]");
         await sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }).catch((e) =>
@@ -347,9 +280,7 @@ export function telegramChannel({
       }
       return new Response(null, { status: 200 });
     };
-    // Test/observability seam: await the fire-and-forget turns this handler enqueues. Inert in production
-    // (nothing reads it; the runtime never drains — see turn-queue), it lets a test await a turn
-    // deterministically instead of polling for side effects to settle.
+    // Test/observability seam: await the fire-and-forget turns this handler enqueues.
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () => runner.idle();
     return { "POST /telegram": handler };
   };

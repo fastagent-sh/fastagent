@@ -1,8 +1,6 @@
 /**
- * `fastagent fire <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for schedules
- * (like `invoke` is for a prompt). Fires `schedules/<name>.ts` now, without waiting for its cron, using
- * the schedule's stable session (faithful to the served behavior). Does NOT advance the schedule's fire
- * state — a test run must never make the scheduler skip the real next run.
+ * `fastagent fire <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for schedules (like `invoke`
+ * is for a prompt).
  */
 import { join } from "node:path";
 import { displayPath } from "../../paths.ts";
@@ -23,14 +21,14 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const placement = await enterAgentCommand(dirArg, opts);
-  // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent
-  // dir), so `fire` sees the same set the scheduler serves.
+  // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent dir), so `fire` sees
+  // the same set the scheduler serves.
   const { schedules, failures } = await loadSchedules(placement.agentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
-    // Name the discovery path: a schedule misplaced in the workspace (outside the agent dir)
-    // should read as "wrong place", not "broken file".
+    // Name the discovery path: a schedule misplaced in the workspace (outside the agent dir) should read as "wrong
+    // place", not "broken file".
     failStartup(
       new Error(
         `unknown schedule "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "schedules")) ?? "schedules"}). ` +

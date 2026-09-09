@@ -1,18 +1,4 @@
-/**
- * Definition domain: read an agent definition directory (AGENTS.md + skills/) into memory. Produces
- * data; create.ts consumes it.
- *
- * IO policy: persona.md + skills load through ExecutionEnv (portable across local/sandbox/remote); the
- * invoke path never touches disk. EXCEPTION — ② project context comes from pi's loadProjectContextFiles,
- * which reads via node fs DIRECTLY (not the injected `env`) and, on failure, at best warns to stderr and
- * at worst is fully silent (its `existsSync` probe swallows a permission error) — no structured signal. So under a
- * non-local ExecutionEnv the ② files still resolve against THIS process's filesystem, not the target env
- * — a known break in the portability contract, deferred with the sandbox work (core.md §6). config/auth/
- * sessions and this module's Node helpers are composition-root code and may use node fs.
- *
- * Errors: a broken persona.md / unresolvable dir throws (fail loudly at startup); non-fatal findings
- * (bad skill files, name collisions) are returned as data. An unreadable ② context file only warns (pi).
- */
+/** Definition domain: read an agent definition directory (AGENTS.md + skills/) into memory. */
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -27,25 +13,21 @@ import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 
-/** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
+/** A same-name skill collision (the discarded side). */
 export interface SkillCollision {
   name: string;
   winnerPath: string;
   loserPath: string;
 }
 
-/** Result of loading a definition directory. Produced by {@link loadAgentDefinition}. */
+/** Result of loading a definition directory. */
 export interface LoadedDefinition {
-  /**
-   * Project-context files feeding segment ② `<project_context>`, sourced via pi's `loadProjectContextFiles`:
-   * the agentDir's own AGENTS.md/CLAUDE.md FIRST, then every AGENTS.md from root down to `cwd` (so the
-   * file nearest `cwd` comes LAST — pi's array order). Empty when none exist. This WALKS cwd's ancestors (pi's coding-agent behaviour) — see core.md §6.
-   */
+  /** Project-context files feeding segment ② `<project_context>`, sourced via pi's `loadProjectContextFiles`. */
   contextFiles: Array<{ path: string; content: string }>;
   /**
-   * Verbatim `persona.md` content — the authored persona that OVERRIDES segment ①'s identity line
-   * (piBasePrompt keeps the tool list + guidelines; NOT a full system-prompt replacement — that is L1
-   * createPiAgent's `instructions`). undefined when absent → segment ① is the default engine identity.
+   * Verbatim `persona.md` content — the authored persona that OVERRIDES segment ①'s identity line (piBasePrompt keeps
+   * the tool list + guidelines; NOT a full system-prompt replacement — that is L1 createPiAgent's `instructions`).
+   * undefined when absent → segment ① is the default engine identity.
    */
   persona?: string;
   skills: Skill[];
@@ -58,22 +40,21 @@ export interface LoadedDefinition {
 }
 
 export interface LoadAgentDefinitionOptions {
-  /**
-   * Working directory whose ancestors are walked for context files (segment ②). Default = `agentDir`.
-   * The opener passes the workspace instead, so an agent that lives in `agentDir` picks up the
-   * project's AGENTS.md up the tree (core.md scenario grid).
-   */
+  /** Working directory whose ancestors are walked for context files (segment ②). */
   cwd?: string;
   env?: ExecutionEnv;
 }
 
-/** Read an agent definition. persona.md/skills come from `agentDir`; ② context = pi's loadProjectContextFiles({ cwd, agentDir }). */
+/**
+ * Read an agent definition. persona.md/skills come from `agentDir`; ② context = pi's loadProjectContextFiles({ cwd,
+ * agentDir }).
+ */
 export async function loadAgentDefinition(
   agentDir: string,
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
-  // One resolved default for the working directory (env cwd AND the context-walk start), so they can
-  // never diverge if a caller passes a relative agentDir.
+  // One resolved default for the working directory (env cwd AND the context-walk start), so they can never diverge if
+  // a caller passes a relative agentDir.
   const cwd = options.cwd ?? agentDir;
   const e = options.env ?? new NodeExecutionEnv({ cwd });
   const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
@@ -82,13 +63,11 @@ export async function loadAgentDefinition(
   }
   const root = rootResult.value;
 
-  // ② project context, following pi: the agentDir's own AGENTS.md + every AGENTS.md walking cwd up to
-  // root (loadProjectContextFiles). It reads via node fs directly (mirrors pi), NOT the ExecutionEnv —
-  // a deliberate, deferred deviation from this module's portable-IO policy (revisit with the sandbox; core.md §6).
+  // ② project context, following pi: the agentDir's own AGENTS.md + every AGENTS.md walking cwd up to root
+  // (loadProjectContextFiles).
   const contextFiles = loadProjectContextFiles({ cwd, agentDir: root });
 
-  // persona.md → segment ① persona (overrides the identity line). Same error policy as AGENTS.md:
-  // only not_found means "absent"; any other read error surfaces rather than silently dropping the persona.
+  // persona.md → segment ① persona (overrides the identity line).
   const personaPath = join(root, "persona.md");
   const personaRead = await e.readTextFile(personaPath, BACKGROUND_CONTEXT);
   if (!personaRead.ok && personaRead.error.code !== "not_found") {
@@ -100,43 +79,7 @@ export async function loadAgentDefinition(
   return { contextFiles, persona, skills, diagnostics, collisions, dir: root };
 }
 
-/**
- * Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none.
- *
- * Paths, not loaded objects — unlike skills (data: content inline, serializable), an extension is
- * CODE that pi loads with jiti and binds to its own eventBus/runtime, so loading it here would
- * reimplement pi's loader. The engine binding hands these to pi as `additionalExtensionPaths`, which
- * survives `noExtensions: true` — that flag suppresses MACHINE-GLOBAL discovery (`~/.pi`), and the
- * definition's own extensions were only ever collateral to it. FILES, not the directory: pi's paths
- * are module specifiers, and a directory fails as `Cannot find module` into a
- * `LoadExtensionsResult.errors` entry nothing reads.
- *
- * SEPARATE from {@link loadAgentDefinition} on purpose. Prompt and skills are re-read every invoke
- * ("the directory is the agent, LIVE"); scanning for extension entry points is not, since the set
- * cannot change without a restart. Called once per assembly, like `tools/`.
- *
- * Discovery runs on BOTH paths; loading does not. `chat` hands these to pi and runs them fully.
- * Serving only announces them — pi's extension runtime is shared across sessions, and serving has
- * concurrent turns for unrelated conversations (see `PiAgentSessionFactoryOptions.extensionPaths`).
- * The refusals below are therefore about what the ARTIFACT may contain, and hold for both.
- *
- * Discovery follows pi's own rules, so an extension that works in pi works here:
- *
- * 1. a direct `*.ts` / `*.js` file;
- * 2. a subdirectory with `index.ts` / `index.js`.
- *
- * pi has a third rule — a subdirectory whose `package.json` declares a `pi` field — which is NOT
- * implemented here. That shape is reported rather than skipped: a definition whose extension silently
- * fails to load is the failure mode this whole path exists to remove.
- *
- * Containment matches skills/tools/channels/schedules (the fifth of five surfaces): a symlinked
- * `extensions/` escaping the agent dir is refused, and — like `loadModuleDir`, whose `entry.isFile()`
- * excludes them — a symlinked ENTRY is not loaded either. pi's own discovery does follow those, but
- * an extension reached through a link out of the definition is code the artifact does not carry: it
- * resolves on the authoring machine and is missing in the container. Refused loudly, never silently.
- *
- * Absent is normal and silent; a FILE at that path is not — that is an author who meant something.
- */
+/** Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none. */
 export async function loadExtensionPaths(
   agentDir: string,
   options: { cwd?: string; env?: ExecutionEnv } = {},
@@ -156,12 +99,7 @@ export async function loadExtensionPaths(
   const paths: string[] = [];
   for (const entry of listed.value) {
     if (entry.kind === "symlink") {
-      // EVERY symlink here is announced, without guessing whether it meant to be an extension. The
-      // two mistakes are not equal: a needless line about a symlinked README costs a glance, while
-      // staying quiet about a symlinked extension loses a feature silently and only shows up in the
-      // container. A name-based guess also cannot see through the link — `audit.ext -> some/dir` is
-      // a directory candidate to pi and a mystery here — so the warning says what it knows and
-      // tells the author when to ignore it.
+      // EVERY symlink here is announced, without guessing whether it meant to be an extension.
       warnSymlinkRefused(entry.path);
       continue;
     }
@@ -174,8 +112,7 @@ export async function loadExtensionPaths(
     if (index.path) {
       paths.push(index.path);
     } else if (!index.refused) {
-      // Silent when the index WAS found and refused for being a symlink: that warning already named
-      // the real problem, and "expected index.ts" on top of it describes a directory that has one.
+      // Silent when the index WAS found and refused for being a symlink.
       log.warn(
         `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
           `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
@@ -185,11 +122,7 @@ export async function loadExtensionPaths(
   return paths.sort();
 }
 
-/**
- * The first candidate that is a REAL file, and whether one was found but REFUSED as a symlink.
- * `exists` would follow the link, which is how a subdirectory's `index.ts` could otherwise point
- * outside the definition and slip past the rule the top-level entries already follow.
- */
+/** The first candidate that is a REAL file, and whether one was found but REFUSED as a symlink. */
 async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ path?: string; refused: boolean }> {
   let refused = false;
   for (const candidate of candidates) {
@@ -215,14 +148,13 @@ function warnSymlinkRefused(path: string): void {
   );
 }
 
-/** The skills half, shared by the full load and {@link loadAgentSkills}. `root` is already resolved. */
+/** The skills half, shared by the full load and {@link loadAgentSkills}. */
 async function readSkills(
   e: ExecutionEnv,
   root: string,
 ): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
-  // Skills come ONLY from the definition's own skills/ (no external/global mount), so the same
-  // definition loads the same skills on every machine — and, like tools/channels/schedules, a symlink
-  // that escapes the agent dir is refused rather than followed (the fourth of four surfaces).
+  // Skills come ONLY from the definition's own skills/ (no external/global mount), so the same definition loads the
+  // same skills on every machine.
   await assertInsideAgentDir(root, "skills");
   const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")], BACKGROUND_CONTEXT);
   const byName = new Map<string, Skill>();
@@ -239,10 +171,8 @@ async function readSkills(
 }
 
 /**
- * The definition's skills ALONE, resolved the same way `loadAgentDefinition` resolves them (same
- * loader, same containment guard, same first-wins collision rule) — for readers that need only the
- * names and must not pay the full load's ② context walk (every AGENTS.md from cwd to root) for them.
- * The control plane's `commands()` is that reader, called when a composer opens its completion list.
+ * The definition's skills ALONE, resolved the same way `loadAgentDefinition` resolves them (same loader, same
+ * containment guard, same first-wins collision rule).
  */
 export async function loadAgentSkills(
   agentDir: string,
@@ -252,13 +182,11 @@ export async function loadAgentSkills(
   const e = options.env ?? new NodeExecutionEnv({ cwd });
   const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
   if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
-  // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}: readers key per-definition state
-  // (the findings memo) on it, and "./agent" vs an absolute path must not become two definitions.
+  // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}.
   return { ...(await readSkills(e, rootResult.value)), dir: rootResult.value };
 }
 
-/** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath.
- *  A non-existent path can't be realpath'd, so it stays as the plain absolute resolve. */
+/** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath. */
 export function canonicalPath(p: string): string {
   const resolved = resolve(p);
   try {

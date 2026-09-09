@@ -1,11 +1,4 @@
-/**
- * What `dev` (its worker) and `start` need beyond the service itself: binding a port, the shutdown
- * order, the startup report, the optional Cloudflare quick tunnel, and the options the CLI hands the
- * assembly (`cliMountOptions`, `resolveBindHost` — policy ABOUT the assembly, decided per command).
- *
- * The ASSEMBLY itself is not here — it lives in `src/service.ts`, which a public entry may import and
- * this directory may not be (it decides process-level things: `fail.ts` calls `process.exit`).
- */
+/** What `dev` (its worker) and `start` need beyond the service itself. */
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
@@ -21,19 +14,11 @@ import { declaredChannels } from "../channels/discover.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
-/**
- * Refuse `--tunnel` with a bind that cloudflared cannot reach: it dials the NAME `localhost:<port>`
- * (the dev supervisor's tunnel too), so anything outside `127.0.0.1`/`::1`/wildcard — including a
- * `127.0.0.2` bind, loopback though it is — would leave the tunnel up and 502ing every request.
- * Checked BEFORE the bind (the flag alone pre-spawn in `dev`, again once config is loaded, since
- * `http.host` can carry the address), so the failure is clean rather than a live-but-broken public URL.
- * `source` decides the exit code, per fail.ts: a flag COMBINATION is a usage error (2), a value that
- * came from config is broken runtime configuration (1).
- */
+/** Refuse `--tunnel` with a bind that cloudflared cannot reach. */
 export function assertTunnelBindable(host: string | undefined, tunnel: boolean, source: "flag" | "config"): void {
   if (!tunnel || answersLocalhost(host)) return;
-  // Name the source, not just the exit code: under `config` there is no `--bind` to change and no flag
-  // to drop, so flag-only wording would send the reader looking for something they never typed.
+  // Name the source, not just the exit code: under `config` there is no `--bind` to change and no flag to drop, so
+  // flag-only wording would send the reader looking for something they never typed.
   const fix =
     source === "flag"
       ? "bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel"
@@ -43,11 +28,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
   failStartup(new Error(message));
 }
 
-/**
- * The bind address a serve uses: the flag, else `http.host` from the config — through `bindAddress`,
- * so a configured `localhost` is an ADDRESS by the time anything binds, renders or dials it — checked
- * against `--tunnel` with the exit code the SOURCE of the value earns (serve.ts assertTunnelBindable).
- */
+/** The bind address a serve uses: the flag, else `http.host` from the config. */
 export function resolveBindHost(
   bindFlag: string | undefined,
   configured: string | undefined,
@@ -69,8 +50,8 @@ export function cliMountOptions(wrapAgent: (agent: Agent) => Agent): MountAgentS
 }
 
 /**
- * Bind, report, announce the control plane, open the tunnel, and close in order on a signal — the
- * tail dev's worker and start share once the service is assembled.
+ * Bind, report, announce the control plane, open the tunnel, and close in order on a signal — the tail dev's worker
+ * and start share once the service is assembled.
  */
 export function serveService(
   service: AgentService,
@@ -94,11 +75,7 @@ export function serveService(
   });
 }
 
-/**
- * The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and
- * what mounted. One function because both commands must say the same thing at the same moment —
- * after readiness, never at socket bind.
- */
+/** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
   for (const line of readyAddressLines(host, boundPort, service.channels.builtinInvoke)) log.info(line);
@@ -108,15 +85,7 @@ export function reportServing(service: AgentService, host: string | undefined, b
   }
 }
 
-/**
- * The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies.
- * ONE function because they are one message — they were two, and `--bind` updated the first while the
- * second went on dialing `localhost`, which is precisely what a non-wildcard bind stops answering. Now
- * neither can be changed without the other in view, and the address has a single derivation.
- *
- * A wildcard bind is every interface, and naming one address there would understate it — but the curl
- * still needs one to dial, which is what `clientHost` gives (loopback for a wildcard, itself otherwise).
- */
+/** The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies. */
 export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   const lines = [
@@ -131,14 +100,8 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
 }
 
 /**
- * Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the control plane
- * once the port is known, and say what reaches it. Returns the file's removal — wired into the
- * shutdown so a stale file cannot point a client at a dead port (`attach` then fails with "cannot
- * read", accurate, instead of a stale token's misleading 401/ECONNREFUSED). A hard exit leaves the
- * file behind: advisory, overwritten by the next boot.
- *
- * Here and not in the assembly: the file, its permissions and the warnings are how THIS process's
- * operator finds and protects the plane. An embedder distributes `service.control` itself.
+ * Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the control plane once the port is
+ * known, and say what reaches it.
  */
 export function announceControl(
   control: { token: string; prefix: string } | undefined,
@@ -152,9 +115,7 @@ export function announceControl(
   const url = `http://${clientHost(bind.host)}:${boundPort}`;
   writeFileAtomic(path, `${JSON.stringify({ url, token: control.token })}\n`, 0o600);
   log.info(`[fastagent] session control on ${control.prefix}/* (token in ${path})`);
-  // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
-  // loudly, and the LAN path must not be the silent third way past the local trust story. A
-  // loopback bind closes exactly that reach, so it earns silence.
+  // LAN-reachable with the bearer token as the only protection.
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(
@@ -174,22 +135,16 @@ export function announceControl(
     try {
       rmSync(path, { force: true });
     } catch {
-      /* the file is advisory — shutdown must not fail on it */
+      // the file is advisory — shutdown must not fail on it
     }
   };
 }
 
-/** What the CLI gives a service to stop in, and the hard exit that follows it. The order matters:
- *  a forced exit before the service answers would report a clean shutdown over a stuck channel. */
+/** What the CLI gives a service to stop in, and the hard exit that follows it. */
 const SHUTDOWN_GRACE_MS = 800;
 const FORCED_EXIT_MS = 1_500;
 
-/**
- * Bind HTTP and report ready — but only once the SERVICE is, which is not the same moment: a bound
- * socket is not a serving agent while a declared long-connection channel is still dialling, so this
- * awaits `hooks.ready` (mountAgentService owns the connections themselves) before announcing
- * anything. Signals are the sole clean-shutdown command; `host` unset binds all interfaces.
- */
+/** Bind HTTP and report ready — but only once the SERVICE is, which is not the same moment. */
 export function serve(
   handler: ChannelHandler,
   bind: { port: number; host?: string },
@@ -206,21 +161,15 @@ export function serve(
   const stop = (exitCode: number): void => {
     if (stopping) return;
     stopping = true;
-    // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires
-    // regardless. No drain — an in-flight turn is cut, which is the existing contract.
-    // Later than the service's own close deadline (SHUTDOWN_GRACE_MS below), or the process leaves
-    // at 0 before `close()` has said a channel would not stop.
+    // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires regardless.
     const deadline = setTimeout(() => {
       log.error(`[fastagent] shutdown did not finish within ${FORCED_EXIT_MS}ms; exiting`);
       process.exit(1);
     }, FORCED_EXIT_MS);
-    // Stop accepting FIRST, before anything is awaited. `onShutdown` waits for long connections to
-    // close, and a socket still listening through that wait would dispatch new work into channels
-    // and a scheduler that are already shutting down.
+    // Stop accepting FIRST, before anything is awaited.
     const closingServer = hosted.close();
     hosted.closeAllConnections();
-    // A cleanup that failed is not a clean exit: `close()` reports a channel that would not stop,
-    // and swallowing it here would end the process at 0 over a resource still holding on.
+    // A cleanup that failed is not a clean exit.
     void Promise.allSettled([closingServer, Promise.resolve(hooks.onShutdown?.())]).then((outcomes) => {
       let code = exitCode;
       for (const outcome of outcomes) {
@@ -238,9 +187,9 @@ export function serve(
   hosted.listening.then(
     async (boundPort) => {
       try {
-        // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come
-        // up, and reporting ready before it does tells the supervisor (and --tunnel, and the
-        // operator) that a surface is live while a channel is dead.
+        // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come up, and reporting
+        // ready before it does tells the supervisor (and --tunnel, and the operator) that a surface is live while a
+        // channel is dead.
         await hooks.ready;
         if (stopping) return;
         hooks.onListening?.(boundPort);
@@ -250,8 +199,8 @@ export function serve(
     },
     (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
-        // With a bind address the port is only taken ON THAT interface, so moving the bind is as valid
-        // a fix as moving the port.
+        // With a bind address the port is only taken ON THAT interface, so moving the bind is as valid a fix as
+        // moving the port.
         failStartup(
           new Error(
             `${bindLabel(host, port)} is already in use; choose another with ` +
@@ -259,8 +208,7 @@ export function serve(
           ),
         );
       }
-      // Through `bindLabel`, like every other message about a bind: hand-concatenating gives `:::8787`
-      // for an IPv6 bind and a bare `:8787` for the wildcard, which reads as an explicit bind of nothing.
+      // Through `bindLabel`, like every other message about a bind.
       failStartup(new Error(`cannot bind http channel on ${bindLabel(host, port)}: ${error.message}`));
     },
   );

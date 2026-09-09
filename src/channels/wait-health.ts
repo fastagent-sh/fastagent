@@ -1,25 +1,15 @@
 /**
- * Readiness probe for a server THIS process can reach directly — the local port `deploy docker --run`
- * just published, and the live probes' own origins.
- *
- * NOT a probe for a public URL a platform must reach: a freshly minted hostname (a quick tunnel, a
- * fresh deploy) is routinely unreachable from here for a minute or more while the platform reaches it
- * fine, and polling it hard from t+0 makes that worse (#421). The webhook registrars therefore let the
- * platform's own URL verification be the probe, retried, instead of gating on this.
+ * Readiness probe for a server THIS process can reach directly — the local port `deploy docker --run` just published,
+ * and the live probes' own origins.
  */
 import { setTimeout as sleep } from "node:timers/promises";
 
-/**
- * Poll `healthUrl` until it responds 200, or the timeout elapses. Any error (not routable yet, DNS not
- * settled, connection refused) is a "keep waiting", not a failure — that IS the readiness signal. Each
- * probe has its own short timeout so one slow attempt can't eat the whole budget.
- */
+/** Poll `healthUrl` until it responds 200, or the timeout elapses. */
 export async function waitForHealth(
   healthUrl: string,
   timeoutMs: number,
   intervalMs: number,
-  /** Optional liveness answer from whoever runs the server. A budget long enough to absorb a slow
-   *  first boot is also how long a CRASHED server would be waited for, and it cannot come back. */
+  /** Optional liveness answer from whoever runs the server. */
   stillStarting?: () => Promise<boolean>,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -27,7 +17,7 @@ export async function waitForHealth(
     try {
       if ((await fetch(healthUrl, { signal: AbortSignal.timeout(5000) })).ok) return true;
     } catch {
-      /* not routable yet — keep polling until the deadline */
+      // not routable yet — keep polling until the deadline
     }
     if (Date.now() >= deadline) return false;
     if (stillStarting && !(await stillStarting())) return false;

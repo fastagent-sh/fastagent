@@ -1,10 +1,4 @@
-/**
- * `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. Where the files land is
- * a default plus one knob, never a detection and never a prompt — non-interactive executors (coding
- * agents) get deterministic behavior they can read. By default the agent goes into `./fastagent/` and the
- * directory around it is untouched; `--agent-dir <name>` names that directory anything, and `--agent-dir .`
- * (spelled `--flat`) makes the directory itself the agent (a standalone agent repo, a monorepo package).
- */
+/** `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. */
 import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { DEFAULT_AGENT_DIRNAME, SECRETS_DIRNAME, agentsAt, displayPath } from "../../paths.ts";
@@ -22,8 +16,7 @@ export interface InitOptions {
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  // A rejected flag VALUE is the usage class, same as one the parser rejects — so it is checked here,
-  // where exit 2 lives, not inside the scaffolder (whose throws are runtime failures, exit 1).
+  // A rejected flag VALUE is the usage class, same as one the parser rejects.
   const requested = agentDirName(opts.agentDir);
   const invalid = agentDirNameError(requested);
   if (invalid) failUsage(`--agent-dir "${requested}" ${invalid}`);
@@ -37,17 +30,16 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     agentDir: requested,
   }).catch(failStartup);
   const flat = rel === ".";
-  // The agent dir is where the manifest lives, so any install runs there — never against a surrounding
-  // workspace's package.json (its deps are its own concern). With `.` they are the same directory.
+  // The agent dir is where the manifest lives, so any install runs there — never against a surrounding workspace's
+  // package.json (its deps are its own concern).
   const agentDir = resolve(dir, rel);
   console.error(
     `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"} — ${flat ? "the directory IS the agent" : `agent in ./${rel}/`}`,
   );
   console.error(`  created: ${created.join(", ")}`);
-  // A second agent beside an existing one is a supported shape, not an accident (an engineer's, a PM's
-  // and a content owner's agent can drive one repository), but it changes how this workspace resolves
-  // from now on — so say it HERE, at the moment it becomes true, instead of at the next command's
-  // refusal. The default name is the tie-break, so a workspace keeping `fastagent/` needs nothing.
+  // A second agent beside an existing one is a supported shape, not an accident (an engineer's, a PM's and a content
+  // owner's agent can drive one repository), but it changes how this workspace resolves from now on — so say it HERE,
+  // at the moment it becomes true, instead of at the next command's refusal.
   const siblings = agentsAt(dir).map((a) => basename(a));
   if (siblings.length > 1) {
     const pick = siblings.includes(DEFAULT_AGENT_DIRNAME)
@@ -56,9 +48,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     console.error(`[fastagent] note: ${dir} now holds ${siblings.length} agents (${siblings.join(", ")}) — ${pick}`);
   }
   if (kept.length > 0) {
-    // Adopting a directory: its own files win, always. Say which ones — and for the two that carry a
-    // consequence, say what that consequence is, because keeping them silently leaves the agent broken
-    // (package.json) or its machinery committable (.gitignore).
+    // Adopting a directory: its own files win, always.
     console.error(`  kept your existing: ${kept.join(", ")}`);
     if (kept.includes(join(rel, "package.json")) && complete) {
       const add =
@@ -70,9 +60,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     }
     const keptSecretsIgnore = kept.includes(join(rel, SECRETS_DIRNAME, ".gitignore"));
     if (kept.includes(join(rel, ".gitignore"))) {
-      // The "credentials are covered either way" reassurance holds only when `.secrets/.gitignore` is
-      // OURS. On an adopted directory it may be the author's too, and then we know nothing about it —
-      // `add <channel>` defends that file with a write; `init` must not claim more than it did.
+      // The "credentials are covered either way" reassurance holds only when `.secrets/.gitignore` is OURS.
       console.error(
         `[fastagent] note: your .gitignore is untouched — make sure it ignores node_modules, .state ` +
           `and .cache` +
@@ -106,7 +94,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }
 
-/** Run `npm install` in `cwd` (inherit stdio). Returns the exit code. */
+/** Run `npm install` in `cwd` (inherit stdio). */
 function npmInstall(cwd: string): Promise<number> {
   return new Promise((resolveCode) => {
     const child = spawn("npm", ["install"], { cwd, stdio: "inherit" });

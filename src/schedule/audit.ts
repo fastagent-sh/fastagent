@@ -1,12 +1,6 @@
 /**
- * The scheduler's run audit: ONE line per fired turn in `<stateRoot>/schedule/runs.jsonl` — the answer
- * to cron's classic pain, "did last night's run silently fail?". Append-only JSONL (grows, never
- * rewritten — the same shape as the core session store), carrying the FULL reply text: a run record is
- * an immutable snapshot of what that fire produced, which the rolling session (where multiple fires
- * interleave with user turns) cannot give you per-fire. Operational audit only — the conversational
- * truth stays in the session store.
- *
- * Appending is TOTAL (failures are logged, never thrown): the audit must not be able to break a fire.
+ * The scheduler's run audit: ONE line per fired turn in `<stateRoot>/schedule/runs.jsonl` — the answer to cron's
+ * classic pain, "did last night's run silently fail?".
  */
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -20,7 +14,7 @@ export interface RunRecord {
   ms: number;
   /** `deferred` = a wake into a busy session, re-scheduled (not a final outcome for that wake-up). */
   outcome: "completed" | "failed" | "deferred";
-  /** The turn's full reply text (completed). Delivery is the agent's tools' job — this is the audit copy. */
+  /** The turn's full reply text (completed). */
   reply?: string;
   /** The failure details (failed). */
   error?: string;
@@ -30,7 +24,6 @@ function runsPath(stateRoot: string): string {
   return join(stateRoot, "schedule", "runs.jsonl");
 }
 
-/** Append one run record. Total — an audit-write failure is logged and swallowed (never breaks a fire). */
 export function appendRun(stateRoot: string, record: RunRecord): void {
   try {
     const path = runsPath(stateRoot);
@@ -41,8 +34,7 @@ export function appendRun(stateRoot: string, record: RunRecord): void {
   }
 }
 
-/** Read the run history (optionally filtered by name), oldest first. A malformed line is skipped with a
- *  warn (fail-visible, like the wakeups store); a missing file is an empty history (first run). */
+/** Read the run history (optionally filtered by name), oldest first. */
 export function readRuns(stateRoot: string, name?: string): RunRecord[] {
   let raw: string;
   try {

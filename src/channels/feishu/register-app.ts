@@ -1,20 +1,4 @@
-/**
- * One-click app creation ("scan to create") — the OAuth 2.0 Device Authorization Grant (RFC 8628)
- * flow the platform provides for agent apps: `begin` returns a one-time verification URL the user
- * opens in Feishu/Lark and confirms (the platform pre-configures the agent app template: bot
- * capability, messaging scopes, event subscriptions); polling returns the new app's credentials.
- *
- * Hand-rolled on fetch, no SDK: the wire protocol is two form-encoded POSTs to the accounts endpoint
- * plus RFC 8628's polling error dance — shared verbatim by all four official SDKs (node/python/java/go),
- * which makes it a de-facto stable surface even though only the SDKs document it. Provenance:
- * larksuite/node-sdk `scene/registration` (registerApp). If the platform ever moves this behind
- * something non-trivial (signed payloads, websockets), adopt the official SDK instead of chasing it —
- * the same tripwire as feishu-api.ts.
- *
- * The scanning user's tenant decides the brand: a Lark-tenant user flips polling to the Lark accounts
- * domain mid-flow (`tenant_brand: "lark"`), and the result carries the brand so the caller can point
- * everything else (API origin) at the right cloud.
- */
+/** One-click app creation ("scan to create"). */
 
 import { gzipSync } from "node:zlib";
 
@@ -27,10 +11,8 @@ const ENDPOINT = "/oauth/v1/app/registration";
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * Additive app config carried on the confirm-page URL (`addons` query param): extra scopes/events
- * merged ON TOP of the platform's agent template — base permissions can never be removed. Shape and
- * encoding (JSON → gzip → base64url) follow the official SDKs (provenance: node-sdk
- * scene/registration); item names unknown to the platform catalog are silently dropped by the page.
+ * Additive app config carried on the confirm-page URL (`addons` query param): extra scopes/events merged ON TOP of the
+ * platform's agent template.
  */
 interface FeishuAppAddons {
   scopes?: { tenant?: string[]; user?: string[] };
@@ -56,7 +38,6 @@ export interface RegisterFeishuAppOptions {
   addons?: FeishuAppAddons;
   /** Called once the one-time verification URL is ready — print it / render it as a QR code. */
   onVerificationUrl: (info: { url: string; expiresInS: number }) => void;
-  /** Cancel the polling. */
   signal?: AbortSignal;
   /** Accounts origins, for tests. */
   accountsBaseUrl?: string;
@@ -87,8 +68,7 @@ interface RegistrationResponse {
 /** RFC 8628 device-flow states whose non-2xx JSON bodies belong to the polling state machine. */
 const DEVICE_FLOW_ERRORS = new Set(["authorization_pending", "slow_down", "access_denied", "expired_token"]);
 
-/** One registration POST (form-encoded). RFC 8628 delivers polling states (authorization_pending,
- *  slow_down, …) as HTTP 400 with a JSON body — those parse as data, not as transport failures. */
+/** One registration POST (form-encoded). */
 async function post(baseUrl: string, params: Record<string, string>): Promise<RegistrationResponse> {
   let res: Response;
   let raw: string;
@@ -122,9 +102,8 @@ async function post(baseUrl: string, params: Record<string, string>): Promise<Re
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Run the scan-to-create flow (module header): begin → hand the verification URL to the caller →
- * poll until the user confirms. Resolves with the new app's credentials; rejects on denial, expiry,
- * abort, or a transport failure — every rejection is a plain Error whose message says what to do.
+ * Run the scan-to-create flow (module header): begin → hand the verification URL to the caller → poll until the user
+ * confirms.
  */
 export async function registerFeishuApp(options: RegisterFeishuAppOptions): Promise<RegisteredFeishuApp> {
   const feishuBase = options.accountsBaseUrl ?? FEISHU_ACCOUNTS;

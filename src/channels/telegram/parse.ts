@@ -1,10 +1,4 @@
-/**
- * Telegram protocol parsing — PURE: message field extraction, the prompt envelope, and the summon/route
- * policy. The defining invariant is purity: no state, no IO, no Bot API calls — plain data-in → data-out.
- * In telegram.ts's pipeline (verify → decide via `route` → run the turn → stream reply), this is the
- * "decide" and prompt-building half; telegram.ts wires it in and owns the stateful lifecycle. Kept
- * separate so this layer tests as plain functions and reads without the factory's noise.
- */
+/** Telegram protocol parsing — PURE: message field extraction, the prompt envelope, and the summon/route policy. */
 import { BUFFER_LINE_MAX_CHARS } from "../kit/context-buffer.ts";
 import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
 
@@ -12,15 +6,13 @@ import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.t
 export interface TelegramMessage {
   message_id: number;
   text?: string;
-  /** Entities Telegram's server parsed out of `text` (mentions, commands, URLs, code…). Offsets are
-   *  UTF-16 code units — exactly JS string indexing, so `text.slice(offset, offset + length)` is the
-   *  entity's text verbatim. */
+  /** Entities Telegram's server parsed out of `text` (mentions, commands, URLs, code…). */
   entities?: { type: string; offset: number; length: number; [k: string]: unknown }[];
   /** Caption on a media message (photo/document/…) — often the user's instruction for the attachment. */
   caption?: string;
   /** Entities of `caption`, same shape as {@link TelegramMessage.entities}. */
   caption_entities?: { type: string; offset: number; length: number; [k: string]: unknown }[];
-  /** Photo sizes, smallest → largest. The channel sends the largest to the model as a vision image. */
+  /** Photo sizes, smallest → largest. */
   photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
   /** Structured payloads worth rendering into the prompt as text (no new modality needed). */
   location?: { latitude: number; longitude: number; [k: string]: unknown };
@@ -40,9 +32,10 @@ export interface TelegramMessage {
   [k: string]: unknown;
 }
 
-/** A Telegram update (the common subset the channel ACTS on — an update kind not listed here is ACKed
- *  and dropped before `route` sees it, so listing it would be a false promise; `[k]` keeps the raw
- *  payload reachable). Narrow for what you route on, e.g. `update.message?.text`. */
+/**
+ * A Telegram update (the common subset the channel ACTS on — an update kind not listed here is ACKed and dropped
+ * before `route` sees it, so listing it would be a false promise; `[k]` keeps the raw payload reachable).
+ */
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
@@ -50,7 +43,10 @@ export interface TelegramUpdate {
   [k: string]: unknown;
 }
 
-/** What `route` returns: act with these (every field optional — omitted ones default from the message), or null to ignore. */
+/**
+ * What `route` returns: act with these (every field optional — omitted ones default from the message), or null to
+ * ignore.
+ */
 export interface TelegramRoute {
   /** Conversation identity (default: `chat` or `chat:thread`). */
   session?: string;
@@ -62,10 +58,7 @@ export interface TelegramRoute {
   text?: string;
 }
 
-/** The actionable message in an update (a fresh message or channel post). Edits (`edited_message` /
- *  `edited_channel_post`) are deliberately NOT actionable: answering them re-answers every typo fix (a
- *  duplicate reply per edit), so an edited message changes nothing — the standard bot behavior. The
- *  trade-off: editing a mention INTO an old message does not summon either; send a new message. */
+/** The actionable message in an update (a fresh message or channel post). */
 export function pickMessage(update: TelegramUpdate): TelegramMessage | undefined {
   return update.message ?? update.channel_post;
 }
@@ -75,35 +68,33 @@ export function extractImages(m: TelegramMessage): string[] {
   return [...ownImages(m), ...(m.reply_to_message ? ownImages(m.reply_to_message) : [])];
 }
 
-/** The message's OWN photo (largest size), without the replied-to message's — the buffer path uses
- *  this: each message is its own entry there, so counting the replied-to attachment again would
- *  duplicate it and squeeze the attachment cap (the reply relation is expressed by `replyTo` instead). */
+/** The message's OWN photo (largest size), without the replied-to message's. */
 export function ownImages(m: TelegramMessage): string[] {
   return [m.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
 }
 
-/** file_ids to download to disk for the agent's tools: this message's files + a replied-to message's
- *  (so "summarize this file" works when the user replies to a document with the mention). */
+/** file_ids to download to disk: this message's files plus a replied-to message's ("summarize this file"). */
 export function extractFiles(m: TelegramMessage): string[] {
   return [...ownFiles(m), ...(m.reply_to_message ? ownFiles(m.reply_to_message) : [])];
 }
 
-/** The message's OWN files, without the replied-to message's (see {@link ownImages} for why). */
+/** The message's OWN files, without the replied-to message's. */
 export function ownFiles(m: TelegramMessage): string[] {
   return [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter((id): id is string =>
     Boolean(id),
   );
 }
 
-/** A stable sender label for attribution. In a shared (multi-user) session the model must tell who is
- *  who across turns; a username-less user still gets a name + id rather than vanishing. */
+/** A stable sender label for attribution. */
 export function fromLabel(from: TelegramMessage["from"]): string | undefined {
   if (!from) return undefined;
   return from.username ? `@${from.username}` : `${from.first_name ?? "user"} (id ${from.id})`;
 }
 
-/** A one-line description of a message's attachment, so the envelope names what was sent even before
- *  the agent opens it (and so a media-only message isn't blank). */
+/**
+ * A one-line description of a message's attachment, so the envelope names what was sent even before the agent opens it
+ * (and so a media-only message isn't blank).
+ */
 export function attachmentSummary(m: TelegramMessage): string | undefined {
   if (m.photo?.length) return "[photo]";
   if (m.document) {
@@ -115,9 +106,10 @@ export function attachmentSummary(m: TelegramMessage): string | undefined {
   return undefined;
 }
 
-/** A message's readable body: its text, else its caption, else a one-line attachment summary; undefined
- *  for an empty/service message. The single source for "what did this message say" — envelope, reply-
- *  quote, and the context-buffer line all read through it so their fallbacks cannot drift apart. */
+/**
+ * A message's readable body: its text, else its caption, else a one-line attachment summary; undefined for an
+ * empty/service message.
+ */
 function bodyOf(m: TelegramMessage): string | undefined {
   return m.text ?? m.caption ?? attachmentSummary(m);
 }
@@ -128,13 +120,8 @@ export function messageText(m: TelegramMessage): string {
 }
 
 /**
- * The default base prompt: a context envelope (chat/thread/sender + a group note + reply) then the
- * user's text/caption and a compact rendering of structured payloads (location/contact/poll). The
- * sender is named on every message and a group chat is flagged — in a shared multi-user session that is
- * how the model tells participants apart and knows it is not a 1:1. The reply
- * block carries the replied-to sender, message id, and text/caption or an attachment summary (and the
- * channel downloads a replied-to file/photo too). Exported so a custom `route` can reuse it, e.g.
- * `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends downloaded attachments.
+ * The default base prompt: a context envelope (chat/thread/sender + a group note + reply) then the user's text/caption
+ * and a compact rendering of structured payloads (location/contact/poll).
  */
 export function telegramEnvelope(m: TelegramMessage): string {
   const r = m.reply_to_message;
@@ -145,9 +132,7 @@ export function telegramEnvelope(m: TelegramMessage): string {
   ]
     .filter(Boolean)
     .join(", ");
-  // In a shared group session the model sees turns from different people (each `from`-tagged); tell it
-  // so it addresses participants by name and does not assume one continuous interlocutor. A 1:1 DM is
-  // self-evident, so no note there.
+  // In a shared group session the model sees turns from different people (each `from`-tagged).
   const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
   const scope = isGroup ? "\n[group chat — multiple people; each message is prefixed with its sender]" : "";
   const replyTo = r
@@ -160,21 +145,15 @@ export function telegramEnvelope(m: TelegramMessage): string {
   return `[telegram: ${meta}]${scope}${replyTo}\n${parts.filter(Boolean).join("\n")}`;
 }
 
-/** Normalize a configured bot username: drop a leading `@`, trim, lowercase (usernames are case-
- *  insensitive). Undefined when unknown. */
+/** Normalize a configured bot username: drop a leading `@`, trim, lowercase (usernames are case- insensitive). */
 function botName(botUsername: string | undefined): string | undefined {
   const s = botUsername?.replace(/^@/, "").trim().toLowerCase();
   return s || undefined;
 }
 
 /**
- * The `mention` ENTITIES naming THIS bot — read from what Telegram's server already parsed, not a
- * regex over the raw text. The entity type excludes by construction what a text scan false-matches:
- * `@bot` inside a code block or a URL is not a `mention` entity, a glued `/cmd@bot` is a `bot_command`
- * — and slicing the exact offset/length range makes `@fast` vs `@fastagent` confusion impossible.
- * (Offsets are UTF-16 code units = native JS string indexing.) No text fallback: mention entities are
- * produced server-side, so their absence means there is no mention. Empty when the bot does not know
- * its own username — "which of these names me?" has no answer then, and guessing would mis-summon.
+ * The `mention` ENTITIES naming THIS bot — read from what Telegram's server already parsed, not a regex over the raw
+ * text.
  */
 function botMentions(m: TelegramMessage, botUsername: string | undefined): { offset: number; length: number }[] {
   const name = botName(botUsername);
@@ -186,15 +165,11 @@ function botMentions(m: TelegramMessage, botUsername: string | undefined): { off
   );
 }
 
-/** Whether the message @mentions the bot. */
 function mentionsBot(m: TelegramMessage, botUsername: string | undefined): boolean {
   return botMentions(m, botUsername).length > 0;
 }
 
-/** The message text with THIS bot's mentions cut out, so a command addressed to it reads as the bare
- *  command. Only its own: a message that names someone else (`@otherbot /stop`) must keep that name,
- *  or cutting it would turn an ask aimed elsewhere into this bot's command. Cut from the end so the
- *  earlier offsets stay valid (they are UTF-16 code units = native JS indexing). */
+/** The message text with THIS bot's mentions cut out, so a command addressed to it reads as the bare command. */
 function textWithoutBotMentions(m: TelegramMessage, botUsername: string | undefined): string {
   const text = m.text ?? m.caption ?? "";
   return botMentions(m, botUsername)
@@ -204,39 +179,25 @@ function textWithoutBotMentions(m: TelegramMessage, botUsername: string | undefi
 }
 
 /**
- * Whether the update is a `/stop` ADDRESSED TO THIS BOT — the one question the channel asks about a
- * stop, because an unaddressed one is not a command it may act on. Four ways to address it, all
- * equivalent: a bare `/stop` in a private chat (no one else is there), `/stop@thisbot`, an `@thisbot`
- * mention beside the command, and a bare `/stop` replying to one of this bot's messages.
- *
- * A BARE `/stop` in a group is deliberately NOT one of them. Telegram hands it to every bot in the
- * chat — and only promises to deliver it at all when this bot spoke last — so it names no one: acting
- * on it lets a bystander's ask for a different bot abort this bot's run, and answering it lets that
- * bystander make this bot talk. It stays ordinary discussion, which is what the group sees anyway.
- *
- * Takes the UPDATE, like `route` itself, so a custom route can ask it directly — that route is the
- * gate a stop must pass, and one that refuses this update silences the command.
+ * Whether the update is a `/stop` ADDRESSED TO THIS BOT — the one question the channel asks about a stop, because an
+ * unaddressed one is not a command it may act on.
  */
 export function telegramStop(update: TelegramUpdate, options?: { botUsername?: string; botId?: number }): boolean {
   const m = pickMessage(update);
   if (!m) return false;
-  // This bot's own mentions are cut out before matching: `@thisbot /stop` is the same command as
-  // `/stop@thisbot`. Anyone else's stays in the text, so `@otherbot /stop` never reduces to a command
-  // here — not even when it also replies to this bot.
+  // This bot's own mentions are cut out before matching: `@thisbot /stop` is the same command as `/stop@thisbot`.
   const match = /^\/stop(?:@([A-Za-z0-9_]+))?$/i.exec(textWithoutBotMentions(m, options?.botUsername));
   if (!match) return false;
-  // `/stop@name` states its addressee: ours only when the name is ours, and never when this bot does
-  // not know its own username (fail closed — the same rule reply/mention summon follows).
+  // `/stop@name` states its addressee: ours only when the name is ours, and never when this bot does not know its own
+  // username (fail closed — the same rule reply/mention summon follows).
   if (match[1] !== undefined) return match[1].toLowerCase() === botName(options?.botUsername);
   return m.chat.type === "private" || mentionsBot(m, options?.botUsername) || repliesToBot(m, options);
 }
 
-/** Whether the message replies to THIS bot — not just any bot: in a multi-bot group, replying to
- *  another bot must not summon ours. Identity is the bot's numeric id (stable; a username is a mutable
- *  handle) — telegramChannel parses it synchronously from the token, so there is no resolution race.
- *  Without an id, fall back to username; with NEITHER, fail closed (false): answering "is this a reply
- *  to me?" with "I don't know who I am, so yes" would mis-summon in every multi-bot group — a caller
- *  reusing the route bare must supply an identity to get reply summon. */
+/**
+ * Whether the message replies to THIS bot — not just any bot: in a multi-bot group, replying to another bot must not
+ * summon ours.
+ */
 function repliesToBot(m: TelegramMessage, options?: { botUsername?: string; botId?: number }): boolean {
   const r = m.reply_to_message?.from;
   if (r?.is_bot !== true) return false;
@@ -245,16 +206,7 @@ function repliesToBot(m: TelegramMessage, options?: { botUsername?: string; botI
   return name !== undefined && r.username?.toLowerCase() === name;
 }
 
-/**
- * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
- * answer private chats always; a group only on a reply to THIS bot (by `botId`) or a `mention` entity
- * naming it (when `botUsername` is supplied — telegramChannel parses the id from the token and resolves
- * the username via getMe). A bare or directed slash command does NOT summon in a group (that was noisy;
- * a bot author who wants commands adds a custom route) — except a `/stop` ADDRESSED to this bot, which
- * must reach the run it stops rather than sit in the buffer behind it (see {@link telegramStop}; a
- * bare group `/stop` addresses no one and stays ordinary discussion). Returns `{}` (act; the channel fills
- * session/target/prompt from the message) or `null` (ignore).
- */
+/** The default routing policy (used when `route` is omitted; exported so a custom route can reuse it). */
 export function defaultTelegramRoute(
   update: TelegramUpdate,
   options?: { botUsername?: string; botId?: number },
@@ -265,9 +217,7 @@ export function defaultTelegramRoute(
     m.chat.type === "private" ||
     repliesToBot(m, options) ||
     mentionsBot(m, options?.botUsername) ||
-    // Adds exactly ONE case to the three above: the `/stop@thisbot` suffix form. Every other way to
-    // address a stop (private, mention, reply) is already a summon on its own — telegramStop repeats
-    // those three by design, since it must answer "addressed to me?" without a route to lean on.
+    // Adds exactly ONE case to the three above: the `/stop@thisbot` suffix form.
     telegramStop(update, options);
   return summoned ? {} : null;
 }

@@ -1,16 +1,6 @@
 /**
- * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools —
- * bound to one durable record, per invoke.
- *
- * The chat path builds the same pi class from the same assembly (session-builder.ts) but keeps ONE
- * resident session. What is specific here is the posture: many sessions, one turn each, nothing in
- * memory between turns.
- *
- * Shared once, rebuilt per turn:
- * - `services` (ResourceLoader, settings, model runtime) is built lazily and reused — it is the
- *   expensive half, and it holds nothing session-specific;
- * - the `AgentSession` and its tool bindings are per turn, because a tool's `execute` closes over the
- *   session it runs in and this posture has several in flight at once.
+ * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
+ * durable record, per invoke.
  */
 import { dirname, join } from "node:path";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -38,16 +28,9 @@ interface PiSessionDefinition {
 }
 
 export interface PiAgentSessionFactoryOptions {
-  /** Where conversations live. Continuity = same store + same session id. */
+  /** Where conversations live. */
   sessions: PiSessionRecordStore;
-  /**
-   * The model to run and the hub that authenticates it, resolved on FIRST USE and kept.
-   *
-   * A thunk because building a `ModelRuntime` is async while assembling an agent is not: the L1
-   * surface hands back an `Agent` synchronously, so the credential read that a runtime performs
-   * belongs on the first turn rather than in the caller's constructor. The two travel together
-   * because a model must be resolved against the runtime that holds its provider's auth.
-   */
+  /** The model to run and the hub that authenticates it, resolved on FIRST USE and kept. */
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
@@ -55,33 +38,11 @@ export interface PiAgentSessionFactoryOptions {
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
-  /**
-   * Where pi looks for ITS settings (retry budget, compaction thresholds, default thinking level).
-   *
-   * Deliberately NOT pi's machine-global `~/.pi/agent`: a served agent must behave the same on the
-   * author's laptop and in a container, and reading the operator's personal pi configuration is the
-   * artifact losing to the machine. Point it at a definition-scoped path; a missing directory simply
-   * means pi's own defaults, which is the intended baseline.
-   */
+  /** Where pi looks for ITS settings (retry budget, compaction thresholds, default thinking level). */
   agentDir?: string;
   /**
-   * The definition's own extension entry points, for ANNOUNCING that serving does not run them.
-   *
-   * pi's extension machinery is built for one process serving one session: `bindCore()` copies the
-   * session's actions into a runtime the pi source itself calls "the shared runtime", extension
-   * modules are cached per assembly, and `session_start`/`session_shutdown` are a matched pair.
-   * Serving breaks every one of those assumptions — concurrent turns for unrelated conversations —
-   * and the failure is silent cross-talk: with two turns in flight, an extension calling
-   * `pi.sendMessage()` can deliver into the other conversation.
-   *
-   * Loading them anyway would be a correctness bug dressed as a feature, so serving does not, and
-   * warns when a definition ships some. `chat` runs them fully: one session, one runtime, which is
-   * exactly the shape pi is built for.
-   *
-   * Isolating them per session is mechanically possible — pi's uncached loader path builds a fresh
-   * module (jiti with `moduleCache: false`) and takes the runtime as an argument — but that function
-   * is not exported and the deep path is blocked by the package's `exports`. Reopening this needs
-   * that entry point upstream, not a workaround here.
+   * The definition's own extension entry points, for ANNOUNCING that serving does not run them. pi's extension
+   * machinery is built for one process serving one session.
    */
   extensionPaths?: string[];
   /** Built-ins omitted by an explicit lower-level tool list. */
@@ -89,13 +50,8 @@ export interface PiAgentSessionFactoryOptions {
 }
 
 /**
- * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
- * tools a loader activated in that call.
- *
- * A DEDICATED record, not pi's own `active_tools_change`: that one is a full SNAPSHOT of everything
- * active at the moment, so replaying it would keep a tool active in old sessions after the author
- * flips it to `deferred` — the session never discovered it. A delta carries only what was actually
- * found, and is layered onto whatever the workspace mounts TODAY.
+ * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred tools a loader
+ * activated in that call.
  */
 const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
 
@@ -112,20 +68,15 @@ function recordedActivations(session: AgentSession): string[] {
   return names;
 }
 
-/** Warned once per session+missing set: a fresh session is built per invoke and channel sessions run
- *  for weeks, so an un-deduped warn would repeat every turn and dilute its own signal. */
+/**
+ * Warned once per session+missing set: a fresh session is built per invoke and channel sessions run for weeks, so an
+ * un-deduped warn would repeat every turn and dilute its own signal.
+ */
 const warnedDroppedActivations = new Set<string>();
 
 type ToolBinding = { session: AgentSession; context: TurnContext };
 
-/**
- * fastagent's tools as pi tool definitions, bound to ONE session.
- *
- * `bound` is filled after the session exists — pi needs the definitions to build the session, and a
- * tool needs the session to reach the turn context. A tool that somehow runs before that binding
- * throws rather than executing outside the turn: a broken lifecycle must not look like a normal
- * out-of-turn call.
- */
+/** fastagent's tools as pi tool definitions, bound to ONE session. */
 function toolDefinitions(tools: MountedTool[], bound: { current?: ToolBinding }, sessionId: string): ToolDefinition[] {
   return tools.map(
     (tool): ToolDefinition => ({
@@ -169,21 +120,15 @@ export interface BindPiSessionOptions {
   cwd: string;
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
-  /** The CALLER's session id — what a tool asking which conversation it is in hears. Defaults to
-   *  pi's own id, which is right where the caller has none (chat). */
+  /** The CALLER's session id — what a tool asking which conversation it is in hears. */
   sessionId?: string;
-  /** Record each discovered activation on the session, so the next bind restores it. Off for chat:
-   *  pi's own session has nowhere to put one, so a resumed chat re-discovers. */
+  /** Record each discovered activation on the session, so the next bind restores it. */
   recordActivations: boolean;
 }
 
 /**
- * Bind ONE pi session to a record: the definition's tools as pi definitions over one turn context,
- * pi's own tool copies kept off, and deferral applied. The per-invoke factory and the resident chat
- * runtime both bind here — they differ in what they hand in (a shared vs a per-session `services`,
- * record-resolved vs configured settings) and in whether a discovered activation has a record to
- * land in, and in nothing else. Two copies of this drifted once (the tool adapter and the deferral
- * narrowing each existed twice, identical but for those parameters).
+ * Bind ONE pi session to a record: the definition's tools as pi definitions over one turn context, pi's own tool
+ * copies kept off, and deferral applied.
  */
 export async function bindPiSession(options: BindPiSessionOptions): ReturnType<typeof createAgentSessionFromServices> {
   const { services, sessionManager, model, thinkingLevel, tools, cwd, recordActivations } = options;
@@ -198,16 +143,12 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
     model,
     thinkingLevel,
     // pi would otherwise mount its built-ins on top of fastagent's copies, offering duplicate names.
-    // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted. And
-    // NO `tools` allowlist: it would freeze the set at bind time, while pi lets an extension register
-    // from `session_start` — `noTools: "builtin"` gives the guarantee the allowlist was there for.
     noTools: "builtin",
     ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
     customTools: toolDefinitions(tools, bound, sessionId),
   });
   const { session } = result;
-  // One context for the whole session: it describes the SESSION, not the call. The activation
-  // bridge above all — a tool call has to see what the previous one activated.
+  // One context for the whole session: it describes the SESSION, not the call.
   bound.current = {
     session,
     context: {
@@ -222,15 +163,14 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
       ),
     },
   };
-  // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
-  // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
-  // add back what THIS session has already discovered.
+  // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the deferred names
+  // (robust to pi mounting tools of its own, unlike an exact-set replacement), then add back what THIS session has
+  // already discovered.
   if (deferred.length > 0) {
     const active = session.getActiveToolNames();
     const mounted = new Set(session.getAllTools().map((tool) => tool.name));
     const recorded = recordActivations ? recordedActivations(session) : [];
-    // A recorded name that is no longer mounted is dropped rather than replayed: pi's setter
-    // THROWS on an unknown name, so replaying one would brick every future turn of this session.
+    // A recorded name that is no longer mounted is dropped rather than replayed.
     const restored = recorded.filter((name) => mounted.has(name));
     const dropped = recorded.filter((name) => !mounted.has(name));
     if (dropped.length > 0) {
@@ -250,11 +190,8 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
 }
 
 /**
- * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and
- * carries on with the rest — sound for a TUI that shows them, silent for a server that never looks.
- * A definition running without the extension it ships is exactly the "quietly missing" failure this
- * exists to remove. CHAT calls it, once per built services — serving does not load extensions at
- * all, and announces that instead (see PiAgentSessionFactoryOptions.extensionPaths).
+ * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and carries on with the
+ * rest.
  */
 export function reportExtensionErrors(services: AgentSessionServices): void {
   for (const { path, error } of services.resourceLoader.getExtensions().errors) {
@@ -265,20 +202,7 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 /** What pi is allowed to discover, minus the parts each assembly fills in itself. */
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
-/**
- * The resource posture a fastagent definition asks pi for — ONE definition of it, for both
- * assemblies. Serving (`piAgentSessionFactory`) and chat (`buildAgentSessionRuntime`) build
- * different sessions on top, but what pi is allowed to DISCOVER is not one of the differences:
- * everything comes from the definition, nothing from the machine that happens to be running it.
- *
- * Two copies of this drifted once already: `additionalExtensionPaths` was added to both, and only
- * one of them also passed the resulting tool names through pi's `tools` allowlist — so extensions
- * worked when served and vanished in chat. A difference between the two has to be visible AS a
- * difference, which is what the parameters are for: serving reads a prompt and skills that change
- * per turn and passes NO extension paths (it does not run them — see
- * {@link PiAgentSessionFactoryOptions.extensionPaths}); chat reads a fixed assembly and passes its
- * own. Both are arguments now, rather than two files that happen to disagree.
- */
+/** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
@@ -286,20 +210,16 @@ export function definitionResourceLoaderOptions(source: {
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
   return {
-    // Definition-only, like dev/start: pi's machine-global discovery (the operator's own ~/.pi
-    // extensions, slash commands, global AGENTS.md, APPEND_SYSTEM.md) stays out, so the agent that
-    // runs is the artifact, not the artifact plus whoever's laptop it is.
+    // Definition-only, like dev/start: pi's machine-global discovery (the operator's own ~/.pi extensions, slash
+    // commands, global AGENTS.md, APPEND_SYSTEM.md) stays out, so the agent that runs is the artifact, not the
+    // artifact plus whoever's laptop it is.
     noExtensions: true,
-    // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
-    // noExtensions, which is exactly the split wanted here — the artifact travels with its
-    // extensions, the machine's stay out.
+    // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under noExtensions, which
+    // is exactly the split wanted here.
     ...(source.extensionPaths?.length ? { additionalExtensionPaths: [...source.extensionPaths] } : {}),
     noPromptTemplates: true,
     noContextFiles: true,
-    // A SPACE, not "", when the assembly has no prompt: pi treats an empty custom prompt as absent
-    // and substitutes its own coding-assistant identity, which an L1 agent
-    // (`createPiAgent({ model, tools })`) never asked for. pi appends its own working-directory line
-    // either way — that is engine behaviour this binding does not fight.
+    // A SPACE, not "", when the assembly has no prompt.
     systemPromptOverride: () => source.systemPrompt() || " ",
     appendSystemPromptOverride: () => [],
     skillsOverride: (base) => ({
@@ -309,7 +229,7 @@ export function definitionResourceLoaderOptions(source: {
   };
 }
 
-/** Open-or-create the record, then bind a fresh session to it. One call per invoke. */
+/** Open-or-create the record, then bind a fresh session to it. */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd } = options;
   const extensionPaths = options.extensionPaths ?? [];
@@ -332,10 +252,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       cwd,
       agentDir: options.agentDir ?? join(cwd, ".fastagent", "pi"),
       modelRuntime,
-      // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is
-      // the one resource question the two assemblies answer differently. The accessors read the
-      // CURRENT prompt/skills — serving refreshes both per turn, so a snapshot taken here would
-      // serve a stale definition after the first edit.
+      // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
+      // question the two assemblies answer differently.
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => definition.systemPrompt,
         skills: () => definition.skills,
@@ -350,26 +268,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       definition = next;
       services = buildServices(modelRuntime); // assigned before any await: concurrent turns share it
     } else {
-      // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only
-      // reaches the model after a reload. Reload only when the definition ACTUALLY changed — an
-      // author edits persona.md far less often than the agent takes a turn, and a reload costs ~5ms
-      // against ~0.6ms to bind a session.
-      //
-      // "Changed" is measured against the LOADER, not against what this factory last wrote. Serving
-      // is concurrent across sessions, and a shared variable makes the check lie: one turn writes
-      // its new prompt, awaits before reloading, and the next turn sees that value already present,
-      // concludes nothing changed, and skips the reload — so the edit reaches neither the loader nor
-      // any error. Asking the loader what it is actually serving cannot go stale that way. The cost
-      // of losing the race is one redundant reload, not a swallowed edit.
-      //
-      // Skill CONTENT is not part of this — pi reads a skill from its file at invocation time, so
-      // only the declared set matters.
-      //
-      // What this deliberately does NOT provide is a per-turn snapshot. The definition is an AGENT
-      // property, not a session one: two turns running either side of an edit each get a definition
-      // that genuinely existed, and the product promise — an edit is live on the next turn — holds
-      // for both. Pinning a snapshot per turn would cost either a loader per turn or a queue in
-      // front of every bind, to buy a guarantee nothing asks for.
+      // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only reaches the model
+      // after a reload.
       const loader = (await services).resourceLoader;
       const definitionChanged =
         loader.getSystemPrompt() !== (next.systemPrompt || " ") ||
@@ -380,13 +280,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       }
     }
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
-    // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and
-    // pi does not read them back — a binding that ignored them would silently run every turn on the
-    // assembly default, and `state()` would report a setting no turn uses.
-    // The SAME read the control plane performs, including its integrity check: a record whose chain
-    // is broken must not run on assembly defaults while `state()` rejects it — one of the two planes
-    // would be lying. A throw here becomes this turn's `failed` event, which is where the fault has
-    // a channel to be reported through.
+    // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
+    // them back.
     const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {
       model,
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,

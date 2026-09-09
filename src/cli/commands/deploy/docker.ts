@@ -1,8 +1,4 @@
-/**
- * `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file.
- * `--tunnel` shapes the generated topology with an optional Quick Tunnel service; `--run` alone
- * decides whether Docker receives side effects.
- */
+/** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
 import { basename, join } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
@@ -42,12 +38,12 @@ export const dockerHost: HostDeploy = {
       console.error(`[fastagent] note: --tunnel skipped — every channel uses a long connection`);
     }
     let plan = dockerPlan(requestedTunnel);
-    // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk,
-    // regardless of the current flag. `--force` is the explicit reset to the requested generated shape.
+    // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk, regardless
+    // of the current flag.
     const composeFile = join(workspace, plan.composePath);
     let keptWithoutRequestedTunnel = false;
-    // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must
-    // describe the topology that will actually be there.
+    // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must describe the
+    // topology that will actually be there.
     const composeText = await readTextIfExists(composeFile).catch(failStartup);
     if (composeText !== undefined && (!opts.force || !isGeneratedCompose(composeText))) {
       const existingHasTunnel = composeHasTunnelService(composeText);
@@ -81,9 +77,8 @@ export const dockerHost: HostDeploy = {
 };
 
 /**
- * `deploy docker --run`: carry local credentials into Compose's child environment, then reconcile the
- * user-owned local topology. Docker owns container/network/volume lifecycle. A Compose tunnel service,
- * when present, yields an ephemeral URL that reuses the same webhook announcer as `dev --tunnel`.
+ * `deploy docker --run`: carry local credentials into Compose's child environment, then reconcile the user-owned local
+ * topology.
  */
 async function runDeployDocker(
   params: ResolvedPlacement & {
@@ -117,18 +112,14 @@ async function runDeployDocker(
     (message) => console.error(`[fastagent] ${message}`),
   );
   const compose = `docker compose -f ${composeFile}`;
-  // Compose reached "up" iff the driver could report where it is. The gates before that point
-  // (no Docker CLI, no daemon, missing secrets) must not be preceded by `docker compose logs`
-  // instructions for containers that do not exist; the health-check gate names its own logs command.
+  // Compose reached "up" iff the driver could report where it is.
   const isUp = outcome.ok || outcome.url !== undefined || outcome.tunnelUrl !== undefined;
   if (outcome.url) console.error(`[fastagent] running → ${outcome.url}`);
   if (isUp) {
     console.error(`[fastagent] logs: ${compose} logs -f agent`);
     console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
   }
-  // BEFORE failStartup: a registration gate says "re-run this deploy", and a re-run rebuilds the
-  // tunnel service — the operator needs to know the URL will be a different one, or they will read
-  // the retry as re-registering the same address.
+  // BEFORE failStartup: a registration gate says "re-run this deploy", and a re-run rebuilds the tunnel service.
   if (outcome.tunnelUrl) {
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +

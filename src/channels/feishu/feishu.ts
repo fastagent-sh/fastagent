@@ -1,12 +1,6 @@
 /**
- * Canonical Feishu bot-channel engine: verified webhook or official-SDK WebSocket → dedup → route →
- * persist → enqueue → stream a live card. Feishu (open.feishu.cn) is the reference cloud. Lark
- * international binds this engine through an explicit compatibility profile because its control plane
- * trails Feishu; protocol reuse does not make Lark the design center.
- *
- * The channel kind remains the unit of route, env namespace, state home, logs, and onboarding, so one
- * workspace may run both without sharing state. Webhook returns the existing route factory; WebSocket
- * returns an explicit long-connection module. Both feed the same acceptance/turn engine. See docs/feishu.md.
+ * Canonical Feishu bot-channel engine: verified webhook or official-SDK WebSocket → dedup → route → persist → enqueue
+ * → stream a live card.
  */
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
@@ -72,25 +66,21 @@ export type { FeishuFailure, FeishuMessage, FeishuMessageEvent, FeishuRoute };
 const MAX_EVENT_BYTES = 1 << 20;
 
 /**
- * Replay window for a SIGNED event, sized by the OPEN PLATFORM'S REDELIVERY SCHEDULE, not by Slack's
- * 5 minutes: a failed push is retried at 15s / 5min / 1h / 6h. It is not established whether a retry
- * is re-signed with a fresh timestamp or replays the original one, and only the second case is safe
- * to guess wrong about in one direction — a window under 6h would 401 three of the four retries, i.e.
- * turn one transient fault into a permanently lost user message (and a callback-health alarm). Wide
- * enough to cover the chain, still bounded, and the `seen` ring dedups an event_id inside it.
+ * Replay window for a SIGNED event, sized by the OPEN PLATFORM'S REDELIVERY SCHEDULE, not by Slack's 5 minutes: a
+ * failed push is retried at 15s / 5min / 1h / 6h.
  */
 const MAX_SIGNATURE_AGE_S = 7 * 60 * 60;
 
-/** Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was
- *  accepted behind another turn. The same reply-quoted card becomes the preview/final answer, so there
- *  is no extra message or recall tombstone to avoid. Authors may still configure a delay explicitly. */
+/**
+ * Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was accepted behind
+ * another turn.
+ */
 const QUEUE_NOTICE_DELAY_MS = 0;
 
 const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
 
-/** The persisted turn intent (what the runner needs to re-execute it). `seq` is the channel-assigned
- *  arrival number — Feishu message_ids (`om_…`) carry no order, so recovery sorts on this instead. */
+/** The persisted turn intent (what the runner needs to re-execute it). */
 interface StoredFeishuTurn {
   id: string; // message_id (the platform delivery identity; seq below carries arrival order)
   seq: number;
@@ -100,16 +90,13 @@ interface StoredFeishuTurn {
   bufferKey: string;
   chatId: string;
   replyTo?: string;
-  /** Source message to quote when queue feedback mounts. Unlike `replyTo`, this is also set for a p2p
-   *  turn: each queued card must identify its own ask even though ordinary p2p answers are unquoted. */
+  /** Source message to quote when queue feedback mounts. */
   queueReplyTo?: string;
   replyInThread?: boolean;
   parentId?: string;
-  /** The place this thread branched from (§5 lineage) — recorded at ingress, where the session's
-   *  routed-ness is known; absent for main places, routed (opaque) sessions, and pre-upgrade records. */
+  /** The place this thread branched from (§5 lineage). */
   parentSession?: string;
-  /** The ROOM's bucket to fold read-only into this turn (§8). Decided at ingress — only there are the
-   *  source chat and the first-turn fact known. */
+  /** The ROOM's bucket to fold read-only into this turn (§8). */
   roomBufferKey?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
@@ -143,10 +130,9 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
   );
 }
 
-/** One accepted turn: the persisted intent plus live-only fields. The mounted queue card/text is not
- *  persisted; a replayed turn mounts a fresh preview because an old card may have expired. */
+/** One accepted turn: the persisted intent plus live-only fields. */
 interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts"> {
-  /** The queue-status card/text, when its delayed mount fired. The turn's preview takes it over. */
+  /** The queue-status card/text, when its delayed mount fired. */
   preview?: MountedFeishuPreview;
 }
 
@@ -155,25 +141,19 @@ interface FeishuChannelBaseOptions {
   appId: string;
   /** App Secret (same page) — drives both ingress authentication and outbound API calls. */
   appSecret: string;
-  /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
+  /** Policy: whether/where to answer an event (return null to ignore). */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
-  /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
-   *  log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
-   *  on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``. */
+  /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator log). */
   onError?: (failed: FeishuFailure) => string | undefined;
-  /** API origin override (tests / self-hosted gateways). Feishu factories default to
-   *  `https://open.feishu.cn`; Lark factories default to `https://open.larksuite.com`. Named to match
-   *  the other channels (telegram/slack). */
+  /** API origin override (tests / self-hosted gateways). */
   apiBaseUrl?: string;
-  /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. Defaults to 0
-   *  (immediate); the same card is later taken over by the live preview/final answer. */
+  /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. */
   queueNoticeDelayMs?: number;
 }
 
 export interface FeishuChannelOptions extends FeishuChannelBaseOptions {
   /** Verification Token for Request-URL authentication. */
   verificationToken: string;
-  /** Optional webhook Encrypt Key. When set, plaintext events are rejected. */
   encryptKey?: string;
 }
 
@@ -198,10 +178,73 @@ interface FeishuWebSocketChannelDeps {
 }
 
 interface FeishuRuntime {
-  /** Routes + persists the event before the transport ACKs it; a throw must fail the delivery so the
-   *  platform re-pushes. Synchronous — it touches no network. The Agent turn stays fire-and-forget. */
+  /**
+   * Routes + persists the event before the transport ACKs it; a throw must fail the delivery so the platform
+   * re-pushes.
+   */
   acceptEvent(event: FeishuMessageEvent): void;
   turnsIdle(): Promise<void>;
+}
+
+/**
+ * The bot's own open_id — the identity the default route matches group @mentions against. Seeded synchronously from
+ * a per-app cache file so a cold start can summon before the network answers, then refreshed once per process by
+ * `bot/v3/info`. The two failure directions differ: a FAILED call is transport weather and keeps the cached identity,
+ * while a SUCCESSFUL call reporting no open_id is an affirmative "there is no bot here" and clears it (fail-closed).
+ */
+function createBotIdentity(deps: {
+  api: FeishuApi;
+  appId: string;
+  label: string;
+  botFile: string;
+}): () => string | undefined {
+  const { api, appId, label, botFile } = deps;
+  const stored = loadStateFile(botFile) as { appId?: unknown; openId?: unknown } | undefined;
+  if (stored !== undefined && typeof stored.appId !== "string") {
+    log.warn(`${label} unexpected shape in ${botFile} — ignoring the cached bot identity`);
+  }
+  let cached = stored?.appId === appId && typeof stored.openId === "string" ? (stored.openId as string) : undefined;
+  let current = cached;
+  // `{ appId }` with no openId reads as "no cache" at the loader — the atomic write is reused instead of
+  // introducing a deletion path.
+  const persist = (openId: string | undefined, failure: string): void => {
+    if (openId === cached) return;
+    cached = openId;
+    try {
+      saveStateFile(botFile, openId === undefined ? { appId } : { appId, openId });
+    } catch (e) {
+      log.warn(`${label} ${failure}: ${String(e)}`);
+    }
+  };
+  void api.botInfo().then(
+    (me) => {
+      if (me.openId) {
+        if (current !== undefined && current !== me.openId) {
+          log.info(`${label} bot open_id changed (${current} → ${me.openId}) — updating the cached identity`);
+        }
+        current = me.openId;
+        persist(
+          me.openId,
+          `could not persist the bot identity to ${botFile} — the next cold start races bot/v3/info again`,
+        );
+        return;
+      }
+      log.warn(
+        current === undefined
+          ? `${label} bot/v3/info returned no open_id — group @mention summon stays off`
+          : `${label} bot/v3/info returned no open_id — cached identity cleared; group @mention summon stays off`,
+      );
+      current = undefined;
+      persist(undefined, `could not clear the cached bot identity ${botFile}`);
+    },
+    (e) =>
+      log.warn(
+        current === undefined
+          ? `${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`
+          : `${label} bot/v3/info failed; running on the cached identity (bot.json): ${String(e)}`,
+      ),
+  );
+  return () => current;
 }
 
 function createFeishuRuntimeFactory(
@@ -214,59 +257,13 @@ function createFeishuRuntimeFactory(
   const { kind } = profile;
   const label = `[${kind}]`;
   return ({ agent, stateRoot, control }) => {
-    // Credential checks run when serving starts, not while the authored module is imported: deployment
-    // can inspect the module shape before secrets exist, while serving still fails before ready.
+    // Credential checks run when serving starts, not while the authored module is imported.
     if (!appId || !appSecret) {
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
     const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
-    // One bot/v3/info per process refreshes the bot's own open_id — the identity the default route
-    // matches group @mentions against. The CACHED copy (bot.json, seeded synchronously once the state
-    // home exists below) is what makes the first envelope safe: this fetch is fire-and-forget, and
-    // under the AgentCore posture channel construction happens INSIDE the first envelope
-    // (channels/agentcore.ts lazy construction), so a network round trip can never beat that same
-    // envelope's own dispatch — without the seed, every cold start's FIRST group mention raced this
-    // fetch and lost (field-observed: an explicit @ buffered as bystander context). The open_id is a
-    // stable property of the app, so disk beats network; the only envelope a deployment ever serves
-    // without the file is its first one, which is the deploy driver's probe — it carries no mention.
-    // No identity at all (fresh dir, no cache, fetch pending/failed) keeps today's fail-closed
-    // behavior: unmatched mentions buffer as context — delayed, never lost.
-    let botOpenId: string | undefined;
-    let persistBotIdentity: (openId: string) => void = () => {}; // bound once the state home exists
-    let invalidateBotIdentity: () => void = () => {}; // likewise
-    void api.botInfo().then(
-      (me) => {
-        if (me.openId) {
-          if (botOpenId !== undefined && botOpenId !== me.openId) {
-            log.info(`${label} bot open_id changed (${botOpenId} → ${me.openId}) — updating the cached identity`);
-          }
-          botOpenId = me.openId;
-          persistBotIdentity(me.openId);
-        } else {
-          // The call SUCCEEDED and the platform reported no identity — an affirmative "there is no
-          // bot here" (capability off, app reconfigured), not transport weather. This is the one
-          // answer that must also INVALIDATE the cache: keeping a summon identity the platform just
-          // declined to confirm would quietly turn fail-closed into fail-open.
-          log.warn(
-            botOpenId === undefined
-              ? `${label} bot/v3/info returned no open_id — group @mention summon stays off`
-              : `${label} bot/v3/info returned no open_id — cached identity cleared; group @mention summon stays off`,
-          );
-          botOpenId = undefined;
-          invalidateBotIdentity();
-        }
-      },
-      (e) =>
-        // A FAILED call is transport weather (network, rate limit): the platform said nothing about
-        // the identity, so a cached one keeps serving — the degradation this cache exists for.
-        log.warn(
-          botOpenId === undefined
-            ? `${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`
-            : `${label} bot/v3/info failed; running on the cached identity (bot.json): ${String(e)}`,
-        ),
-    );
     void api.listAppScopes().then(
       (scopes) => {
         const grantedScope = (name: string): boolean =>
@@ -275,10 +272,8 @@ function createFeishuRuntimeFactory(
               scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
           );
         if (grantedScope(FEISHU_GROUP_CONTEXT_SCOPE)) {
-          // This scope settles the rule's whole input: it delivers the un-mentioned group messages the
-          // channel buffers, which is also what lets it HEAR a thread. Nothing is fetched, so nothing
-          // is pending — the only bootstrap left is social, one mention inside a thread. The read scope
-          // is a separate, softer dependency, so it is reported separately rather than folded in.
+          // This scope settles the rule's whole input: it delivers the un-mentioned group messages the channel
+          // buffers, which is also what lets it HEAR a thread.
           log.info(
             `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
           );
@@ -287,9 +282,9 @@ function createFeishuRuntimeFactory(
             `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare replies in the agent's threads + group context buffering are unavailable`,
           );
         }
-        // Reported OUTSIDE the branch above: the quoted-message read runs in every chat type and every
-        // posture (a p2p thread's opening ask, any quoted @mention in a group), so pairing this warning
-        // with the group scope would leave a mention-only deployment silently losing every referent.
+        // Reported OUTSIDE the branch above: the quoted-message read runs in every chat type and every posture (a p2p
+        // thread's opening ask, any quoted @mention in a group), so pairing this warning with the group scope would
+        // leave a mention-only deployment silently losing every referent.
         if (!scopeSatisfied(FEISHU_MESSAGE_READ_REQUEST, grantedScope)) {
           log.warn(
             `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
@@ -298,62 +293,18 @@ function createFeishuRuntimeFactory(
       },
       (error) => log.warn(`${label} could not inspect group visibility: ${String(error)}`),
     );
-    const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId }));
-
-    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/<kind>`
-    // (engine state at the root, channel state under `channels/<kind>/`) — derived, not an option, so
-    // the operator's ONE state knob (FASTAGENT_STATE_DIR) can never be silently bypassed by glue.
+    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/<kind>` (engine state at the
+    // root, channel state under `channels/<kind>/`).
     if (!isAbsolute(stateRoot)) {
       throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
-    // The cached bot identity (rationale at the botInfo block above): seed synchronously — the
-    // factory runs to completion before any promise resolves, so botOpenId is still unset here and
-    // the seed is what the first envelope's dispatch sees. Refresh keeps the file current.
-    //
-    // BOUND TO THE APP: the state home is per channel KIND, and an operator can point kept state at
-    // a different app (a recreated app, a tenant migration). A cached identity from another app
-    // would make THIS bot treat mentions of the OLD bot as its own summons — identity impersonation,
-    // strictly worse than the race the cache removes — so the cache counts only when it names the
-    // current appId. A mismatch is not noise worth warning about: the next persist IS the migration.
-    const botFile = join(stateHome, "bot.json");
-    const storedBot = loadStateFile(botFile) as { appId?: unknown; openId?: unknown } | undefined;
-    let cachedOpenId: string | undefined;
-    if (storedBot !== undefined) {
-      if (typeof storedBot.appId !== "string") {
-        log.warn(`${label} unexpected shape in ${botFile} — ignoring the cached bot identity`);
-      } else if (storedBot.appId === appId && typeof storedBot.openId === "string") {
-        cachedOpenId = storedBot.openId;
-      }
-    }
-    botOpenId ??= cachedOpenId;
-    persistBotIdentity = (openId) => {
-      if (openId === cachedOpenId) return;
-      cachedOpenId = openId;
-      try {
-        saveStateFile(botFile, { appId, openId });
-      } catch (e) {
-        log.warn(
-          `${label} could not persist the bot identity to ${botFile} — the next cold start races bot/v3/info again: ${String(e)}`,
-        );
-      }
-    };
-    invalidateBotIdentity = () => {
-      if (cachedOpenId === undefined) return;
-      cachedOpenId = undefined;
-      try {
-        // `{ appId }` with no openId reads as "no cache" at the loader — the atomic write is reused
-        // instead of introducing a deletion path.
-        saveStateFile(botFile, { appId });
-      } catch (e) {
-        log.warn(`${label} could not clear the cached bot identity ${botFile}: ${String(e)}`);
-      }
-    };
+    const botOpenId = createBotIdentity({ api, appId, label, botFile: join(stateHome, "bot.json") });
+    const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId: botOpenId() }));
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /** This channel's place key for a thread (the shared store is key-agnostic). */
-    // The SAME identity the session uses (`placeKey`) — a thread's place. Defining it twice would let a
-    // future re-keying silently split participation from the sessions it is supposed to describe.
+    // The SAME identity the session uses (`placeKey`) — a thread's place.
     const threadKey = (chatId: string, threadId: string): string =>
       placeKey(kind, { chat_id: chatId, thread_id: threadId });
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
@@ -376,9 +327,8 @@ function createFeishuRuntimeFactory(
       replyInThread: r.replyInThread,
     });
 
-    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal,
-    // not just an operator log line. Take over its queue preview in place if present (else send fresh) —
-    // leaving it pinned at "Queued" while sending a separate failure would double-post.
+    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
+    // operator log line.
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
       void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
@@ -395,12 +345,7 @@ function createFeishuRuntimeFactory(
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
       bufferKey: (rec) => rec.bufferKey,
       where: (rec) => `chat=${rec.chatId}`,
-      // Queue feedback: mount that turn's preview early with a queue status. It reply-quotes the exact
-      // source message (including p2p), then the runner mutates the SAME card/text into Thinking →
-      // final answer. Immediate by default; with an explicit delay it mounts only if the turn is still
-      // waiting when the timer fires and is cancelled unsent otherwise. Best-effort and post-ACK: a
-      // failed mount is a log line, never a failed event delivery; the turn later mounts its normal
-      // preview.
+      // Queue feedback: mount that turn's preview early with a queue status.
       onQueuedBehind: (rec) => {
         let fired = false;
         let settle: () => void = () => {};
@@ -431,8 +376,8 @@ function createFeishuRuntimeFactory(
           },
         };
       },
-      // Do not recall an existing queue preview (the client exposes a confusing tombstone): settle it in
-      // place to an honest delayed status. The eventual replay mounts a fresh preview.
+      // Do not recall an existing queue preview (the client exposes a confusing tombstone): settle it in place to an
+      // honest delayed status.
       onDeferred: (rec) => {
         if (rec.preview !== undefined) {
           void settleFeishuPreview(api, targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch((e) =>
@@ -442,23 +387,20 @@ function createFeishuRuntimeFactory(
       },
       notifyDropped,
       execute: (rec, discussion, onCompleted) => {
-        // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
-        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold
-        // the thread's snapshot before either commits it. That fan-out loses nothing; claiming by buffer
-        // key would instead couple otherwise-independent root sessions and require failure rollback.
+        // PEEK and never commit: the room still owes this discussion to its OWN memory (§8). ponytail.
         const room = rec.roomBufferKey !== undefined ? buffer.peek(rec.roomBufferKey) : undefined;
         const roomBlock = room?.text
           ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
           : "";
         const prompt = `${roomBlock}${discussionBlock(discussion.text)}${rec.baseText}`;
-        // Room entries FIRST: the collector keeps the TAIL under its cap, so the thread's own
-        // attachments win the slots.
+        // Room entries FIRST: the collector keeps the TAIL under its cap, so the thread's own attachments win the
+        // slots.
         const buffered = collectFeishuBufferedAttachments([...(room?.consumed ?? []), ...discussion.consumed], {
           images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
           files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
         });
-        // Recorded at ingress (see submit) — never re-derived from the session key, which may be a
-        // routed OPAQUE id that only looks like a place key.
+        // Recorded at ingress (see submit) — never re-derived from the session key, which may be a routed OPAQUE id
+        // that only looks like a place key.
         const parentSession = rec.parentSession;
         return feishuReply(
           feishuTurnStream(
@@ -487,23 +429,12 @@ function createFeishuRuntimeFactory(
     registerFeishuApi(stateRoot, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
-    // Who the agent has heard in a thread decides whether a bare message addresses it (participant
-    // model §3), and it comes from what this channel observed — see thread-participants.ts.
+    // Who the agent has heard in a thread decides whether a bare message addresses it (participant model §3), and it
+    // comes from what this channel observed.
 
     let warnedUnidentified = false;
 
-    /**
-     * What this delivery contributes to thread participation, or undefined when it contributes nothing.
-     *
-     * ONE gate for BOTH writes (the humans observation on the way in, and the `agentSpoke` merge once
-     * the turn is durable), and one definition of the synthetic speaker id — hand-written conditions in
-     * two places is the drift that has already bitten this branch once. Structural facts only; see
-     * thread-participants.ts for why configuration must not appear here.
-     *
-     * Feishu-specific: p2p is excluded (nothing reads those records), and a custom route may admit a
-     * bot the default route filters out — answering one is not participation the summon rule should
-     * act on, so such a thread keeps no record and the first human still needs the mention bootstrap.
-     */
+    /** What this delivery contributes to thread participation, or undefined when it contributes nothing. */
     const heardIn = (
       m: FeishuMessage,
       sender: FeishuMessageEvent["sender"],
@@ -511,26 +442,17 @@ function createFeishuRuntimeFactory(
       if (m.chat_type !== "group" || m.thread_id === undefined || sender?.sender_type !== "user") return undefined;
       const speakerId = senderId(sender);
       if (speakerId === undefined && !warnedUnidentified) {
-        // Once per MOUNT — the flag lives in this channel's closure on purpose: the condition is a
-        // property of THIS app's event configuration, so a `feishu` and a `lark` mount must each be
-        // able to report it. A per-thread set would instead grow without bound to repeat one fact.
+        // Once per MOUNT — the flag lives in this channel's closure on purpose.
         warnedUnidentified = true;
         log.warn(
           `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
         );
       }
-      // A human whose id no tenant flavour carries still SPOKE, and no human may speak unrecorded. A
-      // per-MESSAGE synthetic id keeps them distinct; a per-thread one would collapse every human on an
-      // id-less tenant into one, which is the direction that barges into a crowd. Its cost is PERMANENT
-      // — two such messages fill MAX_HUMANS and records never shed, so that thread needs an @mention
-      // from then on and only deleting the file resets it (§3).
+      // A human whose id no tenant flavour carries still SPOKE, and no human may speak unrecorded.
       return { key: threadKey(m.chat_id, m.thread_id), speaker: speakerId ?? `unidentified:${m.message_id}` };
     };
 
-    // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue. It
-    // touches no network, so it stays synchronous inside the platform's ACK window and the delivery
-    // dedup ring alone is enough — there is no await for a duplicate push to race through. The
-    // minutes-long Agent turn remains fire-and-forget.
+    // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue.
     const acceptEvent = (event: FeishuMessageEvent): void => {
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return;
@@ -543,9 +465,8 @@ function createFeishuRuntimeFactory(
       if (!normalized) return;
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Listening is not speaking: every message the channel can see refines who takes part in its
-      // thread, whether or not it is answered. The sender counts toward the rule immediately — a
-      // second human speaking is exactly what makes addressing ambiguous again.
+      // Listening is not speaking: every message the channel can see refines who takes part in its thread, whether or
+      // not it is answered.
       const heard = heardIn(m, event.sender);
       if (heard) threadParticipants.merge(heard.key, { humans: [heard.speaker] });
 
@@ -574,8 +495,7 @@ function createFeishuRuntimeFactory(
                 key: resource.key,
                 name: resource.name,
               }));
-            // A write failure escapes this boundary. HTTP turns it into a 500 response; the official WS
-            // SDK turns it into a 500 ACK frame. Both transports therefore ask the platform to re-push.
+            // A write failure escapes this boundary.
             buffer.push(bufferKey, {
               sender: senderLabel(event.sender) ?? "someone",
               body: bodyText,
@@ -596,35 +516,25 @@ function createFeishuRuntimeFactory(
       }
 
       // Memory follows the place (participant model §5): one session per chat, and one per thread.
-      // Keyed by `thread_id`, never `root_id` — the platform's root_id tracks the reply chain and can
-      // differ between messages of ONE thread, which would split a side conversation in two.
       const routed = r.session;
       const session = routed ?? placeKey(kind, m);
-      // Lineage is recorded ONLY for the default place-derived session. A routed session id is
-      // OPAQUE (the route contract), and re-parsing it as a place key would let a three-segment id
-      // like "tenant:user:alice" masquerade as a thread and inherit from "tenant:user" — a
-      // cross-session injection. Derived from the MESSAGE (the fact this channel owns), at record
-      // time, where routed-ness is still known; the dequeue path only reads it back.
+      // Lineage is recorded ONLY for the default place-derived session.
       const parentSession =
         routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
-      // Read BEFORE this turn records its own participation below, or it is always true. Keyed by the
-      // SOURCE chat, never the answer target a route may name (§8).
+      // Read BEFORE this turn records its own participation below, or it is always true.
       const roomBufferKey =
         parentSession !== undefined && !threadParticipants.agentSpokeIn(session)
           ? feishuBufferPlaceKey({ chatId: m.chat_id })
           : undefined;
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
-      // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers,
-      // stay plain in an ordinary direct message, and stay inside a thread whenever the question came
-      // from one — a direct message's thread is a place too, and relocating out of it is the silent
-      // move the model refuses.
+      // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers, stay plain in an
+      // ordinary direct message, and stay inside a thread whenever the question came from one — a direct message's
+      // thread is a place too, and relocating out of it is the silent move the model refuses.
       const replyTo = sameTarget && (m.chat_type === "group" || m.thread_id !== undefined) ? m.message_id : undefined;
       const replyInThread = replyTo !== undefined && m.thread_id !== undefined ? true : undefined;
       const queueReplyTo = sameTarget ? m.message_id : undefined;
-      // Explicit user stop: a control action, never a turn — it must not queue behind the run it
-      // stops. Mentions arrive as @name tokens; strip them before matching the bare word. Record the
-      // message id so a platform re-push doesn't double-abort or double-notify.
+      // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
         sideTasks.track(
@@ -655,17 +565,8 @@ function createFeishuRuntimeFactory(
           replyTo,
           queueReplyTo,
           replyInThread,
-          // A quote is the user explicitly pointing at something that may predate this session
-          // (§8 rung 2), so it is always loaded.
-          //
-          // There used to be an exception: skip it inside a thread the agent had already answered in,
-          // since the session would hold it. That needed a second fact — did the channel RECEIVE the
-          // messages in between? — which depends on a scope that changes over time, while the record it
-          // was read against is durable. Every attempt to gate it correctly failed in the same
-          // direction (a silently missing quote), for an optimisation worth one `getMessage` on a
-          // quote-reply inside an active thread. Loading it costs a call and some text the session may
-          // already have; it also pins WHICH message is being answered, which a long thread benefits
-          // from anyway.
+          // A quote is the user explicitly pointing at something that may predate this session (§8 rung 2), so it is
+          // always loaded.
           parentId: m.parent_id,
           ...(parentSession !== undefined ? { parentSession } : {}),
           ...(roomBufferKey !== undefined ? { roomBufferKey } : {}),
@@ -675,29 +576,11 @@ function createFeishuRuntimeFactory(
         true,
       );
 
-      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
-      // bare message address it without a mention (§3).
-      //
-      // `r.session === undefined` is what makes this fact mean what its reader assumes. Participation
-      // is keyed by THREAD while the memory it stands in for is keyed by SESSION, and those agree only
-      // when the session is derived from the place. A route supplying its own (the scaffold's
-      // `session: user:<open_id>` example) can put two people's turns in one thread into different
-      // sessions — recording `agentSpoke` from one of them would tell the summon rule the agent took
-      // part in a conversation it cannot remember. So the flag records "the agent answered into THIS
-      // THREAD'S session". Such a thread keeps a bystander record and needs the ordinary mention to
-      // bootstrap if the route is later dropped. `group` matches the observation above so the record is
-      // never half-written.
-      //
-      // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
-      // the thread as the agent has actually left it. A later delivery failure does not undo it —
-      // entering the conversation is the intent, not the send.
-      // Reuses `heardIn` from the way in, so both writes share ONE gate by construction. The extra
-      // conditions are about the ANSWER, not the speaker: it must land in this thread (`sameTarget`,
-      // `replyInThread`) and in the place's own session, or the flag would claim a memory that never
-      // held the turn.
+      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT bare message
+      // address it without a mention (§3).
       if (heard && replyInThread === true && sameTarget && r.session === undefined) {
-        // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
-        // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
+        // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive could otherwise
+        // say "answered here, heard nobody".
         threadParticipants.merge(heard.key, { agentSpoke: true, humans: [heard.speaker] });
       }
     };
@@ -715,9 +598,9 @@ function createFeishuWebhookRoutes(
   const { kind, envPrefix } = profile;
   const label = `[${kind}]`;
   if (!encryptKey) {
-    // Said once at wiring, not per request: without an encrypt key events arrive in plaintext and
-    // carry no signature, so the freshness window below never runs and a captured body replays for
-    // as long as the verification token lives.
+    // Said once at wiring, not per request: without an encrypt key events arrive in plaintext and carry no signature,
+    // so the freshness window below never runs and a captured body replays for as long as the verification token
+    // lives.
     log.warn(
       `${label} no ${envPrefix}_ENCRYPT_KEY: events are accepted unsigned, with no replay window — set one in the console to enable it`,
     );
@@ -748,10 +631,8 @@ function createFeishuWebhookRoutes(
         signature: req.headers.get("x-lark-signature") ?? "",
       };
       if (sig.signature) {
-        // Freshness BEFORE the signature: the signature covers the timestamp but proves nothing about
-        // it, so without a window a captured body + its three x-lark-* headers replays forever. The
-        // `seen` ring is not that defence — it is bounded, and past its rollover a replay re-runs the
-        // turn (a re-sent message, a re-fired tool).
+        // Freshness BEFORE the signature: the signature covers the timestamp but proves nothing about it, so without
+        // a window a captured body + its three x-lark-* headers replays forever.
         if (!signatureIsFresh(sig.timestamp, MAX_SIGNATURE_AGE_S)) {
           log.warn(
             `${label} rejected an event: X-Lark-Request-Timestamp outside the ±${MAX_SIGNATURE_AGE_S / 3600} h replay window`,

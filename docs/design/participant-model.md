@@ -8,17 +8,15 @@ updated: 2026-07-25
 
 # Participant model
 
-This document defines the interaction model for chat channels in collaboration tools — who the bot
-answers, where the answer appears, and what it remembers. It is the *why* behind the routing and
-session code in `src/channels/feishu/`, `src/channels/slack/`, and `src/channels/telegram/`; the
-mechanisms themselves are documented in [core.md](core.md).
+The interaction model for chat channels in collaboration tools — who the bot answers, where the answer
+appears, and what it remembers. It is the *why* behind the routing and session code in
+`src/channels/feishu/`, `src/channels/slack/`, and `src/channels/telegram/`; the mechanisms are
+documented in [core.md](core.md).
 
 The model is derived, not assembled. Everything below follows from one axiom, so changing the axiom
 invalidates the rules rather than adjusting them.
 
 ## 1. The axiom
-
-A bot in a collaboration tool can be framed two ways:
 
 | | Participant (a colleague) | Endpoint (a command surface) |
 |---|---|---|
@@ -39,18 +37,14 @@ implement the participant.
 
 ## 2. Listening is not speaking
 
-The first consequence, and the one most bot designs miss:
-
 > A participant hears everything said in the room, and speaks only when addressed.
 
 The two capabilities are independent, and FastAgent implements them separately: everything heard but
-not addressed to the agent is buffered as context (`channels/kit/context-buffer.ts`) and folded into the
-next answered turn in that place; speaking is governed by rule 1 below.
+not addressed to the agent is buffered as context (`channels/kit/context-buffer.ts`) and folded into
+the next answered turn in that place; speaking is governed by rule 1.
 
-This is also what the platform's sensitive group-message scope actually buys. It does not grant the
-right to speak — it grants the ability to *hear*. Without it the agent is a colleague who only opens
-its eyes when called by name: usable, but slow-witted. The permission therefore selects a posture
-rather than a feature:
+This is what the platform's sensitive group-message scope actually buys. It does not grant the right
+to speak — it grants the ability to *hear*. The permission selects a posture rather than a feature:
 
 | Posture | Permission | Experience |
 |---|---|---|
@@ -59,14 +53,14 @@ rather than a feature:
 
 ## 3. Rule 1 — when to speak
 
-People address each other by name in a crowd, and drop the name when a conversation has only two
-sides. The rule is therefore about the *conversation*, not about the chat type:
+People address each other by name in a crowd and drop the name when a conversation has only two
+sides. The rule is therefore about the *conversation*, not the chat type:
 
 > **Speak without being addressed if, and only if, the agent takes part in this place and has not
 > heard a second human in it. Otherwise require an explicit mention.**
 
 Direct messages are not a special case — they are the instance of the rule where only one human can
-be heard. The derived behavior:
+be heard.
 
 | Place | Humans heard | Behavior |
 |---|---|---|
@@ -75,95 +69,62 @@ be heard. The derived behavior:
 | Thread where only one human has spoken | ≤1 | answer bare messages |
 | Thread where a second human has spoken | ≥2 | require @mention, keep listening |
 
-The last row is the part that "answer everything in a thread the agent once joined" gets wrong: a
-colleague who keeps answering every sentence of a three-way discussion because they were asked one
-question is behaving badly. The agent must fall back to listening when the conversation stops being
-a two-party exchange.
+The last row is what "answer everything in a thread the agent once joined" gets wrong: a colleague who
+keeps answering every sentence of a three-way discussion because they were asked one question is
+behaving badly.
 
 ### The rule is about what the agent HEARD, not about who is really there
 
-This is the load-bearing decision, and it is a deliberate weakening. No platform transmits "who is
-taking part", and none emits an event when someone stops; a claim about true membership can only come
-from reading the thread back on the acceptance path — a remote, paginated, deadline-bound call inside
-the event ACK window.
+A deliberate weakening. No platform transmits "who is taking part", and none emits an event when
+someone stops; a claim about true membership can only come from reading the thread back on the
+acceptance path — a remote, paginated, deadline-bound call inside the event ACK window. That was built
+and removed: it bought a claim its own page cap made incomplete anyway, at the price of a per-platform
+failure taxonomy, an ACK budget, request aborts, a completeness flag, and a duplicate-delivery join.
+Observation makes the weaker claim the rule actually needs, and it is free.
 
-That was built, and then removed. It bought a claim its own page cap made incomplete anyway, and it
-dragged in a failure taxonomy per platform, an ACK budget, request aborts, a completeness flag with a
-refusal-flag sibling, and a duplicate-delivery join — which is where nearly every defect lived.
-Observation makes the weaker claim the rule actually needs, and it is free: the channel already sees
-these messages, and it hears everything in a place it can see (§2).
-
-What the weaker claim costs, stated plainly: **a thread the agent joined before this deployment — or
-before a lost state file — reads as unheard, so it takes one mention to re-enter.** That is the same
-bootstrap every thread starts with, it self-heals in one message, and it is visible to the user. It is
-not the failure this replaced, which was silently mention-only, forever, with no signal.
+The cost, stated plainly: **a thread the agent joined before this deployment — or before a lost state
+file — reads as unheard, so it takes one mention to re-enter.** That is the bootstrap every thread
+starts with, it self-heals in one message, and it is visible to the user.
 
 **The invariant is that every human the channel hears in a thread is recorded there, until a second one
 is known** — not that a record always holds one, and not that `humans` is ever a complete roster. The
 rule asks nothing beyond "is there a second?", so the store stops counting at two; what it must never
-do is miss the first two. Missing one of them is the under-count that makes the agent speak into a
-crowd.
+do is miss the first two. Missing one is the under-count that makes the agent speak into a crowd.
 
-Both halves of a record are therefore written under the SAME gate — a group thread, a human sender —
-so "answered here but heard nobody" cannot arise at all. The predicate still admits it (`humans` of
-zero or one), which states the intent: ambiguity comes from a second person *talking*, not from the
-absence of a first. But it is not a state the channels can produce. A custom route may admit a bot the
-built-in routes filter out; answering one is not participation the rule should act on, so such a thread
-keeps no record and the first human to speak there still needs the mention bootstrap. (The agent half is additionally
-narrowed — it must be the same place and the place's own session — which only ever leaves a bystander
-record, never a participant one with humans missing.)
+Both halves of a record are written under the SAME gate — a group thread, a human sender — so
+"answered here but heard nobody" cannot arise. That gate is built from STRUCTURAL facts only (is this
+a group? is this a thread?) and never from configuration: configuration changes while records outlive
+the change, so gating on it leaves `agentSpoke` on disk with the humans of the intervening window
+missing. Unread records are harmless: they cost two ids, and the cap evicts bystander threads before
+threads the agent takes part in.
 
-That condition is built from STRUCTURAL facts only — is this a group? is this a thread? — and never
-from configuration. Feishu's group-behaviour setting or the presence of a custom route is the tempting
-gate, since nothing reads participation without them, but configuration changes while records outlive
-the change: gate on it, switch back, and `agentSpoke` is still on disk with the humans of the
-intervening window missing. Both channels therefore record in postures where no rule will read the
-result. The condition is the same in both: a group thread, whatever the posture. Unread records are harmless:
-they cost two ids, and the cap evicts bystander threads
-(ones the agent has only listened to) before threads it takes part in, so listening traffic can never
-push out a thread being served.
+Two accepted costs:
 
-The cost runs both ways, and the second direction is not free. A record is only as complete as the
-channel's hearing when it was written: an agent answering a mention in a restricted posture (a Slack
-app created without the history scopes, Feishu without `im:message.group_msg`) records itself plus the
-human who summoned it, while
-everyone else's bare messages in that thread are never delivered. Widen the posture later and the thread
-reads "participant + one human" though it holds several. That is accepted rather than defended against —
-the failure is one unwanted reply, it corrects itself the moment a second human speaks, and detecting it
-needs exactly the completeness bookkeeping this design removed. An operator changing posture on a live
-deployment can delete the state file to force every thread back to the mention bootstrap.
+- A record is only as complete as the channel's hearing when it was written. An agent answering a
+  mention in a restricted posture records itself plus the human who summoned it; widen the posture
+  later and the thread reads "participant + one human" though it holds several. The failure is one
+  unwanted reply, it corrects itself the moment a second human speaks, and detecting it needs exactly
+  the completeness bookkeeping this design removed. Deleting the state file forces every thread back
+  to the mention bootstrap.
+- A human whose event carries no usable id (Feishu's `sender_id` is a union, and which members a
+  tenant populates is app configuration) is counted under a synthetic per-message id, so two such
+  messages fill the thread's human slots. Collapsing them into one speaker would be wrong in the
+  dangerous direction — on a tenant carrying no ids at all, every human would read as the same one.
+  The channel warns once per process, the first time it hears an unattributable sender in a group
+  thread.
 
-One cost in this model is NOT self-healing, and it is worth stating separately: a human whose event
-carries no usable id (Feishu's `sender_id` is a union, and which members a tenant populates is app
-configuration) is counted under a synthetic per-message id, so two such messages fill the thread's
-human slots and it requires an @mention from then on. Collapsing them into one speaker would be tidier
-but wrong in the dangerous direction — on a tenant that carries no ids at all, every human would read
-as the same one. Deleting the state file is the only reset; the channel warns once per process, the
-first time it hears an unattributable sender in a group thread — the only place participation is
-recorded, so a deployment used purely in direct messages never trips it (and never needs to).
-
-Two consequences worth naming rather than discovering:
-
-- A thread where several people are present but only one has spoken *while the agent was listening*
-  reads as two-party. Given the rule's intent — ambiguity comes from several people **talking** — that
-  is arguably more faithful than counting silent members.
-- Observations accumulate and are never shed. The absence of a signal is not evidence that someone
-  left, and the error directions are not symmetric: over-counting humans makes the agent ask to be
-  named, under-counting makes it speak into a crowd.
+Observations accumulate and are never shed: the absence of a signal is not evidence that someone left,
+and the error directions are not symmetric.
 
 **Participation** is required so the agent does not barge into a human thread it was never part of.
-The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
-ordinary social move: mention it once inside the thread, and it stops needing to be named. (A thread's
-root message lives in the main timeline, not in the thread, so the root is not what establishes
-participation.)
+The agent is a participant of a thread once it has answered in it, so bootstrapping is the ordinary
+social move: mention it once inside the thread. (A thread's root message lives in the main timeline,
+so the root does not establish participation.)
 
 **Mentioning only other people is not addressing the agent.** Such a message is discussion; it is
 buffered, never answered.
 
 ## 4. Rule 2 — where to speak
-
-People answer where they were asked, because that is where the audience is. Moving the answer
-elsewhere without saying so is the behavior of a bad colleague.
 
 > **Answer in the place the question was asked. Never relocate an answer silently.**
 
@@ -174,17 +135,13 @@ elsewhere without saying so is the behavior of a bad colleague.
 | Direct message | the direct message |
 
 The agent does not open threads on its own. Automatic placement requires a heuristic ("is this a long
-task?"), and an unpredictable answer location is worse than an untidy timeline. A human who wants a
-side conversation opens a thread, and the agent follows them into it.
+task?"), and an unpredictable answer location is worse than an untidy timeline.
 
 *Non-goal, deliberately deferred:* relocating a long-running task into a thread to release the main
-timeline's turn lock. It is defensible only if announced in place, and only with a reliable
-"this will take a while" signal. People already open threads for long work.
+timeline's turn lock. It is defensible only if announced in place, and only with a reliable "this will
+take a while" signal.
 
 ## 5. Rule 3 — what to remember
-
-People in a room share a memory of that room; entering a side conversation does not erase it; and
-what a side conversation concludes gets carried back.
 
 > **Memory follows the place. A room has one memory. A thread starts from what the room knew and
 > keeps its own history. What happens in a thread flows back to the room.**
@@ -198,37 +155,32 @@ what a side conversation concludes gets carried back.
 The rows name *places*, so a platform whose primitives make a different thing the place lands
 differently while obeying the same rule — see §11.
 
-Sessions are **per place, never per person**. A room's conversation belongs to the room: scoping
-memory per user would break the most common collaborative pattern (one person following up on
-another's exchange) and would hide the agent's own answers from everyone but the asker.
+Sessions are **per place, never per person**. Scoping memory per user would break the most common
+collaborative pattern (one person following up on another's exchange) and would hide the agent's own
+answers from everyone but the asker.
 
 ## 6. Concurrency follows the same rule
 
-The unit of concurrency is the session, and the session is the place. This is not a technical
-compromise — it is the same social rule:
+The unit of concurrency is the session, and the session is the place:
 
 - one conversation is sequential: people take turns, and an answer may depend on the previous one;
 - separate conversations are parallel: threads proceed independently.
 
-Two turns in one place must therefore serialize (`channels/kit/turn-queue.ts` FIFO, and the engine's
-single-writer lease in `engines/pi/turn-kit.ts`). Two turns in different places run concurrently
-because they are different sessions.
+Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and the engine's single-writer
+lease in `engines/pi/turn-kit.ts`). Two turns in different places run concurrently.
 
-Finer-grained concurrency (parallel turns *inside* one session, branching the session tree per turn)
-is rejected: a conversation needs convergence, and a tree only provides divergence. Concatenating two
-independently computed turns afterwards is a stale read — harmless when the two asks are causally
-independent, silently wrong when the second refers to the first, and there is no way to tell them
-apart without understanding the content. The user already tells us which asks are independent: by
-opening a thread.
+Finer-grained concurrency (parallel turns *inside* one session) is rejected: a conversation needs
+convergence, and a tree only provides divergence. Concatenating two independently computed turns
+afterwards is a stale read — harmless when the two asks are causally independent, silently wrong when
+the second refers to the first, and there is no way to tell them apart without understanding the
+content. The user already tells us which asks are independent: by opening a thread.
 
 ## 7. What a thread does not tell the room
 
 *Non-goal, deliberately deferred:* folding a thread's conclusion back into the room. Two different
 things are lost when a side conversation ends — the room's session does not hold what was decided
 (cheap to fix, invisible to everyone) and the people in the room do not know it (needs a message, so
-it needs consent). Nothing is built for either until the gap is felt in use: a person who wants the
-room to know can already ask the agent to post there, and the agent's own memory gap has not yet
-produced a complaint. If it does, the memory half is the one to build first, and the shape is the
+it needs consent). If the gap is felt, the memory half is the one to build first, and the shape is the
 context buffer's: record the thread's latest exchange per thread, fold it into the room's next turn,
 commit on `completed`.
 
@@ -240,111 +192,83 @@ A thread must start from something. Four rungs, increasing in cost:
 |---|---|---|---|
 | 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound | rejected |
 | **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** | implemented |
-| **3** | **room-buffer fold, in the prompt** | **what the room heard but no session absorbed — text and attachments** | **implemented** |
-| **4** | **session inheritance (fork at the branch point)** | **the room's history up to where the thread branched — text, images, tool results — windowed** | **implemented** |
+| **3** | **room-buffer fold, in the prompt** | **what the room heard but no session absorbed — text and attachments** | implemented |
+| **4** | **session inheritance (fork at the branch point)** | **the room's history up to where the thread branched — text, images, tool results — windowed** | implemented |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
-routinely longer than the cut. **Rung 2 is implemented**, with one bound for every channel, derived
-rather than chosen: a referent is the exact text the asker points at, so the cut must clear the
-largest message a chat platform accepts (4096, Telegram's cap and the tightest of ours). Anything
-smaller loses a legal message's tail silently. This is a fidelity bound and must not be confused with
-the context buffer's per-line bound, which is a fairness quota inside a shared budget. A quoted message is always loaded — the quote is the
-user pointing at something that may predate this session. (Skipping it inside a thread the agent had
-already answered in was tried: deciding whether the session really held it needs a second fact, whether
-the channel RECEIVED the messages in between, which depends on a permission that changes over time
-while the record is durable. Every way of gating it failed toward a silently missing quote, for the
-price of one extra read.) An unreadable referent degrades to a marker in
-the prompt: context is not the ask, and losing it must not cost the answer.
+routinely longer than the cut.
+
+**Rung 2** uses one bound for every channel, derived rather than chosen: a referent is the exact text
+the asker points at, so the cut must clear the largest message a chat platform accepts (4096,
+Telegram's cap and the tightest of ours). This is a fidelity bound and must not be confused with the
+context buffer's per-line bound, which is a fairness quota inside a shared budget. A quoted message is
+always loaded — the quote is the user pointing at something that may predate this session. (Skipping
+it inside a thread the agent had already answered in was tried: deciding whether the session really
+held it needs a second fact — whether the channel RECEIVED the messages in between — which depends on
+a permission that changes over time while the record is durable.) An unreadable referent degrades to a
+marker in the prompt: context is not the ask, and losing it must not cost the answer.
 
 On Feishu/Lark — and only there, because that platform threads every reply to a parent while
-Telegram's update embeds exactly one `reply_to_message` object (no chain to walk) and Slack carries
-none — the anchor also resolves the referent's reply CHAIN: the ancestors above the quoted message,
-walked to the platform-defined root and rendered oldest-first as context. Ancestors are context, not
-the ask, and every bound follows from that: their text shares ONE further `REFERENT_MAX_CODE_POINTS`
-budget across the whole chain (the referent itself keeps its full fidelity bound), their attachments
-share the buffered tier's `BUFFER_ATTACH_MAX` budget with the context buffer (chain refs take slots
-first — the direct upstream of what the user pointed at outranks ambient discussion), and an
-unloadable one costs a note, never the turn. Any walk that ends short of the root — the 8-ancestor
-IO cap, an exhausted budget, an unreadable ancestor, a cycle in corrupt data — leaves the same
-visible truncation line: a chain rendered without it would read as complete, and the model would
-take the oldest fetched node for the original ask. One cost is carried deliberately: the walk
-repeats per reply turn, so an established session re-reads chain text it may already hold
-(attachments are deduplicated by message identity; text cannot be, from a layer that cannot read
-the session). Bounded to one referent's worth per turn by the shared budget, that is the price of an
-unconditional, stateless guarantee that what a quote points into is visible. A one-hop version of
-this walk was once added and removed as a memory substitute; what changed is the job — resolving
-the pointer, with history left to the rungs below — and the bounds, which are the chain's own root
-plus explicit budgets rather than a picked level count. Rung 3 is the next increment if anchors
-prove too narrow.
+Telegram's update embeds exactly one `reply_to_message` object and Slack carries none — the anchor
+also resolves the referent's reply CHAIN: the ancestors above the quoted message, walked to the
+platform-defined root and rendered oldest-first as context. Ancestors are context, not the ask, and
+every bound follows from that: their text shares ONE further `REFERENT_MAX_CODE_POINTS` budget across
+the whole chain, their attachments share the buffered tier's `BUFFER_ATTACH_MAX` budget with the
+context buffer (chain refs take slots first), and an unloadable one costs a note, never the turn. Any
+walk that ends short of the root — the 8-ancestor IO cap, an exhausted budget, an unreadable ancestor,
+a cycle in corrupt data — leaves the same visible truncation line, because a chain rendered without it
+would read as complete and the model would take the oldest fetched node for the original ask. One cost
+is deliberate: the walk repeats per reply turn, so an established session re-reads chain text it may
+already hold (attachments are deduplicated by message identity; text cannot be, from a layer that
+cannot read the session).
 
-**Rungs 3 and 4 turned out to be one mechanism with two parameters, and it is implemented as
-session inheritance.** The channel states two facts only it knows — which place this one branched
-from (`scope.parentSession`, SPEC §8's extension mechanism) and which message ids may locate the
-branch point (`scope.branchHints`: the referent and its reply chain, whose ids passed through the
-room's turns) — and the engine does the rest, ONCE, when the thread's session is first created: the
-session existing is the record that the decision was taken, so there is no marker to persist and no
-decision to retry. The fork copies the room's active path up to the branch point (a hit is extended
-to the end of its exchange — a mid-exchange fork inherits a question without its answer; a miss
-falls back to the room's present, with a warn). What the model sees is then bounded by one
-mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
-flat — which IS rung 3's seed, generated from real session entries instead of re-serialized prompt
-text, so images and tool results come along for free. Both limits govern how far the window extends
-into older history; the newest exchange is a floor, kept whole even when it alone exceeds the
-budget — an inheritance that drops the exchange the thread branched off would be no inheritance. Every edge (missing parent, oversize journal,
-torn tail line, a dangling tool call from forking a mid-turn room) fails toward an empty session
-with a warn: context is not the ask, and a thread must not lose its first turn to it.
+**Rungs 3 and 4 are one mechanism with two parameters, implemented as session inheritance.** The
+channel states two facts only it knows — which place this one branched from (`scope.parentSession`,
+SPEC §8's extension mechanism) and which message ids may locate the branch point (`scope.branchHints`:
+the referent and its reply chain) — and the engine does the rest ONCE, when the thread's session is
+first created: the session existing is the record that the decision was taken, so there is no marker
+to persist and no decision to retry. The fork copies the room's active path up to the branch point (a
+hit is extended to the end of its exchange, so a mid-exchange fork does not inherit a question without
+its answer; a miss falls back to the room's present, with a warn). What the model sees is bounded by
+one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
+flat — generated from real session entries instead of re-serialized prompt text, so images and tool
+results come along for free. The newest exchange is a floor, kept whole even when it alone exceeds the
+budget. Every edge (missing parent, oversize journal, torn tail line, a dangling tool call from
+forking a mid-turn room) fails toward an empty session with a warn.
 
-An earlier revision of this section declared rung 4 "not planned" on two assumptions, both wrong
-and both corrected by measurement: a fork does not "pay on every turn" (it is one-time by
-construction — fork, then the two sessions never touch again), and "copying the whole room"
-conflated storage with context (disk keeps the full inspectable copy; the mark governs what reaches
-the model — different budgets). The one prediction it got right — preserving reasoning and tool
-results is fork's exclusive capability — is the reason rung 3 never shipped as prompt text.
+**The two rungs carry different halves.** The fork carries what the room's SESSION knew; a room's
+session only advances when the agent is summoned, so discussion since its last answered turn sits in
+the context buffer, absorbed by nothing. The thread's FIRST turn folds that bucket into its prompt,
+read-only — the room's own next answered turn still commits it, so each place sees the discussion
+exactly once in its own memory, and the fold's attachments cross as real attachments on the buffered
+tier rather than as marker lines.
 
-**Rungs 3 and 4 are both implemented, and they carry different halves.** The fork carries what the
-room's SESSION knew; a room's session only advances when the agent is summoned, so discussion since
-its last answered turn sits in the context buffer, absorbed by nothing. The thread's FIRST turn folds
-that bucket into its prompt, read-only — the room's own next answered turn still commits it, so each
-place sees the discussion exactly once in its own memory, and the fold's attachments cross as real
-attachments on the buffered tier rather than as marker lines.
-
-**Once, not per turn**, and this is not an optimisation — a prompt is not an independent request. It
-lands in the session, so the thread's second turn already has the first turn's fold in its context;
-re-folding puts a second identical copy of the block, and of its images, in ONE context window
-(measured: three turns, three copies of each). Several copies of one screenshot read as several
-postings. After the first turn the content is already present, so only chatter arriving LATER could
-carry anything new — and that does not reach the thread at all. It is the same asymmetry stated at
-the end of this section: what a room says after a thread branches stays in the room, until someone
-repeats it there or an asker quotes the message and rung 2 loads it.
+**Once, not per turn**, and this is not an optimisation: a prompt lands in the session, so the thread's
+second turn already has the first turn's fold in its context. Re-folding puts a second identical copy
+of the block, and of its images, in ONE context window (measured: three turns, three copies of each).
+After the first turn the content is already present, so only chatter arriving LATER could carry
+anything new — and that does not reach the thread at all.
 
 The first-turn fact comes from the participants store, which is a cache by contract (bounded,
-evictable, deletable) — and that is acceptable HERE precisely because the fold is prompt-bound. An
-evicted record costs one extra fold of a block whose label ("discussion in the room this thread
-branched from, not yet answered there") is true whenever it is written, and the record is rewritten
-as soon as that turn answers.
-
-The converse is the rule worth keeping: **this cache may not gate a claim that outlives the turn.**
-Write the same content into the newborn session instead — as a birth mark reading "when this thread
-started" — and a forgotten record permanently attributes the room's CURRENT chatter to a thread that
-branched long before. Repetition degrades an answer; a stale durable label misstates the past. That
-is the whole reason this rung is prompt-bound and rung 4 is not.
+evictable, deletable). That is acceptable HERE precisely because the fold is prompt-bound: an evicted
+record costs one extra fold of a block whose label is true whenever it is written. The converse is the
+rule worth keeping: **this cache may not gate a claim that outlives the turn.** Write the same content
+into the newborn session as a birth mark and a forgotten record permanently attributes the room's
+CURRENT chatter to a thread that branched long before. Repetition degrades an answer; a stale durable
+label misstates the past.
 
 *Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
-at ingress. It would delete this rung entirely (the fork would see everything), and it fails on three
-counts, all measured rather than assumed: durable session writes take the run lease
-([session-control.md](session-control.md) §9), so ingress would block behind a multi-minute turn; that
-blocking sits on the PRE-ACK path, where the webhook must answer before the platform re-pushes; and
-consecutive ambient user entries reach the provider unmerged — the direct Anthropic API now combines
-same-role turns, but Bedrock still rejects them (`roles must alternate`), and `deploy agentcore` is a
-shipped host. The room's session advancing only when summoned is therefore a constraint, not an
-oversight.
+at ingress. It would delete rung 3 entirely, and it fails on three measured counts: durable session
+writes take the run lease ([session-control.md](session-control.md) §9), so ingress would block behind
+a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
+platform re-pushes; and consecutive ambient user entries reach the provider unmerged — Bedrock rejects
+them (`roles must alternate`), and `deploy agentcore` is a shipped host.
 
-Adoption is per channel, because only a channel knows its places' lineage: Feishu/Lark set the
-scope fields and fold the room bucket (threads inherit); Telegram and Slack do not yet (their threads
-still start empty — the fields are one wiring change away).
+Adoption is per channel, because only a channel knows its places' lineage: Feishu/Lark set the scope
+fields and fold the room bucket; Telegram and Slack do not yet.
 
 *Known asymmetry, accepted:* room → thread transfers once, when the thread starts, and nothing flows
-back (§7). A thread neither learns about later room activity nor reports its own.
+back (§7).
 
 ## 9. Rejected designs
 
@@ -361,8 +285,6 @@ back (§7). A thread neither learns about later room activity nor reports its ow
 
 ## 10. Mapping to platforms
 
-The model is platform-neutral; the primitives differ in strength.
-
 | Capability | Feishu / Lark | Slack |
 |---|---|---|
 | Side conversation | topic (`thread_id`) | thread (`thread_ts`) |
@@ -372,49 +294,40 @@ The model is platform-neutral; the primitives differ in strength.
 
 ## 11. Per-platform reach
 
-The rules converge; the mappings do not, because the primitives differ. Convergence means each channel
-implements the same three rules with its own platform's notion of a place — not that they answer in
-the same shape.
+The rules converge; the mappings do not, because the primitives differ.
 
 | | Feishu/Lark | Slack | Telegram |
 |---|---|---|---|
 | Place | chat, `chat:thread_id` | channel, `channel:thread_ts` | chat, `chat:message_thread_id` |
 | Answer in a group | quoted reply in the room | **thread reply** — Slack has no quote primitive, so a thread under the message *is* answering in place | quoted reply in the room |
-| Direct messages | one continuous chat | **assistant threads** — Slack's Agents surface gives each conversation a thread with a title and status | one continuous chat |
+| Direct messages | one continuous chat | **assistant threads** — each conversation gets a thread with a title and status | one continuous chat |
 | Thread rule (§3) | what the channel heard in the thread | what the channel heard in the thread | not applicable — see below |
 | Session for a group ask | the room (`<kind>:<chat_id>`) | the **thread the answer creates** (`slack:<team>:<channel>:<thread_ts>`) | the room (`chat_id`) |
 | Stateless addressing | — | — | **reply-to-bot**: the update embeds the parent's sender |
 
-The session row is the same rule with a different place, not a different rule. Feishu and Telegram
-answer a group ask *in the room*, so the room is the place and keeps one memory. Slack has no quote
-primitive, so answering in place means opening a thread on the ask — which makes that thread the
-place, and its memory starts there.
+The session row is the same rule with a different place. Feishu and Telegram answer a group ask *in
+the room*, so the room is the place. Slack has no quote primitive, so answering in place means opening
+a thread on the ask — which makes that thread the place. Neither channel offers a session mode: the
+place follows from the platform's own way of attaching an answer.
 
-Neither channel offers a session mode: the place follows from the platform's own way of attaching an
-answer, so there is nothing left to select.
-
-Slack pays for that twice, and both are departures from §5 worth naming rather than glossing:
+Slack pays for that twice, and both are departures from §5:
 
 - **In a channel**, the room-level memory §5 argues for is lost — a second person asking at channel
   top level starts a fresh place. That is consistent with Slack, where a follow-up belongs in the
   thread; buying it back would mean either serialising an entire channel behind one session or
-  splitting threads into two kinds, both of which cost more than the case is worth.
+  splitting threads into two kinds.
 - **In a direct message**, each top-level message opens its own assistant thread and therefore its own
-  session — the shape §9 rejects as "a new session per ask" everywhere else. It stands here because
-  Slack's Agents surface *is* a list of conversations: each thread carries its own title and status,
-  and the platform's own model of a DM assistant is one thread per topic, not one linear chat. A
-  follow-up continues inside the thread, where the session already holds the exchange.
+  session — the shape §9 rejects everywhere else. It stands here because Slack's Agents surface *is* a
+  list of conversations: each thread carries its own title and status, and the platform's model of a
+  DM assistant is one thread per topic. A follow-up continues inside the thread.
 
-Two consequences worth stating rather than papering over:
+Two consequences worth stating:
 
 - **Telegram needs no participation store at all**, and it is the channel that shaped this design. Its
   Bot API exposes no history read, so it was never able to claim more than it had heard — and it
   carries the parent message *inside* the update, so "is this a reply to me?" is answered statelessly
-  and survives restarts with no state whatsoever. The other two ended up in the same epistemic
-  position (§3) with a state file, because they have no equivalent primitive; the weakest-claim channel
-  turned out to be the simplest and the least buggy, which is the argument that removed the read.
+  and survives restarts with no state. The other two ended up in the same epistemic position (§3) with
+  a state file, because they have no equivalent primitive.
 - **Feishu/Lark cannot borrow it.** Its event carries `parent_id` as a bare id with no sender, so
   recognising a quote-reply to the agent would need a platform read per message or a durable record of
-  every message the agent has sent. Neither is worth it while the thread rule covers the same flow: a
-  quote-reply to the agent in a group's main timeline is buffered rather than answered, and the user
-  either mentions it or opens a thread.
+  every message the agent has sent. Neither is worth it while the thread rule covers the same flow.

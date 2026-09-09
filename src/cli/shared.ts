@@ -1,7 +1,6 @@
 /**
- * Helpers shared across command modules: interactivity gates, port parsing, the startup auth report,
- * first-run model resolution, and the login terminal IO. Bodies moved verbatim from cli.ts; the
- * module-scoped flag access (`values.*`) became parameters.
+ * Helpers shared across command modules: interactivity gates, port parsing, the startup auth report, first-run model
+ * resolution, and the login terminal IO.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
@@ -41,12 +40,7 @@ import { installProxyFetch } from "../proxy.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { failStartup, failUsage, placementOrExit } from "./fail.ts";
 
-/**
- * How every command that runs the model enters its agent directory, in the one order that works:
- * placement decides whose `.env` to read; `.env` may carry the proxy and the provider keys the
- * picker's auth probe needs; the picker runs last. Six commands wrote these steps out by hand, and
- * one carried the order as a comment. The result is the placement every later step reads.
- */
+/** How every command that runs the model enters its agent directory, in the one order that works. */
 export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; authPath?: string; input?: boolean },
@@ -58,29 +52,17 @@ export async function enterAgentCommand(
   return placement;
 }
 
-/**
- * The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). Hand-spaced
- * labels drift out of alignment the moment a longer one appears — which is exactly what happened when
- * `codingTools:` joined `workspace:`/`config:`/`model:`/`state:`. `info` keeps its own writer on purpose: its report is
- * stdout DATA (pipeable, its own label set, its own width), not a log line — the shared thing is the
- * policy (pad, never hand-space), not a constant.
- *
- * Private to this module: {@link reportAssembly} is the report, and a command reaching past it for a
- * line of its own is how the two copies of that report came to differ.
- */
+/** The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). */
 function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(13)}${value}`);
 }
 
-/** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}):
- *  you pointed at the agent, and the project around it is probably what you meant. A hint, so it renders
- *  as one and is silent otherwise. */
+/** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}). */
 function reportWorkspaceHint(hint: string | undefined): void {
   if (hint) reportLine("hint", hint);
 }
 
-/** What the startup report reads off an opened directory — a structural subset of the opener's return,
- *  spelled out so this module does not depend on that function's whole shape. */
+/** What the startup report reads off an opened directory. */
 export interface ReportableAssembly {
   agentDir: string;
   workspace: string;
@@ -94,23 +76,7 @@ export interface ReportableAssembly {
   toolFailures: ModuleLoadFailure[];
 }
 
-/**
- * What `dev` and `start` say about the directory they just opened, in the order they say it.
- *
- * ONE function because it is one report: the two commands wrote it out line by line, and the copies
- * had already diverged over which lines exist at all — `dev` naming the config file, `start` naming
- * state and sessions. A line added to one of two hand-written copies is invisible in the other.
- *
- * The divergence itself is PRESERVED, not resolved: `start`'s `state:`/`sessions:` pair introduces the
- * persistence warnings that follow it in production posture, and `dev`'s `config:` has no counterpart
- * there. Both are passed as explicit extras by the caller, so the asymmetry is visible at the call
- * site rather than buried in two copies of a list. Whether it is RIGHT is a separate question from
- * whether it has one owner.
- *
- * Findings (skill collisions, definition diagnostics) CLOSE the report — they are about the assembly
- * just printed. What a command says next is its own posture talk, not report: `start`'s persistence
- * notes now follow them rather than precede them.
- */
+/** What `dev` and `start` say about the directory they just opened, in the order they say it. */
 export async function reportAssembly(
   a: ReportableAssembly,
   extras: {
@@ -145,12 +111,7 @@ export function isInteractive(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
-/**
- * Parse + range-check a port string (CLI flag or env). Empty/whitespace is "not set" → undefined, so
- * the `??` chain falls through instead of binding port 0 (`Number("")` is 0). The exit code follows
- * RESPONSIBILITY, not the layer that discovers the problem: a bad `--port` is a usage error (2), a
- * bad `PORT` env is broken runtime configuration (1).
- */
+/** Parse + range-check a port string (CLI flag or env). */
 export function parsePort(value: string | undefined, source: string, from: "flag" | "env"): number | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
@@ -164,9 +125,8 @@ export function parsePort(value: string | undefined, source: string, from: "flag
 }
 
 /**
- * Parse a `--bind` address: empty/whitespace is "not set" → undefined (the `??` chain falls through to
- * config, then all interfaces). An unbindable string is a USAGE error (2) — caught here rather than as
- * a node bind failure, or worse, as a "the interface you bound" diagnostic downstream.
+ * Parse a `--bind` address: empty/whitespace is "not set" → undefined (the `??` chain falls through to config, then
+ * all interfaces).
  */
 export function parseBind(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -175,15 +135,13 @@ export function parseBind(value: string | undefined): string | undefined {
   return bindAddress(trimmed); // a name never travels past this point — see bind.ts
 }
 
-/** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking.
- *  Probes through the AGENT's model surface (`agentDir` carries its models.json), so a custom endpoint is
- *  reported like any built-in rather than as an unknown provider. */
+/** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
 export async function reportAuth(agentDir: string, modelSpec: string, authPath: string): Promise<void> {
   const provider = providerOf(modelSpec);
   const models = await createPiModelRuntime({ agentDir, authPath }).catch(failStartup);
   const source = await probeAuthSource(models, modelSpec);
-  // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from
-  // "stored but unusable" — see formatAuthReport for why. store.read warns on a corrupt file itself.
+  // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from "stored but
+  // unusable".
   const stored =
     source === undefined
       ? await fastagentCredentialStore(authPath)
@@ -196,16 +154,7 @@ export async function reportAuth(agentDir: string, modelSpec: string, authPath: 
 }
 
 /**
- * First-run model resolution for every assembly command (dev/start/invoke/fire/chat/deploy): ONE
- * funnel, no dead ends. When no model is set (flag/env/config) and we're on a TTY, show the FULL
- * catalog annotated per provider — ready (with the credential source, so which account pays is
- * visible at the decision point) or login-required — and, when the choice needs auth, run the login
- * flow INLINE instead of exiting with "run `fastagent login` and come back". A no-op when a model is
- * already set; on a non-TTY (CI, a piped stdin), with `--no-input`, on cancel, or on a failed login
- * it stays quiet and lets the caller raise its own clear error (`missing model`, or deploy's
- * model-travel gate). The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it,
- * and best-effort written back to the config so the next run is quiet. `agentDir` is the resolved
- * AGENT DIR (resolvePlacement().agentDir) — config and auth both live there.
+ * First-run model resolution for every assembly command (dev/start/invoke/fire/chat/deploy): ONE funnel, no dead ends.
  */
 async function resolveFirstRunModel(
   agentDir: string,
@@ -217,8 +166,8 @@ async function resolveFirstRunModel(
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
   const authPath = resolveAuthPath(agentDir, options.authPath);
-  // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a
-  // self-hosted endpoint is pickable on first run instead of being invisible until hand-set.
+  // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
+  // is pickable on first run instead of being invisible until hand-set.
   const models = await createPiModelRuntime({ agentDir, authPath }).catch(failStartup);
   const chosen = await pickWithCredentials(models, authPath);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
@@ -226,20 +175,13 @@ async function resolveFirstRunModel(
   await persistModelChoice(agentDir, configPath, chosen);
 }
 
-/**
- * The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy —
- * remedy warnings for providers no login flow can fix (the choice is KEPT: model validity is
- * independent of credentials), or the inline login for the rest. Returns the chosen spec, or
- * undefined when the pick should be discarded (picker cancel, login cancel, a failed auth probe).
- */
+/** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */
 async function pickWithCredentials(models: Models, authPath: string): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
   } catch (error) {
-    // Per-provider auth throws are captured as `broken` INSIDE providerAuthStatuses; reaching here
-    // means the enumeration itself failed (getProviders / a provider with no probe-able surface) — a
-    // system fault. Surface it; the opener then still raises the clear missing-model error.
+    // Per-provider auth throws are captured as `broken` INSIDE providerAuthStatuses.
     log.warn(`[fastagent] could not probe provider auth: ${(error as Error).message}`);
     return undefined;
   }
@@ -254,9 +196,7 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   if (status?.state === "ready") return chosen; // usable now — nothing to fix
 
   if (status && status.login === "none") {
-    // No login flow exists for this provider — KEEP the choice and name the remedy. The remedy depends
-    // on WHY it is not ready: a BROKEN stored credential still owns the provider (env is consulted
-    // only when nothing is stored — createPiModels), so "set the env var" would not help there.
+    // No login flow exists for this provider — KEEP the choice and name the remedy.
     if (status.state === "broken") {
       log.warn(
         `[fastagent] stored auth for "${provider}" is unusable: ${status.message} — fix or remove it in ${authPath}; invokes fail until then`,
@@ -268,14 +208,13 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   }
 
   try {
-    // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
-    // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.
+    // Verified against the CHOSEN model — the exact request the agent is about to make.
     await loginWithKeyCheck(provider, authPath, chosen);
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
     if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
-    // A FAILED login keeps the choice: the pick persists, the startup auth report names the remedy,
-    // and a later `fastagent login` fixes auth without re-picking the model.
+    // A FAILED login keeps the choice: the pick persists, the startup auth report names the remedy, and a later
+    // `fastagent login` fixes auth without re-picking the model.
     log.warn(
       `[fastagent] login for "${provider}" failed: ${(error as Error).message} — model saved; run \`fastagent login\` to fix auth`,
     );
@@ -284,19 +223,15 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
 }
 
 /**
- * Interactive login with the api_key quick-fail probe closed into a LOOP: a definitively rejected key
- * (HTTP 401) deletes the bad credential and RE-PROMPTS immediately — the user's hands are on the
- * keyboard NOW; parking the failure for a later `fastagent login` would waste that. The loop exits on
- * a verified/unverifiable key (kept), an OAuth login (completing the flow already proved the
- * credential), or cancel (LoginCancelled propagates to the caller's cancel policy). Used by both the
- * `login` command and the first-run picker's inline login.
+ * Interactive login with the api_key quick-fail probe closed into a LOOP: a definitively rejected key (HTTP 401)
+ * deletes the bad credential and RE-PROMPTS immediately.
  */
 export async function loginWithKeyCheck(
   provider: string | undefined,
   authPath: string,
   spec?: string,
-  // Test seams: this loop DESTROYS credential state on `rejected`, so its policy (rejected → delete →
-  // re-ask ONLY the key) is pinned by a test through fake flow/verify; production callers omit both.
+  // Test seams: this loop DESTROYS credential state on `rejected`, so its policy (rejected → delete → re-ask ONLY the
+  // key) is pinned by a test through fake flow/verify.
   seams: {
     flow?: (
       io: LoginIO,
@@ -320,22 +255,14 @@ export async function loginWithKeyCheck(
   }
 }
 
-/**
- * Quick-fail check after an api_key login (OAuth needs none — completing the flow already proved the
- * credential): probe the stored key with one minimal request against `spec`, or the provider's first
- * model. Policy over {@link probeApiKey}'s verdict: `rejected` (definitive HTTP 401) DELETES the
- * just-stored credential — a mistyped key must not persist as plausible state — and the caller
- * ({@link loginWithKeyCheck}) re-prompts; `unknown` (network, quota, permissions) keeps it and prints
- * the provider's message: the key may still be right, and wrongly destroying a good credential costs
- * more than keeping a doubtful one.
- */
+/** Quick-fail check after an api_key login (OAuth needs none — completing the flow already proved the credential). */
 async function verifyApiKeyLogin(
   provider: string,
   authPath: string,
   spec?: string,
 ): Promise<"ok" | "rejected" | "unknown"> {
-  // Built-ins only: `login` itself offers built-in providers (login.ts), and a models.json endpoint
-  // authenticates from its own `apiKey` (env/command), so there is no stored credential to verify here.
+  // Built-ins only: `login` itself offers built-in providers (login.ts), and a models.json endpoint authenticates
+  // from its own `apiKey` (env/command), so there is no stored credential to verify here.
   const models = createPiModels({ authPath });
   const model = spec ? resolveModel(models, spec) : models.getProvider(provider)?.getModels()[0];
   if (!model) {
@@ -360,8 +287,7 @@ async function verifyApiKeyLogin(
   return probe.state;
 }
 
-/** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. Shared
- *  by the `login` command and the first-run picker's inline login. */
+/** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
 function terminalLoginIO(): LoginIO {
   return {
     async select(message, options) {
@@ -379,12 +305,7 @@ function terminalLoginIO(): LoginIO {
   };
 }
 
-/**
- * Best-effort persist the picked model so the next run does not prompt. Rewrites the commented
- * `model:` placeholder the scaffold writes / an existing `model:` line, or re-inserts the line into a
- * scaffold-shaped config (the hand-deleted-to-reset case); anything else (a hand-shaped config) is
- * left untouched with a printed hint. Never throws — persistence is a convenience.
- */
+/** Best-effort persist the picked model so the next run does not prompt. */
 async function persistModelChoice(agentDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>
     console.error(

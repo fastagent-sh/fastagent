@@ -1,4 +1,4 @@
-/** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
+/** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { discoverChannelFiles } from "../../channels/discover.ts";
@@ -34,13 +34,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   loadDotEnv(agentDir); // skills/tools may read env at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
-  // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON
-  // (its cwd, whose AGENTS.md ancestors are ② context).
+  // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON (its cwd, whose
+  // AGENTS.md ancestors are ② context).
   const definition = await loadAgentDefinition(agentDir, { cwd: workspace }).catch(failStartup);
-  // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a
-  // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
-  // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
-  // tools/ dir), not a single bad file.
+  // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a tool), is
+  // isolated the same way everywhere (G2).
   const tools = await resolveAgentTools(config, agentDir, workspace)
     .then((r) => ({
       names: r.toolNames,
@@ -57,9 +55,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       error: (e as Error).message,
     }));
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
-  // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
-  // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and
-  // loading is what makes the next fire instant printable. Consistent with tools (info imports those too).
+  // Loaded (imported + validated), not just discovered.
   const sched = await loadSchedules(agentDir).catch(failStartup);
   const schedules = sched.schedules.map((s) => ({
     name: s.name,
@@ -67,18 +63,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     tz: s.tz ?? null,
     next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
   }));
-  // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
-  // create them, info must not).
+  // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login create them,
+  // info must not).
   const stateRoot = resolveStateRoot(agentDir);
   const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
   const authPath = resolveAuthPath(agentDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
 
-  // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the
-  // agent's own surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
-  // Reporting a healthy-looking spec that `dev`/`start` then reject is the failure this pre-empts.
-  // Reported as DATA rather than thrown — a broken agent is what `info` is for — and read-only: the
-  // runtime reads models.json without creating anything (its catalog cache is written on refresh, and
-  // there is none here).
+  // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
+  // surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
   const modelError = modelSpec
     ? await createPiModelRuntime({ agentDir, authPath })
         .then((models) => {

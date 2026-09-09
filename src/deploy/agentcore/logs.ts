@@ -1,15 +1,4 @@
-/**
- * AgentCore log discovery + tailing. The container's stdout/stderr lives in a per-endpoint CloudWatch
- * log group, while the forwarder Lambda has a separate group. This operator surface resolves the
- * stack's RuntimeArn, discovers the endpoint group by prefix, and tails it.
- *
- * NO STREAM FILTER, deliberately: AgentCore names its streams `YYYY/MM/DD/[runtime-logs]<session-id>`
- * (the Lambda `2024/01/01/[$LATEST]abc` convention), so `[runtime-logs]` is an INFIX after the UTC date
- * path, not a prefix. `--log-stream-name-prefix` is a literal prefix match, and the AWS CLI has no
- * substring filter (`--log-stream-names` takes exact names, which `--follow` could never extend to the
- * new session streams). Passing the marker as a prefix therefore matches zero streams and `aws logs
- * tail` prints nothing and exits 0 — a silent empty tail. Do not add it back.
- */
+/** AgentCore log discovery + tailing. */
 import type { CliRunner } from "../runner.ts";
 import { parseStackOutputs } from "./run.ts";
 
@@ -19,7 +8,7 @@ export interface AgentcoreLogsPlan {
   /** Deployment base name — stack `fastagent-<name>`, forwarder `fastagent-<name>-forwarder`. */
   name: string;
   source: AgentcoreLogSource;
-  /** AWS CLI relative/ISO-8601 window (`10m`, `2h`, ...). Defaults to the CLI's own 10 minutes. */
+  /** AWS CLI relative/ISO-8601 window (`10m`, `2h`, ...). */
   since?: string;
   follow: boolean;
 }
@@ -43,11 +32,6 @@ function parseLogGroupNames(stdout: string): string[] | undefined {
   }
 }
 
-/**
- * Find and tail one AgentCore log source. Discovery is dynamic rather than spelling `-DEFAULT`:
- * endpoint naming belongs to AWS, and an edited stack may use a different endpoint. The whole group
- * is tailed — see the file header for why a stream filter cannot narrow it and must not be added.
- */
 export async function tailAgentcoreLogs(
   plan: AgentcoreLogsPlan,
   aws: CliRunner,
@@ -82,10 +66,7 @@ export async function tailAgentcoreLogs(
     }
     prefix = `/aws/bedrock-agentcore/runtimes/${runtimeId}-`;
   } else {
-    // `ForwarderUrl` is the stack's INGRESS URL, NOT proof that a forwarder Lambda exists: plan.ts
-    // keeps needsForwarder and needsFunctionUrl as two variables on purpose (a schedules-only topology
-    // may keep the forwarder and drop the public URL). So DISCOVERY decides existence below, and the
-    // URL output only picks which not-found sentence is true.
+    // `ForwarderUrl` is the stack's INGRESS URL, NOT proof that a forwarder Lambda exists.
     exact = `/aws/lambda/fastagent-${plan.name}-forwarder`;
     prefix = exact;
   }
@@ -112,9 +93,8 @@ export async function tailAgentcoreLogs(
   }
   const matches = groups.filter((group) => (exact ? group === exact : group.startsWith(prefix))).sort();
   if (matches.length === 0) {
-    // Absent group = never used, EXCEPT when the stack has no forwarder at all — an invoke-only
-    // deployment would otherwise be told to deliver a webhook it can never receive. Both facts agree
-    // there (no ingress URL output either), so the message can name the topology instead of a trigger.
+    // Absent group = never used, EXCEPT when the stack has no forwarder at all — an invoke-only deployment would
+    // otherwise be told to deliver a webhook it can never receive.
     if (plan.source === "forwarder" && !outputs.ForwarderUrl) {
       return {
         ok: false,
@@ -127,8 +107,7 @@ export async function tailAgentcoreLogs(
       gate: `no ${plan.source} log group exists yet — ${trigger}, then retry (AWS creates it on first use)`,
     };
   }
-  // A generated stack has one Runtime endpoint. If an operator's edited stack has several, choosing
-  // one silently would show a valid but potentially WRONG agent log — list them and make the choice explicit.
+  // A generated stack has one Runtime endpoint.
   if (matches.length > 1) {
     return {
       ok: false,

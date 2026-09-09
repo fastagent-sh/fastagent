@@ -1,10 +1,7 @@
 /**
- * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then
- * auto-register the first-party webhook channels against it (Telegram setWebhook; onboarded Slack
- * App Manifest update; Feishu/Lark application-config PATCH; GitHub/manual Slack print URLs). This closes the
- * "local dev → public URL" gap webhooks need.
- *
- * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
+ * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then auto-register the
+ * first-party webhook channels against it (Telegram setWebhook; onboarded Slack App Manifest update; Feishu/Lark
+ * application-config PATCH; GitHub/manual Slack print URLs).
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import type { RegistrationOutcome } from "./channels/registration.ts";
@@ -22,10 +19,10 @@ export interface Tunnel {
   close(): void;
 }
 
-// `(?!api\.)`: cloudflared's ERROR lines mention its request endpoint (`https://api.trycloudflare.com/tunnel`,
-// e.g. "failed to request quick Tunnel: Post ... timeout" under a flaky proxy) — without the exclusion a
-// transient error line parses as the assigned URL and the webhook gets registered against Cloudflare's
-// API host instead of the tunnel.
+// `(?!api\.)`: cloudflared's ERROR lines mention its request endpoint (`https://api.trycloudflare.com/tunnel`, e.g.
+// "failed to request quick Tunnel: Post ... timeout" under a flaky proxy) — without the exclusion a transient error
+// line parses as the assigned URL and the webhook gets registered against Cloudflare's API host instead of the
+// tunnel.
 const TUNNEL_URL_RE = /https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/i;
 
 /** Extract a Cloudflare quick-tunnel URL from a chunk of cloudflared output, if present. */
@@ -33,16 +30,7 @@ export function parseTunnelUrl(chunk: string): string | undefined {
   return chunk.match(TUNNEL_URL_RE)?.[0];
 }
 
-/**
- * cloudflared's line for an established edge connection. THIS, not the URL, is when the hostname
- * begins to exist: `*.trycloudflare.com` is no wildcard, and a quick tunnel's record is published
- * once the tunnel registers a connection — so the URL is printed while the name is still NXDOMAIN.
- * A platform told about it inside that window answers "Failed to resolve host" and goes on answering
- * it far longer than any registrar's retry budget (#435); the record going live seconds later does
- * not undo the answer it already gave, which is why more retries were never the fix.
- *
- * Measured over 7 quick tunnels: the URL at +0s, this line at +1.1-1.9s, the record 0.5-3.9s later.
- */
+/** cloudflared's line for an established edge connection. */
 const TUNNEL_CONNECTED_RE = /Registered tunnel connection/i;
 
 /** Whether cloudflared's output so far reports an edge connection — see {@link TUNNEL_CONNECTED_RE}. */
@@ -50,12 +38,7 @@ export function hasTunnelConnection(output: string): boolean {
   return TUNNEL_CONNECTED_RE.test(output);
 }
 
-/**
- * How long after that connection to hand the URL over. The one number here that is not observed: 5s
- * covers the widest of the 7 measured gaps (3.9s), all taken over cloudflared's http2 transport
- * because this network blocks its QUIC. Costs a beat of `dev --tunnel` start-up; buys the first
- * registration attempt landing on a name that resolves.
- */
+/** How long after that connection to hand the URL over. */
 export const TUNNEL_DNS_LAG_MS = 5000;
 
 /** Global timer (rather than timers/promises) so timeout/retry behavior is deterministic under fake timers. */
@@ -77,13 +60,8 @@ type TunnelSpawn =
   | { tunnel?: undefined; fatal: false; detail?: string };
 
 /**
- * Start a Cloudflare quick tunnel to localhost:`port`, resolving once its public URL is assigned AND
- * the tunnel has an edge connection — the URL is printed first and is not usable yet
- * ({@link hasTunnelConnection}). cloudflared sometimes exits before printing a URL (a transient
- * trycloudflare API error), so retry a few times. ALWAYS resolves to undefined WITH an operator log
- * saying why — missing binary, the exit reason, or "gave up after retries" — never silently; serving
- * continues without a tunnel either way. What remains after this is the PLATFORM's own warm-up, which
- * each registrar absorbs by retrying while the platform reports it cannot yet verify the URL.
+ * Start a Cloudflare quick tunnel to localhost:`port`, resolving once its public URL is assigned AND the tunnel has an
+ * edge connection.
  */
 export async function startCloudflareTunnel(
   port: number,
@@ -107,8 +85,10 @@ export async function startCloudflareTunnel(
   return undefined;
 }
 
-/** One cloudflared launch: a Tunnel once its URL is assigned AND the edge connection is up, or a
- *  failure (missing binary / exit before a URL). */
+/**
+ * One cloudflared launch: a Tunnel once its URL is assigned AND the edge connection is up, or a failure (missing
+ * binary / exit before a URL).
+ */
 function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared, timeoutMs: number): Promise<TunnelSpawn> {
   return new Promise((resolve) => {
     const child = spawnFn(port);
@@ -148,8 +128,7 @@ function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared, timeoutMs: num
     });
     child.on("exit", () => finish({ fatal: false, detail: lastErrorLine(tail) }));
     timer = setTimeout(() => {
-      // A URL whose tunnel never connected is not worth a fresh one — the next attempt meets the same
-      // network. Serve it and name what is wrong, rather than retrying into the same wall.
+      // A URL whose tunnel never connected is not worth a fresh one — the next attempt meets the same network.
       if (assigned) {
         log.warn(
           `[fastagent] --tunnel: cloudflared never reported an edge connection for ${assigned} within ` +
@@ -175,24 +154,10 @@ function lastErrorLine(tail: string): string {
   return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
 }
 
-/**
- * Print the public URL and wire up first-party webhook channels found under `dir` (the agent
- * ROOT): Telegram and Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config
- * token; GitHub and a manually scaffolded Slack app receive explicit console URLs.
- *
- * Returns what each registrar ANSWERED, because two kinds of caller need different things from a
- * failure. `dev`/`start` are long-running: a webhook that did not register is a logged problem, not
- * a reason to stop serving, and they void this. `deploy … --run` is a command that exits, and an
- * exit 0 there tells its caller the deployment is reachable — so it feeds these through
- * `registrationGate`, exactly as the fly/railway/agentcore runners feed their own registrar calls
- * (docker used to be the one host that could not, because this returned nothing).
- */
+/** Print the public URL and wire up first-party webhook channels found under `dir` (the agent ROOT). */
 export async function announceWebhooks(
   dir: string,
   baseUrl: string,
-  /** Every declared channel with its ingress. Not a pre-filtered list: this used to accept "the route
-   *  channels" and default to every basename in `channels/`, which pointed a webhook at a
-   *  long-connection channel whenever a caller forgot to filter. {@link pointChannelsAt} filters. */
   channels: readonly DeclaredChannel[],
   opts: { openUrl?: (url: string) => void; stateRoot?: string } = {},
 ): Promise<{ kind: string; outcome: RegistrationOutcome }[]> {
@@ -200,19 +165,11 @@ export async function announceWebhooks(
   try {
     loadDotEnv(dir); // webhook registrars read channel credentials from .env
   } catch (error) {
-    // best-effort boundary: a MISSING .env is already tolerated by loadDotEnv; an unreadable one (EACCES,
-    // or .env is a directory) must NOT crash the long-running dev/start server — announceWebhooks is
-    // void-called with no unhandledRejection handler, so a throw here would terminate the process. Warn
-    // (surface it, rule 8) and continue best-effort; each registrar then surfaces its own
-    // missing-credential guidance. loadDotEnv keeps throwing for the synchronous command callers.
+    // best-effort boundary: a MISSING .env is already tolerated by loadDotEnv.
     log.warn(`[fastagent] could not read ${dotEnvPath(dir)}: ${(error as Error).message} — continuing without it`);
   }
-  // Readiness is the registrar's job: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before its
-  // origin connects, and each registrar absorbs that by retrying the platform call whose own URL
-  // verification reports it. GitHub needs no wait — the operator adds that webhook by hand.
-  //
-  // The registrars differ from the deploy path's in what they carry, not in which channels they answer
-  // for: this one narrates to the log and opens the console for a manual Feishu step.
+  // Readiness is the registrar's job: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before its origin
+  // connects, and each registrar absorbs that by retrying the platform call whose own URL verification reports it.
   const feishuOptions = {
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };

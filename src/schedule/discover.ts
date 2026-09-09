@@ -1,8 +1,6 @@
 /**
- * Schedule discovery (the N axis, clock form): an agent declares its time-triggers by dropping files
- * in `schedules/`, mirroring `tools/` and `channels/`. Each file default-exports `defineSchedule({...})`,
- * named from its filename. This is the FILE producer of scheduled invocations (the author's, declarative,
- * git-tracked, deploy-guaranteed); the agent's `wake` tool is the second producer.
+ * Schedule discovery (the N axis, clock form): an agent declares its time-triggers by dropping files in `schedules/`,
+ * mirroring `tools/` and `channels/`.
  */
 import { join } from "node:path";
 import { type ModuleLoadFailure, loadModuleDir, moduleInventory } from "../loader.ts";
@@ -10,9 +8,7 @@ import { assertInsideAgentDir } from "../paths.ts";
 import { cronError } from "./cron.ts";
 import type { LoadedSchedule, Schedule } from "./schedule.ts";
 
-/** Schedule file basenames under `<dir>/schedules/` — an existence probe listed WITHOUT importing
- *  (deploy pre-flight's time-trigger detection; `fastagent info` uses {@link loadSchedules} instead,
- *  since it also reports broken files and next instants). */
+/** Schedule file basenames under `<dir>/schedules/`. */
 export async function discoverScheduleFiles(dir: string): Promise<string[]> {
   await assertInsideAgentDir(dir, "schedules");
   const entries = await moduleInventory(join(dir, "schedules"));
@@ -20,11 +16,8 @@ export async function discoverScheduleFiles(dir: string): Promise<string[]> {
 }
 
 /**
- * Discover schedules in `<dir>/schedules/`: each file default-exports a `defineSchedule({...})`, named
- * from its filename. A file broken for ANY reason — a failed import, not a schedule (no cron/prompt), or
- * an invalid cron/tz — is ISOLATED into `failures` (skipped + reported, never a crash-loop, G2), the same
- * way `loadTools`/`loadChannels` isolate theirs. A duplicate name (foo.ts + foo.js) keeps the first and
- * reports the rest.
+ * Discover schedules in `<dir>/schedules/`: each file default-exports a `defineSchedule({...})`, named from its
+ * filename.
  */
 export async function loadSchedules(
   dir: string,
@@ -40,8 +33,8 @@ export async function loadSchedules(
       }
       const err = cronError(s.cron, s.tz);
       if (err) throw new Error(`${label}: invalid cron/tz — ${err}`);
-      // "wake" is reserved: the run audit records self-scheduled wake-ups under that name, so a schedule
-      // named wake would make `schedule history wake` an unreadable mix of two different things.
+      // "wake" is reserved: the run audit records self-scheduled wake-ups under that name, so a schedule named wake
+      // would make `schedule history wake` an unreadable mix of two different things.
       if (name === "wake")
         throw new Error(`${label}: "wake" is a reserved schedule name (the self-scheduling audit uses it)`);
       if (byName.has(name)) throw new Error(`${label}: duplicate schedule name "${name}" — kept the first`);
