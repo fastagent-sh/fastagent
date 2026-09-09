@@ -131,39 +131,35 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       }
     };
     const ready = Deferred.await(bound);
+    /**
+     * Every control command obeys one admission rule: wait for this run's binding, then refuse once it has settled.
+     * Kept in one place so a fourth command cannot arrive with a fifth spelling of it.
+     */
+    const command = (run: (session: AgentSession) => Effect.Effect<void, PortFailure>): Promise<void> =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const session = yield* ready;
+          if (settled)
+            return yield* Effect.fail(
+              new PortFailure(new Error("run already settled; the command cannot take effect")),
+            );
+          yield* run(session);
+        }),
+      );
+    // Image preparation is pure and runs after admission: a settled run must not pay for a resize nobody reads.
+    const enqueue = (p: Prompt, queue: "steer" | "followUp"): Promise<void> =>
+      command((session) =>
+        Effect.gen(function* () {
+          const opts = yield* port(() => toPiPromptOptions(p));
+          yield* port(() => session[queue](p.text, opts?.images));
+        }),
+      );
     const controls: RunControls = {
-      steer: (p) =>
-        Effect.runPromise(
-          Effect.gen(function* () {
-            const opts = yield* port(() => toPiPromptOptions(p));
-            const session = yield* ready;
-            if (settled)
-              return yield* Effect.fail(
-                new PortFailure(new Error("run already settled; the command cannot take effect")),
-              );
-            yield* port(() => session.steer(p.text, opts?.images));
-          }),
-        ),
-      followUp: (p) =>
-        Effect.runPromise(
-          Effect.gen(function* () {
-            const opts = yield* port(() => toPiPromptOptions(p));
-            const session = yield* ready;
-            if (settled)
-              return yield* Effect.fail(
-                new PortFailure(new Error("run already settled; the command cannot take effect")),
-              );
-            yield* port(() => session.followUp(p.text, opts?.images));
-          }),
-        ),
+      steer: (p) => enqueue(p, "steer"),
+      followUp: (p) => enqueue(p, "followUp"),
       abort: () =>
-        Effect.runPromise(
+        command((session) =>
           Effect.gen(function* () {
-            const session = yield* ready;
-            if (settled)
-              return yield* Effect.fail(
-                new PortFailure(new Error("run already settled; the command cannot take effect")),
-              );
             abortsInFlight++;
             yield* port(() => session.abort()).pipe(
               Effect.tap(() =>
