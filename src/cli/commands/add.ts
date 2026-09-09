@@ -9,6 +9,7 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { dotEnvPath, loadDotEnv } from "../../env.ts";
+import { installProxyFetch } from "../../proxy.ts";
 import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
@@ -39,6 +40,7 @@ export async function runAddChannel(
   }
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
+  installProxyFetch(); // feishu/lark app creation talks to the platform — same proxy as everything else
   // Paths are printed to someone standing in their CWD, usually the workspace, while every file belongs to the AGENT
   // dir — prefix them, or they point at nothing.
   const agentFromCwd = displayPath(process.cwd(), target);

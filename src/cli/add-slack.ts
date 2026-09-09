@@ -3,7 +3,6 @@ import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { installProxyFetch } from "../proxy.ts";
 import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
 import {
@@ -78,7 +77,6 @@ export async function onboardSlackInternalApp(input: {
   /** `--replace-config`: go straight to replacing the local App Configuration token pair. */
   replaceConfig?: boolean;
 }): Promise<void> {
-  installProxyFetch();
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new Error(
       "`add slack` needs an interactive terminal for internal-app creation and OAuth — " +

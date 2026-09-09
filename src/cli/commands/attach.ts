@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
+import { installProxyFetch } from "../../proxy.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
@@ -121,6 +122,9 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // A REMOTE attach reads nothing under `dir`.
   const dir = remote ? resolve(dirArg ?? ".") : placementOrExit(resolve(dirArg ?? ".")).agentDir;
   if (!remote) loadDotEnv(dir);
+  // A remote endpoint is out on the internet, so its fetch/SSE must honour HTTP(S)_PROXY. Local discovery
+  // deliberately does not: it talks to 127.0.0.1, and proxying that breaks attach where no_proxy omits localhost.
+  if (remote) installProxyFetch();
   // For a discovered endpoint the FIRST read joins the startup budget below: the dev-watch restart window has two
   // halves.
   let endpoint!: { url: string; token: string };

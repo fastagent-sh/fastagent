@@ -188,6 +188,47 @@ describe("cli papercuts", () => {
     }
   });
 
+  it("tool runs an authored tool through the agent's proxy, not a direct connection", async () => {
+    // Regression (#474): `tool` loaded .env but skipped installProxyFetch(), so an authored tool built on
+    // fetch failed with a bare undici connect timeout on a machine that needs a proxy — while dev/start ran
+    // the same tool fine. Same probe as the deploy test: the reserved .invalid host resolves only via the
+    // local proxy, so a direct connection cannot pass.
+    const requests: string[] = [];
+    const proxy = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("proxied");
+    });
+    await new Promise<void>((resolve, reject) => {
+      proxy.once("error", reject);
+      proxy.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = proxy.address();
+      if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+      const proxyUrl = `http://127.0.0.1:${address.port}`;
+      const dir = await agentWorkspace("fa-tool-proxy-", {
+        ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
+        "tools/probe.mjs":
+          `export default { description: "Probe", parameters: { type: "object" }, async execute() {\n` +
+          `  const res = await fetch("http://tool-proxy.invalid/probe");\n` +
+          `  return await res.text();\n` +
+          `} };\n`,
+      });
+      const env = { ...process.env };
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
+        delete env[key]; // the proxy must come from the agent's .env, loaded inside runTool()
+      }
+
+      const { code, stderr } = await run(["tool", "probe", "{}", dir], undefined, env);
+      expect(code, stderr).toBe(0);
+      expect(requests).toContain("http://tool-proxy.invalid/probe");
+    } finally {
+      await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {
     const v = await run(["--version"]);
     expect(v.code).toBe(0);
