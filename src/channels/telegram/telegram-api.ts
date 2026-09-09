@@ -7,8 +7,8 @@
  *     connection cannot hang a turn, its session queue, or webhook registration.
  *  2. Only a 429 is retried (bounded attempts, honouring `retry_after` up to FLOOD_WAIT_MAX_S per
  *     wait); a longer flood ban or exhausted retries fail visibly. No other failure class is retried:
- *     the request may have been processed, and a retried sendMessage would double-deliver. A caller
- *     whose write is DROPPABLE passes `retries: 0` — see {@link CallOptions}.
+ *     the request may have been processed, and a retried sendMessage would double-deliver. A caller whose
+ *     write is DROPPABLE spends no budget on it — see kit/transport.ts.
  *  3. Success requires the body's own `ok:true` — an intermediary's HTTP 200 is not a sent message.
  *  4. Every failure is a {@link TelegramApiError} naming the method: self-description is a property of
  *     the error type, not per-call-site string assembly.
@@ -20,6 +20,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
+import type { CallOptions } from "../kit/transport.ts";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
@@ -38,20 +39,6 @@ const FLOOD_WAIT_MAX_S = 30;
 
 /** How many 429s one call absorbs before giving up. */
 const RETRIES = 3;
-
-/**
- * Per-call transport options.
- *
- * `retries` exists for ONE distinction the pipeline cannot make for itself: whether this write is
- * worth waiting for. Telegram rate-limits edits to a single message far tighter than sends, and its
- * `retry_after` is routinely tens of seconds — so a live-preview FRAME, whose content the next frame
- * redraws and the final write supersedes, would park the turn (and everything queued behind it) for up
- * to 3 × (FLOOD_WAIT_MAX_S + 1) seconds waiting to deliver a view nobody needs. A droppable write
- * passes 0: the frame is lost, the answer is not.
- */
-export interface CallOptions {
-  retries?: number;
-}
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */

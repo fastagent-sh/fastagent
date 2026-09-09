@@ -191,6 +191,31 @@ skill edits take effect on the next turn. Code modules are reloaded by the dev s
 The low-level `createPiAgent({ instructions })` path is different on purpose: `instructions` is the
 prompt body without directory identity or project-context assembly. Pi appends skills and cwd on both paths.
 
+### Promise ports
+
+Every contract at the edge of this codebase is Promise-shaped and none of them are ours to change:
+the SPEC fixes `Agent.invoke` as an AsyncIterable and `SessionControl` as Promises, pi's SDK is
+Promise-based, every platform client is `fetch`, and so is the filesystem. `src/effect-port.ts` is
+the single crossing into Effect execution, and it holds exactly two opinions.
+
+**Interruption joins.** A Promise exposes no abort hook, so cancelling the fiber awaiting one does
+not stop the work behind it. Releasing its resources anyway is how a disposed session gets written
+to, or a lease reaches the next turn while the previous one still runs. `portJoin` waits for the
+pending promise before releasing; `portAbort` calls the port's own abort hook first and then waits;
+`portRequest` owns an `AbortController`, applies a deadline, and closes the signal on every exit
+(a settled response body has to be released too). `port` is the abandonable case, for reads and for
+writes a caller is free to walk away from.
+
+**The cause survives.** `PortFailure` carries the original error verbatim, because retry
+classification, the channels' platform error types and every operator-facing message read it;
+`portError` is how a caller gets it back.
+
+One module, because each layer re-derived both during the Effect migration: the channel kit, the pi
+engine, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
+join-on-interrupt combinator that differed only in the word before `Failure`. `SessionBusy` stays a
+separate tag in `engines/pi/session-effects.ts` because it is control flow (answered with
+`session_busy` and a retry), not a port failure.
+
 ## 3. Assembly ladder
 
 The pi reference implementation has three reusable rungs:
@@ -234,7 +259,8 @@ state (compaction and overflow recovery both rewrite that array mid-turn).
 `src/engines/pi/invoke-session.ts` combines the two into one async iterable. An Effect execution
 scope owns the shared lease, session and subscription; an Effect queue carries projected events.
 `turn-kit.ts` owns protocol projection and terminal classification. `session-effects.ts` supplies
-the scoped acquisition and typed SDK-failure adapters shared with control-plane writes:
+the scoped lease/session acquisition shared with control-plane writes; the Promise crossing itself is
+`src/effect-port.ts` (see [Promise ports](#promise-ports)):
 
 1. acquire the per-session lease;
 2. publish `run_started` with the run's controls — BEFORE binding, so a dispatch that races the build
@@ -251,7 +277,7 @@ reject after SDK work finishes. Consumer cancellation interrupts the execution f
 actual SDK work, and silences pending reads. Acquisition remains uninterruptible so a late-created
 session cannot publish durable state after its lease is released.
 
-`SessionBusy` and `SessionOperationError` remain typed failures inside execution. Protocol boundaries
+`SessionBusy` and `PortFailure` remain typed failures inside execution. Protocol boundaries
 translate failures and defects into `failed` events or existing `SessionResult` codes. Cleanup faults
 are logged independently, continue remaining finalizers, and cannot overwrite a published outcome.
 An external SDK callback defect stops the turn and becomes one failed terminal.
@@ -407,11 +433,22 @@ ACK and counts queued work as busy immediately. Each turn runs in an independent
 per-session successors wait for the preceding scope to close, while other sessions run concurrently.
 Request completion does not close these fibers, and service shutdown still does not drain them.
 
-`tasks.ts` translates Promise rejection into `TaskFailure` and joins already-started work on
-interruption. Platform hooks expose no abort operation, so releasing ownership while their Promises
-still run would permit overlapping work and premature idle snapshots. Side-task drains observe only
+Platform hooks expose no abort operation, so releasing ownership while their Promises
+still run would permit overlapping work and premature idle snapshots — `effect-port.ts` is what keeps
+that from happening (see [Promise ports](#promise-ports)). Side-task drains observe only
 the tasks tracked when called. Queue notices are observed from acceptance and joined at dequeue,
 including when a notice's cancellation hook fails.
+
+`invoke-turn-kit.ts` owns the turn itself: resolve the platform inputs, then ask the agent. A failed
+resolution becomes a `failed` EVENT (SPEC MUST 2) whose only per-channel part is whether it is worth
+a redelivery — Slack reads its API error's status, the other two say yes.
+
+A write's rate-limit budget is the caller's to set, through `kit/transport.ts`. A live-preview frame
+passes `DROPPABLE_FRAME`: the next frame carries the same snapshot and the terminal write supersedes
+it, so waiting out a 429 for one parks the answer and every turn queued behind it (measured at 93 s /
+90 s / 6 s for Telegram / Slack / Feishu). Writes whose content exists only in that call — Telegram's
+placeholder send, Slack's ordered stream appends, every terminal write — keep the default budget. How
+a platform signals a limit and how long it asks us to wait stay in each `*-api.ts`.
 
 `runQueuedTurn` separates business settlement from resource cleanup. The `completed` callback removes
 intent before committing the exact context snapshot consumed; later discussion remains buffered.
@@ -453,7 +490,7 @@ Telegram is the stateful channel reference. Its modules separate:
 | Module | Responsibility |
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
-| `invoke-turn.ts` | attachment resolution and one Agent invocation (busy-retry loop + manifest wording shared via `../kit/invoke-turn-kit.ts`) |
+| `invoke-turn.ts` | attachment resolution; the turn itself (busy-retry loop, load-failure event, manifest wording) is `../kit/invoke-turn-kit.ts` |
 | `../kit/turn-runner.ts` | the durable-turn lifecycle over the queue + store + buffer (shared with Slack and Feishu); `../kit/turn-queue.ts` is its per-session FIFO |
 | `turn-store.ts` | telegram's record + ordering over the shared generic `../kit/turn-store.ts` (pre-ACK persisted turn intent, crash replay) |
 | `context-buffer.ts` | telegram's entry shape + attachment selection over the shared generic `../kit/context-buffer.ts` (durable un-summoned group context, peek→completed→commit) |
@@ -765,8 +802,10 @@ verdicts `{ ok, error? }`, preserving their diagnostics through the forwarder. A
 same runtime session id; the envelope session id selects the conversation. The S3 bucket contains only
 the content-hashed forwarder deployment package.
 
-AgentCore IO has a typed failure channel (`channels/agentcore-effects.ts`): activation and channel
-construction are cached Effects, failures included, and the alarm sink's deadlines use the captured
+AgentCore IO crosses the Promise boundary through `src/effect-port.ts` like every other host port:
+activation and channel construction are cached Effects, failures included — uninterruptible, because
+a cached exit must be a success or a diagnosable failure, never a remembered interruption — and the
+alarm sink's deadlines use the captured
 Effect clock, abort the actual request and join its settlement before releasing ownership or retrying.
 Non-abortable filesystem ports are joined rather than abandoned; a transport ignoring abort may delay
 release, and a timeout does not make unfinished IO safe to leave running. The sink counts admission

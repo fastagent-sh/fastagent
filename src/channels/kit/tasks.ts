@@ -1,33 +1,9 @@
-/** Promise ownership and ACK-independent side-task tracking. Drains are observation hooks, not service shutdown. */
-import * as Cause from "effect/Cause";
+/** ACK-independent side-task tracking. Drains are observation hooks, not service shutdown. */
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import { portError, portJoin } from "../../effect-port.ts";
 import { beginWork } from "../busy.ts";
 import { log } from "../../log.ts";
-
-export class TaskFailure extends Error {
-  readonly _tag = "TaskFailure";
-  constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-  }
-}
-
-export function taskFailure(cause: Cause.Cause<unknown>): unknown {
-  const error = Cause.squash(cause);
-  return error instanceof TaskFailure ? error.cause : error;
-}
-
-/** These ports expose no abort hook. Interruption must join their actual work before releasing ownership. */
-export function taskEffect<A>(run: () => Promise<A>): Effect.Effect<A, TaskFailure> {
-  const wait = (pending: Promise<A>) =>
-    Effect.tryPromise({ try: () => pending, catch: (cause) => new TaskFailure(cause) });
-  return Effect.acquireUseRelease(
-    Effect.try({ try: run, catch: (cause) => new TaskFailure(cause) }),
-    wait,
-    (pending, exit) => (Exit.hasInterrupts(exit) ? Effect.exit(wait(pending)) : Effect.void),
-  );
-}
 
 export interface TaskTracker {
   /** Track already-started work. Rejections are logged without failing the drain. */
@@ -42,10 +18,10 @@ export function createTaskTracker(label: string): TaskTracker {
     track(task) {
       const workDone = beginWork();
       const fiber = Effect.runFork(
-        taskEffect(() => task).pipe(
+        portJoin(() => task).pipe(
           Effect.asVoid,
           Effect.catchCause((cause) =>
-            Effect.sync(() => log.warn(`${label} side task rejected: ${String(taskFailure(cause))}`)),
+            Effect.sync(() => log.warn(`${label} side task rejected: ${String(portError(cause))}`)),
           ),
           Effect.ensuring(Effect.sync(workDone)),
         ),

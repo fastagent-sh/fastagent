@@ -8,6 +8,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
+import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { appendRun } from "./audit.ts";
@@ -19,13 +20,6 @@ import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 /** A schedule shares one continuing conversation without depending on engine session storage. */
 export function scheduleSession(name: string): string {
   return `schedule:${name}`;
-}
-
-export class ScheduleFailure extends Error {
-  readonly _tag = "ScheduleFailure";
-  constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-  }
 }
 
 export interface Scheduler {
@@ -70,7 +64,7 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
         }
         return { busy: failed !== undefined && busy, failed, reply };
       },
-      catch: (cause) => new ScheduleFailure(cause),
+      catch: (cause) => new PortFailure(cause),
     }).pipe(
       Effect.match({
         onSuccess: (result) => {
@@ -107,7 +101,7 @@ export function fireScheduleOnce(opts: {
   schedule: LoadedSchedule;
   slot?: Date;
   now?: () => Date;
-}): Effect.Effect<ScheduleFireOutcome, ScheduleFailure> {
+}): Effect.Effect<ScheduleFireOutcome, PortFailure> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const { agent, stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
@@ -124,7 +118,7 @@ export function fireScheduleOnce(opts: {
         saveFires(stateRoot, fires);
         return undefined;
       },
-      catch: (cause) => new ScheduleFailure(cause),
+      catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
     const firedAt = now().toISOString();
@@ -193,7 +187,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             yield* Effect.sleep(Math.min(due.getTime() - now().getTime(), MAX_WAIT_MS));
           }
           yield* fireScheduleOnce({ agent, stateRoot, schedule: s, now }).pipe(
-            Effect.catchTag("ScheduleFailure", (error) =>
+            Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() => {
                 log.error(
                   `[schedule] ${s.name}: fire failed (skipping this run, schedule stays armed): ${String(error.cause)}`,
@@ -217,7 +211,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const wakeOnce = Effect.gen(function* () {
       const w = yield* Effect.try({
         try: () => takeFirstDueWakeup(stateRoot, now()),
-        catch: (cause) => new ScheduleFailure(cause),
+        catch: (cause) => new PortFailure(cause),
       });
       if (!w) return false;
       yield* Effect.acquireUseRelease(
@@ -231,7 +225,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             if (r.busy && !w.cron) {
               kept = yield* Effect.try({
                 try: () => deferWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS)),
-                catch: (cause) => new ScheduleFailure(cause),
+                catch: (cause) => new PortFailure(cause),
               });
               if (kept) log.info(`[schedule] ${label}: session busy — retrying next poll`);
               else log.error(`[schedule] ${label}: dropped after too many busy retries`);
@@ -260,7 +254,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       return true;
     }).pipe(
       // Log storage faults before a pending stop can replace the typed failure with interruption.
-      Effect.catchTag("ScheduleFailure", (error) =>
+      Effect.catchTag("PortFailure", (error) =>
         Effect.sync(() => {
           log.error(`[schedule] wake-up poll failed (continuing next poll): ${String(error.cause)}`);
           return false;

@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { type Agent, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
 import { type BusyRetry, busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
-import type { TaskFailure } from "../src/channels/kit/tasks.ts";
+import type { PortFailure } from "../src/effect-port.ts";
 import { run as runEffect } from "./channel-effects.ts";
 import { log } from "../src/log.ts";
 
@@ -48,7 +48,7 @@ async function run(agent: Agent, retry: BusyRetry = FAST): Promise<AgentEvent[]>
   return read(telegramTurnStream(agent, "s", "hi", transport, noAttachments, undefined, retry));
 }
 
-const read = (events: Stream.Stream<AgentEvent, TaskFailure>) => runEffect(Stream.runCollect(events));
+const read = (events: Stream.Stream<AgentEvent, PortFailure>) => runEffect(Stream.runCollect(events));
 
 afterEach(() => {
   vi.useRealTimers();

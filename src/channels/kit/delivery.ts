@@ -9,26 +9,26 @@ import * as Stream from "effect/Stream";
 import type { AgentEvent } from "../../agent.ts";
 import { log } from "../../log.ts";
 import type { ChannelFailure } from "./preview-kit.ts";
-import { TaskFailure, taskEffect } from "./tasks.ts";
+import { PortFailure, portJoin } from "../../effect-port.ts";
 
 /** Snapshot/edit renderers share terminal ownership; platform-specific settle policies stay injected. */
 export function renderReply(
-  events: Stream.Stream<AgentEvent, TaskFailure>,
+  events: Stream.Stream<AgentEvent, PortFailure>,
   opts: {
     label: string;
     onEvent: (event: AgentEvent) => void;
     finish: Effect.Effect<void>;
     answer: () => string;
-    settle: (text: string) => Effect.Effect<void, TaskFailure>;
+    settle: (text: string) => Effect.Effect<void, PortFailure>;
     formatError: (failure: ChannelFailure) => string | undefined;
   },
-): Effect.Effect<void, TaskFailure, Scope.Scope> {
+): Effect.Effect<void, PortFailure, Scope.Scope> {
   return Effect.gen(function* () {
     let finalized = false;
     const notify = (failure: ChannelFailure, phase: string) =>
-      Effect.try({ try: () => opts.formatError(failure) ?? "", catch: (cause) => new TaskFailure(cause) }).pipe(
+      Effect.try({ try: () => opts.formatError(failure) ?? "", catch: (cause) => new PortFailure(cause) }).pipe(
         Effect.flatMap(opts.settle),
-        Effect.catchTag("TaskFailure", (error) =>
+        Effect.catchTag("PortFailure", (error) =>
           Effect.sync(() => log.error(`${opts.label} failed to deliver the ${phase} notice: ${String(error.cause)}`)),
         ),
       );
@@ -46,7 +46,7 @@ export function renderReply(
             opts.onEvent(event);
             return true;
           },
-          catch: (cause) => new TaskFailure(cause),
+          catch: (cause) => new PortFailure(cause),
         });
       }
       return Effect.gen(function* () {
@@ -64,13 +64,13 @@ export function renderReply(
             "agent-failure",
           );
           return yield* Effect.fail(
-            new TaskFailure(new Error(`agent failed: ${event.details} (retryable=${event.retryable})`)),
+            new PortFailure(new Error(`agent failed: ${event.details} (retryable=${event.retryable})`)),
           );
         }
         return false;
       }).pipe(Effect.uninterruptible);
     });
-    if (!finalized) yield* Effect.fail(new TaskFailure(new Error("stream ended without a terminal event")));
+    if (!finalized) yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
   });
 }
 
@@ -100,8 +100,8 @@ export function previewPump(opts: {
         if (opts.beforeFlush) yield* opts.beforeFlush;
         // An issued mutation may have reached the platform. Join it, including publishing its id
         // and diagnosing its outcome, before the final writer takes over.
-        yield* taskEffect(opts.flush).pipe(
-          Effect.catchTag("TaskFailure", (error) =>
+        yield* portJoin(opts.flush).pipe(
+          Effect.catchTag("PortFailure", (error) =>
             Effect.sync(() => {
               if (!reported) {
                 reported = true;
@@ -139,7 +139,7 @@ export function previewPump(opts: {
 export interface SerialWriter {
   enqueue(work: () => Promise<void>): void;
   /** End admission and join every accepted operation, including its caller-owned failure policy. */
-  finish: Effect.Effect<void, TaskFailure>;
+  finish: Effect.Effect<void, PortFailure>;
 }
 
 export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> {
@@ -148,7 +148,7 @@ export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> 
     const work = Effect.gen(function* () {
       for (;;) {
         const next = yield* Queue.take(queue);
-        yield* taskEffect(next).pipe(Effect.uninterruptible);
+        yield* portJoin(next).pipe(Effect.uninterruptible);
       }
     }).pipe(Effect.catchTag("Done", () => Effect.void));
     const fiber = yield* Effect.forkScoped(work);

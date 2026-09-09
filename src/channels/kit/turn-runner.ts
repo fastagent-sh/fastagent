@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import { log } from "../../log.ts";
-import { type TaskFailure, taskEffect, taskFailure } from "./tasks.ts";
+import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 import type { ContextBuffer } from "./context-buffer.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
@@ -56,7 +56,7 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
     rec: R,
     discussion: { text: string; consumed: E[] },
     onCompleted: () => void,
-  ): Effect.Effect<void, TaskFailure, Scope.Scope>;
+  ): Effect.Effect<void, PortFailure, Scope.Scope>;
 }
 
 export interface TurnRunner<R, S> {
@@ -74,10 +74,10 @@ export interface TurnRunner<R, S> {
 export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E>(
   options: TurnRunnerOptions<R, S, E>,
   rec: R,
-): Effect.Effect<void, TaskFailure> {
+): Effect.Effect<void, PortFailure> {
   return Effect.gen(function* () {
     const { label, store, buffer, beforeRun } = options;
-    if (beforeRun && !(yield* taskEffect(() => beforeRun(rec)))) return;
+    if (beforeRun && !(yield* portJoin(() => beforeRun(rec)))) return;
     const decision = store.startAttempt(rec.id);
     if (decision === "exceeded") {
       options.notifyDropped(rec);
@@ -131,11 +131,11 @@ export function createTurnRunner<
         const notice = onQueuedBehind(rec);
         // Observe rejection at acceptance, even if dequeue is minutes away.
         const done = Effect.runFork(
-          taskEffect(() => notice.done).pipe(
+          portJoin(() => notice.done).pipe(
             Effect.catchCause((cause) =>
               Effect.sync(() =>
                 log.warn(
-                  `${label} queue notice failed: turn=${rec.id} session=${rec.session}: ${String(taskFailure(cause))}`,
+                  `${label} queue notice failed: turn=${rec.id} session=${rec.session}: ${String(portError(cause))}`,
                 ),
               ),
             ),

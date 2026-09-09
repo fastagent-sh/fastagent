@@ -24,16 +24,8 @@ import { type CancelHooks, cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
 import type { SessionInheritance } from "./session-inheritance.ts";
-import {
-  SessionBusy,
-  SessionOperationError,
-  acquireSession,
-  acquireSessionLease,
-  sessionCleanup,
-  sessionFailure,
-  sessionOperation,
-  sessionWork,
-} from "./session-effects.ts";
+import { PortFailure, port, portAbort, portCleanup, portError } from "../../effect-port.ts";
+import { SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
 import {
   type Lease,
   type RunControls,
@@ -126,7 +118,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
   ): AsyncGenerator<AgentEvent> {
     const queue = Effect.runSync(Queue.unbounded<AgentEvent, Cause.Done>());
     const consumed = Deferred.makeUnsafe<void>();
-    const bound = Deferred.makeUnsafe<AgentSession, SessionBusy | SessionOperationError>();
+    const bound = Deferred.makeUnsafe<AgentSession, SessionBusy | PortFailure>();
     const abort = new AbortController();
     onCancelReady(() => abort.abort());
     const runId = crypto.randomUUID();
@@ -147,28 +139,25 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       steer: (p) =>
         Effect.runPromise(
           Effect.gen(function* () {
-            const opts = yield* sessionOperation("prepare steering", () => toPiPromptOptions(p));
+            const opts = yield* port(() => toPiPromptOptions(p));
             const session = yield* ready;
             if (settled)
               return yield* Effect.fail(
-                new SessionOperationError("steer", new Error("run already settled; the command cannot take effect")),
+                new PortFailure(new Error("run already settled; the command cannot take effect")),
               );
-            yield* sessionOperation("steer", () => session.steer(p.text, opts?.images));
+            yield* port(() => session.steer(p.text, opts?.images));
           }),
         ),
       followUp: (p) =>
         Effect.runPromise(
           Effect.gen(function* () {
-            const opts = yield* sessionOperation("prepare follow-up", () => toPiPromptOptions(p));
+            const opts = yield* port(() => toPiPromptOptions(p));
             const session = yield* ready;
             if (settled)
               return yield* Effect.fail(
-                new SessionOperationError(
-                  "follow-up",
-                  new Error("run already settled; the command cannot take effect"),
-                ),
+                new PortFailure(new Error("run already settled; the command cannot take effect")),
               );
-            yield* sessionOperation("follow-up", () => session.followUp(p.text, opts?.images));
+            yield* port(() => session.followUp(p.text, opts?.images));
           }),
         ),
       abort: () =>
@@ -177,10 +166,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             const session = yield* ready;
             if (settled)
               return yield* Effect.fail(
-                new SessionOperationError("abort", new Error("run already settled; the command cannot take effect")),
+                new PortFailure(new Error("run already settled; the command cannot take effect")),
               );
             abortsInFlight++;
-            yield* sessionOperation("abort", () => session.abort()).pipe(
+            yield* port(() => session.abort()).pipe(
               Effect.tap(() =>
                 Effect.sync(() => {
                   abortSucceeded = true;
@@ -219,9 +208,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       let finalAssistant: AssistantMessage | undefined;
       let streamedAnswer = false;
       let retriedAfterAnswer: string | undefined;
-      let eventFailure: SessionOperationError | undefined;
+      let eventFailure: PortFailure | undefined;
       const stop = () => {
-        void Effect.runPromise(sessionCleanup("abort", () => session.abort()));
+        void Effect.runPromise(portCleanup("event-fault abort", () => session.abort()));
       };
       yield* Effect.acquireRelease(
         Effect.try({
@@ -260,19 +249,19 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                 if (projected.type === "text" || projected.type === "thinking") streamedAnswer = true;
                 Queue.offerUnsafe(queue, projected);
               } catch (error) {
-                eventFailure = new SessionOperationError("event translation", error);
+                eventFailure = new PortFailure(error);
                 queueMicrotask(stop);
               }
             }),
-          catch: (error) => new SessionOperationError("subscribe", error),
+          catch: (error) => new PortFailure(error),
         }),
-        (unsubscribe) => sessionCleanup("unsubscribe", unsubscribe),
+        (unsubscribe) => portCleanup("unsubscribe", unsubscribe),
       );
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.
       yield* Deferred.succeed(bound, session);
-      const promptOptions = yield* sessionOperation("prepare prompt", () => toPiPromptOptions(prompt));
+      const promptOptions = yield* port(() => toPiPromptOptions(prompt));
       if (eventFailure) return yield* Effect.fail(eventFailure);
-      yield* sessionWork(
+      yield* portAbort(
         "prompt",
         () => session.prompt(prompt.text, promptOptions),
         () => session.abort(),
@@ -294,7 +283,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         Effect.gen(function* () {
           const terminal = yield* execute.pipe(
             Effect.catchCause((cause) => {
-              const error = sessionFailure(cause);
+              const error = portError(cause);
               return Effect.succeed(
                 error instanceof SessionBusy
                   ? ({

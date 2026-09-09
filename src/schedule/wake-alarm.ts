@@ -25,12 +25,7 @@
 import { readFileSync } from "node:fs";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import {
-  AgentcoreFailure,
-  agentcoreFailure,
-  agentcoreOperation,
-  agentcoreRequest,
-} from "../channels/agentcore-effects.ts";
+import { PortFailure, portError, portJoin, portRequest } from "../effect-port.ts";
 import { RESERVED_PATHS, type WakeAlarm, type WakeAlarmRequest } from "../channels/agentcore-protocol.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
@@ -109,7 +104,7 @@ export function createWakeAlarmSink(options: {
     const clock = yield* Clock.Clock;
     const fork = Effect.runForkWith(yield* Effect.context<never>());
     const { secret, fetchImpl = fetch, now = () => new Date(clock.currentTimeMillisUnsafe()), delay: pause } = options;
-    const delay = (ms: number) => (pause ? agentcoreOperation(() => pause(ms)) : Effect.sleep(ms));
+    const delay = (ms: number) => (pause ? portJoin(() => pause(ms)) : Effect.sleep(ms));
     let running = false;
     let dirty = false;
 
@@ -119,21 +114,21 @@ export function createWakeAlarmSink(options: {
       Effect.gen(function* () {
         const alarms = yield* Effect.try({
           try: () => toAlarms(listWakeups(stateRoot), now()),
-          catch: (cause) => new AgentcoreFailure(cause),
+          catch: (cause) => new PortFailure(cause),
         });
         // Nothing future to mirror: converged. Deletion is lazy by design — alarms already mirrored for
         // cancelled wake-ups fire, find nothing, self-delete — so an empty set is never POSTed.
         if (alarms.length === 0) return true;
         const url = yield* Effect.try({
           try: () => readWakeAlarmUrl(stateRoot),
-          catch: (cause) => new AgentcoreFailure(cause),
+          catch: (cause) => new PortFailure(cause),
         });
         if (!url) {
           log.warn("[schedule] wake alarm skipped — forwarder URL not seen yet");
           return true;
         }
         const body: WakeAlarmRequest = { secret, alarms };
-        return yield* agentcoreRequest(async (signal) => {
+        return yield* portRequest(async (signal) => {
           const res = await fetchImpl(`${url.replace(/\/$/, "")}${RESERVED_PATHS.wakeAlarm}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -206,7 +201,7 @@ export function createWakeAlarmSink(options: {
                 Effect.sync(() => {
                   // Store/clock faults cannot be repaired by another POST. A new mutation may retry the mirror.
                   log.error(
-                    `[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(agentcoreFailure(cause))}`,
+                    `[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(portError(cause))}`,
                   );
                 }),
               ),

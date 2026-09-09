@@ -4,6 +4,7 @@ import { mkdir, open, stat, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
+import type { CallOptions } from "../kit/transport.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import type { SlackFile } from "./model.ts";
 
@@ -13,19 +14,6 @@ const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
 
-/**
- * Per-call transport options.
- *
- * `retries` exists for ONE distinction the pipeline cannot make for itself: whether this write is
- * worth waiting for. A classic live-preview FRAME is a full SNAPSHOT — redrawn by the next frame and
- * superseded by the final write — so absorbing Slack's `retry-after` for it would park the turn, and
- * everything queued behind it, for up to 3 × MAX_RETRY_AFTER_S seconds to deliver a view nobody needs.
- * A droppable write passes 0: the frame is lost, the answer is not. NOT for `chat.appendStream`, whose
- * ordered appends each carry content of their own — dropping one loses it.
- */
-export interface SlackCallOptions {
-  retries?: number;
-}
 /** Slack's standard-Markdown fields cap each call at 12,000 characters. Keep headroom for
  * code-fence balancing and future server-side transformations. */
 const SLACK_MAX_MARKDOWN = 10_000;
@@ -97,6 +85,7 @@ export function isSlackNativeUnavailable(error: unknown): boolean {
   return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
 }
 
+/** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface SlackApiOptions {
@@ -109,7 +98,7 @@ export interface SlackApi {
   postMessage(target: SlackTarget, text: string): Promise<string>;
   postMarkdown(target: SlackTarget, markdown: string): Promise<string>;
   updateMessage(channelId: string, ts: string, text: string): Promise<void>;
-  updateMarkdown(channelId: string, ts: string, markdown: string, opts?: SlackCallOptions): Promise<void>;
+  updateMarkdown(channelId: string, ts: string, markdown: string, opts?: CallOptions): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   /** Post standard Markdown, split under Slack's limit. `target.channelId` may be a user id: Slack
    *  then opens (or reuses) the app's DM with that user, and the result names it. */
@@ -242,7 +231,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     method: string,
     body: Record<string, unknown>,
     httpMethod: "GET" | "POST" = "POST",
-    opts: SlackCallOptions = {},
+    opts: CallOptions = {},
   ): Promise<T> => {
     const retries = opts.retries ?? RETRIES;
     const url = new URL(`${apiBase}/${method}`);

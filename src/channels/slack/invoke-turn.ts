@@ -1,17 +1,16 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
-import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
-import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
-import { log } from "../../log.ts";
+import type * as Stream from "effect/Stream";
+import type { PortFailure } from "../../effect-port.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
+  loadBackground,
   missingAttachmentsNote,
-  busyRetryStream,
+  turnStream,
 } from "../kit/invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
@@ -59,25 +58,16 @@ async function resolveInputs(
 
   const backgroundImages: { image: ImageRef; ref: SlackBufferedFileRef }[] = [];
   const backgroundFiles: { file: DownloadedSlackFile; ref: SlackBufferedFileRef }[] = [];
-  let lost = 0;
-  const results = await Promise.allSettled(
-    attachments.buffered.files.map(async (ref) => ({
-      ref,
-      resolved: await resolveFile(transport, ref.id),
-    })),
-  );
-  for (const result of results) {
-    if (result.status === "fulfilled") {
-      const { ref, resolved } = result.value;
-      if (resolved.image) backgroundImages.push({ image: resolved.image, ref });
-      if (resolved.file) backgroundFiles.push({ file: resolved.file, ref });
-    } else {
-      lost++;
-      log.warn(`${transport.label} could not load an earlier (buffered) Slack file: ${String(result.reason)}`);
-    }
+  const background = await loadBackground(attachments.buffered.files, (ref) => resolveFile(transport, ref.id), {
+    label: transport.label,
+    what: "Slack file",
+  });
+  for (const { ref, value } of background.loaded) {
+    if (value.image) backgroundImages.push({ image: value.image, ref });
+    if (value.file) backgroundFiles.push({ file: value.file, ref });
   }
 
-  const missingNote = missingAttachmentsNote(lost + attachments.buffered.skipped);
+  const missingNote = missingAttachmentsNote(background.lost + attachments.buffered.skipped);
   const imageManifest = backgroundImagesManifest(
     images.length,
     backgroundImages.map(({ ref }) => ref),
@@ -104,31 +94,20 @@ export function slackTurnStream(
   attachments: SlackTurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): Stream.Stream<AgentEvent, TaskFailure> {
-  return Stream.unwrap(
-    taskEffect(() => resolveInputs(transport, attachments)).pipe(
-      Effect.map((resolved) =>
-        busyRetryStream(
-          agent,
-          { session },
-          {
-            text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`,
-            images: resolved.images,
-          },
-          { label: transport.label, onCompleted, busyRetry },
-        ),
-      ),
-      Effect.catchTag("TaskFailure", ({ cause: error }) => {
-        const retryable =
-          error instanceof SlackApiError && (error.status === 0 || error.status === 429 || error.status >= 500);
-        return Effect.succeed(
-          Stream.succeed<AgentEvent>({
-            type: "failed",
-            details: `could not load Slack attachment: ${String(error)}`,
-            retryable,
-          }),
-        );
-      }),
-    ),
-  );
+): Stream.Stream<AgentEvent, PortFailure> {
+  return turnStream({
+    agent,
+    label: transport.label,
+    busyRetry,
+    ...(onCompleted ? { onCompleted } : {}),
+    resolve: () => resolveInputs(transport, attachments),
+    turn: (resolved) => ({
+      scope: { session },
+      prompt: { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images },
+    }),
+    // Slack says which failures are transient; anything else (a deleted file, a missing scope) will
+    // fail the same way on redelivery.
+    retryableLoadFailure: (cause) =>
+      cause instanceof SlackApiError && (cause.status === 0 || cause.status === 429 || cause.status >= 500),
+  });
 }

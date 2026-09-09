@@ -13,19 +13,13 @@
  * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
-import {
-  type SessionBusy,
-  SessionOperationError,
-  acquireSession,
-  acquireSessionLease,
-  sessionCleanup,
-  sessionFailure,
-  sessionOperation,
-  sessionWork,
-} from "./session-effects.ts";
+import { PortFailure, port, portAbort, portCleanup, portError, portJoin } from "../../effect-port.ts";
+import { type SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
 import {
   type SessionEntry as PiSessionEntry,
   findCutPoint,
@@ -145,9 +139,22 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
 export const SUBSCRIBER_BUFFER_CAP = 10_000;
 export const SUBSCRIBER_BUFFER_BYTES = 8 * 1024 * 1024;
 
-/** One subscriber's bounded push→pull queue. `close()` settles a
- *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
- *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
+/**
+ * One subscriber's bounded push→pull queue.
+ *
+ * The mechanics are Effect's, because both halves are things this class hand-rolled and got wrong
+ * once each. `Queue.end` stops accepting offers, lets the reader drain what WAS accepted, and only
+ * then reports done — which is both the overflow policy above and the door teardown needs (an async
+ * generator suspended on a quiet stream cannot be ended by `return()` alone: that queues behind the
+ * never-settling await). And a queue has a SET of takers, so two concurrent `next()` calls — legal,
+ * any wrapper may poll twice — cannot overwrite each other's resolver.
+ *
+ * What stays here is the arithmetic Queue has no opinion on: the two backlog limits, and the JSON
+ * snapshot (taken at push, so a producer that later mutates its event or tool result cannot grow a
+ * queued one). Cost of the swap: one fiber per delivered event instead of an array shift, on a
+ * stream that carries per-token deltas — cheap next to a model call, and paid only while someone is
+ * attached.
+ */
 class Subscriber {
   /** For the overflow diagnostic only — a warn without the session is not actionable on a
    *  multi-session serve. (Explicit assignment: TS parameter properties break Node's strip-only
@@ -156,55 +163,43 @@ class Subscriber {
   constructor(session: string) {
     this.session = session;
   }
-  // Serialized snapshots cannot grow when a producer later mutates its event or tool result.
-  private buffer: Array<{ json: string; bytes: number }> = [];
+  private readonly queue = Effect.runSync(Queue.unbounded<{ json: string; bytes: number }, Cause.Done>());
+  private buffered = 0;
   private bufferedBytes = 0;
-  // A QUEUE of waiters, not a single slot: concurrent next() calls are contract-legal (any wrapper
-  // may poll twice), and a single `wake` field would let the second await overwrite the first's
-  // resolver — hanging the first next() forever. Every wake flushes all waiters; each re-checks the
-  // buffer and re-queues if another consumer won the event.
-  private wakes: (() => void)[] = [];
-  private closed = false;
-
-  private flush(): void {
-    const wakes = this.wakes;
-    this.wakes = [];
-    for (const wake of wakes) wake();
-  }
+  private ended = false;
 
   push(event: SessionEvent): void {
-    if (this.closed) return;
+    if (this.ended) return;
     const json = JSON.stringify(event);
     const bytes = Buffer.byteLength(json);
-    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP || this.bufferedBytes + bytes > SUBSCRIBER_BUFFER_BYTES) {
+    if (this.buffered >= SUBSCRIBER_BUFFER_CAP || this.bufferedBytes + bytes > SUBSCRIBER_BUFFER_BYTES) {
       log.warn(
         `[fastagent] session-control subscriber for session "${this.session}" exceeded its buffer limit (${SUBSCRIBER_BUFFER_CAP} events / ${SUBSCRIBER_BUFFER_BYTES} bytes; ${this.bufferedBytes} bytes queued, ${bytes} incoming); its stream ends after draining the backlog, then the client resyncs via entries()`,
       );
       this.close();
       return;
     }
-    this.buffer.push({ json, bytes });
+    Queue.offerUnsafe(this.queue, { json, bytes });
+    this.buffered++;
     this.bufferedBytes += bytes;
-    this.flush();
   }
 
   close(): void {
-    this.closed = true;
-    this.flush();
+    this.ended = true;
+    Queue.endUnsafe(this.queue);
   }
 
-  async next(): Promise<IteratorResult<SessionEvent>> {
-    while (true) {
-      const item = this.buffer.shift();
-      if (item) {
-        this.bufferedBytes -= item.bytes;
-        return { done: false, value: JSON.parse(item.json) as SessionEvent };
-      }
-      if (this.closed) return { done: true, value: undefined };
-      await new Promise<void>((resolve) => {
-        this.wakes.push(resolve);
-      });
-    }
+  next(): Promise<IteratorResult<SessionEvent>> {
+    return Effect.runPromise(
+      Queue.take(this.queue).pipe(
+        Effect.map((item): IteratorResult<SessionEvent> => {
+          this.buffered--;
+          this.bufferedBytes -= item.bytes;
+          return { done: false, value: JSON.parse(item.json) as SessionEvent };
+        }),
+        Effect.catchTag("Done", () => Effect.succeed({ done: true, value: undefined } as IteratorResult<SessionEvent>)),
+      ),
+    );
   }
 }
 
@@ -498,12 +493,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   });
 
   const runBoundary = (
-    command: Effect.Effect<SessionResult, SessionOperationError | SessionBusy, Scope.Scope>,
+    command: Effect.Effect<SessionResult, PortFailure | SessionBusy, Scope.Scope>,
   ): Promise<SessionResult> =>
     Effect.runPromise(
       Effect.scoped(command).pipe(
         Effect.catchTag("SessionBusy", () => Effect.succeed(busy())),
-        Effect.catchCause((cause) => Effect.succeed(failed(sessionFailure(cause)))),
+        Effect.catchCause((cause) => Effect.succeed(failed(portError(cause)))),
       ),
     );
 
@@ -511,7 +506,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    *  registered with `run_started`; nothing durable is written. */
   const runAction = (session: string, action: SessionAction): Promise<SessionResult> =>
     Effect.runPromise(
-      Effect.gen(function* (): Effect.fn.Return<SessionResult, SessionOperationError> {
+      Effect.gen(function* (): Effect.fn.Return<SessionResult, PortFailure> {
         const run = active.get(session);
         if (!run) {
           // Run/compaction symmetry: an in-flight compaction is a model call too, and `abort` is its
@@ -549,7 +544,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           };
         }
         const controls = run.controls;
-        yield* sessionOperation(action.type, () =>
+        yield* port(() =>
           action.type === "steer"
             ? controls.steer(action.prompt)
             : action.type === "follow_up"
@@ -561,7 +556,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         Effect.catchCause((cause) =>
           Effect.succeed({
             ok: false as const,
-            error: { code: RUN_COMMAND_FAILED_CODE, message: String(sessionFailure(cause)), retryable: false },
+            error: { code: RUN_COMMAND_FAILED_CODE, message: String(portError(cause)), retryable: false },
           }),
         ),
       ),
@@ -613,7 +608,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // Sessions are created by invoke or copied by fork, never minted by an update: an unknown id is
         // rejected, not turned into a ghost record. (Read-only handle — the WRITE one is opened under
         // the lease below, and this one is discarded.)
-        const existing = yield* sessionOperation("read session", () => sessions.openIfExists(session));
+        const existing = yield* port(() => sessions.openIfExists(session));
         if (!existing) return noSuchSession(session);
 
         if (patch.leafEntryId !== undefined) {
@@ -658,7 +653,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         const applied = yield* Effect.scoped(
           Effect.gen(function* () {
             yield* acquireSessionLease(b.lease, session);
-            return yield* sessionOperation("update", () =>
+            // portJoin, not port: the lease is held for the duration of this write, so an interrupted
+            // fiber must not release it while the store is still writing (effect-port.ts, rule 1).
+            return yield* portJoin(() =>
               sessions.applyProperties(session, {
                 ...(patch.name !== undefined ? { name: patch.name } : {}),
                 ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
@@ -724,12 +721,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     const work = Effect.scoped(
       Effect.gen(function* (): Effect.fn.Return<
         { summary: string } | Extract<SessionResult, { ok: false }>,
-        SessionBusy | SessionOperationError,
+        SessionBusy | PortFailure,
         Scope.Scope
       > {
         const b = boundary;
         if (!b) return unsupported("compact()");
-        const existing = yield* sessionOperation("read session", () => sessions.openIfExists(session));
+        const existing = yield* port(() => sessions.openIfExists(session));
         if (!existing) return noSuchSession(session);
         yield* acquireSessionLease(b.lease, session);
         const bound = yield* acquireSession(b.sessionFactory, session);
@@ -770,11 +767,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 );
                 emitOwn(session, toRetryScheduledEvent(event));
               }),
-            catch: (error) => new SessionOperationError("subscribe", error),
+            catch: (error) => new PortFailure(error),
           }),
-          (unsubscribe) => sessionCleanup("unsubscribe", unsubscribe),
+          (unsubscribe) => portCleanup("unsubscribe", unsubscribe),
         );
-        const done = yield* sessionWork(
+        const done = yield* portAbort(
           "compact",
           () => bound.compact(instructions),
           () => bound.abortCompaction(),
@@ -783,7 +780,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       }),
     ).pipe(
       Effect.catchTag("SessionBusy", () => Effect.succeed(busy())),
-      Effect.catchCause((cause) => Effect.succeed(failed(sessionFailure(cause)))),
+      Effect.catchCause((cause) => Effect.succeed(failed(portError(cause)))),
       Effect.tap((result) =>
         Effect.sync(() => {
           if (accepted) {
@@ -825,7 +822,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (!isAddressableSession(into)) {
           return invalid(`${JSON.stringify(into)} cannot be a session id — the control plane could not address it`);
         }
-        const source = yield* sessionOperation("read fork source", () => sessions.openIfExists(from));
+        const source = yield* port(() => sessions.openIfExists(from));
         if (!source) return noSuchSession(from);
         // The entry predicate is the one `entries()` publishes by, so "everything published is forkable"
         // holds by construction — the same argument the leaf move makes.
@@ -833,7 +830,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (!entry || !isNavigable(entry)) {
           return invalid(`entry "${at}" is not a forkable position in session "${from}" — entries() lists the ids`);
         }
-        const existingTarget = yield* sessionOperation("read fork target", () => sessions.openIfExists(into));
+        const existingTarget = yield* port(() => sessions.openIfExists(into));
         if (existingTarget) {
           // Already forked from HERE: the request already happened, so answering ok is the truth rather
           // than a convenience. Anything else under that id is a different history, and saying yes would
@@ -851,13 +848,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         yield* acquireSessionLease(b.lease, from);
         yield* acquireSessionLease(b.lease, into);
         // Recheck under both leases: another creator may have taken the target since validation.
-        const raced = yield* sessionOperation("read fork target", () => sessions.openIfExists(into));
+        const raced = yield* port(() => sessions.openIfExists(into));
         if (raced) {
           return forkProvenance(raced) === provenance
             ? { ok: true }
             : invalid(`session "${into}" already exists with a different history — fork mints nothing over it`);
         }
-        yield* sessionOperation("fork", () => sessions.fork(from, at, into, provenance));
+        // portJoin: both leases are held for this write and must outlive it (effect-port.ts, rule 1).
+        yield* portJoin(() => sessions.fork(from, at, into, provenance));
         return { ok: true };
       }),
     );
@@ -867,12 +865,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       Effect.gen(function* () {
         const b = boundary;
         if (!b) return unsupported("delete()");
-        const existing = yield* sessionOperation("read session", () => sessions.openIfExists(session));
+        const existing = yield* port(() => sessions.openIfExists(session));
         if (!existing) return noSuchSession(session);
         const removed = yield* Effect.scoped(
           Effect.gen(function* () {
             yield* acquireSessionLease(b.lease, session);
-            return yield* sessionOperation("delete", () => sessions.delete(session));
+            // portJoin: the lease must outlive the removal (effect-port.ts, rule 1).
+            return yield* portJoin(() => sessions.delete(session));
           }),
         );
         if (!removed) return noSuchSession(session);

@@ -5,7 +5,7 @@ import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { previewPump, renderReply, serialWriter } from "../kit/delivery.ts";
-import { TaskFailure, taskEffect } from "../kit/tasks.ts";
+import { PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
   RETRY_NOTICE,
@@ -22,12 +22,12 @@ import {
 } from "../kit/preview-kit.ts";
 import {
   type SlackApi,
-  type SlackCallOptions,
   type SlackTarget,
   chunkSlackMarkdown,
   chunkSlackText,
   isSlackNativeUnavailable,
 } from "./slack-api.ts";
+import { type CallOptions, DROPPABLE_FRAME } from "../kit/transport.ts";
 
 export type SlackFailure = ChannelFailure;
 export type SlackRendering = "native" | "classic";
@@ -100,7 +100,8 @@ async function settleClassic(
   target: SlackTarget,
   previewTs: string | undefined,
   markdown: string,
-  update: (ts: string, value: string) => Promise<void> = (ts, value) => api.updateMarkdown(target.channelId, ts, value),
+  /** The renderer's own edit — it spends the mutation slot the pacing depends on. */
+  update: (ts: string, value: string) => Promise<void>,
 ): Promise<void> {
   if (markdown.trim() === "") {
     if (previewTs) await api.deleteMessage(target.channelId, previewTs).catch(() => {});
@@ -138,7 +139,7 @@ export async function settleSlackPreview(
 }
 
 function streamClassicSlackReply(
-  events: Stream.Stream<AgentEvent, TaskFailure>,
+  events: Stream.Stream<AgentEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -169,7 +170,7 @@ function streamClassicSlackReply(
       const remaining = lastMutationAt + CLASSIC_UPDATE_INTERVAL_MS - now();
       return remaining > 0 ? Effect.sleep(remaining) : Effect.void;
     });
-    const update = async (ts: string, markdown: string, opts?: SlackCallOptions): Promise<void> => {
+    const update = async (ts: string, markdown: string, opts?: CallOptions): Promise<void> => {
       try {
         await api.updateMarkdown(target.channelId, ts, markdown, opts);
       } finally {
@@ -184,9 +185,7 @@ function streamClassicSlackReply(
       const markdown = chunkSlackText(view())[0] ?? THINKING_PLACEHOLDER;
       if (markdown === lastSent) return;
       if (previewTs) {
-        // Droppable: the next frame carries the same snapshot, so a rate-limit wait here would only
-        // delay the answer behind a view that is already stale.
-        await update(previewTs, markdown, { retries: 0 });
+        await update(previewTs, markdown, DROPPABLE_FRAME);
       } else {
         if (previewAttempted) return;
         previewAttempted = true;
@@ -209,7 +208,7 @@ function streamClassicSlackReply(
       settle: (markdown) =>
         Effect.gen(function* () {
           if (previewTs && markdown.trim()) yield* waitForMutationSlot;
-          yield* taskEffect(() => settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), update));
+          yield* portJoin(() => settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), update));
         }),
       onEvent: (event) => {
         const changed = applyTurnEvent(turn, event, now());
@@ -221,8 +220,14 @@ function streamClassicSlackReply(
   });
 }
 
+/**
+ * The native renderer owns its own terminal branches instead of `renderReply`'s: each of its three
+ * endings (completed, agent failure, abnormal) weaves the ending INTO the open stream — the notice
+ * becomes more of the answer being typed out — where `renderReply` issues one separate settle write.
+ * Sharing the loop would mean injecting all three, which is more shape than the two lines it saves.
+ */
 function streamNativeSlackReply(
-  events: Stream.Stream<AgentEvent, TaskFailure>,
+  events: Stream.Stream<AgentEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -263,8 +268,8 @@ function streamNativeSlackReply(
       Effect.suspend(() => {
         const ts = streamTs;
         return ts && !stopAttempted
-          ? taskEffect(() => stop(ts, `\n\n${GENERIC_FAILURE}`)).pipe(
-              Effect.catchTag("TaskFailure", (error) =>
+          ? portJoin(() => stop(ts, `\n\n${GENERIC_FAILURE}`)).pipe(
+              Effect.catchTag("PortFailure", (error) =>
                 Effect.sync(() =>
                   log.error(`${label} failed to stop an abnormal Slack stream: ${String(error.cause)}`),
                 ),
@@ -358,7 +363,7 @@ function streamNativeSlackReply(
       Effect.gen(function* () {
         flushText(true);
         yield* operations.finish;
-        yield* taskEffect(async () => {
+        yield* portJoin(async () => {
           const safeTerminal = sanitizeSlackMarkdown(terminalMarkdown);
           if (renderError !== undefined) {
             if (!streamTs && isSlackNativeUnavailable(renderError)) {
@@ -381,14 +386,14 @@ function streamNativeSlackReply(
         if (!finalized) {
           pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${GENERIC_FAILURE}`;
           yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE).pipe(
-            Effect.catchTag("TaskFailure", (error) =>
+            Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() => log.error(`${label} failed to stop an abnormal Slack stream: ${String(error.cause)}`)),
             ),
           );
         }
       }),
     );
-    yield* taskEffect(async () => {
+    yield* portJoin(async () => {
       if (initialPreviewTs) {
         await api
           .deleteMessage(target.channelId, initialPreviewTs)
@@ -458,7 +463,7 @@ function streamNativeSlackReply(
                   retryable: event.retryable,
                   ...(event.code !== undefined ? { code: event.code } : {}),
                 }) ?? "",
-              catch: (cause) => new TaskFailure(cause),
+              catch: (cause) => new PortFailure(cause),
             });
             if (notice) {
               pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
@@ -466,25 +471,25 @@ function streamNativeSlackReply(
             }
             yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE);
           }).pipe(
-            Effect.catchTag("TaskFailure", (error) =>
+            Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() =>
                 log.error(`${label} failed to deliver the agent-failure stream: ${String(error.cause)}`),
               ),
             ),
           );
           return yield* Effect.fail(
-            new TaskFailure(new Error(`agent failed: ${event.details} (retryable=${event.retryable})`)),
+            new PortFailure(new Error(`agent failed: ${event.details} (retryable=${event.retryable})`)),
           );
         }
         return true;
       }).pipe(Effect.uninterruptible),
     );
-    if (!finalized) yield* Effect.fail(new TaskFailure(new Error("stream ended without a terminal event")));
+    if (!finalized) yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
   });
 }
 
 export function slackReply(
-  events: Stream.Stream<AgentEvent, TaskFailure>,
+  events: Stream.Stream<AgentEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
