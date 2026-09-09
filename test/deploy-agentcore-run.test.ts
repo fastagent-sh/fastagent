@@ -168,7 +168,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(awsCmds()).toEqual([
       "sts get-caller-identity --output json",
       // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
-      "bedrock-agentcore-control list-agent-runtimes --max-results 1",
+      "bedrock-agentcore-control list-agent-runtimes --max-items 1 --region us-west-2",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       // The deployment bucket: created if absent, its safety/durability properties re-converged every
       // deploy, then the content-hashed forwarder package uploaded.
@@ -339,14 +339,24 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(calls.slice(0, spoken).every((c) => c.args[0] === "sts" || c.args[0] === "configure")).toBe(true);
   });
 
-  it("stays quiet about the principal when the identity carries no Arn", async () => {
+  it("stays quiet about the principal when the identity carries no Arn, and names where the region came from", async () => {
     const logs: string[] = [];
-    await deployAgentcoreRun(plan(), fakeCli(happyAws).cli, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
-      telegram: async () => "registered",
-    });
-    expect(logs[0]).toBe(
-      "account 123456789012, region us-west-2 (from the environment), image fastagent/my-agent:20260728",
+    // No AWS_REGION: the region (and so the source label an operator reads to answer "where did this come from?")
+    // is the one `aws configure get region` gave.
+    const aws = fakeCli((a) => (a[0] === "configure" ? { stdout: "eu-west-1\n" } : happyAws(a)));
+    await deployAgentcoreRun(
+      plan({ region: undefined }),
+      aws.cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      { telegram: async () => "registered" },
     );
+    expect(logs[0]).toBe(
+      "account 123456789012, region eu-west-1 (from aws configure), image fastagent/my-agent:20260728",
+    );
+    expect(aws.cmds()).toContain("bedrock-agentcore-control list-agent-runtimes --max-items 1 --region eu-west-1");
     expect(logs.join("\n")).not.toContain("root user");
     expect(logs.join("\n")).not.toContain("could not confirm");
   });
