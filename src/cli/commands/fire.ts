@@ -41,10 +41,12 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   // `fire` RUNS this schedule, so it takes the serving path's guarantee: a prompt built from an
   // unset declared value is the degraded turn this feature exists to prevent (`Post the digest to `
   // — sent and executed), and the loader resolved it into a string before anything could notice.
-  // THIS schedule only (`owner`): firing one job by hand must not fail because a sibling needs a
-  // credential this machine has no reason to hold. The failures go to the gate too, even though they
-  // were printed above — its guarantee must not depend on this call site remembering (a repeated
-  // line on the refusal path is the cheaper failure).
+  // THIS schedule only (`owner`): firing one job must not fail because a SIBLING SCHEDULE needs a
+  // credential this machine has no reason to hold. The agent assembled below is a different question
+  // and gates every mounted tool — a fired turn can call any of them — so `fire` is not free of a
+  // tool's declaration, only of another schedule's. The failures go to the gate too, even though they
+  // were printed above: its guarantee must not depend on this call site remembering (a repeated line
+  // on the refusal path is the cheaper failure).
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
   const { agent, modelSpec, authPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,

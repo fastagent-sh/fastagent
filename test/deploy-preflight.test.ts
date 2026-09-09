@@ -523,14 +523,23 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(listed.find((s) => s.name === "X_API_KEY")?.hint).toBe("required by tools/x-post.mjs");
   });
 
-  it("warns when a code input cannot be loaded — its declarations cannot be carried", async () => {
+  it("warns when a code input cannot be loaded, and GATES --run on it", async () => {
+    // Generate-only warns: the operator may be producing artifacts on a machine that never installed
+    // the agent's deps. `--run` gates, because the BOX will load that file successfully and refuse to
+    // start on a declaration this deploy could not read — a crash loop after a "successful" deploy.
     const dir = await workspace();
     await mkdir(join(dir, "tools"), { recursive: true });
     await writeFile(join(dir, "tools", "broken.mjs"), `throw new Error("boom");\n`);
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
-    if (!pre.ok) return;
-    expect(pre.messages.some((m) => m.level === "warn" && /tools\/broken\.mjs failed to load/.test(m.text))).toBe(true);
+    if (pre.ok) {
+      expect(pre.messages.some((m) => m.level === "warn" && /tools\/broken\.mjs failed to load/.test(m.text))).toBe(
+        true,
+      );
+    }
+    const run = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(run.ok).toBe(false);
+    if (!run.ok) expect(run.gate).toMatch(/tools\/broken\.mjs failed to load.*would refuse to start/);
   });
 
   it("sessionControl carries the plane's token as a deploy secret — a minted one is unreadable off-box", async () => {

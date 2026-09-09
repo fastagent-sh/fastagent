@@ -407,11 +407,17 @@ export async function preflightDeploy(input: {
   // for what no code declares. Read through the SAME resolver dev/start mount with, so "which tool declarations
   // count" has one answer (config.tools declare too; a shadowed file's declaration is dropped in both places).
   const resolvedTools = await resolveAgentTools(config, agentDir, workspace);
+  // A code input we could not READ is a code input whose declarations we cannot carry — and the box
+  // WILL read it (its deps are installed there), so its gate fires after the deploy reported success:
+  // a crash loop, which is the failure mode this whole mechanism exists to move to build time. Under
+  // `--run` that is a gate, like a channel that fails to inspect; generate-only warns, since the
+  // operator may be producing artifacts from a machine that never installed the agent's deps.
   for (const failure of [...resolvedTools.toolFailures, ...loadedSchedules.failures]) {
-    messages.push({
-      level: "warn",
-      text: `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried to the host`,
-    });
+    const issue =
+      `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried ` +
+      `to the host, so the deployed box would refuse to start`;
+    if (run) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
   }
   const extraSecrets: DeclaredSecret[] = [
     ...(config.deploy?.secrets ?? []).map((name) => ({ name, source: "fastagent.config deploy.secrets" })),

@@ -310,8 +310,9 @@ describe("cli papercuts", () => {
   });
 
   it("fire asserts only the named schedule's secrets, not every sibling's", async () => {
-    // One manual trigger must not require the credentials of jobs it is not running: a laptop that
-    // has no reason to hold the digest channel can still fire `cleanup`.
+    // One manual trigger must not require the credentials of the SCHEDULES it is not running: a laptop
+    // that has no reason to hold the digest channel can still fire `cleanup`. (The agent it then
+    // assembles still gates every mounted tool — a fired turn can call any of them.)
     const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
     const dir = await agentWorkspace("fa-fire-sibling-", {
       "schedules/digest.ts":

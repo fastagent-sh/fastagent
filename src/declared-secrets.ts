@@ -36,11 +36,27 @@ export interface DeclaredSecret {
   source: string;
 }
 
-/** Is an authored `secrets:` field usable? A `.js` tool or a wrong type never met TypeScript, and a
- *  malformed declaration must fail as a load error rather than be silently dropped — the whole value
- *  of the field is that its absence is meaningful. */
-function validSecretNames(value: unknown): boolean {
-  return value === undefined || (Array.isArray(value) && value.every((n) => typeof n === "string" && n !== ""));
+/**
+ * What an env-var NAME may look like. Checked at the declaration, not left to the host: these names
+ * are written verbatim into a Compose file, a Fly/Railway runbook and a CloudFormation parameter, so
+ * a typo (`"X_API_KEY "`, `"my key"`) or a quote/newline produces a broken or wrong artifact whose
+ * error surfaces in someone's cloud CLI, pointing at nothing. Case is not dictated — `http_proxy` is
+ * a real variable — only the shape a shell and every artifact format agree on.
+ */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Why an authored `secrets:` is unusable, or undefined when it is fine. A `.js` tool or a wrong type
+ *  never met TypeScript, and a malformed declaration must fail as a load error rather than be
+ *  silently dropped — the whole value of the field is that its absence is meaningful. */
+function secretNamesProblem(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return "secrets must be an array of env-var names";
+  for (const name of value) {
+    if (typeof name !== "string" || !ENV_NAME.test(name)) {
+      return `secrets must be an array of env-var names — ${JSON.stringify(name)} is not one`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -58,7 +74,8 @@ export function readSecretDeclaration(
   label: string,
 ): { secrets: DeclaredSecret[]; error?: undefined } | { secrets?: undefined; error: string } {
   const declared = (moduleDefault as { secrets?: unknown } | undefined)?.secrets;
-  if (!validSecretNames(declared)) return { error: `${label}: secrets must be an array of env-var names` };
+  const problem = secretNamesProblem(declared);
+  if (problem !== undefined) return { error: `${label}: ${problem}` };
   return { secrets: ((declared as readonly string[] | undefined) ?? []).map((name) => ({ name, source: label })) };
 }
 

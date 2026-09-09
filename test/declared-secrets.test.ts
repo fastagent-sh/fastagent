@@ -113,6 +113,22 @@ describe("declared secrets: where they are declared", () => {
       "tools/bad.mjs: secrets must be an array of env-var names",
     ]);
   });
+
+  it("a name that is not an env-var name is refused AT THE DECLARATION, naming the value", async () => {
+    // These names are written verbatim into a Compose file, a runbook and a CloudFormation parameter,
+    // so a stray space or quote has to fail here — not later, as a broken artifact whose error comes
+    // out of someone's cloud CLI pointing at nothing.
+    const dir = await agent({
+      "tools/typo.mjs": `export default { name: "t", description: "t", parameters: {},
+         secrets: ["X_API_KEY "], execute: async () => ({}) };\n`,
+      "tools/spaced.mjs": `export default { name: "s", description: "s", parameters: {},
+         secrets: ["my key"], execute: async () => ({}) };\n`,
+    });
+    expect((await loadTools(dir)).failures.map((f) => f.message)).toEqual([
+      'tools/spaced.mjs: secrets must be an array of env-var names — "my key" is not one',
+      'tools/typo.mjs: secrets must be an array of env-var names — "X_API_KEY " is not one',
+    ]);
+  });
 });
 
 describe("declared secrets: the values reach the code that declared them", () => {
