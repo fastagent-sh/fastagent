@@ -4,7 +4,7 @@ import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import { log } from "../../log.ts";
 import { beginWork } from "../busy.ts";
-import { taskFailure } from "./tasks.ts";
+import { portError } from "../../effect-port.ts";
 
 export interface TurnQueue<T> {
   accept(rec: T): void;
@@ -39,7 +39,7 @@ export function createTurnQueue<T extends { session: string }>(opts: {
           Effect.catchCause((cause) =>
             Effect.sync(() =>
               log.error(
-                `${label} turn runner rejected (session=${rec.session}; own your error surface in run()): ${String(taskFailure(cause))}`,
+                `${label} turn runner rejected (session=${rec.session}; own your error surface in run()): ${String(portError(cause))}`,
               ),
             ),
           ),

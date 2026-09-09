@@ -27,7 +27,7 @@
  */
 import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
-import { AgentcoreFailure, agentcoreOperation } from "./agentcore-effects.ts";
+import { PortFailure, portJoin } from "../effect-port.ts";
 import type { Agent } from "../agent.ts";
 import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
@@ -78,24 +78,29 @@ function createActivation(deps: {
   onStateReady: (() => void) | undefined;
   channels: AgentcoreAdapterOptions["channels"];
 }): {
-  prepare(envelope: AgentcoreEnvelope): Effect.Effect<void, AgentcoreFailure>;
+  prepare(envelope: AgentcoreEnvelope): Effect.Effect<void, PortFailure>;
   /** The channel surface; the construction outcome is cached either way. */
-  channels: Effect.Effect<ChannelHandler, AgentcoreFailure>;
+  channels: Effect.Effect<ChannelHandler, PortFailure>;
 } {
   const { stateRoot, onStateReady } = deps;
+  // UNINTERRUPTIBLE, because the outcome is CACHED: `Effect.cached` memoizes whatever exit it sees,
+  // interruption included. A once-per-process activation that remembered "interrupted" would answer
+  // every later envelope with an empty cause instead of the success or the diagnosable failure this
+  // block promises. Both are already unreachable (no caller passes a signal), which is exactly why
+  // the invariant has to be written down rather than relied on.
   const stateReady = Effect.runSync(
     Effect.cached(
-      agentcoreOperation(async () => {
+      portJoin(async () => {
         onStateReady?.();
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
   const channels = Effect.runSync(
     Effect.cached(
-      agentcoreOperation(async () => {
+      portJoin(async () => {
         const surface = await deps.channels();
         return router(surface.routes, surface.mounts);
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
   return {
@@ -107,7 +112,7 @@ function createActivation(deps: {
           const url = envelope.wake.url;
           yield* Effect.try({
             try: () => rememberWakeAlarmUrl(stateRoot, url),
-            catch: (cause) => new AgentcoreFailure(cause),
+            catch: (cause) => new PortFailure(cause),
           });
         }
         yield* stateReady;

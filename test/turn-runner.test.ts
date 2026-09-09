@@ -10,7 +10,7 @@ import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/con
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
-import { taskEffect } from "../src/channels/kit/tasks.ts";
+import { portJoin } from "../src/effect-port.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import * as atomic from "../src/atomic-write.ts";
 import { log } from "../src/log.ts";
@@ -72,7 +72,7 @@ function runnerOptions(
     onDeferred: (rec) => calls.push(`deferred ${rec.id}`),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
     execute: (rec, discussion, onCompleted) =>
-      taskEffect(async () => {
+      portJoin(async () => {
         calls.push(`execute ${rec.id} notice=${rec.notice ?? "-"} text=${discussion.text}`);
         onCompleted();
       }),
@@ -121,7 +121,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         "-e",
         `
       import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
-      import { taskEffect } from ${JSON.stringify(`${source}tasks.ts`)};
+      import { portJoin } from ${JSON.stringify(new URL("../src/effect-port.ts", import.meta.url).href)};
       import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
       import { createContextBuffer } from ${JSON.stringify(`${source}context-buffer.ts`)};
       const root = ${JSON.stringify(dir)};
@@ -131,7 +131,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       const runner = createTurnRunner({
         label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
         bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
-        execute: (_rec, _discussion, onCompleted) => taskEffect(async () => {
+        execute: (_rec, _discussion, onCompleted) => portJoin(async () => {
           process.on('message', () => {
             onCompleted();
             buffer.push('place:s', 'later');
@@ -183,7 +183,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     const r = runner(store, calls, {
       onQueuedBehind: () => ({ done: Promise.reject(new Error("notice rejected before dequeue")) }),
       execute: (rec) =>
-        taskEffect(async () => {
+        portJoin(async () => {
           if (rec.id === "a") {
             entered.resolve();
             await head.promise;
@@ -247,7 +247,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       const opts = runnerOptions(store, [], {
         buffer,
         execute: (_rec, discussion, onCompleted) =>
-          taskEffect(async () => {
+          portJoin(async () => {
             expect(discussion.consumed).toEqual(["earlier"]);
             if (completed) onCompleted();
             entered.resolve();
@@ -392,7 +392,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     recovered.push({ id: "r", session: "s", text: "again", attempts: 1 });
     const r = runner(store, calls, {
       execute: (rec) =>
-        taskEffect(async () => {
+        portJoin(async () => {
           calls.push(`execute ${rec.id}`);
           throw new Error("transport down");
         }),

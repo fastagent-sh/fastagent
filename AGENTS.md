@@ -20,356 +20,189 @@ Code truth is `src/`.
 
 ## Repo map
 
+One line per file: **what it owns**. The reason it is that way lives in the file's own header — the
+one place that cannot drift away from the code it explains. Directories that have no header file
+(`src/deploy`, `test/live`) point at where theirs lives.
+
 ```
 src/
-├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
-├── service.ts               # THE PRODUCT AS ONE CALL: a directory becomes a live service
-│                           # (mountAgentService; engines/pi/service.ts adds the opener in front of it
-│                           # as createAgentService). Before it, only the CLI could keep fastagent's
-│                           # "into a live service inside an app" promise — everything else was
-│                           # parts an embedder had to assemble in the right order, and getting it
-│                           # wrong is silent (a plane that 404s while advertising itself). The
-│                           # assembly parts (routesFor / mountSessionControl / startSchedules) live
-│                           # here rather than in cli/, because a public entry must not reach into a
-│                           # directory that calls process.exit — guarded in package-boundary.test.
-│                           # dev/start are callers of this, not a second implementation.
-├── channel.ts               # the Channel contract — the TRIGGER side of the product boundary
-│                           # (core.md §1), beside agent.ts and session.ts: ChannelModule / Routes /
-│                           # ChannelHandler / LongConnection*. Pure types, no host, no framework:
-│                           # a WebSocket ingress needs LongConnection and has no HTTP in it, and a
-│                           # channel author must not pull node:http in behind a type import.
-├── collect.ts               # caller-side stream helpers: collect (buffered consumption) + abortFirstIterator (shared cancellation protocol)
-├── core.ts, node.ts,        # THE THREE LAYERS, split by what each costs to import: core (+session)
-│   pi.ts                    # is engine- AND runtime-neutral with ZERO packages; node adds what needs
-│                           # a Node runtime (the assembly, the http binding); pi names an engine.
-│                           # Every layer's dependency list is asserted in package-boundary.test.ts.
-├── index.ts                 # supported all-in-one entry (re-exports core + node + session + pi)
-├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
-├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers: serve/bind reporting, tunnel — the ASSEMBLY lives in service.ts and the agentcore one in channels/agentcore-service.ts, since a public entry may not reach into cli/), fail.ts, commands/ (one module per command — except `deploy`, whose dispatcher keeps only the host-neutral prelude and hands off to one `commands/deploy/<host>.ts` per target)
-├── telegram.ts, github.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
+├── agent.ts                # the Agent Handler contract (pure types, no engine import)
+├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
+├── session.ts              # the session-control contract: state/entries/events + dispatch, error codes
+├── service.ts              # THE PRODUCT AS ONE CALL — a directory becomes a live service (mountAgentService),
+│                           # plus the assembly parts dev/start share: routesFor / mountSessionControl / startSchedules
+├── effect-port.ts          # the ONE crossing from a Promise-shaped port into Effect: port / portJoin / portAbort /
+│                           # portRequest / portCleanup / PortFailure
+├── collect.ts              # caller-side stream helpers: collect + the SPEC cancellation protocol (abortFirstIterator)
+├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + zero packages /
+│                           # engine-neutral but needs Node / names the engine. Asserted in package-boundary.test.ts
+├── index.ts                # supported all-in-one entry (re-exports core + node + session + pi)
+├── cli.ts                  # the THIN entry (import-free; lazy-loads cli/program.ts)
+├── cli/                    # the CLI, built on clig.dev
+│   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
+│   ├── program.ts          # the spec registry — the CLI surface's source of truth; lazy per-command imports
+│   ├── invoke-stream.ts    # `invoke`: stream → exit code
+│   ├── models-view.ts, auth-view.ts, add-feishu.ts # `models` / auth-report output; `add feishu|lark` onboarding
+│   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
+│   ├── fail.ts             # the process-exiting failure boundary
+│   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
+├── telegram.ts, github.ts, # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   slack.ts, feishu.ts,
 │   lark.ts
-├── bind.ts                  # THE reading of a bind address, as the six DIFFERENT questions it is:
-│                           # bindable (isBindAddress) / an address not a name (bindAddress, applied
-│                           # where a value enters) / reach (classifyBind) / dialable by the NAME
-│                           # localhost (answersLocalhost — NOT the same as reach: 127.0.0.2 is
-│                           # loopback and --tunnel still cannot reach it) / how a message names it
-│                           # (bindLabel) / what a client dials (clientHost). The flag, http.host
-│                           # validation, serveNode, the ready lines, control.json and the deploy
-│                           # pre-flight all read one through this — conflating any two of those
-│                           # questions produces a silent failure, which is why they are separate.
-├── log.ts                   # leveled logging singleton (dev=debug, start=info)
-├── session.ts               # engine-neutral session-control contract (SessionControl: state/entries/events + dispatch, error codes)
-├── session-remote.ts        # remote clients over /control/*: connectSessionControl (control plane) + connectAgent (data plane)
-├── observe.ts               # turn-trace logging around an Agent
-├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
-├── dev-supervisor.ts        # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
-├── proxy.ts                 # HTTPS_PROXY wiring
-├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
-├── runtime.ts               # agent runtime/package-manager detection (node vs bun) + readPackageJson
-├── loader.ts                # neutral ESM module discovery/loading and failure reporting for tools/ channels/ schedules/ config
-├── paths.ts                # PLACEMENT + the path predicates everyone shares (isUnderDir):
-│                           # resolvePlacement — ONE marker (`fastagent.config.*`, at any
-│                           # NAME) and one rule: the workspace is the dir you point at, the agent is the
-│                           # single config holder at it or one level inside + the machinery paths that follow
-│                           # (.secrets/.state + env overrides), the containment guard, and the neutral
-│                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
-│                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
-├── atomic-write.ts         # writeFileAtomic: the ONE synchronous "whole file or none of it" write
-│                           # (temp + rename + mode), after five copies drifted apart. The fixed
-│                           # `<path>.tmp` rests on one-writer-per-state-root, with slack onboarding
-│                           # state as the documented exception, and is the seam channel tests use to
-│                           # inject a write failure.
+├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
+├── log.ts                  # leveled logging singleton (dev=debug, start=info)
+├── session-remote.ts       # remote clients over /control/*: connectSessionControl + connectAgent
+├── observe.ts              # turn-trace logging around an Agent
+├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
+├── dev-supervisor.ts       # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
+├── proxy.ts                # HTTPS_PROXY wiring
+├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
+├── env.ts                  # `.env` → process.env loading
+├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
+├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ schedules/ config
+├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared
+│                           # path predicates and the machinery paths that follow (.secrets/.state)
+├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
 ├── version.ts              # package version (deploy pins it into the image)
-├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
+├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── serve.ts             # HOW a route table becomes a running server. Dispatch is a MAP LOOKUP
-│   │                     # on literal paths — a deployment mounts a handful (one per channel, plus
-│   │                     # health, plus the plane's prefix), and a routing library would answer the
-│   │                     # same question through a pattern language we do not use, whose extra
-│   │                     # semantics every collision check would then have to PREDICT. Prefix
-│   │                     # owners are a separate mount argument, not a key spelling. Plus the
-│   │                     # totality boundary and the node:http binding. Shared ground, NOT a
-│   │                     # deployment target: every host in deploy/ runs this same process. What is
-│   │                     # imported here is Hono's node ADAPTER (serve/getRequestListener), never the
-│   │                     # framework — the dispatch above is ours; overrideGlobalObjects: false keeps
-│   │                     # even the adapter inside the file, since an embedder's globals are not ours
-│   │                     # to swap. The types stay pure Fetch.
-│   ├── agentcore-service.ts # the AgentCore SERVING assembly — same product as service.ts, built
-│   │                     # differently because the host is: the adapter is the surface, channels are
-│   │                     # discovered on trusted ingress. Runtime filesystems appear ON INVOCATION, so the
-│   │                     # process opener defers the WHOLE definition until the first envelope. The clock
-│   │                     # is external, resident connections cannot survive scale-to-zero. Returns an
-│   │                     # AgentService, so `start` picks an assembly once and everything after is
-│   │                     # common. Owns nothing process-global: the wake sink stays with the entry.
-│   ├── agentcore.ts          # the RUNTIME adapter that assembly serves: AgentCore gives a container two
-│   │                     # paths (POST /invocations, GET /ping) and no public URL, so every trigger arrives
-│   │                     # as an ENVELOPE (webhook | schedule-fire | invoke | wake-poke | probe)
-│   │                     # and the channel's real HTTP status rides INSIDE a transport-200 reply. The
-│   │                     # authentication boundary is here: InvokeAgentRuntime is an ordinary IAM action, so
-│   │                     # only a shared-secret envelope is the forwarder's; a public one runs `invoke` alone.
-│   ├── agentcore-protocol.ts # THE WIRE between the forwarder Lambda and the container, in one place: the
-│   │                     # envelope union, the webhook reply, the wake-alarm request,
-│   │                     # the reserved paths. The forwarder (deploy/agentcore/forwarder.js) is JavaScript
-│   │                     # and cannot import it, so agentcore-forwarder.test.ts pins its literals to these
-│   ├── agentcore-effects.ts  # typed host IO + abort-and-join request deadlines; request/background error policies stay with callers
-│   ├── agentcore-limits.ts   # the HOST's body ceilings, computed once (a Function URL caps at 6 MB, and the
-│   │                     # body rides base64 inside a JSON envelope) — deploy states it at plan time
-│   ├── busy.ts               # process-wide background work counter read by /ping (HealthyBusy).
-│   │                     # Webhook ACKs do not mean the turn has finished.
-│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Serving it is
-│   │                     # serve.ts's job — this file knows only the contract and one stream's shape
-│   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
-│   ├── sse.ts               # Fetch-only response lifecycle shared by invoke and observation: subscription, heartbeat, cancellation and cleanup
-│   ├── discover.ts          # channels/ filesystem discovery (ChannelModule → Routes) — engine-neutral,
-│   │                     # so it lives here and not under engines/ (#365)
-│   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
-│   ├── secret.ts            # the ONE constant-time comparison every shared-secret gate reads through
-│   │                     # (control bearer token, telegram secret token, slack signature, feishu
-│   │                     # verification token/signature, agentcore envelope secret). An EMPTY expected
-│   │                     # value never matches: an unconfigured gate must not be passable by sending none
-│   ├── wait-health.ts       # readiness probe for a server THIS process reaches directly (deploy's
-│   │                     # published local port). NOT for a public URL a platform must reach: the
-│   │                     # registrars let the platform's own URL verification be the probe (#421)
-│   ├── registration.ts      # SHARED registrar outcome (registered|manual|failed) + the ONE retry loop
-│   │                     # every registrar spends its warm-up budget through (retryWhile). Each platform
-│   │                     # keeps only what differs: which errors mean "not reachable YET" and what a
-│   │                     # final failure MEANS (one's terminal state is another's `manual`). Two budgets,
-│   │                     # because a tunnel is live when its URL prints and a deploy is not — a registrar
-│   │                     # that gives up first GATES the deploy (#428) — same reason
-│   ├── kit/                 # WRITING a channel — the parts every chat platform needs and none should
-│   │   │                     # reinvent. The split from the mechanism beside it is a FACT about
-│   │   │                     # imports, asserted in package-boundary.test.ts: every file here has
-│   │   │                     # consumers only under channels/<platform>/, and serve/http/control/
-│   │   │                     # discover have none there. Neither side may reach for the other.
-│   │   ├── preview-kit.ts   # pure turn-view reducer, line renderers, and preview policies
-│   │   ├── delivery.ts      # scoped coalescing previews, ordered native writes, and snapshot terminal settlement
-│   │   ├── event-stream.ts  # typed, demand-driven Agent iterator acquisition and scoped cleanup
-│   │   ├── invoke-turn-kit.ts # demand-driven Effect stream: scoped attempts, cancellable busy wait, completed-event commit
-│   │   ├── turn-runner.ts   # accept → dequeue → execute → settle over the queue + store + buffer;
-│   │   │                     # business settlement removes intent, resource finalizers never do
-│   │   ├── turn-queue.ts    # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
-│   │   ├── turn-store.ts    # generic durable turn intent (L1) — record shape/validator/order injected
-│   │   ├── context-buffer.ts# generic durable un-summoned-discussion buffer (peek→completed→commit)
+│   ├── serve.ts            # how a route table becomes a running server: literal-path dispatch, prefix mounts,
+│   │                       # the totality boundary, the node:http binding. Shared ground, not a deploy target
+│   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
+│                           # host): channels discovered on trusted ingress, the whole definition opened
+│                           # on the first envelope, an external clock, no resident connections
+│   ├── agentcore.ts        # the AgentCore Runtime adapter: POST /invocations + GET /ping, the envelope kinds,
+│   │                       # and the shared-secret boundary that separates a forwarder call from any IAM one
+│   ├── agentcore-protocol.ts # THE WIRE between the forwarder Lambda and the container (types + constants)
+│   ├── agentcore-limits.ts # the host's body ceilings, computed once
+│   ├── busy.ts             # process-wide background work counter read by /ping (HealthyBusy): a webhook
+│                           # ACK does not mean the turn has finished
+│   ├── http.ts             # HTTP/SSE channel (consumes only the Agent contract)
+│   ├── control.ts          # session-control transport: bearer-token /control/* routes + SSE events + /control/invoke
+│   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
+│   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), engine-neutral
+│   ├── body.ts, respond.ts # channel-authoring kit (body cap, responses)
+│   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
+│   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
+│   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop
+│   ├── kit/                # WRITING a channel. Its defining property is an import fact, asserted in
+│   │   │                   # package-boundary.test.ts: everything here has consumers only under
+│   │   │                   # channels/<platform>/, and serve/http/control/discover have none there
+│   │   ├── preview-kit.ts  # pure turn-view reducer, line renderers, preview policies
+│   │   ├── delivery.ts     # scoped coalescing previews, ordered native writes, terminal settlement
+│   │   ├── event-stream.ts # typed, demand-driven Agent iterator acquisition and scoped cleanup
+│   │   ├── invoke-turn-kit.ts # resolve inputs → ask the agent; the background tier's degradation; busy wait;
+│   │   │                   # the prompt manifest wording
+│   │   ├── transport.ts    # whether a write is worth waiting out a rate limit for (DROPPABLE_FRAME)
+│   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + buffer
+│   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
+│   │   ├── turn-store.ts   # generic durable turn intent (record shape/validator/order injected)
+│   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
-│   │   ├── state.ts, seen.ts# atomic channel state + bounded durable delivery dedup
-│   │   ├── signature.ts     # replay window for a signed webhook ingress (the LENGTH is the platform's)
-│   │   ├── tasks.ts         # typed Promise ownership (join on interruption) + side-task tracking; drain is observation only
-│   │   ├── text.ts          # Unicode-safe code-point slicing (cards, preview kit)
-│   │   ├── attachment-path.ts # where an attachment lands: the conversation id is ENCODED into a
-│   │   │                     # directory (like piSessionId — an id belongs to the caller, so it is
-│   │   │                     # never rejected), the file name is only reduced, since the model reads it
-│   │   └── stop-command.ts  # the shared /stop parsing every chat channel accepts
-│   ├── github/              # github channel (+ scaffold/ bundle)
-│   ├── telegram/            # telegram channel: see docs/design/core.md §7
-│   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
-│   │   ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
-│   │   ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
-│   │   ├── turn-store.ts    # telegram's record + update_id arrival order over the shared generic store
-│   │   ├── context-buffer.ts# telegram's entry shape + attachment selection over the shared generic buffer
-│   │   ├── preview.ts       # live-preview pump + terminal-write policy
-│   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
+│   │   ├── state.ts, seen.ts # atomic channel state + bounded durable delivery dedup
+│   │   ├── signature.ts    # replay window for a signed webhook ingress
+│   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
+│   │   ├── text.ts         # Unicode-safe code-point slicing
+│   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
+│   │   └── stop-command.ts # the shared /stop parsing every chat channel accepts
+│   ├── github/             # github channel (+ scaffold/ bundle)
+│   ├── telegram/           # telegram channel: see docs/design/core.md §7
+│   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
+│   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy
+│   │   ├── invoke-turn.ts  # resolve this platform's attachments for one turn
+│   │   ├── turn-store.ts   # telegram's record + update_id arrival order over the generic store
+│   │   ├── context-buffer.ts # telegram's entry shape + attachment selection over the generic buffer
+│   │   ├── preview.ts      # live-preview pump + terminal-write policy
+│   │   ├── telegram-api.ts # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
-│   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   ├── slack/               # Slack Agent: native streams + inline tool traces, signed Events API ingress, durable threads/context, files + onboarding/scaffold
-│   │   └── shared-api.ts    # the ONE transport per state root the channel and the scaffolded send tool share (#458)
-│   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
-│   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
-│   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
-│   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
+│   │   └── scaffold/       # `add telegram` bundle (channel.ts + send tool)
+│   ├── slack/              # Slack Agent: native streams + inline tool traces, signed Events API ingress
+│   │   ├── slack.ts        # ingress + per-turn lifecycle + composition
+│   │   ├── parse.ts, model.ts, reaction.ts # pure protocol parsing/shapes + the reaction vocabulary
+│   │   ├── invoke-turn.ts, preview.ts # turn IO + BOTH renderers (native Agent stream, classic edits)
+│   │   ├── context-buffer.ts # slack's entry shape + file selection over the generic buffer
+│   │   ├── slack-api.ts    # the Bot API pipeline (retry, markdown/text splitting, files)
+│   │   ├── shared-api.ts   # the ONE transport per state root the channel and the send tool share
+│   │   ├── onboard.ts, setup-server.ts, manifest.ts, config-api.ts, onboarding-state.ts, welcomed.ts,
+│   │   │                   # register-webhook.ts # `add slack`: the app-creation flow and what it remembers
+│   │   └── scaffold/       # `add slack` bundle
+│   ├── feishu/             # CANONICAL Feishu channel engine — see docs/design/core.md
+│   │   ├── feishu.ts       # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
+│   │   ├── cloud.ts        # explicit Feishu-reference / Lark-compatibility capability profiles
+│   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol/content/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
-│   │   ├── context-buffer.ts# feishu's entry shape + resource selection over the shared generic buffer
-│   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
-│   │   ├── shared-api.ts    # channel/send-tool transport sharing per cloud and state root (Feishu + Lark)
-│   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
+│   │   ├── context-buffer.ts # feishu's entry shape + resource selection over the generic buffer
+│   │   ├── feishu-api.ts   # canonical Open API pipeline (token cache, retry, cardkit)
+│   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same engine)
+│   │   ├── setup-mode.ts   # the onboarding choices (webhook vs websocket, group visibility)
+│   │   ├── shared-api.ts   # channel/send-tool transport sharing per cloud and state root
+│   │   ├── register-app.ts # `add feishu`: scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
-│   │   └── scaffold/        # `add feishu` bundle
-│   └── lark/                # Lark compatibility/degraded edges over the Feishu engine
-│       ├── lark.ts          # thin branded adapter bound to LARK_COMPAT_CLOUD
-│       ├── onboard.ts       # unbound launcher + credentials + manual config fallback
-│       └── scaffold/        # `add lark` bundle
-├── deploy/                  # `deploy docker|fly|railway|agentcore`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
-│   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical). A new host is
-│   │                        # a new dir here (copy fly/: PLAN pure, `--run` driver behind the runner seam), its
-│   │                        # `HostDeploy` in cli/commands/deploy/<host>.ts (kept-file semantics, gates, the drive
-│   │                        # glue — the process-exiting half), and its name in deploy/hosts.ts.
-│   │                        # BEFORE writing one: READ that host's docs for what it does NOT do implicitly
-│   │                        # — above all, whether a created resource is REACHABLE without a further
-│   │                        # step. Fly taught this eight rounds in a row: `[http_service]` declares a
-│   │                        # service and allocates no address, so every step succeeded and the URL had
-│   │                        # no DNS record (#425); v4 and v6 are separate free commands, so an app with
-│   │                        # only v6 is unreachable from an IPv4-only webhook sender. Five of the eight
-│   │                        # defects were sitting in Fly's own docs or fly-go's source; each was instead
-│   │                        # bought with a real deploy or a red nightly. A parser's judgement must also
-│   │                        # match the GRANULARITY of the action it drives (one question per command),
-│   │                        # and "we could not read the host" is a third answer, never "absent".
-│   │                        # The CLI dispatcher that picks between them is cli/commands/deploy.ts; what it may NOT
-│   │                        # hold is a fact about ANOTHER host ("--into-linked is railway's" lived in three
-│   │                        # branches and drifted) — that is HOST_ONLY_FLAGS, one row per host-only flag
-│   │                        # that only WARNS elsewhere. `--tunnel` is host-only too and stays a usage GATE
-│   │                        # in runDeploy (exit 2): a refusal is not a row, and tabling it would make it advice.
-│   ├── hosts.ts             # DEPLOY_HOSTS, the deploy targets as a value: the CLI's `<host>` choices and
-│   │                        # HOST_ONLY_FLAGS's exhaustiveness check read this one copy. Dependency-free,
-│   │                        # so cli/program.ts imports it without pulling a command module
-│   ├── channel-ingress.ts   # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL
-│   │                     # end-to-end, the words when nobody can. The ONE answer to "which channels
-│   │                     # have a webhook" — it was written per host (3 runbooks, 3 --run drivers, a
-│   │                     # docker path table, the tunnel announcer) and the long-connection exception
-│   │                     # reached only the feishu/lark branches, so a long-connection Telegram deploy
-│   │                     # printed setWebhook and 409'd the channel it just deployed. Every function
-│   │                     # filters the DeclaredChannel list ITSELF — a pre-filtered argument is how it
-│   │                     # drifted. Consumed by every host AND by the serving path (src/tunnel.ts)
-│   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
-│   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
-│   ├── container.ts         # portable image + ignore files + release manifest (host-neutral)
-│   ├── workspace.ts         # shared deployed lifecycle: assert the storage is MOUNTED (an unmounted dir
-│   │                        # must never look like a new disk), one process lease, recoverable definition
-│   │                        # replacement. base/ is cwd; .state/ and .secrets/ stay outside the definition.
-│   │                        # start loads the service from the workspace's OWN package so tools and engine
-│   │                        # share one runtime module instance (one AsyncLocalStorage).
-│   ├── secrets.ts           # BOTH directions of the credential carry: required-secret NAMES (runbook),
-│   │                     # assembleSecrets VALUES (--run), and the boot-side authSeedBytes/collectAuthSeed
-│   │                     # the container reads them back with. The read side lived in fly/run.ts, which
-│   │                     # `start` had to reach into to deploy nothing on Fly.
-│   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
-│   ├── docker/    { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
-│   ├── fly/       { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
-│   ├── railway/   { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
-│   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js }  # AWS Bedrock AgentCore: ONE CloudFormation stack (runtime +
-│                         # forwarder Lambda for webhooks + EventBridge rules for schedules). No public URL and no
-│                         # resident process — and no volume: managed SessionStorage is wiped on every deploy,
-│                         # which this host STATES rather than engineers around (docs/design/core.md).
-├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)
-│   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
-│   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
-│   ├── discover.ts         # schedules/ filesystem discovery (loadSchedules/discoverScheduleFiles), isolates a bad file (G2)
-│   ├── scheduler.ts        # Effect clock loops + typed claim/run/audit; stop cancels waits, claimed turns finish;
-│   │                      # overdue catch-up ONCE, stable schedule sessions, wake busy ownership through durable settlement
-│   ├── wakeups.ts          # the agent's self-scheduled wake-ups, one-shot + recurring (2nd producer): engine-neutral store + guardrails (min delay/gap, cap, claim/defer)
-│   ├── audit.ts            # runs.jsonl append-only run audit (full reply) + `schedule history` reader — "did last night's run silently fail?"
-│   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: on a scale-to-zero host nothing is resident to
-│   │                     # poll, so each pending wake-up is mirrored into a one-shot EventBridge schedule
-│   │                     # through the forwarder, plus post-restore reconcile; Effect clock/backoff owns bounded retries and joined requests
-│   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
-└── engines/pi/              # the pi reference implementation
-    ├── service.ts           # createAgentService: the public one-call shortcut = this engine's opener +
-    │                         # the neutral mountAgentService. Here, not in src/service.ts, because
-    │                         # opening a DIRECTORY is the only pi-specific part of it
-    ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt. Every rung builds a
-    │                         # PiAssembly VALUE (lease, store, session factory, engine thunk) and puts the
-    │                         # L0 over it; the opener takes the value itself, since the control plane
-    │                         # must contend on the same lease and validate against the same registry
-    ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half: lease (single-writer
-    │                         # floor), terminals (settled message/thrown error → SPEC terminal +
-    │                         # retryable), prompt image prep, the SPEC
-    │                         # projection, and the observation seam (RunControls + SessionObserver)
-    ├── invoke-session.ts    # THE L0: pi's AgentSession, one per invoke, over the same durable
-    │                         # record. Events translate ONCE into the rich SessionEvent vocabulary;
-    │                         # the SPEC stream is its projection. Owns the run's identity, its
-    │                         # controls, and exactly one settlement. Its Effect scope stays alive through
-    │                         # consumer settlement; cancellation aborts and joins the actual SDK work
-    ├── session-effects.ts   # typed SDK failures and scoped lease/session acquisition shared by invocation
-    │                         # and control writes. Late acquisition keeps its lease; cleanup faults are logged
-    ├── agent-session-factory.ts # the engine binding: the assembly (model/prompt/skills/tools) bound
-    │                         # to one record per invoke. services shared, session per turn. Carries
-    │                         # the adaptations pi's TUI origins require — see its header. bindPiSession
-    │                         # is the ONE binding of tools + turn context + deferral to a pi session;
-    │                         # chat's session-builder binds through it too (recordActivations: false)
-    ├── session-store.ts     # session records on pi's SessionManager: Caller ids encoded into names
-    │                         # pi accepts, a record published on create (pi buffers until the first
-    │                         # assistant message), crash reconciliation for interrupted tool calls
-    ├── session-inheritance.ts # where a NEW thread starts from when it names a parent
-    │                         # (participant-model.md §5): fork the parent's active path to the branch
-    │                         # point, then bound the model's view with one mechanical compaction mark
-    ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
-    ├── session-markers.ts   # which journal entries are POSITIONS and which are the plane's own bookkeeping.
-    │                         # One module because the record store and the history copier must agree, and a
-    │                         # disagreement is invisible until a fork comes back missing something
-    ├── session-settings.ts  # what a session is SET TO, and what it may be set to. Model and thinking level
-    │                         # are ONE setting (which levels exist is a property of the model), so `state()`,
-    │                         # the update() gate and the per-invoke binding resolve them HERE rather than
-    │                         # each deriving its own — the run plane and the observation plane, one function
-    ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
-    ├── open.ts              # shared opener: directory → agent for dev/start/invoke
-    ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
-    ├── tool.ts              # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
-    ├── tool-context.ts      # ToolContext.session + tool-activation bridge via AsyncLocalStorage (set around the turn; read in execute — the wake/search_tools seam)
-    ├── search-tools.ts      # built-in search_tools loader for deferred tools (auto-mounted when any tool is deferred; author's wins)
-    ├── wake-tool.ts         # the built-in `wake` tool (pi-coupled: defineTool): writes a wake-up into ToolContext.session; withWakeTool mounts it (serving path only)
-    ├── definition.ts        # AGENTS.md + skills loading and bundling
-    ├── config.ts            # fastagent.config.ts loading + model/precedence (placement lives in paths.ts)
-    ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
-    ├── models.ts            # Models collection wiring + the agent's OWN models.json (custom endpoints:
-    │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
-    └── report.ts            # startup report (auth/model/skills/tools surface)
-test/                        # vitest; faux models by default + reusable SPEC conformance.
-├── embedding.test.ts       # the docs/embedding.md snippets, run against REAL express/fastify (the
-│                            # only reason they are devDeps): that path crosses the Node/Fetch seam
-│                            # through code we do not own, so a swap underneath can keep every unit
-│                            # test green while breaking the paste-this-in promise
-└── live/                   # the probes for what the offline suite FAKES — every file here exists to
-                             # check an assumption about a system we do not own, never to re-run logic:
-                             # the published tarball (registry), a real provider's stream and errors
-                             # (model), a real container build + boot + state volume (docker), a real
-                             # Quick Tunnel carrying a request home (tunnel), a cron on disk firing a
-                             # real turn into the audit log (schedule), Telegram VERIFYING a webhook URL
-                             # it was handed and Feishu CALLING one with a challenge (telegram/feishu —
-                             # registration only; delivery needs a human to type), and Slack's Bot API
-                             # answering our pipeline (slack — OUTBOUND only: its inbound half needs a
-                             # 12h App Configuration Token, which no nightly can hold), the `railway`
-                             # CLI still printing what its driver reads (railway — read-only, and the
-                             # file that dates the `Verified against CLI 5.15.0` claims in run.ts) plus
-                             # a REAL Railway project provisioned and destroyed (railway-deploy — the
-                             # only way to observe `railway domain`, which MINTS one when absent),
-                             # CloudFormation ACCEPTING the YAML this repo emits by hand, forwarder and
-                             # schedule branches included (agentcore — read-only, free, and the only
-                             # check that the template parses)
-                             # plus a REAL stack + ECR repo + S3 bucket provisioned and destroyed
-                             # (agentcore-deploy — no public URL exists, so it proves the deployment
-                             # works through InvokeAgentRuntime; teardown is THREE places because the
-                             # bucket, repo and runtime-created wake alarms all live outside the stack
-                             # on purpose, and it is ONE shared function in test/live/env.ts because a
-                             # second copy of cleanup code drifts where nobody looks), and an agent
-                             # SCHEDULING ITSELF on a host with no resident process (agentcore-wake —
-                             # the wake tool's write becomes a POST to the forwarder becomes an
-                             # EventBridge one-shot, three systems that must be simultaneously right
-                             # and all silent from inside the agent when they are not; the FIRE is
-                             # only weakly checked, via a self-deleting alarm's disappearance),
-                             # `flyctl` still printing what the Fly driver reads (fly — read-only), and
-                             # a REAL Fly app provisioned then destroyed (fly-deploy — which is how
-                             # #425 was found: a deploy whose every step succeeded, serving on a URL
-                             # that had no IP). Each one drives a PRODUCT ENTRY (`createPiAgentFromDir`,
-                             # `deploy docker --run`, `deploy fly --run`, `deploy railway --run`,
-                             # `npm install`, `startCloudflareTunnel`, `startSchedules`,
-                             # `registerTelegramWebhook`, `registerFeishuWebhook`, `createSlackApi`)
-                             # and observes from OUTSIDE it — except the two read-only CLI probes
-                             # (fly, railway), which check what a real host CLI prints against the
-                             # driver's PARSING assumptions about it (`listHasName`,
-                             # `ingressAddresses`, `isLinked`, `linkedName`, `parseHasVolume`): the
-                             # belief a faked CliRunner cannot test
-                             # — a probe that rebuilds the assembly to get a better observation point
-                             # measures the rebuild, and the entry's own steps (installProxyFetch,
-                             # credential resolution, pinning pi's agent dir) go missing one at a time.
-                             # Unit tests below DO reach into that layer, correctly — the rule is this
-                             # directory's, because only these files claim to report on the real thing.
-                             # Excluded from `npm test`; `npm run test:live` (vitest.live.config.ts)
-                             # opts in, and a missing credential FAILS rather than skips — you asked
-                             # for them. Credentials arrive the PRODUCT's way (FASTAGENT_AUTH_PATH → an
-                             # auth.json), which is what lets an OAuth-only provider be the model.
-                             #
-                             # A PROBE'S FIXTURE IS ITS SPECIFICATION, not boilerplate to copy from the
-                             # file next door. Fly and Railway have one topology whatever the definition
-                             # says; AgentCore's is a FUNCTION of it (`needsForwarder` — a webhook
-                             # channel, a schedule, or selfSchedule — decides whether a forwarder, a
-                             # Function URL, EventBridge rules and the artifact bucket exist at all). The
-                             # three copied lines of persona+config landed on the small side, so both
-                             # agentcore probes spent a release describing a deployment neither
-                             # performed: 98 lines of template validated while the comment claimed 900,
-                             # and a teardown deleting three things where two were created. Reading what
-                             # the product CAN do is not reading what YOUR INPUT makes it do. The cheap
-                             # check is countable without deploying anything: what teardown removes must
-                             # match what the fixture's branch actually creates.
-docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
+│   │   └── scaffold/       # `add feishu` bundle
+│   └── lark/               # Lark compatibility/degraded edges over the Feishu engine
+│       ├── lark.ts         # thin branded adapter bound to LARK_COMPAT_CLOUD
+│       ├── onboard.ts      # unbound launcher + credentials + manual config fallback
+│       └── scaffold/       # `add lark` bundle
+├── deploy/                 # `deploy docker|fly|railway|agentcore` (core.md §9). Neutral kernel at top, one
+│   │                       # directory per host. ADDING A HOST: deploy/hosts.ts says what to write and what
+│   │                       # to read first
+│   ├── hosts.ts            # DEPLOY_HOSTS, the targets as a value + the add-a-host guide
+│   ├── channel-ingress.ts  # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL, the
+│   │                       # words when nobody can. Consumed by every host AND by the serving path
+│   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
+│   ├── preflight.ts        # host-neutral pre-flight: model-travel gate, channel discovery, auth probe, warnings
+│   ├── container.ts        # portable image + ignore files + release manifest (host-neutral)
+│   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
+│                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and
+│                           # .secrets/ stay outside the definition)
+│   ├── secrets.ts          # both directions of the credential carry: the NAMES a runbook lists, the VALUES
+│   │                       # `--run` sends, and the seed the container reads back
+│   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
+│   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
+│   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
+│   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js } # ONE CloudFormation stack: runtime +
+│                             # forwarder Lambda (webhooks) + EventBridge rules (schedules). No public URL,
+│                             # no resident process, no volume — the facts every difference follows from
+├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron
+│   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types
+│   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
+│   ├── discover.ts         # schedules/ filesystem discovery; a bad file is isolated
+│   ├── scheduler.ts        # the resident clock loops + claim/run/audit; stop cancels waits, claimed turns finish
+│   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
+│   ├── audit.ts            # runs.jsonl append-only run audit + the `schedule history` reader
+│   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules
+│   └── state.ts            # atomic schedule state under <stateRoot>/schedule/
+└── engines/pi/             # the pi reference implementation
+    ├── service.ts          # createAgentService: this engine's opener + the neutral mountAgentService
+    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, engine thunk)
+    ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: lease, terminals, image prep,
+    │                       # the SPEC projection, the observation seam (RunControls + SessionObserver)
+    ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
+    ├── session-effects.ts  # scoped lease/session acquisition (SessionBusy is its own tag: control flow, not IO)
+    ├── agent-session-factory.ts # the engine binding: assembly → one record per invoke (bindPiSession)
+    ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create, crash repair
+    ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
+    ├── session-control.ts  # the pi control hub: observation projections + dispatch
+    ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
+    ├── session-markers.ts  # which journal entries are POSITIONS and which are the plane's own bookkeeping
+    ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
+    ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
+    ├── open.ts             # shared opener: directory → agent for dev/start/invoke
+    ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent
+    ├── tool.ts             # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
+    ├── tool-context.ts     # ToolContext.session + the tool-activation bridge (AsyncLocalStorage)
+    ├── search-tools.ts     # built-in search_tools loader for deferred tools
+    ├── wake-tool.ts        # the built-in `wake` tool; withWakeTool mounts it (serving path only)
+    ├── definition.ts       # AGENTS.md + skills loading and bundling
+    ├── config.ts           # fastagent.config.ts loading + model/precedence
+    ├── auth.ts, login.ts   # credential store/resolution + the `login` flow
+    ├── models.ts           # Models wiring + the agent's OWN models.json (definition-local, so it travels)
+    └── report.ts           # startup report (auth/model/skills/tools surface)
+test/                       # vitest; faux models by default + reusable SPEC conformance
+├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
+└── live/                   # probes for what the offline suite FAKES — see test/live/README.md
+docs/                       # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 
 ## DevX Principle Stack

@@ -5,17 +5,16 @@
  * factory keeps only wiring and the per-turn lifecycle.
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
-import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
-import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
-import { log } from "../../log.ts";
+import type * as Stream from "effect/Stream";
+import type { PortFailure } from "../../effect-port.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
   attachedFilesManifest,
   attributedFileName,
+  loadBackground,
   missingAttachmentsNote,
-  busyRetryStream,
+  turnStream,
 } from "../kit/invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
@@ -62,32 +61,20 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
   const { primary, buffered } = attachments;
   const images = await resolveImages(api, botToken, primary.imageFileIds);
   const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
-  const bufferedImages: ImageRef[] = [];
-  const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = [];
-  let lost = 0;
-  const imageResults = await Promise.allSettled(buffered.images.map((ref) => resolveImages(api, botToken, [ref.id])));
-  for (const r of imageResults) {
-    if (r.status === "fulfilled") bufferedImages.push(...(r.value ?? []));
-    else {
-      lost++;
-      log.warn(`[telegram] could not load an earlier (buffered) photo: ${String(r.reason)}`);
-    }
-  }
-  const fileResults = await Promise.allSettled(
-    buffered.files.map(async (ref) => ({
-      ref,
-      files: (await resolveFiles(api, botToken, [ref.id], chatId, filesDir)) ?? [],
-    })),
+  const backgroundImages = await loadBackground(buffered.images, (ref) => resolveImages(api, botToken, [ref.id]), {
+    label: "[telegram]",
+    what: "photo",
+  });
+  const backgroundFiles = await loadBackground(
+    buffered.files,
+    (ref) => resolveFiles(api, botToken, [ref.id], chatId, filesDir),
+    { label: "[telegram]", what: "attachment" },
   );
-  for (const r of fileResults) {
-    if (r.status === "fulfilled") {
-      for (const file of r.value.files) bufferedFiles.push({ file, ref: r.value.ref });
-    } else {
-      lost++;
-      log.warn(`[telegram] could not load an earlier (buffered) attachment: ${String(r.reason)}`);
-    }
-  }
-  const missingNote = missingAttachmentsNote(lost + buffered.skipped);
+  const bufferedImages: ImageRef[] = backgroundImages.loaded.flatMap(({ value }) => value ?? []);
+  const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = backgroundFiles.loaded.flatMap(({ ref, value }) =>
+    (value ?? []).map((file) => ({ file, ref })),
+  );
+  const missingNote = missingAttachmentsNote(backgroundImages.lost + backgroundFiles.lost + buffered.skipped);
   // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
   // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
   // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
@@ -105,9 +92,8 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
 }
 
 /**
- * Run one turn: resolve its attachments, then stream agent.invoke with the shared busy-wait
- * (invoke-turn-kit — `onCompleted` is the durable-commit point; see busyRetryStream). A
- * primary-attachment failure surfaces as a `failed` event (never a silent drop).
+ * Run one turn: resolve its attachments, then ask the agent (invoke-turn-kit — `onCompleted` is the
+ * durable-commit point; a primary-attachment failure surfaces as a `failed` event, never a silent drop).
  */
 export function telegramTurnStream(
   agent: Agent,
@@ -117,29 +103,18 @@ export function telegramTurnStream(
   attachments: TurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): Stream.Stream<AgentEvent, TaskFailure> {
-  return Stream.unwrap(
-    taskEffect(() => resolveTurnAttachments(transport, attachments)).pipe(
-      Effect.map((resolved) =>
-        busyRetryStream(
-          agent,
-          { session },
-          {
-            text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`,
-            images: resolved.images,
-          },
-          { label: "[telegram]", onCompleted, busyRetry },
-        ),
-      ),
-      Effect.catchTag("TaskFailure", (error) =>
-        Effect.succeed(
-          Stream.succeed<AgentEvent>({
-            type: "failed",
-            details: `could not load attachment: ${String(error.cause)}`,
-            retryable: true,
-          }),
-        ),
-      ),
-    ),
-  );
+): Stream.Stream<AgentEvent, PortFailure> {
+  return turnStream({
+    agent,
+    label: "[telegram]",
+    busyRetry,
+    ...(onCompleted ? { onCompleted } : {}),
+    resolve: () => resolveTurnAttachments(transport, attachments),
+    turn: (resolved) => ({
+      scope: { session },
+      prompt: { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images },
+    }),
+    // A Bot API download that failed may simply succeed on the redelivery.
+    retryableLoadFailure: () => true,
+  });
 }

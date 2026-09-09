@@ -12,10 +12,10 @@ import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import { readRuns } from "../src/schedule/audit.ts";
+import type { PortFailure } from "../src/effect-port.ts";
 import {
   createScheduler,
   fireScheduleOnce,
-  type ScheduleFailure,
   type ScheduleFireOutcome,
   type Scheduler,
 } from "../src/schedule/scheduler.ts";
@@ -345,14 +345,14 @@ it("keeps claim IO failures typed and never invokes before a successful durable 
   await mkdir(join(stateRoot, "schedule", "fires.json.tmp"), { recursive: true });
   const invoke = vi.fn();
   const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly() });
-  expectTypeOf(work).toEqualTypeOf<Effect.Effect<ScheduleFireOutcome, ScheduleFailure>>();
+  expectTypeOf(work).toEqualTypeOf<Effect.Effect<ScheduleFireOutcome, PortFailure>>();
   // @ts-expect-error -- a failed durable claim still needs a failure policy
   const infallible: Effect.Effect<ScheduleFireOutcome> = work;
   void infallible;
   const exit = await Effect.runPromiseExit(work);
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit))
-    expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "ScheduleFailure", cause: expect.any(Error) });
+    expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "PortFailure", cause: expect.any(Error) });
   expect(invoke).not.toHaveBeenCalled();
   expect(readRuns(stateRoot)).toEqual([]);
 });

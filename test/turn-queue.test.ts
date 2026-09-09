@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { activeWork } from "../src/channels/busy.ts";
 import { type TurnQueue, createTurnQueue } from "../src/channels/kit/turn-queue.ts";
 import { log } from "../src/log.ts";
-import { taskEffect } from "../src/channels/kit/tasks.ts";
+import { portJoin } from "../src/effect-port.ts";
 
 /** The consumer-side record for these tests: a `session` key plus caller-domain fields. */
 interface Rec {
@@ -21,7 +21,7 @@ const until = async (cond: () => boolean): Promise<void> => {
 };
 
 const makeQueue = (run: (r: Rec) => Promise<void>, onQueuedBehind?: (r: Rec) => void): TurnQueue<Rec> =>
-  createTurnQueue<Rec>({ label: "[test]", run: (rec) => taskEffect(() => run(rec)), onQueuedBehind });
+  createTurnQueue<Rec>({ label: "[test]", run: (rec) => portJoin(() => run(rec)), onQueuedBehind });
 
 describe("turn-queue", () => {
   it("owns cleanup before the successor runs, counts queued work, and isolates sessions", async () => {

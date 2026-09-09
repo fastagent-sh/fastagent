@@ -20,6 +20,12 @@ import type { AgentEvent, Json } from "./agent.ts";
  * generator's own catch/finally already surfaced the outcome). `throw()` tears down identically
  * and rethrows the caller's error deterministically instead of poking a completed generator.
  *
+ * NOT `Stream.toAsyncIterable`. Its `return()` does interrupt the in-flight pull and close the scope,
+ * but a pull that has ALREADY resolved still hands its value back from the same `next()` — the entry
+ * guard only catches later calls. A consumer that cancels while a buffered terminal is in flight would
+ * therefore receive that terminal, which is the one thing MUST 3 forbids. The re-check after the await
+ * below is what makes the silence deterministic instead of a race.
+ *
  * Cancellation also SILENCES the stream, and that belongs here rather than in each producer: a
  * generator parked in an await can still reach a `yield` on its way out (an error path that
  * yields a terminal, say), and that yield satisfies the pending `next()` — handing a terminal

@@ -10,7 +10,8 @@ import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
 import { previewPump, renderReply } from "../kit/delivery.ts";
-import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
+import { DROPPABLE_FRAME } from "../kit/transport.ts";
+import { type PortFailure, portJoin } from "../../effect-port.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -87,7 +88,7 @@ async function finalize(
  * and surfaces a real failure (bad token, etc.).
  */
 export function telegramReply(
-  events: Stream.Stream<AgentEvent, TaskFailure>,
+  events: Stream.Stream<AgentEvent, PortFailure>,
   api: string,
   botToken: string,
   target: Target,
@@ -123,9 +124,8 @@ export function telegramReply(
       if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
       lastSent = text;
       if (messageId !== undefined) {
-        // plain — a partial answer may carry unbalanced HTML; droppable — the next frame redraws it and
-        // the final write supersedes it, so a flood wait here would park the answer behind a dead view.
-        await editMessageText(api, botToken, target, messageId, text, { retries: 0 });
+        // plain — a partial answer may carry unbalanced HTML; droppable — see DROPPABLE_FRAME.
+        await editMessageText(api, botToken, target, messageId, text, DROPPABLE_FRAME);
         return;
       }
       // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
@@ -133,8 +133,7 @@ export function telegramReply(
       // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
       //
       // NOT droppable, unlike the frames above: this send happens once and every later frame depends on
-      // its id, so dropping it costs the whole turn's live preview rather than one redrawable view. The
-      // asymmetry is Telegram's own — it rate-limits edits to a single message far tighter than sends.
+      // its id, so dropping it costs the whole turn's live preview rather than one redrawable view.
       if (previewSent) return;
       previewSent = true;
       messageId = await sendMessage(api, botToken, target, text, { html: false });
@@ -158,7 +157,7 @@ export function telegramReply(
         if (applyTurnEvent(turn, event, now())) touch();
       },
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
-      settle: (text) => taskEffect(() => finalize(api, botToken, target, messageId, text)),
+      settle: (text) => portJoin(() => finalize(api, botToken, target, messageId, text)),
     });
   });
 }

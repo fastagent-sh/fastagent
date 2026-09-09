@@ -27,7 +27,7 @@ import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
 import { previewPump, renderReply } from "../kit/delivery.ts";
-import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
+import { type PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
@@ -37,16 +37,8 @@ import {
   finalCardJson,
   streamingCardJson,
 } from "./card.ts";
-import {
-  type FeishuApi,
-  type FeishuCallOptions,
-  type FeishuTarget,
-  chunkFeishuText,
-  isCardStreamingClosed,
-} from "./feishu-api.ts";
-
-/** Every live card frame is droppable — see {@link FeishuCallOptions}. */
-const DROPPABLE_FRAME: FeishuCallOptions = { retries: 0 };
+import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
+import { DROPPABLE_FRAME } from "../kit/transport.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -243,7 +235,7 @@ export async function settleFeishuPreview(
  * than recalling it and posting another reply.
  */
 export function feishuReply(
-  events: Stream.Stream<AgentEvent, TaskFailure>,
+  events: Stream.Stream<AgentEvent, PortFailure>,
   api: FeishuApi,
   target: FeishuTarget,
   formatError: (failed: FeishuFailure) => string | undefined,
@@ -348,7 +340,7 @@ export function feishuReply(
         if (applyTurnEvent(turn, event, now())) touch();
       },
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
-      settle: (text) => taskEffect(() => finalize(api, target, preview, text, nextSeq)),
+      settle: (text) => portJoin(() => finalize(api, target, preview, text, nextSeq)),
     });
   });
 }

@@ -7,7 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import { expect, it, vi } from "vitest";
 import { previewPump, serialWriter, renderReply, type PreviewPump } from "../src/channels/kit/delivery.ts";
-import { taskFailure, TaskFailure, taskEffect } from "../src/channels/kit/tasks.ts";
+import { PortFailure, portError, portJoin } from "../src/effect-port.ts";
 import { run } from "./channel-effects.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -188,7 +188,7 @@ it.each(["source", "completed"] as const)(
     const secondary = new Error("notice delivery failed");
     const warning = vi.spyOn(console, "error").mockImplementation(() => {});
     const settle = vi.fn(() =>
-      taskEffect(async () => {
+      portJoin(async () => {
         throw phase === "source" ? secondary : primary;
       }),
     );
@@ -196,7 +196,7 @@ it.each(["source", "completed"] as const)(
       run(
         Effect.scoped(
           renderReply(
-            phase === "source" ? Stream.fail(new TaskFailure(primary)) : Stream.succeed({ type: "completed" } as const),
+            phase === "source" ? Stream.fail(new PortFailure(primary)) : Stream.succeed({ type: "completed" } as const),
             {
               label: "[test]",
               finish: Effect.void,
@@ -228,5 +228,5 @@ it("source failure remains primary when writer cleanup also fails", async () => 
       }),
     ),
   );
-  expect(Exit.isFailure(exit) && taskFailure(exit.cause)).toBe(primary);
+  expect(Exit.isFailure(exit) && portError(exit.cause)).toBe(primary);
 });

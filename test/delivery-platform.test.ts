@@ -9,7 +9,7 @@ import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import { feishuReply } from "../src/channels/feishu/preview.ts";
 import { busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
-import type { TaskFailure } from "../src/channels/kit/tasks.ts";
+import type { PortFailure } from "../src/effect-port.ts";
 import { slackReply } from "../src/channels/slack/preview.ts";
 import type { SlackApi } from "../src/channels/slack/slack-api.ts";
 import { telegramReply } from "../src/channels/telegram/preview.ts";
@@ -29,7 +29,7 @@ function renderer(platform: Platform, open: () => Promise<void>, settle: () => P
       else throw new Error(`unexpected Telegram call: ${String(input)}`);
       return Response.json({ ok: true, result: { message_id: 17 } });
     });
-    return (events: Stream.Stream<AgentEvent, TaskFailure>) =>
+    return (events: Stream.Stream<AgentEvent, PortFailure>) =>
       telegramReply(events, "https://api.telegram.org", "token", { chatId: 1 }, neutral);
   }
   if (platform === "feishu") {
@@ -44,7 +44,7 @@ function renderer(platform: Platform, open: () => Promise<void>, settle: () => P
       },
       updateCardElement: async () => {},
     } as unknown as FeishuApi;
-    return (events: Stream.Stream<AgentEvent, TaskFailure>) => feishuReply(events, api, { chatId: "chat-1" }, neutral);
+    return (events: Stream.Stream<AgentEvent, PortFailure>) => feishuReply(events, api, { chatId: "chat-1" }, neutral);
   }
   const api = {
     postMarkdown: async () => {
@@ -67,7 +67,7 @@ function renderer(platform: Platform, open: () => Promise<void>, settle: () => P
       await settle();
     },
   } as unknown as SlackApi;
-  return (events: Stream.Stream<AgentEvent, TaskFailure>) =>
+  return (events: Stream.Stream<AgentEvent, PortFailure>) =>
     slackReply(events, api, { channelId: "C1", threadTs: "1.0" }, neutral, {
       rendering: platform === "slack-classic" ? "classic" : "native",
       disclaimer: false,

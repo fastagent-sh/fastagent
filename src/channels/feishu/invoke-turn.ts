@@ -13,9 +13,8 @@
  * or hide its still-readable siblings.
  */
 import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
-import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
-import { type TaskFailure, taskEffect } from "../kit/tasks.ts";
+import type * as Stream from "effect/Stream";
+import type { PortFailure } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -23,8 +22,9 @@ import {
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
+  loadBackground,
   missingAttachmentsNote,
-  busyRetryStream,
+  turnStream,
 } from "../kit/invoke-turn-kit.ts";
 import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
@@ -296,47 +296,34 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const mergedFiles = capMerge(chain.files, attachments.buffered.files, primaryFiles);
   const bufferedImages = mergedImages.kept;
   const bufferedFiles = mergedFiles.kept;
-  const backgroundImages: { image: ImageRef; ref: FeishuBufferedRef }[] = [];
-  const backgroundFiles: { file: DownloadedFile; ref: FeishuBufferedRef }[] = [];
-  let lost = 0;
-  const imageResults = await Promise.allSettled(
-    bufferedImages.map(async (ref) => ({ ref, image: await t.api.fetchImage(ref.messageId, ref.key) })),
+  const backgroundImages = await loadBackground(bufferedImages, (ref) => t.api.fetchImage(ref.messageId, ref.key), {
+    label: t.label,
+    what: "image",
+  });
+  const backgroundFiles = await loadBackground(
+    bufferedFiles,
+    (ref) => t.api.fetchFile(ref.messageId, ref.key, ref.name ?? ref.key, t.chatId, t.filesDir),
+    { label: t.label, what: "attachment" },
   );
-  for (const result of imageResults) {
-    if (result.status === "fulfilled") backgroundImages.push(result.value);
-    else {
-      lost++;
-      log.warn(`${t.label} could not load an earlier (buffered) image: ${String(result.reason)}`);
-    }
-  }
-  const fileResults = await Promise.allSettled(
-    bufferedFiles.map(async (ref) => ({
-      ref,
-      file: await t.api.fetchFile(ref.messageId, ref.key, ref.name ?? ref.key, t.chatId, t.filesDir),
-    })),
-  );
-  for (const result of fileResults) {
-    if (result.status === "fulfilled") backgroundFiles.push(result.value);
-    else {
-      lost++;
-      log.warn(`${t.label} could not load an earlier (buffered) attachment: ${String(result.reason)}`);
-    }
-  }
   const missingNote = missingAttachmentsNote(
-    lost + attachments.buffered.skipped + mergedImages.dropped + mergedFiles.dropped,
+    backgroundImages.lost +
+      backgroundFiles.lost +
+      attachments.buffered.skipped +
+      mergedImages.dropped +
+      mergedFiles.dropped,
   );
   const backgroundImageManifest = backgroundImagesManifest(
     imageRefs.length,
-    backgroundImages.map(({ ref }) => ref),
+    backgroundImages.loaded.map(({ ref }) => ref),
   );
   const allFiles = [
     ...downloaded,
-    ...backgroundFiles.map(({ file, ref }) => ({
-      ...file,
-      name: attributedFileName(file.name, ref.from, ref.messageId),
+    ...backgroundFiles.loaded.map(({ value, ref }) => ({
+      ...value,
+      name: attributedFileName(value.name, ref.from, ref.messageId),
     })),
   ];
-  const allImages = [...imageRefs, ...backgroundImages.map(({ image }) => image)];
+  const allImages = [...imageRefs, ...backgroundImages.loaded.map(({ value }) => value)];
   return {
     images: allImages.length ? allImages : undefined,
     promptSuffix: `${referentBlock}${missingNote}${backgroundImageManifest}${attachedFilesManifest(allFiles)}`,
@@ -345,9 +332,8 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
 }
 
 /**
- * Run one turn: resolve its inputs, then stream agent.invoke with the shared busy-wait
- * (invoke-turn-kit — `onCompleted` is the durable-commit point; see busyRetryStream). A
- * primary-input failure surfaces as a `failed` event (never a silent drop).
+ * Run one turn: resolve its inputs, then ask the agent (invoke-turn-kit — `onCompleted` is the
+ * durable-commit point; a primary-input failure surfaces as a `failed` event, never a silent drop).
  */
 export function feishuTurnStream(
   agent: Agent,
@@ -357,27 +343,21 @@ export function feishuTurnStream(
   attachments: FeishuTurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): Stream.Stream<AgentEvent, TaskFailure> {
-  return Stream.unwrap(
-    taskEffect(() => resolveTurnInputs(transport, attachments)).pipe(
-      Effect.map((resolved) => {
-        const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };
-        // Lineage is resolved per turn; the engine reads it only when creating a new session.
-        const scope: Scope =
-          transport.parentSession === undefined
-            ? { session }
-            : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds };
-        return busyRetryStream(agent, scope, prompt, { label: transport.label, onCompleted, busyRetry });
-      }),
-      Effect.catchTag("TaskFailure", (error) =>
-        Effect.succeed(
-          Stream.succeed<AgentEvent>({
-            type: "failed",
-            details: `could not load attachment: ${String(error.cause)}`,
-            retryable: true,
-          }),
-        ),
-      ),
-    ),
-  );
+): Stream.Stream<AgentEvent, PortFailure> {
+  return turnStream({
+    agent,
+    label: transport.label,
+    busyRetry,
+    ...(onCompleted ? { onCompleted } : {}),
+    resolve: () => resolveTurnInputs(transport, attachments),
+    turn: (resolved) => ({
+      // Lineage is resolved per turn; the engine reads it only when creating a new session.
+      scope: (transport.parentSession === undefined
+        ? { session }
+        : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds }) satisfies Scope,
+      prompt: { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images },
+    }),
+    // A resource fetch that failed may simply succeed on the redelivery.
+    retryableLoadFailure: () => true,
+  });
 }

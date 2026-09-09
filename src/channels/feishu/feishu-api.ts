@@ -22,6 +22,7 @@ import type { ImageRef } from "../../agent.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import { utf8Prefix } from "../kit/text.ts";
+import type { CallOptions } from "../kit/transport.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;
@@ -30,18 +31,6 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
 /** How many rate-limit rejects one call absorbs before giving up. */
 const RETRIES = 3;
 
-/**
- * Per-call transport options.
- *
- * `retries` exists for ONE distinction the pipeline cannot make for itself: whether this write is
- * worth waiting for. A card live-preview FRAME is a full content SNAPSHOT under a strictly increasing
- * sequence — the next frame carries the same view and the settle write replaces the whole entity — so
- * absorbing a rate-limit backoff for it only parks the answer behind a view nobody needs. A droppable
- * write passes 0: the frame is lost, the answer is not.
- */
-export interface FeishuCallOptions {
-  retries?: number;
-}
 /** Download sanity cap; a larger resource is rejected visibly (the engine resizes vision images
  *  anyway, so this is a transport guard, not a model limit). */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
@@ -227,7 +216,7 @@ export interface FeishuApi {
     elementId: string,
     content: string,
     sequence: number,
-    opts?: FeishuCallOptions,
+    opts?: CallOptions,
   ): Promise<void>;
   /** Replace a card entity's content (the settle write; also flips streaming_mode off via the JSON). */
   updateCard(cardId: string, cardJson: string, sequence: number): Promise<void>;
@@ -304,7 +293,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
-    opts: FeishuCallOptions = {},
+    opts: CallOptions = {},
   ): Promise<T> => {
     const retries = opts.retries ?? RETRIES;
     let refreshedAuth = false;

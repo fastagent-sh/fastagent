@@ -11,7 +11,8 @@ import { signatureIsFresh } from "../kit/signature.ts";
 import { createThreadParticipants } from "../kit/thread-participants.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { createTaskTracker, taskEffect } from "../kit/tasks.ts";
+import { portJoin } from "../../effect-port.ts";
+import { createTaskTracker } from "../kit/tasks.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
@@ -316,7 +317,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       execute: (turn, discussion, onCompleted) => {
         const messageRef = messageRefOf(turn.id);
         return Effect.acquireUseRelease(
-          taskEffect(async () =>
+          portJoin(async () =>
             reactionEmojis && messageRef
               ? startSlackReaction({
                   api,
@@ -354,7 +355,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               ),
             ),
           (reaction, exit) =>
-            taskEffect(async () => {
+            portJoin(async () => {
               if (Exit.isSuccess(exit)) await reaction?.complete();
               else await reaction?.remove();
             }).pipe(Effect.orDie),
