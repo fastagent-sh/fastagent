@@ -286,6 +286,24 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/at gateSecrets|Node\.js v/);
   });
 
+  it("tool reports the size the MODEL sees, which is not the size it prints", async () => {
+    // The printed form is `details`, indented for a human; the model gets the content text (compact JSON). Measuring
+    // the piped stdout therefore answers a different question, which is why the run reports this one itself.
+    const value = { note: "x".repeat(200) };
+    const dir = await agentWorkspace("fa-tool-size-", {
+      "tools/big.mjs":
+        `export default { name: "big", description: "b", parameters: { type: "object", properties: {} },\n` +
+        `  execute: async () => ({ content: [{ type: "text", text: ${JSON.stringify(JSON.stringify(value))} }],\n` +
+        `    details: ${JSON.stringify(value)} }) };\n`,
+    });
+
+    const { code, stdout, stderr } = await run(["tool", "big", "{}", dir]);
+    expect(code, stderr).toBe(0);
+    const modelChars = JSON.stringify(value).length;
+    expect(stderr).toContain(`result: ${modelChars} chars \u2248 ${Math.ceil(modelChars / 4)} tokens to the model`);
+    expect(stdout.trim().length).toBeGreaterThan(modelChars); // the indented print is the bigger one
+  });
+
   it("tool asserts only the named tool's secrets, not every mounted tool's", async () => {
     // Same scoping as `fire`: running one tool by hand on a machine that holds only some credentials
     // must not be blocked by a sibling tool's declaration.
