@@ -157,10 +157,12 @@ export async function deployAgentcoreRun(
     return gate("no working AWS credentials — run `aws configure` (or set AWS_ACCESS_KEY_ID/…), then re-run");
   }
   let account: string;
+  let principal: string | undefined;
   try {
-    const parsed = JSON.parse(identity.stdout) as { Account?: unknown };
+    const parsed = JSON.parse(identity.stdout) as { Account?: unknown; Arn?: unknown };
     if (typeof parsed.Account !== "string") throw new Error("no Account");
     account = parsed.Account;
+    principal = typeof parsed.Arn === "string" ? parsed.Arn : undefined;
   } catch {
     return gate("could not read the account id from `aws sts get-caller-identity` — see the output above");
   }
@@ -205,6 +207,35 @@ export async function deployAgentcoreRun(
     if (k !== "FASTAGENT_AUTH_SEED" && v.length > 2048) {
       return gate(`secret ${k} is ${v.length} chars — AgentCore environment values cap at 2048; shorten it`);
     }
+  }
+
+  // 3c. Say what this deploy is ABOUT TO TOUCH while it can still be stopped for free: until here the account and
+  // region only surfaced several hundred log lines in, inside the ECR image URI.
+  const source = plan.region ? "the environment" : "aws configure";
+  log(
+    `account ${account}${principal ? ` (${principal})` : ""}, region ${region} (from ${source}), image ${repo}:${plan.tag}`,
+  );
+  if (principal?.endsWith(":root")) {
+    log(`warn: deploying as the account root user — this stack's IAM roles are created under it; prefer an IAM role`);
+  }
+  // Warn, never gate: an aws CLI too old to know the service, or a role without ListAgentRuntimes, would make a gate
+  // refuse a valid deploy. The point is to say it BEFORE the multi-minute arm64 build, not to be authoritative.
+  // `--region` explicitly: every other region-dependent call here writes it out (the ECR registry URI, the bucket's
+  // LocationConstraint), and the warning below names ${region} — the probe must be about the SAME region it names.
+  const service = await aws(
+    ["bedrock-agentcore-control", "list-agent-runtimes", "--max-items", "1", "--region", region],
+    {
+      capture: true,
+      captureStderr: true,
+    },
+  );
+  if (service.code !== 0) {
+    const why = (service.stderr ?? "").trim().split("\n")[0];
+    log(
+      `warn: could not confirm AgentCore is available in ${region}${why ? ` (${why})` : ""} — if it is not, ` +
+        `cloudformation deploy fails minutes from now, after the image build: ` +
+        `https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html`,
+    );
   }
 
   // 4.
