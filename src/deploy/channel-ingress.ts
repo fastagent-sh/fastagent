@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../channels/discover.ts";
 import type { RegistrationOutcome } from "../channels/registration.ts";
 import type { ChannelKind } from "../scaffold/add-channel.ts";
 import { registrationGate } from "./registration-gate.ts";
+import { waitForHealth } from "../channels/wait-health.ts";
 
 export interface Registrars {
   telegram: (baseUrl: string) => Promise<RegistrationOutcome>;
@@ -118,6 +119,69 @@ export async function pointChannelsAt(input: {
     outcomes.push({ kind, outcome: await running });
   }
   return outcomes;
+}
+
+/**
+ * How long a just-deployed public URL gets to answer `/health`: the FIRST boot seeds the whole workspace onto the
+ * volume before it binds a port, so this budget covers a copy on slow host storage, not a listen.
+ */
+const PUBLIC_HEALTH_TIMEOUT_MS = 180_000;
+
+/** How often the wait announces itself, so a crash-looping app is not three silent minutes. */
+const WAIT_NOTICE_MS = 15_000;
+
+/** Poll a public `/health` until it answers 200; false on timeout. Injected by tests. */
+export type PublicHealthProbe = (healthUrl: string) => Promise<boolean>;
+
+/**
+ * The readiness floor a host clears BEFORE {@link registerWebhooks}: `setWebhook` does not verify that anything
+ * answers the URL, so a deploy whose app crash-loops would otherwise point a live channel at a dead address and
+ * report success. The channels that DO verify (Slack/Feishu challenge) would fail here too, but as "registration
+ * failed" — a diagnosis that hides the actual cause.
+ *
+ * Asked ONLY when this deployment actually has a webhook to point. A definition with none (schedules only, the
+ * built-in `POST /invoke`, or long-connection channels) needs no inbound reachability at all, and demanding it would
+ * invent a failure for a deploy run from a network that cannot reach the platform's edge.
+ */
+export async function publicHealthGate(input: {
+  baseUrl: string;
+  channels: readonly DeclaredChannel[];
+  log: (msg: string) => void;
+  /** How THIS host is inspected and re-run — the only per-host words in the gate. */
+  inspectHint: string;
+  probe?: PublicHealthProbe;
+}): Promise<string | undefined> {
+  if (webhookKinds(input.channels).length === 0) return undefined;
+  const healthUrl = `${input.baseUrl}/health`;
+  input.log(`waiting for ${healthUrl} (up to ${PUBLIC_HEALTH_TIMEOUT_MS / 1000}s)…`);
+  const probe =
+    input.probe ?? ((url: string) => waitForHealth(url, PUBLIC_HEALTH_TIMEOUT_MS, 500, announce(input.log)));
+  if (await probe(healthUrl)) return undefined;
+  // The infrastructure is up and only the webhook is missing, so hand over the manual route rather than leaving
+  // `re-run` as the only way out (a Fly re-run repeats the remote build).
+  for (const line of webhookRunbook(input.baseUrl, input.channels)) input.log(line);
+  return (
+    `the deployed agent did not become healthy at ${healthUrl}, so no webhook was registered — ${input.inspectHint}. ` +
+    `To point the channels by hand instead, use the lines above.`
+  );
+}
+
+/**
+ * Keep the wait visible. This occupies `waitForHealth`'s liveness slot without answering it: neither Fly nor Railway
+ * has a liveness question cheaper than the wait it would shorten (each is a CLI round trip, unlike docker's local
+ * `compose ps`), so the hook reports progress and never cuts the budget short.
+ */
+function announce(log: (msg: string) => void): () => Promise<boolean> {
+  const started = Date.now();
+  let last = started;
+  return async () => {
+    const now = Date.now();
+    if (now - last >= WAIT_NOTICE_MS) {
+      last = now;
+      log(`still waiting for /health (${Math.round((now - started) / 1000)}s)…`);
+    }
+    return true;
+  };
 }
 
 /** {@link pointChannelsAt} plus the shared gate policy, for a command that EXITS. */

@@ -1,5 +1,5 @@
 /** `fastagent deploy railway --run` — drive the Railway CLI to completion. */
-import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
+import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -86,6 +86,7 @@ export async function deployRailwayRun(
   railway: CliRunner,
   log: (msg: string) => void,
   registrars: Registrars,
+  healthProbe?: PublicHealthProbe,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service (`init
@@ -190,6 +191,16 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
+  // 6b. `railway up --ci` exits 0 once the build is accepted, so readiness is asked here and not inferred.
+  const healthGate = await publicHealthGate({
+    baseUrl: url,
+    channels: plan.channels,
+    log,
+    inspectHint: "the service itself deployed — inspect `railway logs`, then re-run once it answers",
+    probe: healthProbe,
+  });
+  if (healthGate) return gate(healthGate);
+
   // 7.
   const registrationGateMsg = await registerWebhooks({
     baseUrl: url,
