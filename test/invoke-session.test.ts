@@ -329,6 +329,46 @@ describe("AgentSession L0: the observation plane", () => {
     await expect(controls?.steer({ text: "too late" })).rejects.toThrow(/already settled/);
     await expect(controls?.abort()).rejects.toThrow(/already settled/);
   });
+
+  it("refuses a command whose own prompt preparation outlived the run", async () => {
+    // Admission and the enqueue must not be separated by an await: pi takes a steering message for a
+    // finished run without complaint, so a command admitted before the run settles and delivered after
+    // it would be dropped from the model call and still reported as success.
+    const steered: string[] = [];
+    const { session } = promptRecordingSession();
+    (session as unknown as { steer: (text: string) => Promise<void> }).steer = async (text) => {
+      steered.push(text);
+    };
+    let controls: RunControls | undefined;
+    const agent = createPiAgentFromSession({
+      observer: (_s, _e, run) => {
+        if (run) controls = run;
+      },
+      sessionFactory: async () => session,
+    });
+
+    const bound = Promise.withResolvers<void>();
+    const finishTurn = Promise.withResolvers<void>();
+    let preps = 0;
+    let turn: Promise<AgentEvent[]> | undefined;
+    duringPromptPrep.value = async () => {
+      if (preps++ === 0) {
+        bound.resolve(); // the run is live and its controls are published
+        await finishTurn.promise;
+        return;
+      }
+      // This is the steer's OWN preparation: let the run settle while it is in flight.
+      finishTurn.resolve();
+      await turn;
+    };
+
+    turn = drain(agent.invoke({ session: "settling" }, { text: "hi" }));
+    await bound.promise;
+
+    await expect(controls?.steer({ text: "late" })).rejects.toThrow(/already settled/);
+    expect(steered).toEqual([]);
+    await turn;
+  });
 });
 
 describe("invocation execution scope", () => {
