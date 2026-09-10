@@ -262,6 +262,28 @@ describe("config: loadConfig", () => {
     ); // unknown deploy key
   });
 
+  it("validates deploy.agentcore.idleTimeoutSeconds against AWS's own bounds", async () => {
+    const load = async (body: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      return loadConfig(dir);
+    };
+    const { config } = await load(`export default { deploy: { agentcore: { idleTimeoutSeconds: 900 } } };`);
+    expect(config.deploy?.agentcore?.idleTimeoutSeconds).toBe(900);
+    // Out of range / not an integer: caught HERE, not by CloudFormation minutes into a --run deploy.
+    for (const bad of ["59", "1209601", "180.5", `"600"`]) {
+      await expect(load(`export default { deploy: { agentcore: { idleTimeoutSeconds: ${bad} } } };`)).rejects.toThrow(
+        /"deploy\.agentcore\.idleTimeoutSeconds" must be an integer 60-1209600/,
+      );
+    }
+    await expect(load(`export default { deploy: { agentcore: { idleTimeout: 900 } } };`)).rejects.toThrow(
+      /unknown key "deploy\.agentcore\.idleTimeout"/,
+    );
+    await expect(load(`export default { deploy: { agentcore: "600" } };`)).rejects.toThrow(
+      /"deploy\.agentcore" must be an object/,
+    );
+  });
+
   it("multiple config files throw instead of silently choosing one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.js"), `export default { model: "openai-codex/gpt-5.5" };`);

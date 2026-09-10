@@ -49,6 +49,15 @@ export interface FastagentConfig {
     secrets?: string[];
     /** Extra apt packages baked into the generated image (Debian default repos: git, ripgrep, jq…). */
     apt?: string[];
+    /** `deploy agentcore` only. */
+    agentcore?: {
+      /**
+       * How long an idle AgentCore session keeps its microVM, 60–1209600 seconds (default 180). Memory bills for the
+       * whole idle tail, and a session past it cold-starts — the workload picks the trade: a chat agent talked to in
+       * bursts wants a longer tail, a schedule-only agent a shorter one.
+       */
+      idleTimeoutSeconds?: number;
+    };
   };
 }
 
@@ -174,9 +183,23 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "deploy" must be an object`);
   }
   for (const key of Object.keys(c.deploy ?? {})) {
-    if (key !== "secrets" && key !== "apt") {
-      throw new Error(`${path}: unknown key "deploy.${key}" (valid keys: secrets, apt)`);
+    if (key !== "secrets" && key !== "apt" && key !== "agentcore") {
+      throw new Error(`${path}: unknown key "deploy.${key}" (valid keys: secrets, apt, agentcore)`);
     }
+  }
+  if (c.deploy?.agentcore !== undefined && (typeof c.deploy.agentcore !== "object" || c.deploy.agentcore === null)) {
+    throw new Error(`${path}: "deploy.agentcore" must be an object`);
+  }
+  for (const key of Object.keys(c.deploy?.agentcore ?? {})) {
+    if (key !== "idleTimeoutSeconds") {
+      throw new Error(`${path}: unknown key "deploy.agentcore.${key}" (valid keys: idleTimeoutSeconds)`);
+    }
+  }
+  // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is rejected by CloudFormation minutes into
+  // `deploy agentcore --run`, after the image build.
+  const idle = c.deploy?.agentcore?.idleTimeoutSeconds;
+  if (idle !== undefined && (!Number.isInteger(idle) || idle < 60 || idle > 1209600)) {
+    throw new Error(`${path}: "deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600 (seconds)`);
   }
   // secrets are UPPER_SNAKE env-var names (deploy reads their VALUES from the local env); apt entries are Debian
   // package names.

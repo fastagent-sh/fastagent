@@ -72,6 +72,7 @@ export const agentcoreHost: HostDeploy = {
       extraSecrets,
       schedules: loaded.schedules.map((s) => ({ name: s.name, cron: s.cron, tz: s.tz })),
       selfSchedule: !!config.selfSchedule,
+      idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
     for (const u of plan.untranslatableSchedules) {
@@ -96,7 +97,8 @@ export const agentcoreHost: HostDeploy = {
       const existing = await readFile(templateHome, "utf8");
       if (isGeneratedAgentcoreTemplate(existing) && existing !== templateArtifact.content) {
         const msg =
-          `${templateArtifact.path} no longer matches this definition (channels/schedules/selfSchedule changed) — ` +
+          `${templateArtifact.path} no longer matches this definition (channels/schedules/selfSchedule or a ` +
+          `deploy.agentcore setting changed) — ` +
           `the kept template would silently drop the difference. Pass --force to regenerate (hand edits are lost), ` +
           `or delete the file.`;
         if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));

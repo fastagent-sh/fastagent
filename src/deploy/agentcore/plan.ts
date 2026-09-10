@@ -33,6 +33,12 @@ export interface AgentcorePlanInput extends ContainerInput {
   schedules: ScheduleFact[];
   /** Mirror the wake tool's pending work into EventBridge alarms. */
   selfSchedule: boolean;
+  /**
+   * How long an idle session keeps its microVM (config `deploy.agentcore.idleTimeoutSeconds`). The workload decides:
+   * a chat agent talked to in bursts wants a longer tail than a schedule-only one. Defaults to
+   * {@link DEFAULT_IDLE_TIMEOUT_SECONDS}.
+   */
+  idleTimeoutSeconds?: number;
 }
 
 export interface AgentcorePlan {
@@ -75,10 +81,13 @@ export const MOUNT = "/mnt/data";
 /** Beside the state root on the one mount, as every volume-backed host does. */
 export const SECRETS_DIR = `${MOUNT}/${SECRETS_DIRNAME}`;
 
-/** How long an idle session keeps its microVM. */
-export const IDLE_TIMEOUT_SECONDS = 180;
+/**
+ * How long an idle session keeps its microVM when the config names no other value. Below AWS's own default (900) on
+ * purpose: memory bills for the whole idle tail, so the cheap posture is the default and a longer one is a choice.
+ */
+export const DEFAULT_IDLE_TIMEOUT_SECONDS = 180;
 
-/** The platform ceiling on one session's compute (8 h). */
+/** One session's compute lifetime — AWS's own default. Both lifecycle fields cap at 1209600 (14 d). */
 export const MAX_LIFETIME_SECONDS = 28800;
 
 export const FORWARDER_FILE = "lambda/index.js";
@@ -236,6 +245,7 @@ function template(
   topology: AgentcoreTopology,
 ): string {
   const runtimeName = toRuntimeName(input.name);
+  const idleTimeout = input.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
   const needsForwarder = topology.forwarder;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
@@ -364,11 +374,12 @@ function template(
     `      # would need EFS or S3 Files, both VPC-only and therefore a standing NAT bill.`,
     `      FilesystemConfigurations:`,
     `        - SessionStorage: { MountPath: ${MOUNT} }`,
-    `      # Idle ${IDLE_TIMEOUT_SECONDS}s (the ping's HealthyBusy + time_of_last_update keeps BUSY sessions alive), max compute`,
-    `      # lifetime ${MAX_LIFETIME_SECONDS}s — the platform ceiling; the session id stays valid, so the next invoke`,
+    `      # Idle ${idleTimeout}s (the ping's HealthyBusy + time_of_last_update keeps BUSY sessions alive), max compute`,
+    `      # lifetime ${MAX_LIFETIME_SECONDS}s; the session id stays valid, so the next invoke`,
     `      # just gets fresh compute with the same storage. Memory bills per second for the whole`,
-    `      # session INCLUDING the idle tail, so a shorter tail is the main cost lever here.`,
-    `      LifecycleConfiguration: { IdleRuntimeSessionTimeout: ${IDLE_TIMEOUT_SECONDS}, MaxLifetime: ${MAX_LIFETIME_SECONDS} }`,
+    `      # session INCLUDING the idle tail, so a shorter tail is the main cost lever here —`,
+    `      # deploy.agentcore.idleTimeoutSeconds buys latency back for a chat workload.`,
+    `      LifecycleConfiguration: { IdleRuntimeSessionTimeout: ${idleTimeout}, MaxLifetime: ${MAX_LIFETIME_SECONDS} }`,
     `      EnvironmentVariables:`,
     ...envLines,
   ];
