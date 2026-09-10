@@ -41,9 +41,9 @@ Supported keys:
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
 | `tools` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
-| `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
+| `http.host` | Bind address for `dev` / `start`. Unset leaves the default to the command: `start` binds all interfaces (what containers need), `dev` binds `127.0.0.1`. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
-| `sessionControl` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, `fastagent attach`. Off by default (it is a remote-control surface). When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; the serve binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it. On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
+| `sessionControl` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, `fastagent attach`. Off by default (it is a remote-control surface). When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; `start` binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
 | `deploy.secrets` | Secret env-var names **no code declares** — a value read outside `tools/`/`schedules/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and carried from your local env under `--run`; a missing value gates the run. |
 | `deploy.agentcore.idleTimeoutSeconds` | `deploy agentcore` only: how long an idle session keeps its microVM, 60–1209600 seconds. Default `180`. Memory bills for the whole idle tail and a session past it cold-starts, so the workload picks the trade — raise it for a chat agent talked to in bursts, lower it for a schedule-only one. Changing it changes the generated template, so an existing `agentcore.template.yaml` needs `--force` to pick it up. See [AgentCore](deploy.md#aws-bedrock-agentcore). |
 | `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
@@ -219,24 +219,28 @@ Use `PORT` in hosted environments that inject a port.
 ## Bind address
 
 ```txt
---bind > fastagent.config.* http.host > all interfaces
+dev:   --bind > fastagent.config.* http.host > 127.0.0.1
+start: --bind > fastagent.config.* http.host > all interfaces
 ```
 
 `localhost` is accepted and resolved to `127.0.0.1` as it is read, so what binds, what the startup
 lines print and what `control.json` records are the same address — a name would leave that to
 `dns.lookup` on one side and to the client's resolver on the other, which can disagree.
 
-All interfaces is the default because containers require it. A desktop app driving a local agent wants
-the opposite: `--bind 127.0.0.1` keeps the port — `/control/*` with it — unreachable from the LAN.
-`<stateRoot>/control.json` records the address a client should dial, so clients read it rather than
-assume one.
+The chain is one; only its last rung differs, because the two commands sit in different places.
+`start` is the container/server posture, where all interfaces is what makes the port reachable at all.
+`dev` runs on a laptop, on networks its author does not own, and serves the agent's full tool
+authority — so it ends at loopback, and `--bind 0.0.0.0` gives back the reach a container, a phone on
+the LAN, or a colleague needs. `<stateRoot>/control.json` records the address a client should dial,
+so clients read it rather than assume one.
 
 **FastAgent does not provide a security boundary, and a default cannot be one.** The built-in
 `POST /invoke` has no authentication; author-written `tools/` can import anything; a WebSocket or
 Socket-Mode channel dials OUT, so no bind address constrains who can message the agent. Whoever can
-reach an agent can use everything it mounts. Put it behind an application, a gateway, or a network
-you control — that is where the boundary belongs, and a narrower default here would substitute a
-feeling for one.
+reach an agent can use everything it mounts. A bind address decides who can reach the port by
+accident, nothing more. Authentication belongs where the request is still a request: a channel's own
+handler (declaring any channel also replaces the built-in `/invoke`), or your host framework's
+middleware when you [embed](embedding.md) — that is where the boundary lives.
 
 Two edges: `--tunnel` reaches the serve by dialing `localhost`, so a bind that name never resolves to
 (`--bind 192.168.1.5`, or even `--bind 127.0.0.2`) is refused with it; and `http.host` travels into a deployed image, where any non-wildcard bind

@@ -28,13 +28,18 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
   failStartup(new Error(message));
 }
 
-/** The bind address a serve uses: the flag, else `http.host` from the config. */
+/**
+ * The bind address a serve uses: the flag, else `http.host` from the config, else `fallback` — which is where `dev`
+ * and `start` differ. `dev` is a laptop posture on networks its author does not own, and the surface it serves has
+ * shell authority, so it falls back to loopback; `start` keeps the wildcard a container needs.
+ */
 export function resolveBindHost(
   bindFlag: string | undefined,
   configured: string | undefined,
   tunnel: boolean,
+  fallback?: string,
 ): string | undefined {
-  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
+  const host = bindFlag ?? (configured === undefined ? fallback : bindAddress(configured));
   assertTunnelBindable(host, tunnel, bindFlag ? "flag" : "config");
   return host;
 }

@@ -26,8 +26,9 @@ export interface FastagentConfig {
   /** Extra custom tools, appended after the pi coding tools — never replaces them. */
   tools?: FastagentTool[];
   /**
-   * `host` is the bind address: unset (or `0.0.0.0`) binds all interfaces — what containers need; `127.0.0.1` keeps
-   * the serve (including `/control/*`) off the LAN.
+   * `host` is the bind address. Unset leaves the last rung to the command: `start` binds all interfaces (what
+   * containers need), `dev` binds `127.0.0.1`. `0.0.0.0` is all interfaces either way; `127.0.0.1` keeps the serve
+   * (including `/control/*`) off the LAN.
    */
   http?: { port?: number; host?: string };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */

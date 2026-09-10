@@ -28,7 +28,7 @@ const NO_INPUT: FlagSpec = {
 const PORT: FlagSpec = { flags: "--port <n>", description: "HTTP port" };
 const BIND: FlagSpec = {
   flags: "--bind <addr>",
-  description: "bind address (default: all interfaces; 127.0.0.1 keeps it off the LAN)",
+  description: "bind address (dev defaults to 127.0.0.1; start defaults to all interfaces, which containers need)",
 };
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",

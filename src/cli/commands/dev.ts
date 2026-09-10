@@ -12,6 +12,13 @@ import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, resolveBindHost, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
+/**
+ * What `dev` binds when nothing else says: loopback. The bind is not a security boundary — the built-in `POST
+ * /invoke` has no auth either way — but a dev serve carries the agent's full tool authority, and putting it on the
+ * café LAN is not a choice anyone made. `--bind 0.0.0.0` restores the reach a container or a phone needs.
+ */
+const DEV_FALLBACK_BIND = "127.0.0.1";
+
 export interface DevOptions {
   port?: string;
   bind?: string;
@@ -51,7 +58,7 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
   await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
-  const host = resolveBindHost(bindFlag, a.config.http?.host, tunnel);
+  const host = resolveBindHost(bindFlag, a.config.http?.host, tunnel, DEV_FALLBACK_BIND);
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
   // connections.
   const service = await mountAgentService(a, cliMountOptions(logAgentLoop)).catch(failStartup);
