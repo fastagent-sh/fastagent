@@ -183,8 +183,11 @@ export async function deployFlyRun(
   const baseUrl = `https://${plan.appName}.fly.dev`;
   const healthGate = await publicHealthGate({
     baseUrl,
+    channels: plan.channels,
     log,
-    inspectHint: `inspect \`fly logs -a ${plan.appName}\`, fix it, then re-run`,
+    inspectHint:
+      `the app itself deployed — inspect \`fly logs -a ${plan.appName}\`, then re-run once it answers ` +
+      `(a re-run repeats the remote build)`,
     probe: healthProbe,
   });
   if (healthGate) return gate(healthGate);

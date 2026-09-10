@@ -2,13 +2,47 @@ import { describe, expect, it, vi } from "vitest";
 import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { planAgentcoreDeploy } from "../src/deploy/agentcore/plan.ts";
-import { registerWebhooks, webhookKinds, webhookPaths, webhookRunbook } from "../src/deploy/channel-ingress.ts";
+import {
+  publicHealthGate,
+  registerWebhooks,
+  webhookKinds,
+  webhookPaths,
+  webhookRunbook,
+} from "../src/deploy/channel-ingress.ts";
 import { planFlyDeploy } from "../src/deploy/fly/plan.ts";
 import { planRailwayDeploy } from "../src/deploy/railway/plan.ts";
 
 const registered = (): Promise<RegistrationOutcome> => Promise.resolve("registered");
 const webhook = (...names: string[]) => declaredChannels(names);
 const longConnection = (...names: string[]) => declaredChannels(names, "long-connection");
+
+describe("deploy/channel-ingress: the readiness floor before registration", () => {
+  it("is not asked when there is no webhook to point", async () => {
+    // A schedules-only or long-connection deployment needs no inbound reachability, so demanding it would
+    // invent a failure for a deploy run from a network that cannot reach the platform's edge.
+    const probe = vi.fn(async () => false);
+    for (const channels of [[], longConnection("telegram"), webhook("discord")]) {
+      expect(await publicHealthGate({ baseUrl: "https://x", channels, log: () => {}, inspectHint: "h", probe })).toBe(
+        undefined,
+      );
+    }
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("gates on the URL and hands over the manual route, since only registration is left undone", async () => {
+    const logs: string[] = [];
+    const gate = await publicHealthGate({
+      baseUrl: "https://x",
+      channels: webhook("telegram"),
+      log: (m) => logs.push(m),
+      inspectHint: "the app itself deployed — inspect the logs",
+      probe: async () => false,
+    });
+    expect(gate).toContain("https://x/health");
+    expect(gate).toContain("the app itself deployed"); // the host's own words, not this module's
+    expect(logs.join("\n")).toContain("url=https://x/telegram"); // the runbook line to do it by hand
+  });
+});
 
 describe("deploy/channel-ingress: which channels have a webhook", () => {
   it("answers in declaration order, whatever order the channels arrive in", () => {

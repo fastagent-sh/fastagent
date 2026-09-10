@@ -194,8 +194,9 @@ export async function deployRailwayRun(
   // 6b. `railway up --ci` exits 0 once the build is accepted, so readiness is asked here and not inferred.
   const healthGate = await publicHealthGate({
     baseUrl: url,
+    channels: plan.channels,
     log,
-    inspectHint: "inspect `railway logs`, fix it, then re-run",
+    inspectHint: "the service itself deployed — inspect `railway logs`, then re-run once it answers",
     probe: healthProbe,
   });
   if (healthGate) return gate(healthGate);
