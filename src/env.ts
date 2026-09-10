@@ -31,9 +31,10 @@ export function parseEnvContent(content: string): Map<string, string> {
 }
 
 /**
- * READ a value file without entering it: the values as data, never `process.env`. A deployment's values belong to
- * the deployment being planned, so the code that decides what travels must not be able to pick up the operator's
- * shell instead. A missing file is no values, which is normal.
+ * READ a value file without entering it: the values as data, never `process.env`. This is how code reasons about an
+ * environment OTHER than its own — `deploy` resolves configuration in the environment being deployed, which this
+ * file declares, and merging it into the running process would put the two environments in one bag. A missing file
+ * is no values, which is normal.
  */
 export function loadEnvValues(file: string): Map<string, string> {
   try {

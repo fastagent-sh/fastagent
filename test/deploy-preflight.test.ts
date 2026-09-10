@@ -57,12 +57,15 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!pre.ok) expect(pre.gate).toMatch(/no model resolves/);
   });
 
-  it("names the shell as a non-source in that gate — the operator who exported it is who hits it", async () => {
+  it("names WHICH environment was read in that gate — whoever has the variable set here is who hits it", async () => {
+    // The chain is the usual one; it is evaluated in the environment being deployed. Someone with
+    // FASTAGENT_MODEL set on this machine sees `fastagent info` report a model, so the gate has to say which
+    // environment it looked in rather than just "no model resolves".
     const dir = await workspace();
     vi.stubEnv("FASTAGENT_MODEL", "openai/gpt-4o-mini");
     const pre = await call(dir, {}, { run: true });
     expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toMatch(/shell's FASTAGENT_MODEL is NOT a deploy source/);
+    if (!pre.ok) expect(pre.gate).toMatch(/THIS machine's environment, which is not the environment being deployed/);
   });
 
   it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {

@@ -85,14 +85,23 @@ fastagent dev --model openai-codex/gpt-5.5
 FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 ```
 
-**A deployment resolves this differently, on purpose.** `deploy` reads `FASTAGENT_MODEL` from
-`.secrets/.env` itself and bakes it into the generated Dockerfile as an `ENV`, with `config.model`
-(which ships in the config file) as the fallback. Both carriers are the image, so the answer is
-reproducible from the artifact: nothing interpolates the operator's shell, and deleting the line and
-redeploying drops the `ENV` with the rebuild instead of leaving a stale host variable behind. Your
-shell's `FASTAGENT_MODEL` is not a source there, and `deploy` has no `--model` flag — a deployment
-must be reproducible from what it carries. `deploy` prints the effective model and which of the two
-it came from.
+**Same chain, different environment.** `deploy` evaluates the very same precedence in the environment
+*being deployed* instead of this machine's. That environment is declared by `.secrets/.env`, so
+`deploy` reads `FASTAGENT_MODEL` from the file and bakes it into the generated Dockerfile as an `ENV`,
+falling back to `config.model` (which ships in the config file). Your shell is simply not part of the
+deployed environment — the same way `fastagent dev` never reads another machine's shell — so nothing
+here is a special rule to remember.
+
+`deploy` has no `--model` flag for the same reason it has no other one-off inputs: a generated
+Dockerfile is rewritten on every deploy, so a flag baked into one would vanish on the next deploy that
+omits it. A file does not. `deploy` prints the effective model and which of the two sources it came
+from.
+
+The value file is the half of the deployed environment you can *declare*. The other half — variables
+the platform already holds (Fly secrets, Compose `environment:`, CloudFormation parameters) — lives on
+the box and outranks the image's own `ENV`. That is why the model is baked instead of delivered as one
+more platform variable: deleting the line from `.secrets/.env` and redeploying drops the `ENV` with the
+rebuild, while a platform variable nothing ever clears would keep winning.
 
 ## Custom model endpoints
 

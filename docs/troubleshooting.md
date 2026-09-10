@@ -282,12 +282,15 @@ A broken `schedules/<name>.ts` file is reported by `fastagent info` before it ev
 
 ## Deployed agent crash-loops with `missing model`
 
-Two sources reach the box, both in the image: `model` in `fastagent.config.*` (the config file ships)
-and `FASTAGENT_MODEL` in `.secrets/.env` (`deploy` reads that file and bakes an `ENV` into the
-generated Dockerfile). Your shell's `FASTAGENT_MODEL` is not one of them, and `deploy` has no
-`--model` flag. A **hand-written** Dockerfile receives no bake — `deploy` warns and names what it
-dropped, so either add the `ENV` yourself or set `model` in the config. Set a source and redeploy —
-`deploy` prints the effective model and where it read it. See [Deploy](deploy.md).
+`deploy` resolves the model in **the environment being deployed**, not in yours. That environment is
+declared by `.secrets/.env`, so its `FASTAGENT_MODEL` is baked into the generated Dockerfile as an
+`ENV`, with `model` in `fastagent.config.*` as the fallback (the config file ships too). A
+`FASTAGENT_MODEL` exported in your shell belongs to this machine's environment and never reaches the
+box, and `deploy` has no `--model` flag. A **hand-written** Dockerfile receives no bake — `deploy`
+warns and names what it dropped, so either add the `ENV` yourself or set `model` in the config. Set a
+source and redeploy — `deploy` prints the effective model and where it read it. Note the baked `ENV`
+outranks the deployed box's own `.secrets/.env`, so switching models means editing the source here and
+redeploying, not editing the file on the box. See [Deploy](deploy.md).
 
 ## Webhooks stop working after a tunnel restart
 

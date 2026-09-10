@@ -307,7 +307,8 @@ function terminalLoginIO(): LoginIO {
 async function persistModelChoice(agentDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>
     console.error(
-      // No "using it for this run" promise: deploy's model-travel gate rightly ignores the un-persisted pick.
+      // The pick lives in THIS process's environment only, so it serves this run and nothing that outlives it: a
+      // deployment resolves in the environment being deployed, where this machine's variables do not exist.
       `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
     );
   if (!configPath) return hint();

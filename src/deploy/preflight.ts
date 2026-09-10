@@ -124,18 +124,18 @@ export async function preflightDeploy(input: {
   const messages: DeployMessage[] = [];
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
-  // cannot disagree about it, and read from the value FILE so the operator's shell cannot become a deploy source.
+  // cannot disagree about it.
   const valueFile = relative(workspace, dotEnvPath(agentDir));
   const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)), valueFile);
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
       `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy bakes that one into the image)` +
-      // The operator most likely to hit this gate is the one who exported the variable: `fastagent info` shows a
-      // model, so "no model resolves" reads like a bug unless the message says the shell was not consulted.
+      // The operator most likely to hit this gate is the one who has the variable set right here: `fastagent info`
+      // shows a model, so "no model resolves" reads like a bug until the message names WHICH environment was read.
       (process.env.FASTAGENT_MODEL
-        ? `. Your shell's FASTAGENT_MODEL is NOT a deploy source (a deployment must be reproducible from what it ` +
-          `carries) — write that line into ${valueFile}`
+        ? `. FASTAGENT_MODEL is set in THIS machine's environment, which is not the environment being deployed — ` +
+          `declare it in ${valueFile}`
         : ``);
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
@@ -486,9 +486,18 @@ export async function preflightDeploy(input: {
 }
 
 /**
- * WHICH model this deployment runs on, and where that came from: the selected value file's `FASTAGENT_MODEL` over the
- * committed `config.model`. A `--model` flag is not a source — a deployment must be reproducible from what it
- * carries, and a flag is neither committed nor delivered.
+ * WHICH model this deployment runs on, and where that came from.
+ *
+ * There is ONE precedence chain — `flag > environment > config.model` — and this is it evaluated in the environment
+ * BEING DEPLOYED rather than in this machine's. That environment is declared by the value file, so the operator's
+ * `process.env` simply is not part of it (the same way `dev` never reads another machine's shell); it needs no rule
+ * of its own. `deploy` has no flag layer either, and that follows from the same model rather than from policy: a
+ * generated Dockerfile is rewritten on every deploy, so a flag baked into one would silently vanish on the next run
+ * that omits it. A file does not.
+ *
+ * The value file is the half of the deployed environment we can DECLARE. The other half — variables the platform
+ * already holds — is still on the box and still outranks the image's own `ENV`, which is exactly why the model is
+ * baked rather than delivered as one more platform variable that nothing would ever clear.
  */
 function resolveDeployModel(
   config: FastagentConfig,
