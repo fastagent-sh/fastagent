@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../channels/discover.ts";
 import type { RegistrationOutcome } from "../channels/registration.ts";
 import type { ChannelKind } from "../scaffold/add-channel.ts";
 import { registrationGate } from "./registration-gate.ts";
+import { waitForHealth } from "../channels/wait-health.ts";
 
 export interface Registrars {
   telegram: (baseUrl: string) => Promise<RegistrationOutcome>;
@@ -118,6 +119,35 @@ export async function pointChannelsAt(input: {
     outcomes.push({ kind, outcome: await running });
   }
   return outcomes;
+}
+
+/**
+ * How long a just-deployed public URL gets to answer `/health`: the FIRST boot seeds the whole workspace onto the
+ * volume before it binds a port, so this budget covers a copy on slow host storage, not a listen.
+ */
+const PUBLIC_HEALTH_TIMEOUT_MS = 180_000;
+
+/** Poll a public `/health` until it answers 200; false on timeout. Injected by tests. */
+export type PublicHealthProbe = (healthUrl: string) => Promise<boolean>;
+
+/**
+ * The readiness floor a host with a public URL clears BEFORE {@link registerWebhooks}: `setWebhook` does not verify
+ * that anything answers the URL, so a deploy whose app crash-loops would otherwise point a live channel at a dead
+ * address and report success. The channels that DO verify (Slack/Feishu challenge) would fail here too, but as
+ * "registration failed" — a diagnosis that hides the actual cause.
+ */
+export async function publicHealthGate(input: {
+  baseUrl: string;
+  log: (msg: string) => void;
+  /** How THIS host is inspected — the only per-host words in the gate. */
+  inspectHint: string;
+  probe?: PublicHealthProbe;
+}): Promise<string | undefined> {
+  const healthUrl = `${input.baseUrl}/health`;
+  input.log(`waiting for ${healthUrl}…`);
+  const probe = input.probe ?? ((url: string) => waitForHealth(url, PUBLIC_HEALTH_TIMEOUT_MS, 500));
+  if (await probe(healthUrl)) return undefined;
+  return `the deployed agent did not become healthy at ${healthUrl} — ${input.inspectHint}`;
 }
 
 /** {@link pointChannelsAt} plus the shared gate policy, for a command that EXITS. */

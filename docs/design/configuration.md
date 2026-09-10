@@ -111,11 +111,13 @@ Availability is a property of **ordering**, not of how many commands the operato
 2. provision      storage and access; accepts no agent work yet
 3. static values  the selected value file → the platform's variable storage
 4. credential     credentials travel (§8); a failure stops here
-5. readiness      process health + credential present and unexpired (no real model request)
+5. readiness      the deployed process answers /health (no real model request)
 6. activate       register webhooks, enable schedules, take traffic  ← the only point a public entrance opens
 ```
 
-Step 6 is where `src/deploy/registration-gate.ts` already sits; this adds "credential present + ready" to its preconditions rather than introducing a mechanism. Step 5 deliberately does not spend a real model call: it costs money and an unexpired access token **does not prove future refreshability**. A partial failure in step 3 is reported and stops the run — no success claim, no newly enabled scheduled work.
+Step 5 is `publicHealthGate` (`src/deploy/channel-ingress.ts`), asked by every host that has a public URL before it reaches `registerWebhooks`: `fly deploy` and `railway up --ci` both exit 0 on a deployment that then crash-loops, and `setWebhook` does not verify that anything answers the URL. It deliberately does not spend a real model call: it costs money and an unexpired access token **does not prove future refreshability**. A partial failure in step 3 is reported and stops the run — no success claim, no newly enabled scheduled work.
+
+Step 4 needs no probe of its own, and `/health` must not grow a credential check. "A credential exists" is already guaranteed twice: `gateOnModelCredential` stops a `--run` with nothing to carry before the first side effect, and a failed seed write throws out of `maybeSeedAuth` on first boot, so the process never reaches a listening state. Re-deriving it inside `/health` would add no coverage and would let a healthy deployment whose key comes from a `models.json` `!command` be declared dead.
 
 The point of the ordering is that a run with no usable credential **opens no entrance at all**, instead of reporting success and failing on the first real message.
 

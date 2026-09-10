@@ -30,8 +30,13 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   ...over,
 });
 
-const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered")) =>
-  deployFlyRun(p, fly, () => {}, { telegram: tg });
+/** Healthy by default: every test but the readiness one is about the flyctl sequence, not the probe. */
+const run = (
+  p: FlyRunPlan,
+  fly: CliRunner,
+  tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+  healthy: () => Promise<boolean> = async () => true,
+) => deployFlyRun(p, fly, () => {}, { telegram: tg }, healthy);
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("happy path: auth → create app+volume+address → set secrets → deploy → telegram webhook", async () => {
@@ -158,11 +163,17 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
 
-    const out = await deployFlyRun(plan({ channels: declaredChannels(["telegram", "feishu"]) }), fly, () => {}, {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
-      feishu: // telegram registration ends with the webhook NOT set
-        registerFeishu,
-    });
+    const out = await deployFlyRun(
+      plan({ channels: declaredChannels(["telegram", "feishu"]) }),
+      fly,
+      () => {},
+      {
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
+        feishu: // telegram registration ends with the webhook NOT set
+          registerFeishu,
+      },
+      async () => true,
+    );
 
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
     expect(out).toEqual({
@@ -170,6 +181,17 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       gate: expect.stringMatching(/webhook registration failed for: telegram/),
     });
     expect(registerFeishu).toHaveBeenCalledWith("https://bot.fly.dev", "feishu");
+  });
+
+  it("gate: an app that never answers /health stops BEFORE any webhook is registered", async () => {
+    // `fly deploy` exits 0 on a machine that then crash-loops, and setWebhook does not verify the URL:
+    // registering here would point a live channel at a dead address and report success.
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), fly, tg, async () => false);
+
+    expect(out).toEqual({ ok: false, gate: expect.stringContaining("https://bot.fly.dev/health") });
+    expect(tg).not.toHaveBeenCalled();
   });
 
   it("secret values go over stdin (import), never argv", async () => {

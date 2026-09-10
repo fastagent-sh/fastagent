@@ -1,5 +1,5 @@
 /** `fastagent deploy fly --run` — drive flyctl to completion. */
-import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
+import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -83,6 +83,7 @@ export async function deployFlyRun(
   fly: CliRunner,
   log: (msg: string) => void,
   registrars: Registrars,
+  healthProbe?: PublicHealthProbe,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -178,9 +179,19 @@ export async function deployFlyRun(
     return gate("`fly deploy` failed — see the flyctl output above; fix and re-run");
   }
 
-  // 8.
+  // 8. `fly deploy` exits 0 on a machine that then crash-loops, so readiness is asked here and not inferred.
+  const baseUrl = `https://${plan.appName}.fly.dev`;
+  const healthGate = await publicHealthGate({
+    baseUrl,
+    log,
+    inspectHint: `inspect \`fly logs -a ${plan.appName}\`, fix it, then re-run`,
+    probe: healthProbe,
+  });
+  if (healthGate) return gate(healthGate);
+
+  // 9.
   const registrationGateMsg = await registerWebhooks({
-    baseUrl: `https://${plan.appName}.fly.dev`,
+    baseUrl,
     channels: plan.channels,
     registrars,
     log,

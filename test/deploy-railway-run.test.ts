@@ -39,11 +39,13 @@ const LINKED = JSON.stringify({ name: "bot", id: "proj-1" });
 // A minted domain, as `railway domain --json` would return it (field name unknown → parser scans values).
 const DOMAIN_JSON = JSON.stringify({ domain: "bot-production.up.railway.app" });
 
+/** Healthy by default: every test but the readiness one is about the railway sequence, not the probe. */
 const run = (
   p: RailwayRunPlan,
   railway: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-) => deployRailwayRun(p, railway, () => {}, { telegram: tg });
+  healthy: () => Promise<boolean> = async () => true,
+) => deployRailwayRun(p, railway, () => {}, { telegram: tg }, healthy);
 
 describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () => {
   it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
@@ -123,6 +125,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
         feishu: // telegram registration ends with the webhook NOT set
           registerFeishu,
       },
+      async () => true,
     );
 
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
@@ -147,6 +150,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       railway,
       (message) => logs.push(message),
       { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
+      async () => true,
     );
     expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
   });
@@ -224,10 +228,31 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       return {};
     });
     const logs: string[] = [];
-    await deployRailwayRun(plan({ intoLinked: true }), railway, (m) => logs.push(m), {
-      telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-    });
+    await deployRailwayRun(
+      plan({ intoLinked: true }),
+      railway,
+      (m) => logs.push(m),
+      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
+      async () => true,
+    );
     expect(logs.join("\n")).toMatch(/--into-linked.*isn't linked|creating a fresh/i);
+  });
+
+  it("gate: a service that never answers /health stops BEFORE any webhook is registered", async () => {
+    // `railway up --ci` exits 0 once the build is accepted, and setWebhook does not verify the URL.
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), railway, tg, async () => false);
+
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringContaining("https://bot-production.up.railway.app/health"),
+    });
+    expect(tg).not.toHaveBeenCalled();
   });
 
   it("gate: not logged in → stops before any side effect", async () => {
