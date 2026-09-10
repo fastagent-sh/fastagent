@@ -97,7 +97,8 @@ export const agentcoreHost: HostDeploy = {
       const existing = await readFile(templateHome, "utf8");
       if (isGeneratedAgentcoreTemplate(existing) && existing !== templateArtifact.content) {
         const msg =
-          `${templateArtifact.path} no longer matches this definition (channels/schedules/selfSchedule changed) — ` +
+          `${templateArtifact.path} no longer matches this definition (channels/schedules/selfSchedule or a ` +
+          `deploy.agentcore setting changed) — ` +
           `the kept template would silently drop the difference. Pass --force to regenerate (hand edits are lost), ` +
           `or delete the file.`;
         if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
