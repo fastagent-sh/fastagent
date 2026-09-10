@@ -36,7 +36,8 @@ These two arrive together, and not by coincidence: the hard requirement for seve
 | Which external values it needs | with the code | yes (names only) | `defineTool/defineChannel/defineSchedule({ secrets })` — already implemented |
 | Application identity and defaults | version history | yes | `fastagent.config.ts` (`name`, `model`, …) |
 | Where to deploy (host, env) | per invocation | — | **the command line**, stated every time |
-| Host parameters (region, account, timeouts) | per environment | no | environment variables, from `.secrets/<env>/.env` or CI |
+| Host tuning that follows the workload (`deploy.agentcore.idleTimeoutSeconds`) | version history | yes | `fastagent.config.ts` — the same value in every env, because it describes the agent's traffic shape, not where it runs |
+| Host parameters that locate the deployment (region, account) | per environment | no | environment variables (`AWS_REGION` already is one), from `.secrets/<env>/.env` or CI |
 | Application/tool values, including API keys | per environment | no | same |
 | Model OAuth credentials | refreshes itself | no | `.secrets/auth.json` (project) / `~/.fastagent/.secrets/auth.json` (global) |
 
