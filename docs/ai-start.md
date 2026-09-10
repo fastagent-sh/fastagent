@@ -278,7 +278,7 @@ This makes a real model request and may incur cost. Verify tool use and the answ
 process exit. For continuous local development, ask the owner to run:
 
 ```bash
-fastagent dev --bind 127.0.0.1
+fastagent dev
 ```
 
 `dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, and skills are read on the next turn.

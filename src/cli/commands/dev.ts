@@ -12,6 +12,20 @@ import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, resolveBindHost, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
+/**
+ * `dev`'s bind chain — the same one `start` reads, ending at loopback instead of the wildcard. The bind is not a
+ * security boundary (the built-in `POST /invoke` has no auth either way), but a dev serve carries the agent's full
+ * tool authority and lands on networks its author does not own, so reaching the LAN is a choice to make rather than
+ * one to inherit: `--bind 0.0.0.0` gives back the reach a container or a phone needs.
+ */
+export function devBindHost(
+  bindFlag: string | undefined,
+  configured: string | undefined,
+  tunnel: boolean,
+): string | undefined {
+  return resolveBindHost(bindFlag, configured, tunnel, "127.0.0.1");
+}
+
 export interface DevOptions {
   port?: string;
   bind?: string;
@@ -51,7 +65,7 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
   await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
-  const host = resolveBindHost(bindFlag, a.config.http?.host, tunnel);
+  const host = devBindHost(bindFlag, a.config.http?.host, tunnel);
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
   // connections.
   const service = await mountAgentService(a, cliMountOptions(logAgentLoop)).catch(failStartup);
