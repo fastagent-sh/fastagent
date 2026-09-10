@@ -5,15 +5,11 @@ import { installProxyFetch } from "./proxy.ts";
 import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
- * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH axes
- * (verified against Node).
+ * Write parsed values into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH
+ * axes (verified against Node in test/env.test.ts): a real env var wins over the file, and within the file the last
+ * occurrence wins ({@link parseEnvContent}).
  */
-export function loadEnvFile(file: string): void {
-  applyEnvValues(parseEnvContent(readFileSync(file, "utf8")));
-}
-
-/** Write parsed values into `process.env` under Node's precedence: a real env var wins over the file. */
-function applyEnvValues(values: ReadonlyMap<string, string>): void {
+export function applyEnvValues(values: ReadonlyMap<string, string>): void {
   for (const [key, value] of values) if (!(key in process.env)) process.env[key] = value;
 }
 
@@ -75,7 +71,7 @@ export function enterAgentEnv(agentDir: string): void {
 }
 
 /**
- * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link loadEnvFile}), treating a MISSING file as
+ * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link applyEnvValues}), treating a MISSING file as
  * normal (no .env). Commands want {@link enterAgentEnv}, which is this plus the proxy that `.env` may declare.
  */
 export function loadDotEnv(agentDir: string): void {

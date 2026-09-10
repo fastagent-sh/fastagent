@@ -89,12 +89,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.container.modelSpec).toBeUndefined();
   });
 
-  it("refuses a FASTAGENT_MODEL that is not a spec — it is about to become a Dockerfile instruction", async () => {
+  it("refuses a FASTAGENT_MODEL carrying Dockerfile syntax, but not a multi-segment modelId", async () => {
     // A space truncates the ENV, a trailing backslash swallows the next line, a `$` expands at build time: the
-    // author must see a typo as a typo, not as a broken image.
+    // author must see a typo as a typo, not as a broken image. A `/` inside the modelId is NOT one of those — 795
+    // of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolveModel splits on the first slash.
     const dir = await workspace();
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o mini\n");
-    await expect(call(dir, {})).rejects.toThrow(/not a "provider\/modelId" spec/);
+    for (const bad of ["openai/gpt-4o mini", "openai/gpt-4o$X", "openai/gpt-4o\\", "gpt-4o"]) {
+      await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
+      await expect(call(dir, {})).rejects.toThrow(/not a usable "provider\/modelId" spec/);
+    }
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=baseten/zai-org/GLM-5.3\n");
+    const pre = await call(dir, {}, { run: true });
+    expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
   });
 
   it("gates --run when a hand-written Dockerfile cannot carry the value-file model", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dotEnvPath, loadDotEnv, loadEnvFile } from "../src/env.ts";
+import { applyEnvValues, dotEnvPath, loadDotEnv, loadEnvValues } from "../src/env.ts";
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
   it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
@@ -14,13 +14,14 @@ describe("dotEnvPath (follows the resolved secrets dir)", () => {
 });
 
 // A portable .env loader (Node has process.loadEnvFile; Bun does not — same parse must run on both).
-describe("loadEnvFile", () => {
+describe("loadEnvValues + applyEnvValues", () => {
   const write = async (content: string): Promise<string> => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-"));
     const file = join(dir, ".env");
     await writeFile(file, content);
     return file;
   };
+  const loadEnvFile = (file: string): void => applyEnvValues(loadEnvValues(file));
 
   it("parses KEY=VALUE: comments/blanks skipped, quotes stripped, first-= split, env-wins, last-wins", async () => {
     const key = `A_${Date.now()}`;
@@ -71,10 +72,11 @@ describe("loadEnvFile", () => {
     },
   );
 
-  it("propagates ENOENT for a missing file (the caller decides it's normal)", async () => {
-    expect(() => loadEnvFile(join(tmpdir(), `no-such-${Date.now()}`, ".env"))).toThrow(
-      expect.objectContaining({ code: "ENOENT" }),
-    );
+  it("a missing file is no values; an unreadable one still throws", async () => {
+    expect(loadEnvValues(join(tmpdir(), `no-such-${Date.now()}`, ".env")).size).toBe(0);
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-bad-"));
+    await mkdir(join(dir, ".env")); // a directory at the path → EISDIR, which must surface
+    expect(() => loadEnvValues(join(dir, ".env"))).toThrow(expect.objectContaining({ code: "EISDIR" }));
   });
 });
 
