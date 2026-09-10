@@ -32,6 +32,7 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | Document | Purpose |
 |---|---|
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
+| [configuration.md](configuration.md) | **Proposed.** Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
 | [conformance-levels.md](conformance-levels.md) | Where a session's state lives: the deployment axis, the postures that pin it, and what each owes. |
 | [participant-model.md](participant-model.md) | How a chat bot behaves in a collaboration tool: the participant axiom and the summon/placement/memory rules derived from it. |
 | [session-control.md](session-control.md) | Session control plane beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions. |
