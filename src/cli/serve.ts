@@ -29,9 +29,9 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
 }
 
 /**
- * The bind address a serve uses: the flag, else `http.host` from the config, else `fallback` — which is where `dev`
- * and `start` differ. `dev` is a laptop posture on networks its author does not own, and the surface it serves has
- * shell authority, so it falls back to loopback; `start` keeps the wildcard a container needs.
+ * The bind address a serve uses: the flag, else `http.host` from the config, else the caller's `fallback` (omitted =
+ * the wildcard). Only that last rung differs between the commands; why each ends where it does lives with the
+ * command — `devBindHost` in commands/dev.ts, the wildcard `start` needs for a container in commands/start.ts.
  */
 export function resolveBindHost(
   bindFlag: string | undefined,

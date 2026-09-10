@@ -240,15 +240,18 @@ describe("cli: bind address policy", () => {
     expect(exits(() => parseBind("banana"))).toBe(2);
   });
 
-  it("resolveBindHost: flag > http.host > the command's fallback (dev loopback, start wildcard)", async () => {
+  it("the bind chain: flag > http.host > the command's last rung (dev loopback, start wildcard)", async () => {
+    // Both commands read ONE chain and differ only in where it ends, so both ends are asserted here: `devBindHost`
+    // is dev's whole policy (its call site passes the parsed flag and `http.host` straight through), and start's
+    // end is `resolveBindHost` with no fallback.
     const { resolveBindHost } = await import("../src/cli/serve.ts");
-    expect(resolveBindHost("192.168.1.5", "0.0.0.0", false, "127.0.0.1")).toBe("192.168.1.5");
-    expect(resolveBindHost(undefined, "0.0.0.0", false, "127.0.0.1")).toBe("0.0.0.0"); // a configured bind beats it
-    expect(resolveBindHost(undefined, "localhost", false, "127.0.0.1")).toBe("127.0.0.1"); // read as an address
-    expect(resolveBindHost(undefined, undefined, false, "127.0.0.1")).toBe("127.0.0.1"); // dev's default
+    const { devBindHost } = await import("../src/cli/commands/dev.ts");
+    expect(devBindHost("192.168.1.5", "0.0.0.0", false)).toBe("192.168.1.5");
+    expect(devBindHost(undefined, "0.0.0.0", false)).toBe("0.0.0.0"); // a configured bind beats the default
+    expect(devBindHost(undefined, "localhost", false)).toBe("127.0.0.1"); // read as an address
+    expect(devBindHost(undefined, undefined, false)).toBe("127.0.0.1"); // dev ends at loopback
+    expect(devBindHost(undefined, undefined, true)).toBe("127.0.0.1"); // a bind `localhost` resolves to: --tunnel ok
     expect(resolveBindHost(undefined, undefined, false)).toBeUndefined(); // start: the wildcard a container needs
-    // dev's fallback is a bind `localhost` resolves to, so --tunnel is not refused by the new default.
-    expect(resolveBindHost(undefined, undefined, true, "127.0.0.1")).toBe("127.0.0.1");
   });
 
   it("assertTunnelBindable: --tunnel refuses a bind localhost cannot reach; the source picks the exit code", async () => {

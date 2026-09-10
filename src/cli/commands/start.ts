@@ -81,6 +81,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
   const tunnel = opts.tunnel ?? false;
+  // No fallback: this is the container posture, so an unset bind stays the wildcard a published port needs.
   const host = resolveBindHost(bindFlag, service.bindHost, tunnel);
   serveService(
     service,
