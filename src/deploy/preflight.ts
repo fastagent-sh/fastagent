@@ -36,8 +36,6 @@ interface DeployFacts {
   channels: DeclaredChannel[];
   /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). */
   hasTimeTriggers: boolean;
-  /** The model this deployment will run on, and where it was read from ({@link resolveDeployModel}). */
-  model: { spec?: string; source: string; envValue?: string };
   /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
@@ -446,18 +444,28 @@ export async function preflightDeploy(input: {
   if (config.sessionControl === true) {
     extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
   }
-  // Both of these only shape the GENERATED Dockerfile, so a kept hand-written one silently drops them.
+  // `deploy.apt` and the baked model live ONLY in the generated Dockerfile, so a hand-written one drops them. A
+  // generated one is always regenerated (writeArtifacts), so it cannot go stale.
   const dockerfileHome = join(agentDir, "Dockerfile");
-  if ((config.deploy?.apt?.length || model.envValue) && !force && (await exists(dockerfileHome))) {
-    if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
-      const dropped = [
-        ...(config.deploy?.apt?.length ? [`deploy.apt (${config.deploy.apt.join(", ")})`] : []),
-        ...(model.envValue ? [`ENV FASTAGENT_MODEL=${model.envValue}`] : []),
-      ];
-      messages.push({
-        level: "warn",
-        text: `kept your hand-written Dockerfile — ${dropped.join(" and ")} NOT applied; add them yourself.`,
-      });
+  const handWritten =
+    (config.deploy?.apt?.length || model.envValue) &&
+    (await exists(dockerfileHome)) &&
+    !isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))
+      ? await readFile(dockerfileHome, "utf8")
+      : undefined;
+  if (handWritten !== undefined) {
+    // The model has NO other carrier: the value file is dockerignored and it is not a delivered variable. So a
+    // hand-written Dockerfile that does not set it itself ships a box that cannot resolve the model preflight just
+    // reported — a known crash-loop when nothing else names one, and a silent mismatch when the config does.
+    const modelDropped = model.envValue !== undefined && !handWritten.includes("FASTAGENT_MODEL");
+    const dropped = [
+      ...(config.deploy?.apt?.length ? [`deploy.apt (${config.deploy.apt.join(", ")})`] : []),
+      ...(modelDropped ? [`ENV FASTAGENT_MODEL=${model.envValue}`] : []),
+    ];
+    if (dropped.length > 0) {
+      const text = `kept your hand-written Dockerfile — ${dropped.join(" and ")} NOT applied; add them yourself.`;
+      if (modelDropped && run) return { ok: false, gate: text };
+      messages.push({ level: "warn", text });
     }
   }
 
@@ -466,7 +474,6 @@ export async function preflightDeploy(input: {
     messages,
     channels,
     hasTimeTriggers,
-    model,
     modelAuth,
     modelKeyInDefinition,
     authPath,
@@ -488,6 +495,12 @@ function resolveDeployModel(
   valueFile: string,
 ): { spec?: string; source: string; envValue?: string } {
   const fromEnv = values.get("FASTAGENT_MODEL");
+  // It is about to be generated INTO a Dockerfile, where a space truncates the instruction, a trailing `\` swallows
+  // the next line and a `$` expands at build time. A spec is `provider/modelId`, so anything else is a typo the
+  // author must see as one rather than as a broken build.
+  if (fromEnv && !/^[\w.-]+\/[\w.:@-]+$/.test(fromEnv)) {
+    throw new Error(`FASTAGENT_MODEL in ${valueFile} is not a "provider/modelId" spec: ${JSON.stringify(fromEnv)}`);
+  }
   // `envValue` is what must be BAKED into the image (ContainerInput.modelSpec), so it is set only when the value file
   // is the source: a `config.model` already travels in the config itself. Because the carrier is the image and not a
   // host variable, deleting the line and redeploying drops the ENV with the rebuild — nothing stale survives.

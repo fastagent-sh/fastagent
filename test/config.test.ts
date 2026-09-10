@@ -409,8 +409,8 @@ describe("config: resolveModelSpec (precedence flag > env > config)", () => {
   });
 
   it("an EMPTY FASTAGENT_MODEL is unset, not a veto over config.model", () => {
-    // A container topology declares the name and interpolates a missing value to "" (docker compose's
-    // `${FASTAGENT_MODEL:-}`): a shadowed config.model would crash-loop the box on a plain `docker compose up`.
+    // `export FASTAGENT_MODEL=` in a shell or CI job, and a hand-written compose/env entry interpolating a missing
+    // variable, both arrive as "": shadowing config.model there would refuse to start a correctly configured agent.
     const empty = { FASTAGENT_MODEL: "" } as NodeJS.ProcessEnv;
     expect(resolveModelSpec(undefined, { model: "c/m" }, empty)).toBe("c/m");
     expect(resolveModelSpec(undefined, {}, empty)).toBeUndefined();

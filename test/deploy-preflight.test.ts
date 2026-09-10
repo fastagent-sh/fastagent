@@ -74,7 +74,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     const source = `${basename(dir)}/.secrets/.env`; // as READ, relative to the workspace
-    expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source, envValue: "openai/gpt-4o-mini" });
     expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
     // It travels BAKED into the image, not as a host variable: an image cannot interpolate the operator's shell,
     // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
@@ -86,8 +85,31 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(await workspace(), { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source: "fastagent.config" });
+    expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4o-mini (source: fastagent.config)" });
     expect(pre.container.modelSpec).toBeUndefined();
+  });
+
+  it("refuses a FASTAGENT_MODEL that is not a spec — it is about to become a Dockerfile instruction", async () => {
+    // A space truncates the ENV, a trailing backslash swallows the next line, a `$` expands at build time: the
+    // author must see a typo as a typo, not as a broken image.
+    const dir = await workspace();
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o mini\n");
+    await expect(call(dir, {})).rejects.toThrow(/not a "provider\/modelId" spec/);
+  });
+
+  it("gates --run when a hand-written Dockerfile cannot carry the value-file model", async () => {
+    // The bake is the model's ONLY carrier (the value file is dockerignored, and it is not a delivered variable),
+    // so deploying past this ships a box that cannot resolve the model the note just reported.
+    const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    const gated = await call(dir, {}, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/hand-written Dockerfile.*ENV FASTAGENT_MODEL=openai\/gpt-4o-mini/);
+
+    // A hand-written Dockerfile that sets it itself is not dropping anything.
+    const own = await workspace({ Dockerfile: "FROM node:22-slim\nENV FASTAGENT_MODEL=openai/gpt-4o-mini\n" });
+    await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    expect((await call(own, {}, { run: true })).ok).toBe(true);
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
@@ -443,20 +465,19 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
-  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach; --force suppresses it", async () => {
+  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach, --force included", async () => {
+    // `--force` does NOT rescue this: writeArtifacts refuses a file it did not generate whatever the flag says
+    // ("--force does not touch it"), so suppressing the warning there only hid the same dropped packages.
     const dir = await workspace({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
     const config: FastagentConfig = { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };
 
-    const kept = await call(dir, config, { force: false });
-    expect(kept.ok).toBe(true);
-    if (kept.ok) {
-      expect(kept.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+    for (const force of [false, true]) {
+      const pre = await call(dir, config, { force });
+      expect(pre.ok).toBe(true);
+      if (pre.ok) {
+        expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+      }
     }
-
-    // --force regenerates the Dockerfile, so the kept-hand-written warning does not apply.
-    const forced = await call(dir, config, { force: true });
-    expect(forced.ok).toBe(true);
-    if (forced.ok) expect(forced.messages.some((m) => /NOT applied/.test(m.text))).toBe(false);
   });
 
   it("detects time triggers: schedules/ files OR config.selfSchedule → hasTimeTriggers + a keep-1 note", async () => {

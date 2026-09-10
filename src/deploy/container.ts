@@ -84,7 +84,9 @@ function dockerfile(input: ContainerInput): string {
   // node:22-slim lacks.
   const apt = aptLayer(input.apt);
   // PIN the agent into the image.
-  const pin = `ENV FASTAGENT_AGENT=${dir}\n${input.modelSpec ? `ENV FASTAGENT_MODEL=${input.modelSpec}\n` : ""}`;
+  // Quoted: the value is authored text, and preflight's spec check is what keeps a bad one from reaching here as a
+  // broken instruction rather than as a wrong model.
+  const pin = `ENV FASTAGENT_AGENT=${dir}\n${input.modelSpec ? `ENV FASTAGENT_MODEL=${JSON.stringify(input.modelSpec)}\n` : ""}`;
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=/app/${into(RELEASE_FILE)}\nENV FASTAGENT_STORAGE_DIR=/data\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent` from PATH.

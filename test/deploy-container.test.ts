@@ -64,7 +64,7 @@ describe("deploy/container: shared Docker context", () => {
       const baked = containerArtifacts({ ...shape, modelSpec: "openai/gpt-4o-mini" }).find(
         (a) => a.path === "fastagent/Dockerfile",
       )!.content;
-      expect(baked).toContain("ENV FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+      expect(baked).toContain('ENV FASTAGENT_MODEL="openai/gpt-4o-mini"\n'); // quoted: the value is authored text
       const plain = containerArtifacts(shape).find((a) => a.path === "fastagent/Dockerfile")!.content;
       expect(plain).not.toContain("FASTAGENT_MODEL");
     }

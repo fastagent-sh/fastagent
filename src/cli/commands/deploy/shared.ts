@@ -135,13 +135,21 @@ export async function writeArtifacts(
       );
       continue;
     }
-    if (existing !== undefined && !options.force) {
+    // A GENERATED Dockerfile is build output, not configuration: the marker's own contract is "delete this line to
+    // take ownership", and keeping a stale one silently ships an image that contradicts the definition — the model
+    // baked as `ENV FASTAGENT_MODEL` and `deploy.apt` both live only here.
+    const regenerate = a.path.endsWith("Dockerfile");
+    if (existing !== undefined && !options.force && !regenerate) {
       console.error(
         existing !== a.content
           ? `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
               `you edited it); pass --force to regenerate.`
           : `[fastagent] kept ${a.path} (unchanged)`,
       );
+      continue;
+    }
+    if (existing === a.content) {
+      console.error(`[fastagent] kept ${a.path} (unchanged)`);
       continue;
     }
     await mkdir(dirname(abs), { recursive: true }); // artifacts live under fastagent/

@@ -256,9 +256,9 @@ export function rewriteConfigModel(src: string, spec: string): string | null {
 
 /**
  * Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. An EMPTY `FASTAGENT_MODEL` is
- * "unset", not "no model": container topologies declare the name and interpolate a missing value to `""` (docker
- * compose's `${FASTAGENT_MODEL:-}`), and a set-but-empty variable that shadowed `config.model` would crash-loop a box
- * whose config names a model.
+ * "unset", not "no model": `export FASTAGENT_MODEL=` in a shell or CI job, and an `environment:`/`env` entry that
+ * interpolates a missing variable, both arrive as `""` — and a set-but-empty value that shadowed `config.model`
+ * would refuse to start an agent whose config names a model.
  */
 export function resolveModelSpec(
   flag: string | undefined,

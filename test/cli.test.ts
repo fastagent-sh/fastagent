@@ -348,10 +348,11 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/FA_TEST_FIRE_CHANNEL/); // got past the gate (it then needs a model/auth)
   });
 
-  it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {
-    // deploy KEEPS any existing Dockerfile without --force (no silent data loss). A generated one (marker)
-    // that drifted from current config is flagged stale; a hand-written one is kept + warned (its apt won't
-    // apply). An up-to-date generated one is kept quietly. Marker/predicate come from container.ts (single source).
+  it("regenerates a GENERATED Dockerfile, never clobbers a hand-written one (G6)", async () => {
+    // A generated Dockerfile (marker) is build output and is refreshed every deploy: what only lives there
+    // (deploy.apt, the baked ENV FASTAGENT_MODEL) would otherwise ship an image contradicting the definition.
+    // Editing it means taking ownership by deleting the marker, which is then kept verbatim + warned.
+    // Marker/predicate come from container.ts (single source).
     const setup = async (dockerfileContent: string) => {
       const dir = await agentWorkspace("fa-apt-", {
         "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };\n`,
@@ -362,12 +363,12 @@ describe("cli papercuts", () => {
       return { res, dockerfile: await readFile(join(dir, "fastagent", "Dockerfile"), "utf8") };
     };
 
-    // A generated-but-edited Dockerfile (marker kept, a hand-added line) → flagged stale, NEVER overwritten.
+    // A generated-but-edited Dockerfile (marker kept) → refreshed, because the marker says deploy owns it.
     const edited = `${GENERATED_DOCKERFILE_MARKER}. was generated\nFROM node:22-slim\nRUN echo my-own-edit\n`;
     const gen = await setup(edited);
-    expect(gen.res.stderr).toMatch(/no longer matches what deploy would generate/); // stale flagged
-    expect(gen.res.stderr).toMatch(/--force to regenerate/);
-    expect(gen.dockerfile).toBe(edited); // preserved — the user's edit survives (no data loss)
+    expect(gen.res.stderr).toMatch(/wrote fastagent\/Dockerfile/);
+    expect(gen.dockerfile).not.toBe(edited);
+    expect(gen.dockerfile).toContain("apt-get"); // deploy.apt reached the image
     expect(gen.res.stderr).not.toMatch(/deploy\.apt.*NOT applied/); // generated → not the hand-written warn
 
     // An up-to-date generated Dockerfile (built with the SAME inputs deploy uses) → kept quietly, no stale flag.
@@ -381,7 +382,7 @@ describe("cli papercuts", () => {
       apt: ["git"],
     }).find((a) => a.path === "fastagent/Dockerfile")!.content;
     const fresh = await setup(current);
-    expect(fresh.res.stderr).not.toMatch(/no longer matches/); // identical → nothing to flag
+    expect(fresh.res.stderr).toMatch(/kept fastagent\/Dockerfile \(unchanged\)/); // identical → nothing written
 
     // A HAND-WRITTEN Dockerfile (no marker) → kept verbatim + warned (its apt won't include the packages).
     const hw = await setup("FROM python:3.12\n");
