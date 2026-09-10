@@ -19,6 +19,8 @@ import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
+import { dotEnvPath, loadEnvValues } from "../env.ts";
+import { SECRETS_DIRNAME } from "../paths.ts";
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { isEnvKey } from "./secrets.ts";
 
@@ -35,6 +37,8 @@ interface DeployFacts {
   channels: DeclaredChannel[];
   /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). */
   hasTimeTriggers: boolean;
+  /** The model this deployment will run on, and where it was read from ({@link resolveDeployModel}). */
+  model: { spec?: string; source: string; envValue?: string };
   /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
@@ -80,8 +84,7 @@ function dockerignoreMatcher(text: string): (path: string) => boolean {
 export async function preflightDeploy(input: {
   placement: ResolvedPlacement;
   config: FastagentConfig;
-  modelSpec: string | undefined;
-  /** `--run` fully deploys, so a model that won't travel is a GATE (a known crash-loop); else it warns. */
+  /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
@@ -96,7 +99,6 @@ export async function preflightDeploy(input: {
   const {
     placement: { agentDir, workspace },
     config,
-    modelSpec,
     run,
     force,
     externalClock,
@@ -124,13 +126,19 @@ export async function preflightDeploy(input: {
   const agentPrefix = `${basename(agentDir)}/`;
   const messages: DeployMessage[] = [];
 
-  // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via env/flag/.env
-  // doesn't travel.
-  const modelIssue = modelTravelIssue(config.model, modelSpec);
-  if (modelIssue) {
-    if (run) return { ok: false, gate: modelIssue };
-    messages.push({ level: "warn", text: modelIssue });
+  // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
+  // cannot disagree about it, and read from the value FILE so the operator's shell cannot become a deploy source.
+  const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)));
+  if (!model.spec) {
+    const issue =
+      `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
+      `in the image), or FASTAGENT_MODEL in ${relative(workspace, dotEnvPath(agentDir))} (it travels as a host variable)`;
+    if (run) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
+  } else {
+    messages.push({ level: "note", text: `model ${model.spec} (source: ${model.source})` });
   }
+  const modelSpec = model.spec;
 
   // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*` (steer, stop, rewrite
   // or delete a session) rides the PUBLIC host URL, protected only by the bearer token.
@@ -449,6 +457,7 @@ export async function preflightDeploy(input: {
     messages,
     channels,
     hasTimeTriggers,
+    model,
     modelAuth,
     modelKeyInDefinition,
     authPath,
@@ -458,11 +467,16 @@ export async function preflightDeploy(input: {
   };
 }
 
-/** Why the resolved model won't reach the deployed box, or undefined if it will — host-neutral. */
-export function modelTravelIssue(configModel: string | undefined, modelSpec: string | undefined): string | undefined {
-  if (configModel) return undefined;
-  return modelSpec
-    ? `model "${modelSpec}" is set via --model/FASTAGENT_MODEL, not fastagent.config.ts — it won't reach ` +
-        `the deployed box. Add \`model: "${modelSpec}"\` to fastagent.config.ts.`
-    : `no model in fastagent.config.ts — the deployed box can't resolve one. Add \`model: "provider/id"\`.`;
+/**
+ * WHICH model this deployment runs on, and where that came from: the selected value file's `FASTAGENT_MODEL` over the
+ * committed `config.model`. A `--model` flag is not a source — a deployment must be reproducible from what it
+ * carries, and a flag is neither committed nor delivered.
+ */
+function resolveDeployModel(
+  config: FastagentConfig,
+  values: ReadonlyMap<string, string>,
+): { spec?: string; source: string; envValue?: string } {
+  const fromEnv = values.get("FASTAGENT_MODEL");
+  if (fromEnv) return { spec: fromEnv, source: `${SECRETS_DIRNAME}/.env`, envValue: fromEnv };
+  return { spec: config.model, source: "fastagent.config" };
 }

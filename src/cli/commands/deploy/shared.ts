@@ -27,7 +27,6 @@ export interface DeployOptions {
   /** false ⇔ `--no-scale-to-zero`. */
   scaleToZero?: boolean;
   intoLinked?: boolean;
-  model?: string;
   authPath?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
@@ -81,14 +80,17 @@ export function registrarsFor(agentDir: string): Registrars {
 export async function carryCredentials(params: {
   modelAuth: string | undefined;
   modelKeyInDefinition: boolean;
+  /** The `FASTAGENT_MODEL` value that must travel, when the model came from the value file and not the config. */
+  modelEnvValue: string | undefined;
   authPath: string;
   channels: readonly DeclaredChannel[];
   extraSecrets: readonly DeclaredSecret[];
 }): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
-  const { modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets } = params;
+  const { modelAuth, modelKeyInDefinition, modelEnvValue, authPath, channels, extraSecrets } = params;
   return assembleSecrets({
     modelAuth,
     modelKeyInDefinition,
+    ...(modelEnvValue !== undefined ? { modelEnvValue } : {}),
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     extraSecrets,

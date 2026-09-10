@@ -32,6 +32,20 @@ export function parseEnvContent(content: string): Map<string, string> {
   return parsed;
 }
 
+/**
+ * READ a value file without entering it: the values as data, never `process.env`. A deployment's values belong to
+ * the deployment being planned, so the code that decides what travels must not be able to pick up the operator's
+ * shell instead. A missing file is no values, which is normal.
+ */
+export function loadEnvValues(file: string): Map<string, string> {
+  try {
+    return parseEnvContent(readFileSync(file, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+}
+
 /** The agent's `.env` file: `<resolved secrets dir>/.env`. */
 export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
   return join(resolveSecretsDir(agentDir, env), ".env");

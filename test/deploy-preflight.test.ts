@@ -26,7 +26,6 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
   preflightDeploy({
     placement: { agentDir: target, workspace: dirname(target) },
     config,
-    modelSpec: config.model,
     run: false,
     force: false,
     authPathFlag: undefined,
@@ -48,12 +47,33 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await rm(host, { recursive: true, force: true });
   });
 
-  it("gates --run when the model isn't in config (would ship a crash-loop)", async () => {
-    const dir = await workspace();
-    // model resolved via --model/FASTAGENT_MODEL, absent from config → won't travel.
-    const pre = await call(dir, {}, { modelSpec: "openai/gpt-4o-mini", run: true });
+  it("gates --run when NO source resolves a model (would ship a crash-loop)", async () => {
+    const dir = await workspace(); // .secrets/.env holds no FASTAGENT_MODEL, config holds no model
+    const pre = await call(dir, {}, { run: true });
     expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
+    if (!pre.ok) expect(pre.gate).toMatch(/no model resolves/);
+  });
+
+  it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
+    // The value file is how a deployment picks a model without editing the committed default; the operator's
+    // shell is deliberately not a source, so this cannot be satisfied by exporting FASTAGENT_MODEL.
+    const dir = await workspace();
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    const pre = await call(dir, { model: "openai/other" }, { run: true });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.model).toEqual({
+      spec: "openai/gpt-4o-mini",
+      source: ".secrets/.env",
+      envValue: "openai/gpt-4o-mini",
+    });
+    expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4o-mini (source: .secrets/.env)" });
+  });
+
+  it("a config model needs no carry — it is already inside the image", async () => {
+    const pre = await call(await workspace(), { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source: "fastagent.config" });
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
@@ -224,7 +244,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       preflightDeploy({
         placement: { agentDir, workspace: host },
         config: { model: "openai/gpt-4o-mini" },
-        modelSpec: "openai/gpt-4o-mini",
         run: false,
         force: false,
         authPathFlag: undefined,
@@ -306,14 +325,13 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("warns (not gates) about the same model issue without --run", async () => {
-    const dir = await workspace();
-    const pre = await call(dir, {}, { modelSpec: "openai/gpt-4o-mini", run: false });
+    const pre = await call(await workspace(), {}, { run: false });
     expect(pre.ok).toBe(true);
     if (pre.ok)
-      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/fastagent\.config/) });
+      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/no model resolves/) });
   });
 
-  it("computes container facts and no model message when the model is in config (markdown agent)", async () => {
+  it("computes container facts and no model WARNING when the model is in config (markdown agent)", async () => {
     const dir = await workspace();
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -321,7 +339,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.container.hasPackageJson).toBe(false); // markdown/skills agent → global-install path
     expect(pre.container.runtime).toBe("node");
     expect(pre.port).toBe(8787);
-    expect(pre.messages.some((m) => /fastagent\.config/.test(m.text))).toBe(false);
+    expect(pre.messages.some((m) => m.level === "warn" && /model/.test(m.text))).toBe(false);
   });
 
   it("recognizes Slack as a first-party route channel for secrets/deploy guidance", async () => {

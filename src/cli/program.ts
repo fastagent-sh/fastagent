@@ -455,7 +455,6 @@ const deploy: CommandSpec = {
         "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
         "default --run refuses a pre-existing link (could be unrelated/production)",
     },
-    MODEL,
     AUTH_PATH,
     NO_INPUT,
   ],
@@ -477,7 +476,6 @@ const deploy: CommandSpec = {
       stop: f.stop === true,
       scaleToZero: f.scaleToZero !== false,
       intoLinked: f.intoLinked === true,
-      model: f.model as string | undefined,
       authPath: f.authPath as string | undefined,
       input: f.input !== false,
     }),

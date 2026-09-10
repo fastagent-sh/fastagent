@@ -4,7 +4,7 @@
  */
 import type { DeployHost } from "../../deploy/hosts.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { loadConfig, resolveModelSpec } from "../../engines/pi/config.ts";
+import { loadConfig } from "../../engines/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentCommand } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
@@ -89,13 +89,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // ONE deploy semantic: bake the WORKSPACE (WYSIWYG).
   const { agentDir, workspace } = placement;
   const { config } = await loadConfig(agentDir).catch(failStartup);
-  const modelSpec = resolveModelSpec(opts.model, config);
-  // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts + their
-  // warnings) lives in deploy/preflight.ts.
+  // The host-neutral pre-flight (the model and its source, channel discovery, model-auth probe, container facts +
+  // their warnings) lives in deploy/preflight.ts.
   const pre = await preflightDeploy({
     placement,
     config,
-    modelSpec,
     run: !!opts.run,
     force: !!opts.force,
     externalClock: host === "agentcore", // cron rides EventBridge there — the resident-host notes don't apply

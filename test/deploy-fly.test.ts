@@ -2,7 +2,6 @@ import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
-import { modelTravelIssue } from "../src/deploy/preflight.ts";
 
 const flyToml = (p: ReturnType<typeof planFlyDeploy>) =>
   p.artifacts.find((a) => a.path === "fastagent/fly.toml")!.content;
@@ -288,15 +287,6 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(isGeneratedFlyToml(generated)).toBe(true);
     expect(isGeneratedFlyToml('app = "mine"\n')).toBe(false);
     expect(isGeneratedFlyToml(`# my own header\n${generated}`)).toBe(false); // marker must open the file
-  });
-
-  it("flags a model that won't travel — config.model is the deployed box's only source", () => {
-    // A model in config.ts travels (in the image) → no issue.
-    expect(modelTravelIssue("openai/gpt-4o", "openai/gpt-4o")).toBeUndefined();
-    // Resolved from env/flag but NOT in config → won't reach the box; the message names config.ts + the spec.
-    expect(modelTravelIssue(undefined, "openai/gpt-4o")).toMatch(/fastagent\.config\.ts.*openai\/gpt-4o/s);
-    // No model at all.
-    expect(modelTravelIssue(undefined, undefined)).toMatch(/no model/);
   });
 
   it("sanitizes a dir basename into a valid Fly app name", () => {
