@@ -8,6 +8,8 @@ status: proposed
 
 **Status: proposed.** This is the design conclusion for [#482](https://github.com/fastagent-sh/fastagent/issues/482). It replaces that RFC's file layout and command surface with a smaller one; §11 lists what was dropped and why. Nothing here is implemented yet — the code truth is `src/`, and §12 is the sequencing.
 
+The user-facing document for what exists today is [configuration.md](../configuration.md). Landing this proposal updates its *Secrets and credentials* chain (`FASTAGENT_AUTH_PATH` keeps its place, the `--auth-path` flag goes, a global store is added below the project one) and its *Model resolution* section (`FASTAGENT_MODEL` is read from the selected value file). The config-file and artifact-location sections stay as they are.
+
 ## 1. Decision
 
 Convention over configuration, with an explicit boundary:
@@ -41,7 +43,7 @@ These two arrive together, and not by coincidence: the hard requirement for seve
 ## 4. Files
 
 ```
-fastagent.config.ts               # in git, only .ts: name / model / http / selfSchedule / deploy.{secrets,apt}
+fastagent.config.ts               # in git (or .js/.mjs): name / model / http / selfSchedule / deploy.{secrets,apt}
 persona.md  skills/  tools/  channels/  schedules/
 
 .secrets/.env                     # the local (= single-instance deploy) values
@@ -51,11 +53,11 @@ persona.md  skills/  tools/  channels/  schedules/
 .secrets/production/.env          # day two only: that env's values (API key, AWS_REGION, FASTAGENT_MODEL…)
 .secrets/alpha/.env
 
-.state/                           # local state + .state/deploy/<host>-<env>/ generated artifacts (no secrets)
+.state/                           # local state (no secrets)
 ~/.fastagent/.secrets/auth.json   # this person on this machine (login -g)
 ```
 
-`.secrets/` keeps its 0700 guarantee (`ensureSecretsDir` in `src/paths.ts`), and one `.secrets/*/` ignore rule covers every env. **A single-instance agent has no `.secrets/<env>/` at all** — the acceptance test for convention over configuration is that a small agent never learns the word "env".
+`.secrets/` keeps its 0700 guarantee (`ensureSecretsDir` in `src/paths.ts`), and its existing `*` ignore rule already covers every env subdirectory — git never descends into an ignored directory, so day two adds no ignore rule at all. **A single-instance agent has no `.secrets/<env>/` at all** — the acceptance test for convention over configuration is that a small agent never learns the word "env".
 
 ## 5. Three resolution chains, one rule
 
@@ -63,9 +65,9 @@ persona.md  skills/  tools/  channels/  schedules/
 
 | Subject | Chain |
 |---|---|
-| Model | `--model` > `FASTAGENT_MODEL` > `config.model` |
+| Model | `--model` (local runs only) > the selected value file's `FASTAGENT_MODEL` > `config.model`. The operator's shell variable is not a source: the chain reads the value file, never `process.env` |
 | Values | `--env` given → **only** `.secrets/<env>/.env`; omitted → `.secrets/.env`. No fallback between them |
-| Credentials | `.secrets/auth.json` > `~/.fastagent/.secrets/auth.json` |
+| Credentials | `FASTAGENT_AUTH_PATH` > `.secrets/auth.json` > `~/.fastagent/.secrets/auth.json` |
 
 The defaults live in different places for exactly one reason: one can be committed and the other cannot. `config` is the committed application default; the global auth file is "this person's" default. **Another environment's values are never a default** — the local `.env` holds one person's values on one machine, so falling back to it would make a deployment's result depend on who ran it and where.
 
@@ -80,7 +82,7 @@ Two rules follow:
 fastagent login openai-codex          # writes <agent>/.secrets/auth.json
 fastagent login openai-codex -g       # writes ~/.fastagent/.secrets/auth.json
 
-fastagent deploy fly                  # plan + diff against what is deployed; changes nothing
+fastagent deploy fly                  # plan + write the generated artifacts; touches nothing remote
 fastagent deploy fly --run            # execute
 
 fastagent deploy agentcore --env production --run
@@ -91,12 +93,13 @@ fastagent logs agentcore --env production
 
 | Command | Change |
 |---|---|
-| `deploy <host> [dir]` | add `--env <name>`; `host` stays a required positional (unambiguous, so it does not move) |
+| `deploy <host> [dir]` | add `--env <name>`; drop `--model` (§5: it never reaches the box) and `--auth-path`; `host` stays a required positional (unambiguous, so it does not move) |
 | `logs <host> [dir]` | add `--env <name>` |
-| `login <provider> [dir]` | add `-g`; drop the `--auth-path` flag (SDK store injection stays) |
-| the other twelve commands | unchanged |
+| `login [provider]` | add `-g`; drop the `--auth-path` flag (SDK store injection stays) |
+| `dev`, `chat`, `info`, `invoke`, `fire`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
+| the other six commands | unchanged |
 
-`[dir]` is a positional shared by every command, so `--env` is a flag rather than a second optional positional — `deploy production` and `deploy ./myagent` are indistinguishable otherwise. Remote state needs no new command either: `deploy` without `--run` is the "planned vs deployed" view, which is already its role.
+`[dir]` is a positional both `deploy` and `logs` already carry, so `--env` is a flag rather than a second optional positional — `deploy fly production` and `deploy fly ./myagent` are indistinguishable otherwise. `deploy` without `--run` keeps its current meaning: it writes the generated artifacts into the agent dir (ownership markers decide what may be overwritten) and changes nothing on the host. Reading back remote state is **not** part of this proposal.
 
 ## 7. Deployment phases
 
@@ -138,7 +141,9 @@ the selected value file  →  validate/preview  →  the platform's variable sto
 
 No `secret push` / `env sync` prerequisite lifecycle (the lesson Kamal 2 encodes by deleting `envify`): edit the file, deploy. CI materializes the same file before running the same command.
 
-**Ownership is derived, not tracked remotely**: the keys FastAgent owns are every `{ secrets }` declaration ∪ the keys in the selected value file. Nothing outside that union is touched, so platform-owned variables survive. A deletion means the name is gone from both the declarations and the file, and it appears in the plan.
+**Ownership is derived, not tracked remotely**: the keys FastAgent owns are every `{ secrets }` declaration ∪ the keys in the selected value file. Nothing outside that union is written, so platform-owned variables survive.
+
+That union describes the *current* intent and cannot say which remote key a past deploy set, so **nothing is deleted implicitly**. The plan lists the remote key names (names only — every supported host allows listing names without values) and reports the ones outside the union as unmanaged; removing them is the operator's call. Tracking a "previously managed" set would mean either a remote registry or local state that CI does not have, and the whole point of §9 is that neither exists.
 
 Values are redacted in every output; write-only platform secrets are never read back to build a plan; a plaintext value file never enters an image, a command-line argument, a generated manifest, or a log; framework-owned storage/ingress/bootstrap names are refused.
 
@@ -148,7 +153,7 @@ The real guard on missing values is the **declaration-driven gate** (`src/secret
 
 Resource prefix `<name>-<env>` (`<name>` for a single instance), where `name` comes from `fastagent.config.ts` and is recorded once by `init` rather than recomputed from the checkout directory. State, schedules, services, and channel bindings all hang below it. Local `dev` is the same rule with no env, **not a special case**.
 
-A distinct name is not a security boundary; platform permissions enforce the isolation. Generated host manifests land in `.state/deploy/<host>-<env>/`, hold no secrets, and are artifacts rather than a second hand-maintained configuration source.
+A distinct name is not a security boundary; platform permissions enforce the isolation. Generated host manifests keep their current home — the agent dir, with the marker line that makes them regenerable and a hand-tuned file untouchable (`src/deploy/container.ts`, [deploy.md](../deploy.md)) — because being committable and hand-adjustable is a deliberate property, not an accident. With `--env`, the host config carries the env in its name (`fly.production.toml`) so two environments do not overwrite each other's artifact.
 
 ## 11. Not doing
 
@@ -156,14 +161,15 @@ Dropped from the RFC, and from earlier drafts of this document:
 
 | Rejected | Why |
 |---|---|
-| A binding record (`deploy.targets`) the tool writes into its own config | Buys only "type `--host fly` less often". Costs: programmatic TS rewriting; either an invisible local state (the "implicit current environment" the RFC rightly rejects) or a `deploy` that mutates the working tree, contradicting "without `--run` it changes nothing". CI wants the flag spelled out anyway |
+| A binding record (`deploy.targets`) the tool writes into its own config | Buys only "type `--host fly` less often". Costs: programmatic TS rewriting; either an invisible local state (the "implicit current environment" the RFC rightly rejects) or a `deploy` that rewrites authored configuration rather than only regenerating its own marked artifacts. CI wants the flag spelled out anyway |
 | `deploy.<env>.ts`, an env registry, a second config extension, config-merging DSL, env inheritance | Conventions must not require restating what a filename or a flag already says |
 | `login --env`, `auth push`, per-host credential management, per-provider merge | Day two uses API keys; day one has no choice to make |
 | A credential account/alias dimension, `config.accounts` | `--env` plus the two credential layers already covers "different account per environment" |
 | Cross-env value fallback, importing pi's credentials, copying an OAuth grant between local and remote | §5 |
 | Moving `.env` out of `.secrets/` | Plaintext credentials in a 0755 directory; see the `ensureSecretsDir` note in `AGENTS.md` |
-| Removing `FASTAGENT_SECRETS_DIR` / `FASTAGENT_STATE_DIR` | The fly/railway/agentcore plans point them at the mounted volume. Only the corresponding CLI flags can go |
+| Removing `FASTAGENT_SECRETS_DIR` / `FASTAGENT_STATE_DIR` / `FASTAGENT_AUTH_PATH` | The fly/railway/agentcore plans point them at the mounted volume, and the deployed container locates `auth.json` through that chain. Only the corresponding CLI flags can go |
 | A `--profile` selector, a current-environment switch, arbitrary credential-path options, a custom encryption/key-distribution framework | Orchestration or scope creep |
+| Reading back deployed state to diff it, moving generated artifacts into `.state/`, narrowing `AGENT_CONFIG_NAMES` to `fastagent.config.ts` | Each is a breaking change unrelated to env or credential ownership (the last one invalidates every agent `init` scaffolded as `fastagent.config.mjs`), and none is needed for anything above |
 
 ## 12. Implementation sketch and sequencing
 
@@ -174,8 +180,9 @@ Dropped from the RFC, and from earlier drafts of this document:
 | `name` field | `src/engines/pi/config.ts` |
 | project > global credential fallback, refresh write-back to the layer read, `login -g` | `src/engines/pi/auth.ts`, `src/engines/pi/login.ts` |
 | "credential present + ready" precondition | `src/deploy/registration-gate.ts` |
-| report the effective model **and its source**; validate that model's provider | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
-| `.secrets/<env>/` path derivation; `AGENT_CONFIG_NAMES` reduced to `fastagent.config.ts` | `src/paths.ts` |
+| report the effective model **and its source**; validate that model's provider; gate `--run` when **no** source resolves a model (the replacement for the deleted gate — without it the deletion leaves a silent-degradation window) | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
+| `.secrets/<env>/` path derivation | `src/paths.ts` |
+| Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
 | Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0700, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
 
 | # | Step | Independent value |
@@ -193,6 +200,7 @@ Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are
 - **"Which account does prod use" is not in committed FastAgent config.** The review point moves to the CI workflow, which also has branch protection and environment protection rules — a better home for it.
 - **Local and remote hold the same OAuth grant.** If the provider's refresh token is single-use, whoever refreshes first wins. The tools available are not overwriting implicitly (`authSeedBytes`) and printing the source.
 - **`FASTAGENT_AUTH_SEED` chunking is ugly but effective**, and `auth.json` keeps growing with providers.
+- **Loading a definition under a given env's values costs a subprocess.** Every plan/deploy pays one process start, and channel/schedule discovery errors have to cross a process boundary without losing their diagnosability (§12).
 - **A refresh and a storage write are not one transaction.** A crash after provider-side rotation can still require reauthentication, and each provider's grant issue/invalidate behavior must be verified rather than assumed.
 - **AgentCore resets its storage on every runtime version update**, so OAuth credentials are re-delivered on each deploy. That scenario should use an API key; no special-case clause is written for it.
 
@@ -202,7 +210,7 @@ Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are
 - [ ] `.secrets/production/.env` and `.secrets/alpha/.env` can select different models; preflight, generated configuration, runtime, and diagnostics agree on the effective model and its credential provider.
 - [ ] With `--env`, neither `.secrets/.env` nor the operator's shell `FASTAGENT_MODEL` affects resolution.
 - [ ] A typoed env or a missing declared variable fails visibly and names the declaring file, with no other environment's values substituted.
-- [ ] A deploy delivers the full allowed key set, reports partial failure, and removes only planned, previously managed keys.
+- [ ] A deploy delivers the full allowed key set, reports partial failure, deletes no remote key implicitly, and lists remote names outside its ownership union as unmanaged.
 - [ ] Value files, secret values, and credentials appear in no build context, image, manifest, command argument, or log.
 - [ ] With no project credential, the global one is used and its source is printed; a credential read from the global store refreshes back into it and leaves no project copy.
 - [ ] Concurrent local projects share the global credential file safely.
