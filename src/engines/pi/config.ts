@@ -254,13 +254,18 @@ export function rewriteConfigModel(src: string, spec: string): string | null {
   return null;
 }
 
-/** Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. */
+/**
+ * Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. An EMPTY `FASTAGENT_MODEL` is
+ * "unset", not "no model": container topologies declare the name and interpolate a missing value to `""` (docker
+ * compose's `${FASTAGENT_MODEL:-}`), and a set-but-empty variable that shadowed `config.model` would crash-loop a box
+ * whose config names a model.
+ */
 export function resolveModelSpec(
   flag: string | undefined,
   config: FastagentConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return flag ?? env.FASTAGENT_MODEL ?? config.model;
+  return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
 /**

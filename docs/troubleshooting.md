@@ -282,11 +282,12 @@ A broken `schedules/<name>.ts` file is reported by `fastagent info` before it ev
 
 ## Deployed agent crash-loops with `missing model`
 
-Two sources reach the box: `model` in `fastagent.config.*` (it ships inside the image) and
-`FASTAGENT_MODEL` in `.secrets/.env` (`deploy` reads that file and delivers the value as a host
-variable). Your shell's `FASTAGENT_MODEL` is not one of them, and `deploy` has no `--model` flag.
-Set either source and redeploy — `deploy` prints the effective model and where it read it. See
-[Deploy](deploy.md).
+Two sources reach the box, both in the image: `model` in `fastagent.config.*` (the config file ships)
+and `FASTAGENT_MODEL` in `.secrets/.env` (`deploy` reads that file and bakes an `ENV` into the
+generated Dockerfile). Your shell's `FASTAGENT_MODEL` is not one of them, and `deploy` has no
+`--model` flag. A **hand-written** Dockerfile receives no bake — `deploy` warns and names what it
+dropped, so either add the `ENV` yourself or set `model` in the config. Set a source and redeploy —
+`deploy` prints the effective model and where it read it. See [Deploy](deploy.md).
 
 ## Webhooks stop working after a tunnel restart
 

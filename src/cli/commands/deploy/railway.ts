@@ -21,7 +21,7 @@ export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, pre, channels, write } = ctx;
-    const { hasTimeTriggers, model, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
+    const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
     const serviceName = toRailwayName(basename(workspace));
     const plan = planRailwayDeploy({
       serviceName,
@@ -48,7 +48,6 @@ export const railwayHost: HostDeploy = {
         name: serviceName,
         modelAuth,
         modelKeyInDefinition,
-        modelEnvValue: model.envValue,
         authPath,
         channels,
         extraSecrets,
@@ -67,7 +66,6 @@ async function runDeployRailway(
     name: string;
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
-    modelEnvValue: string | undefined;
     authPath: string;
     channels: readonly DeclaredChannel[];
     extraSecrets: readonly DeclaredSecret[];

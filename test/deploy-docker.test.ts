@@ -90,12 +90,7 @@ describe("deploy/docker: planDockerDeploy", () => {
         ...base,
         modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram", "feishu"]),
-        extraSecrets: [
-          { name: "GH_TOKEN", source: "tools/gh.ts" },
-          // Compose delivery is NAME-driven: a carried value with no line here reaches the compose process and
-          // stops there, so the container would boot without the model the preflight just reported.
-          { name: "FASTAGENT_MODEL", source: "fastagent/.secrets/.env" },
-        ],
+        extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
       }),
     );
     for (const name of [
@@ -104,7 +99,6 @@ describe("deploy/docker: planDockerDeploy", () => {
       "TELEGRAM_SECRET_TOKEN",
       "FEISHU_APP_ID",
       "GH_TOKEN",
-      "FASTAGENT_MODEL",
       "FASTAGENT_AUTH_SEED",
     ]) {
       expect(yaml).toContain(`${name}: "\${${name}:-}"`);

@@ -21,7 +21,7 @@ export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
-    const { model, modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets } = pre;
+    const { modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets } = pre;
     const hasDeclaredChannels = channels.length > 0;
     const projectName = toDockerProjectName(basename(workspace));
     const dockerPlan = (tunnel: boolean) =>
@@ -61,7 +61,6 @@ export const dockerHost: HostDeploy = {
         requireTunnel: requestedTunnel,
         modelAuth,
         modelKeyInDefinition,
-        modelEnvValue: model.envValue,
         authPath,
         channels,
         extraSecrets,
@@ -89,7 +88,6 @@ async function runDeployDocker(
     requireTunnel: boolean;
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
-    modelEnvValue: string | undefined;
     authPath: string;
     channels: readonly DeclaredChannel[];
     extraSecrets: readonly DeclaredSecret[];

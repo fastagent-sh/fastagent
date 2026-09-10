@@ -407,6 +407,14 @@ describe("config: resolveModelSpec (precedence flag > env > config)", () => {
     expect(resolveModelSpec(undefined, {}, env)).toBe("e/m");
     expect(resolveModelSpec(undefined, {}, {} as NodeJS.ProcessEnv)).toBeUndefined();
   });
+
+  it("an EMPTY FASTAGENT_MODEL is unset, not a veto over config.model", () => {
+    // A container topology declares the name and interpolates a missing value to "" (docker compose's
+    // `${FASTAGENT_MODEL:-}`): a shadowed config.model would crash-loop the box on a plain `docker compose up`.
+    const empty = { FASTAGENT_MODEL: "" } as NodeJS.ProcessEnv;
+    expect(resolveModelSpec(undefined, { model: "c/m" }, empty)).toBe("c/m");
+    expect(resolveModelSpec(undefined, {}, empty)).toBeUndefined();
+  });
 });
 
 describe("rewriteConfigModel (first-run picker write-back)", async () => {

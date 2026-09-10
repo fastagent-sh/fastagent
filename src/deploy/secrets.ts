@@ -71,11 +71,6 @@ export function assembleSecrets(input: {
    */
   modelKeyInDefinition?: boolean;
   authFile: Buffer | undefined;
-  /**
-   * `FASTAGENT_MODEL` as the selected value file spells it, or undefined when the model comes from the committed
-   * config (which already travels inside the image). This is HOW a per-deployment model reaches the box.
-   */
-  modelEnvValue?: string;
   channels: readonly DeclaredChannel[];
   /** Everything the definition declared it needs — `deploy.secrets` plus every tool/schedule
    *  declaration — carried like channel secrets. */
@@ -102,8 +97,6 @@ export function assembleSecrets(input: {
   } else {
     needsModelCredential = true; // no env key, no auth.json — `fastagent login` remediation
   }
-
-  if (input.modelEnvValue) secrets.FASTAGENT_MODEL = input.modelEnvValue;
 
   for (const { kind, ingress } of firstPartyChannels(input.channels)) {
     for (const e of channelSetup(kind, ingress === "long-connection" ? "websocket" : "webhook").env) {

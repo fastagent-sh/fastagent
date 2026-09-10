@@ -86,10 +86,13 @@ FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 ```
 
 **A deployment resolves this differently, on purpose.** `deploy` reads `FASTAGENT_MODEL` from
-`.secrets/.env` itself and delivers it to the host as a variable; `config.model` is the fallback and
-already ships inside the image. Your shell's `FASTAGENT_MODEL` is not a source there, and `deploy`
-has no `--model` flag — a deployment must be reproducible from what it carries. `deploy` prints the
-effective model and which of the two it came from.
+`.secrets/.env` itself and bakes it into the generated Dockerfile as an `ENV`, with `config.model`
+(which ships in the config file) as the fallback. Both carriers are the image, so the answer is
+reproducible from the artifact: nothing interpolates the operator's shell, and deleting the line and
+redeploying drops the `ENV` with the rebuild instead of leaving a stale host variable behind. Your
+shell's `FASTAGENT_MODEL` is not a source there, and `deploy` has no `--model` flag — a deployment
+must be reproducible from what it carries. `deploy` prints the effective model and which of the two
+it came from.
 
 ## Custom model endpoints
 

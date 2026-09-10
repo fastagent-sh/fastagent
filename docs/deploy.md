@@ -29,7 +29,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 
 | Requirement | Why | How |
 |---|---|---|
-| **A model resolves** | Two sources travel: `model` in `fastagent.config.*` (inside the image) and `FASTAGENT_MODEL` in `.secrets/.env` (delivered as a host variable, and it wins). A `--model` flag is neither — `deploy` has no such flag, because a deployment must be reproducible from what it carries. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. |
+| **A model resolves** | Two sources travel, both inside the image: `model` in `fastagent.config.*`, and `FASTAGENT_MODEL` in `.secrets/.env` — which wins, and which `deploy` bakes into the generated Dockerfile as an `ENV`. A `--model` flag is neither: `deploy` has no such flag, because a deployment must be reproducible from what it carries. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. A hand-written Dockerfile gets neither bake nor `deploy.apt` — `deploy` warns and names what it dropped. |
 | **Secrets are declared** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). |
 | **Workspace, state and secrets are durable** | Local directories remain where you created them. | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`, and a new release replaces only the nested definition. AgentCore uses managed SessionStorage at `/mnt/data`, which the platform resets on every deploy. |
 

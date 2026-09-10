@@ -261,26 +261,6 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(r.needsModelCredential).toBe(false);
   });
 
-  it("a value-file model travels as FASTAGENT_MODEL; a config model carries nothing", () => {
-    // This is HOW a deployment runs a model the committed config does not name. `modelEnvValue` is only set
-    // when the value file supplied it (preflight's resolveDeployModel), so a config model adds no variable.
-    const withEnv = assembleSecrets({
-      modelAuth: "OPENAI_API_KEY",
-      modelEnvValue: "openai/gpt-4o-mini",
-      authFile: undefined,
-      channels: [],
-      env: { OPENAI_API_KEY: "sk-x" },
-    });
-    expect(withEnv.secrets).toEqual({ OPENAI_API_KEY: "sk-x", FASTAGENT_MODEL: "openai/gpt-4o-mini" });
-    const fromConfig = assembleSecrets({
-      modelAuth: "OPENAI_API_KEY",
-      authFile: undefined,
-      channels: [],
-      env: { OPENAI_API_KEY: "sk-x" },
-    });
-    expect(fromConfig.secrets.FASTAGENT_MODEL).toBeUndefined();
-  });
-
   it("OAuth/stored auth (no env key) rides as a base64 FASTAGENT_AUTH_SEED", () => {
     const r = assembleSecrets({ modelAuth: "OAuth", authFile: Buffer.from('{"a":1}'), channels: [], env: {} });
     expect(r.secrets.FASTAGENT_AUTH_SEED).toBe(Buffer.from('{"a":1}').toString("base64"));

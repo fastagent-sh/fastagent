@@ -268,7 +268,7 @@ source files, and logs. The CLI reads the agent's `.secrets/.env`, not a workspa
 Set `model: "provider/model-id"` in the existing `fastagent.config.mjs`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
 from two sources only — that config value, or `FASTAGENT_MODEL` in `fastagent/.secrets/.env`, which
-`deploy` reads from the file and delivers as a host variable. A `--model` flag is local to the run that
+`deploy` reads from the file and bakes into the image. A `--model` flag is local to the run that
 passes it, and `deploy` has none. See [models and auth](configuration.md).
 
 ```bash

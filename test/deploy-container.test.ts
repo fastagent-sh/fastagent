@@ -56,6 +56,20 @@ describe("deploy/container: shared Docker context", () => {
     expect(ships(".git/HEAD")).toBe(true);
   });
 
+  it("bakes a value-file model into every image shape, and nothing when the config named it", () => {
+    // The carrier is the IMAGE, not a host variable: an image cannot interpolate the operator's shell (a compose
+    // `${FASTAGENT_MODEL:-}` line can), and a rebuild after the line is deleted simply drops the ENV.
+    const shapes = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }];
+    for (const shape of shapes) {
+      const baked = containerArtifacts({ ...shape, modelSpec: "openai/gpt-4o-mini" }).find(
+        (a) => a.path === "fastagent/Dockerfile",
+      )!.content;
+      expect(baked).toContain("ENV FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+      const plain = containerArtifacts(shape).find((a) => a.path === "fastagent/Dockerfile")!.content;
+      expect(plain).not.toContain("FASTAGENT_MODEL");
+    }
+  });
+
   it("gives each image a stable release and describes its persistent workspace", () => {
     const values = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }]
       .map((i) => containerArtifacts(i).find((artifact) => artifact.path === "fastagent/Dockerfile")!.content)

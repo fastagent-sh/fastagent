@@ -41,6 +41,13 @@ export interface ContainerInput {
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
   /**
+   * The model spec to bake as `ENV FASTAGENT_MODEL`, set only when the VALUE FILE named it — a `config.model` needs
+   * nothing here, since the config itself is in the image. Baking it (rather than delivering a host variable) is what
+   * keeps the answer reproducible from the artifact: an image cannot pick up the operator's shell, and rebuilding
+   * after the line is deleted from the value file simply drops the ENV instead of leaving a stale variable behind.
+   */
+  modelSpec?: string;
+  /**
    * Where deploy's artifacts and the agent's own files sit, relative to the BUILD CONTEXT (which is always the
    * workspace).
    */
@@ -77,7 +84,7 @@ function dockerfile(input: ContainerInput): string {
   // node:22-slim lacks.
   const apt = aptLayer(input.apt);
   // PIN the agent into the image.
-  const pin = `ENV FASTAGENT_AGENT=${dir}\n`;
+  const pin = `ENV FASTAGENT_AGENT=${dir}\n${input.modelSpec ? `ENV FASTAGENT_MODEL=${input.modelSpec}\n` : ""}`;
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=/app/${into(RELEASE_FILE)}\nENV FASTAGENT_STORAGE_DIR=/data\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent` from PATH.

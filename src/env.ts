@@ -9,10 +9,12 @@ import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
  * (verified against Node).
  */
 export function loadEnvFile(file: string): void {
-  const parsed = parseEnvContent(readFileSync(file, "utf8"));
-  for (const [key, value] of parsed) {
-    if (!(key in process.env)) process.env[key] = value; // env-vs-file: a real env var wins
-  }
+  applyEnvValues(parseEnvContent(readFileSync(file, "utf8")));
+}
+
+/** Write parsed values into `process.env` under Node's precedence: a real env var wins over the file. */
+function applyEnvValues(values: ReadonlyMap<string, string>): void {
+  for (const [key, value] of values) if (!(key in process.env)) process.env[key] = value;
 }
 
 /** Parse .env content into key → value (the dialect above; last occurrence of a key wins). */
@@ -78,11 +80,7 @@ export function enterAgentEnv(agentDir: string): void {
  */
 export function loadDotEnv(agentDir: string): void {
   const path = dotEnvPath(agentDir);
-  try {
-    loadEnvFile(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+  applyEnvValues(loadEnvValues(path)); // ONE definition of "a missing value file is normal" (loadEnvValues)
   // A `.env` at the agent's root is the file habit puts there, and nothing reads it.
   const stray = join(agentDir, ".env");
   if (stray === path || !existsSync(stray)) return;

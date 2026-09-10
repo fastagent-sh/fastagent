@@ -33,7 +33,7 @@ export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
-    const { model, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
+    const { modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session
     // has nothing to wake it.
     if (longConnectionChannels.length > 0) {
@@ -117,7 +117,6 @@ export const agentcoreHost: HostDeploy = {
         name: acName,
         modelAuth,
         modelKeyInDefinition,
-        modelEnvValue: model.envValue,
         authPath,
         channels,
         extraSecrets,
@@ -136,7 +135,6 @@ async function runDeployAgentcore(
     name: string;
     modelAuth: string | undefined;
     modelKeyInDefinition: boolean;
-    modelEnvValue: string | undefined;
     authPath: string;
     channels: readonly DeclaredChannel[];
     extraSecrets: readonly DeclaredSecret[];

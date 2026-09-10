@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -33,6 +33,8 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
   });
 
 describe("deploy/preflight: the host-neutral pre-flight", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("gates a placement the release manifest could not carry, naming the directory", async () => {
     // `init --agent-dir` accepts any single path segment; the manifest joins this name onto the
     // storage root inside the container and accepts fewer. Without this gate the refusal surfaced
@@ -49,9 +51,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
   it("gates --run when NO source resolves a model (would ship a crash-loop)", async () => {
     const dir = await workspace(); // .secrets/.env holds no FASTAGENT_MODEL, config holds no model
+    vi.stubEnv("FASTAGENT_MODEL", undefined);
     const pre = await call(dir, {}, { run: true });
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.gate).toMatch(/no model resolves/);
+  });
+
+  it("names the shell as a non-source in that gate — the operator who exported it is who hits it", async () => {
+    const dir = await workspace();
+    vi.stubEnv("FASTAGENT_MODEL", "openai/gpt-4o-mini");
+    const pre = await call(dir, {}, { run: true });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.gate).toMatch(/shell's FASTAGENT_MODEL is NOT a deploy source/);
   });
 
   it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
@@ -65,18 +76,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const source = `${basename(dir)}/.secrets/.env`; // as READ, relative to the workspace
     expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source, envValue: "openai/gpt-4o-mini" });
     expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
-    // DELIVERY is name-driven on some hosts (docker's compose env block, agentcore's template parameters), so the
-    // carried value must also be a DECLARED name — otherwise those hosts drop it or refuse the stack.
-    expect(pre.extraSecrets).toContainEqual({ name: "FASTAGENT_MODEL", source });
-    expect(deploymentSecrets(undefined, [], pre.extraSecrets).map((s) => s.name)).toContain("FASTAGENT_MODEL");
+    // It travels BAKED into the image, not as a host variable: an image cannot interpolate the operator's shell,
+    // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
+    expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
+    expect(pre.extraSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
   });
 
-  it("a config model needs no carry — it is already inside the image", async () => {
+  it("a config model bakes nothing extra — the config is already in the image", async () => {
     const pre = await call(await workspace(), { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source: "fastagent.config" });
-    expect(pre.extraSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
+    expect(pre.container.modelSpec).toBeUndefined();
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {

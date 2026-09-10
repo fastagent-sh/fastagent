@@ -132,7 +132,13 @@ export async function preflightDeploy(input: {
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
-      `in the image), or FASTAGENT_MODEL in ${valueFile} (it travels as a host variable)`;
+      `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy bakes that one into the image)` +
+      // The operator most likely to hit this gate is the one who exported the variable: `fastagent info` shows a
+      // model, so "no model resolves" reads like a bug unless the message says the shell was not consulted.
+      (process.env.FASTAGENT_MODEL
+        ? `. Your shell's FASTAGENT_MODEL is NOT a deploy source (a deployment must be reproducible from what it ` +
+          `carries) — write that line into ${valueFile}`
+        : ``);
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   } else {
@@ -393,6 +399,7 @@ export async function preflightDeploy(input: {
     hasLockfile,
     version: await fastagentVersion(),
     apt,
+    ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };
   const port = config.http?.port ?? 8787;
@@ -439,20 +446,17 @@ export async function preflightDeploy(input: {
   if (config.sessionControl === true) {
     extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
   }
-  // A model that came from the value file has to be DELIVERED, so it is declared like any other carried name: the
-  // hosts whose delivery is name-driven (docker's compose `environment:` block, agentcore's template parameters)
-  // read this list, and so does every runbook. Its VALUE still comes from `model.envValue` and never from
-  // `process.env` — same fact, one declaration.
-  if (model.envValue) extraSecrets.push({ name: "FASTAGENT_MODEL", source: valueFile });
-  // deploy.apt only shapes the GENERATED Dockerfile.
+  // Both of these only shape the GENERATED Dockerfile, so a kept hand-written one silently drops them.
   const dockerfileHome = join(agentDir, "Dockerfile");
-  if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
+  if ((config.deploy?.apt?.length || model.envValue) && !force && (await exists(dockerfileHome))) {
     if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
+      const dropped = [
+        ...(config.deploy?.apt?.length ? [`deploy.apt (${config.deploy.apt.join(", ")})`] : []),
+        ...(model.envValue ? [`ENV FASTAGENT_MODEL=${model.envValue}`] : []),
+      ];
       messages.push({
         level: "warn",
-        text:
-          `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
-          `NOT applied; install those packages in your Dockerfile.`,
+        text: `kept your hand-written Dockerfile — ${dropped.join(" and ")} NOT applied; add them yourself.`,
       });
     }
   }
@@ -484,6 +488,9 @@ function resolveDeployModel(
   valueFile: string,
 ): { spec?: string; source: string; envValue?: string } {
   const fromEnv = values.get("FASTAGENT_MODEL");
+  // `envValue` is what must be BAKED into the image (ContainerInput.modelSpec), so it is set only when the value file
+  // is the source: a `config.model` already travels in the config itself. Because the carrier is the image and not a
+  // host variable, deleting the line and redeploying drops the ENV with the rebuild — nothing stale survives.
   if (fromEnv) return { spec: fromEnv, source: valueFile, envValue: fromEnv };
   return { spec: config.model, source: "fastagent.config" };
 }
