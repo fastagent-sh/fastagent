@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import { deploymentSecrets } from "../src/deploy/secrets.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
@@ -62,18 +62,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, { model: "openai/other" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    expect(pre.model).toEqual({
-      spec: "openai/gpt-4o-mini",
-      source: ".secrets/.env",
-      envValue: "openai/gpt-4o-mini",
-    });
-    expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4o-mini (source: .secrets/.env)" });
+    const source = `${basename(dir)}/.secrets/.env`; // as READ, relative to the workspace
+    expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source, envValue: "openai/gpt-4o-mini" });
+    expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
+    // DELIVERY is name-driven on some hosts (docker's compose env block, agentcore's template parameters), so the
+    // carried value must also be a DECLARED name — otherwise those hosts drop it or refuse the stack.
+    expect(pre.extraSecrets).toContainEqual({ name: "FASTAGENT_MODEL", source });
+    expect(deploymentSecrets(undefined, [], pre.extraSecrets).map((s) => s.name)).toContain("FASTAGENT_MODEL");
   });
 
   it("a config model needs no carry — it is already inside the image", async () => {
     const pre = await call(await workspace(), { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
-    if (pre.ok) expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source: "fastagent.config" });
+    if (!pre.ok) return;
+    expect(pre.model).toEqual({ spec: "openai/gpt-4o-mini", source: "fastagent.config" });
+    expect(pre.extraSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {

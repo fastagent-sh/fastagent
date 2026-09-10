@@ -20,7 +20,6 @@ import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
-import { SECRETS_DIRNAME } from "../paths.ts";
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { isEnvKey } from "./secrets.ts";
 
@@ -128,11 +127,12 @@ export async function preflightDeploy(input: {
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it, and read from the value FILE so the operator's shell cannot become a deploy source.
-  const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)));
+  const valueFile = relative(workspace, dotEnvPath(agentDir));
+  const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)), valueFile);
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
-      `in the image), or FASTAGENT_MODEL in ${relative(workspace, dotEnvPath(agentDir))} (it travels as a host variable)`;
+      `in the image), or FASTAGENT_MODEL in ${valueFile} (it travels as a host variable)`;
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   } else {
@@ -439,6 +439,11 @@ export async function preflightDeploy(input: {
   if (config.sessionControl === true) {
     extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
   }
+  // A model that came from the value file has to be DELIVERED, so it is declared like any other carried name: the
+  // hosts whose delivery is name-driven (docker's compose `environment:` block, agentcore's template parameters)
+  // read this list, and so does every runbook. Its VALUE still comes from `model.envValue` and never from
+  // `process.env` — same fact, one declaration.
+  if (model.envValue) extraSecrets.push({ name: "FASTAGENT_MODEL", source: valueFile });
   // deploy.apt only shapes the GENERATED Dockerfile.
   const dockerfileHome = join(agentDir, "Dockerfile");
   if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
@@ -475,8 +480,10 @@ export async function preflightDeploy(input: {
 function resolveDeployModel(
   config: FastagentConfig,
   values: ReadonlyMap<string, string>,
+  /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
+  valueFile: string,
 ): { spec?: string; source: string; envValue?: string } {
   const fromEnv = values.get("FASTAGENT_MODEL");
-  if (fromEnv) return { spec: fromEnv, source: `${SECRETS_DIRNAME}/.env`, envValue: fromEnv };
+  if (fromEnv) return { spec: fromEnv, source: valueFile, envValue: fromEnv };
   return { spec: config.model, source: "fastagent.config" };
 }

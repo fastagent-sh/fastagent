@@ -266,9 +266,10 @@ provider key in `fastagent/.secrets/.env`. Keep credentials out of chat transcri
 source files, and logs. The CLI reads the agent's `.secrets/.env`, not a workspace-root `.env`.
 
 Set `model: "provider/model-id"` in the existing `fastagent.config.mjs`, preserving its export. A terminal
-picker can also set the model; unattended invocations require an explicit model. The config value must
-be present before deployment: a builder's `--model` flag or environment selection does not travel in
-an image. See [models and auth](configuration.md).
+picker can also set the model; unattended invocations require an explicit model. A deployment resolves
+from two sources only — that config value, or `FASTAGENT_MODEL` in `fastagent/.secrets/.env`, which
+`deploy` reads from the file and delivers as a host variable. A `--model` flag is local to the run that
+passes it, and `deploy` has none. See [models and auth](configuration.md).
 
 ```bash
 fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send anything."
