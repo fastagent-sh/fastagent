@@ -30,7 +30,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 | Requirement | Why | How |
 |---|---|---|
 | **A model resolves** | The usual `flag > environment > config` chain, evaluated in **the environment being deployed** rather than this machine's. That environment is declared by `.secrets/.env`, so its `FASTAGENT_MODEL` wins and `deploy` records it in the release manifest (`fastagent.release.json`, rewritten by every deploy); `config.model` is the fallback and ships in the config file. Your shell is not part of the deployed environment, and `deploy` has no `--model` flag — a deployment's inputs are files, so that they survive the next deploy that omits them. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. |
-| **Secrets are declared** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). |
+| **Secrets are declared, and their values are in the value file** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). `--run` reads the values from the agent's `.secrets/.env` and nowhere else — that file declares the deployed environment, so a variable exported in your shell does not reach the deployment. In CI, write the file before running the command. |
 | **Workspace, state and secrets are durable** | Local directories remain where you created them. | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`, and a new release replaces only the nested definition. AgentCore uses managed SessionStorage at `/mnt/data`, which the platform resets on every deploy. |
 
 Model auth: if your local auth is an **env key** (e.g. `OPENAI_API_KEY`), `deploy` lists it as a host secret automatically. In a runbook-only deploy, an OAuth/stored login still needs a provider API key or an `auth.json` placed on the volume. Under `--run`, FastAgent carries the local auth file as an absent-only `FASTAGENT_AUTH_SEED`, so a credential already refreshed on the volume is never overwritten.
@@ -111,7 +111,7 @@ Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy 
 Or let the CLI do all of it:
 
 ```bash
-fastagent deploy fly --run   # idempotent, resumable; carries your local env secrets to Fly
+fastagent deploy fly --run   # idempotent, resumable; carries .secrets/.env's values to Fly
 ```
 
 Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
@@ -138,7 +138,7 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile`, `.docke
 Or:
 
 ```bash
-fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries your local env secrets
+fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries .secrets/.env's values
 ```
 
 `--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, time triggers, or a long-connection channel; a sleeping service cannot hold an outbound connection.

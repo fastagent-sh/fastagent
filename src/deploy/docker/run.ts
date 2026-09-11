@@ -124,7 +124,9 @@ export async function deployDockerRun(
   }
   if (plan.missingSecrets.length > 0) {
     return gate(
-      `no local value for: ${plan.missingSecrets.join(", ")} — set them in .env (or the environment) and re-run`,
+      `no value for: ${plan.missingSecrets.join(", ")} — the deployed environment is declared by the agent's
+        .secrets/.env, and this deploy reads only that file (exporting the variable here does not reach the
+        deployment). Add them there and re-run`,
     );
   }
 

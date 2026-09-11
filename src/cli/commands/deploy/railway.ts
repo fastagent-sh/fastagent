@@ -21,7 +21,7 @@ export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, pre, channels, write } = ctx;
-    const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets } = pre;
+    const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, extraSecrets, values } = pre;
     const serviceName = toRailwayName(basename(workspace));
     const plan = planRailwayDeploy({
       serviceName,
@@ -51,6 +51,7 @@ export const railwayHost: HostDeploy = {
         authPath,
         channels,
         extraSecrets,
+        values,
         intoLinked: !!opts.intoLinked,
         dockerfilePath: dockerfilePathVar(pre.container.agentPrefix),
       });
@@ -69,6 +70,7 @@ async function runDeployRailway(
     authPath: string;
     channels: readonly DeclaredChannel[];
     extraSecrets: readonly DeclaredSecret[];
+    values: ReadonlyMap<string, string>;
     intoLinked: boolean;
     /** RAILWAY_DOCKERFILE_PATH — the scriptable route to the agent's non-root Dockerfile. */
     dockerfilePath: string;

@@ -83,15 +83,17 @@ export async function carryCredentials(params: {
   authPath: string;
   channels: readonly DeclaredChannel[];
   extraSecrets: readonly DeclaredSecret[];
+  /** The deployed environment's declaration, from the pre-flight's single read. */
+  values: ReadonlyMap<string, string>;
 }): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
-  const { modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets } = params;
+  const { modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets, values } = params;
   return assembleSecrets({
     modelAuth,
     modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     extraSecrets,
-    env: process.env,
+    values,
   });
 }
 

@@ -60,8 +60,15 @@ export function deploymentSecrets(
 }
 
 /**
- * Assemble the secret VALUES a `--run` deploy sets on the host, from the local credential + channels. Channel secrets
- * come from the local env only — NEVER minted here.
+ * Assemble the VALUES a `--run` deploy sets on the host, from the deployed environment's declaration + the local
+ * credential. Never minted here.
+ *
+ * `values` is the selected value file, read as data — **the environment running `deploy` is not a source**. A
+ * deployment must be reproducible from what it carries, and a variable that happens to be exported on the builder is
+ * written down nowhere. It is the same rule the model already follows, and the same line the industry draws by what
+ * a tool configures: dotenv and Compose let the shell win because they configure THIS process, Terraform checks
+ * `TF_VAR_*` last because it declares a remote object, and Kamal 2 stopped loading `.env` into the environment
+ * altogether. CI supplies values by writing the file before running the command.
  */
 export function assembleSecrets(input: {
   modelAuth: string | undefined;
@@ -75,7 +82,8 @@ export function assembleSecrets(input: {
   /** Everything the definition declared it needs — `deploy.secrets` plus every tool/schedule
    *  declaration — carried like channel secrets. */
   extraSecrets?: readonly DeclaredSecret[];
-  env: NodeJS.ProcessEnv;
+  /** The selected value file's contents (`loadEnvValues`). The ONLY source of operator-supplied values. */
+  values: ReadonlyMap<string, string>;
 }): {
   secrets: Record<string, string>;
   missingSecrets: string[];
@@ -86,7 +94,7 @@ export function assembleSecrets(input: {
   let needsModelCredential = false;
 
   if (isEnvKey(input.modelAuth)) {
-    const v = input.env[input.modelAuth];
+    const v = input.values.get(input.modelAuth);
     if (v) secrets[input.modelAuth] = v;
     else missingSecrets.push(input.modelAuth); // an env-key name with no value — `.env` remediation fits
   } else if (input.authFile) {
@@ -100,7 +108,7 @@ export function assembleSecrets(input: {
 
   for (const { kind, ingress } of firstPartyChannels(input.channels)) {
     for (const e of channelSetup(kind, ingress === "long-connection" ? "websocket" : "webhook").env) {
-      const v = input.env[e.name];
+      const v = input.values.get(e.name);
       if (v)
         secrets[e.name] = v; // optional channel values travel when configured
       else if (e.required) {
@@ -110,7 +118,7 @@ export function assembleSecrets(input: {
   }
   for (const { name } of dedupeSecrets(input.extraSecrets ?? [])) {
     if (name in secrets || missingSecrets.includes(name)) continue; // already covered by model/channel — no dup
-    const v = input.env[name];
+    const v = input.values.get(name);
     if (v) secrets[name] = v;
     // The control token is CARRIED, never gated.
     else if (name !== CONTROL_TOKEN_ENV) missingSecrets.push(name);
