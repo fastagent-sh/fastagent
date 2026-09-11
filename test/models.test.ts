@@ -184,16 +184,25 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     const dir = await agentWith(
       JSON.stringify({
         providers: {
-          literal: { baseUrl: "http://a/v1", api: "openai-completions", apiKey: "sk-in-file", models: [{ id: "m" }] },
-          reference: { baseUrl: "http://b/v1", api: "openai-completions", apiKey: "$GW_KEY", models: [{ id: "m" }] },
-          braced: { baseUrl: "http://c/v1", api: "openai-completions", apiKey: `\${GW_KEY}`, models: [{ id: "m" }] },
-          command: { baseUrl: "http://d/v1", api: "openai-completions", apiKey: "!echo sk", models: [{ id: "m" }] },
-          none: { baseUrl: "http://e/v1", api: "openai-completions", models: [{ id: "m" }] },
+          literal: { baseUrl: "https://a.example.com/v1", api: "o", apiKey: "sk-in-file", models: [{ id: "m" }] },
+          // `$$` is pi's escape for a literal `$`, so this resolves to `sk$abc` — a credential, not a reference.
+          escaped: { baseUrl: "https://f.example.com/v1", api: "o", apiKey: "sk$$abc", models: [{ id: "m" }] },
+          local: { baseUrl: "http://localhost:11434/v1", api: "o", apiKey: "ollama", models: [{ id: "m" }] },
+          lan: { baseUrl: "http://10.0.0.7:8000/v1", api: "o", apiKey: "placeholder", models: [{ id: "m" }] },
+          reference: { baseUrl: "https://b.example.com/v1", api: "o", apiKey: "$GW_KEY", models: [{ id: "m" }] },
+          braced: { baseUrl: "https://c.example.com/v1", api: "o", apiKey: `\${GW_KEY}`, models: [{ id: "m" }] },
+          command: { baseUrl: "https://d.example.com/v1", api: "o", apiKey: "!echo sk", models: [{ id: "m" }] },
+          none: { baseUrl: "https://e.example.com/v1", api: "o", models: [{ id: "m" }] },
         },
       }),
     );
     await writeFile(join(dir, "auth.json"), JSON.stringify({ literal: { type: "api_key", key: "sk-stored" } }));
-    expect(await literalKeyProviders(dir)).toEqual(["literal"]);
+    expect(await literalKeyProviders(dir)).toEqual([
+      { id: "literal", public: true },
+      { id: "escaped", public: true },
+      { id: "local", public: false }, // a keyless server's placeholder, not a credential
+      { id: "lan", public: false },
+    ]);
     expect(await literalKeyProviders(join(dir, "no-such-dir"))).toEqual([]); // no models.json is the normal case
   });
 

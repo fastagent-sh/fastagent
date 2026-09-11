@@ -3,7 +3,6 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
-import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface DockerPlanInput extends ContainerInput {
@@ -19,6 +18,10 @@ export interface DockerPlanInput extends ContainerInput {
   tunnel: boolean;
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule declarations). */
   extraSecrets?: readonly DeclaredSecret[];
+  /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), workspace-relative. */
+  valueFile: string;
+  /** Whether that file is on disk — `--env-file` fails outright on a missing path. */
+  valueFileExists: boolean;
 }
 
 export interface DockerPlan {
@@ -138,11 +141,13 @@ volumes:
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   const composePath = `${input.agentPrefix}${DOCKER_COMPOSE_FILE}`;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
-  // `--env-file`, not a bare `-f`: Compose interpolates `${NAME:-}` from the shell or the PROJECT `.env` and
-  // substitutes `""` for anything it cannot find, so a hand-run command without it starts a container whose
-  // declared values are all empty — no error, no log line. Pointing it at the value file makes the manual path read
-  // the same declaration `--run` does.
-  const compose = `docker compose --env-file ${input.agentPrefix}${SECRETS_DIRNAME}/.env -f ${composePath}`;
+  const compose = `docker compose -f ${composePath}`;
+  // Only the command that STARTS containers interpolates, and only it gets `--env-file`: Compose fills `${NAME:-}`
+  // from the shell or the PROJECT `.env` and substitutes `""` for anything it cannot find, so a hand-run `up`
+  // without it boots an agent whose declared values are all empty — no error, no log line. `logs`/`ps`/`down` need
+  // no values, and `--env-file` is a HARD failure on a missing path (`couldn't find env file: …`), which would take
+  // the whole runbook down with it on an agent that has no value file yet.
+  const composeUp = input.valueFileExists ? `docker compose --env-file ${input.valueFile} -f ${composePath}` : compose;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const required = secrets.filter((secret) => secret.required);
   const optional = secrets.filter((secret) => !secret.required);
@@ -156,10 +161,15 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   if (required.length > 0) {
     runbook.push(
-      `# Required environment values. Put them in ${input.agentPrefix}${SECRETS_DIRNAME}/.env — that file declares`,
-      `# the deployed environment, and every command below reads it through --env-file (in CI, write the file`,
-      `# before running the command):`,
+      `# Required environment values. Put them in ${input.valueFile} — that file declares the deployed`,
+      `# environment (in CI, write it before running the command):`,
       ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
+      ...(input.valueFileExists
+        ? []
+        : [
+            `# It does not exist yet, so the \`up\` below cannot read it (--env-file fails on a missing path).`,
+            `# Create it, then re-run \`fastagent deploy docker\` for an \`up\` that reads it.`,
+          ]),
     );
   }
   if (optional.length > 0) {
@@ -184,7 +194,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     ``,
     `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
     `# The Compose volume at ${MOUNT} retains the workspace, state and credentials.`,
-    `${compose} up -d --build`,
+    `${composeUp} up -d --build`,
     `curl --fail http://127.0.0.1:${input.port}/health`,
     ``,
     `# Operate it:`,

@@ -535,11 +535,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 });
 
 describe("preflight: how a models.json endpoint's credential reaches the host", () => {
-  const GATEWAY = (apiKey: string) =>
+  const GATEWAY = (apiKey: string, baseUrl = "https://gw.example.com/v1") =>
     JSON.stringify({
-      providers: {
-        mygw: { baseUrl: "http://vllm.internal:8000/v1", api: "openai-completions", apiKey, models: [{ id: "m1" }] },
-      },
+      providers: { mygw: { baseUrl, api: "openai-completions", apiKey, models: [{ id: "m1" }] } },
     });
 
   it("an env-keyed endpoint reports the VARIABLE NAME, so the value carries like any provider key", async () => {
@@ -560,10 +558,10 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     }
   });
 
-  it("a LITERAL key gates --run: the file ships inside the image, where any puller reads the layer", async () => {
+  it("a LITERAL key for a REACHABLE endpoint gates --run: the file ships inside the image", async () => {
     // Same rule the `.dockerignore` check enforces — any configuration that would put a credential into the image
-    // stops `--run`. A literal has no legitimate use: an endpoint needing no key omits it, and one that needs a key
-    // has two forms (`$NAME`, `!command`) that do not ship it.
+    // stops `--run`. A key presented to an endpoint anyone can reach is a credential, and it has two forms
+    // (`$NAME`, `!command`) that do not ship.
     const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file") });
     const gated = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(gated.ok).toBe(false);
@@ -582,14 +580,36 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const dir = await workspace({
       "models.json": JSON.stringify({
         providers: {
-          mygw: { baseUrl: "http://a/v1", api: "openai-completions", apiKey: "$FA_GW_KEY", models: [{ id: "m1" }] },
-          unused: { baseUrl: "http://b/v1", api: "openai-completions", apiKey: "sk-unused", models: [{ id: "m2" }] },
+          mygw: {
+            baseUrl: "https://a.example.com/v1",
+            api: "openai-completions",
+            apiKey: "$K",
+            models: [{ id: "m1" }],
+          },
+          unused: {
+            baseUrl: "https://b.example.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-u",
+            models: [{ id: "m2" }],
+          },
         },
       }),
     });
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.gate).toMatch(/literal apiKey for "unused"/);
+  });
+
+  it("a literal for an UNREACHABLE endpoint only warns — pi's docs prescribe it for a keyless local server", async () => {
+    // `"apiKey": "ollama"` against http://localhost:11434 is the documented way to make a keyless server's models
+    // usable. Gating it would make "local ollama for dev, cloud model for deploy" undeployable, and that string is
+    // not a credential: nothing outside the deployment can be reached with it.
+    const dir = await workspace({ "models.json": GATEWAY("ollama", "http://localhost:11434/v1") });
+    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/not reachable from outside/) });
+    }
   });
 
   it("a !command key is NOT gated — it runs on the box and the credential never travels", async () => {

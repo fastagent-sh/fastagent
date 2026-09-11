@@ -16,6 +16,8 @@ const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join
 const base = {
   releaseId: "release-one",
   agentPrefix: "fastagent/",
+  valueFile: "fastagent/.secrets/.env",
+  valueFileExists: true,
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,
@@ -122,6 +124,22 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(plan)).toContain("Run from the WORKSPACE ROOT");
   });
 
+  it("omits --env-file when the value file does not exist yet, and says why", () => {
+    // `fastagent init` writes .env.example, not .env, so an OAuth-only agent has no value file. `--env-file` on a
+    // missing path is `couldn't find env file: …`, which would take the whole runbook's `up` down with it.
+    const out = runbook(
+      planDockerDeploy({
+        ...base,
+        valueFileExists: false,
+        modelAuth: "OPENAI_API_KEY",
+        channels: declaredChannels(["telegram"]),
+      }),
+    );
+    expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
+    expect(out).not.toContain("docker compose --env-file"); // the note mentions the flag; no command uses it
+    expect(out).toMatch(/does not exist yet.*--env-file fails on a missing path/s);
+  });
+
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(
       planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "github"]) }),
@@ -130,6 +148,11 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(out).toContain(
       "docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build",
     );
+    // ONLY `up` interpolates, so only `up` carries --env-file: `--env-file` is a hard failure on a missing path,
+    // and these three need no values at all.
+    for (const cmd of ["logs -f agent", "ps", "down"]) {
+      expect(out).toContain(`docker compose -f fastagent/fastagent.compose.yml ${cmd}`);
+    }
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");
     expect(out).toContain("Public ingress is operator-owned");

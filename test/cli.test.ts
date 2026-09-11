@@ -94,7 +94,7 @@ describe("cli papercuts", () => {
     const first = await run(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
     expect(first.stdout).toContain(
-      "docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build",
+      "docker compose -f fastagent/fastagent.compose.yml up -d --build", // no value file yet → no --env-file
     );
     const generatedCompose = await readFile(join(dir, "fastagent", "fastagent.compose.yml"), "utf8");
     expect(generatedCompose).toContain('"127.0.0.1:8787:8787"');
@@ -127,7 +127,7 @@ describe("cli papercuts", () => {
     expect(result.stderr).toMatch(/edit it, delete it and regenerate, or pass --force/);
     expect(result.stdout).not.toContain("logs -f tunnel");
     expect(result.stdout).toContain(
-      "docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build",
+      "docker compose -f fastagent/fastagent.compose.yml up -d --build", // no value file yet → no --env-file
     );
     expect(await readFile(composePath, "utf8")).toBe(compose);
   });

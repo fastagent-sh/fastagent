@@ -49,6 +49,8 @@ interface DeployFacts {
   values: ReadonlyMap<string, string>;
   /** That file, workspace-relative — the name every "set it here" message must use. */
   valueFile: string;
+  /** Whether it is on disk. `--env-file` is a hard failure on a missing path, so a runbook must not assume one. */
+  valueFileExists: boolean;
   /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
@@ -139,6 +141,7 @@ export async function preflightDeploy(input: {
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
   const valueFile = relative(workspace, dotEnvPath(agentDir));
+  const valueFileExists = await exists(dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
   const model = resolveDeployModel(config, values, valueFile);
   if (model.invalid !== undefined) {
@@ -252,16 +255,29 @@ export async function preflightDeploy(input: {
   }
   // Same rule the `.dockerignore` check enforces: any configuration that would put a credential into the image gates
   // `--run`. Asked of EVERY provider, not just the selected model's — the file ships whole, so a literal on a
-  // provider nothing selects today is in the image all the same. A literal has no legitimate use: an endpoint that
-  // needs no key omits it, and one that needs a key has two forms that do not ship it.
+  // provider nothing selects today is in the image all the same. A literal aimed at a PRIVATE endpoint is not a
+  // credential, though: pi's docs tell you to write `"apiKey": "ollama"` for a keyless local server, so that one
+  // only warns — gating it would make a "local ollama for dev, cloud model for deploy" definition undeployable.
   const literalKeys = await literalKeyProviders(agentDir);
-  if (literalKeys.length > 0) {
+  const named = (ids: { id: string }[]) => ids.map(({ id }) => `"${id}"`).join(", ");
+  const exposed = literalKeys.filter((provider) => provider.public);
+  if (exposed.length > 0) {
     const issue =
-      `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
-      `file ships inside the image, where anyone who can pull it reads the layer. Use "$YOUR_ENV_VAR" (deploy ` +
-      `carries it like any provider key) or "!command" (it runs on the box and never travels).`;
+      `${AGENT_MODELS_FILE} carries a literal apiKey for ${named(exposed)} — that file ships inside the image, ` +
+      `where anyone who can pull it reads the layer. Use "$YOUR_ENV_VAR" (deploy carries it like any provider key) ` +
+      `or "!command" (it runs on the box and never travels).`;
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
+  }
+  const placeholders = literalKeys.filter((provider) => !provider.public);
+  if (placeholders.length > 0) {
+    messages.push({
+      level: "warn",
+      text:
+        `${AGENT_MODELS_FILE} carries a literal apiKey for ${named(placeholders)}, whose baseUrl is not reachable ` +
+        `from outside the deployment — read as a placeholder for a keyless server, not a credential. If it IS one, ` +
+        `move it to "$YOUR_ENV_VAR" or "!command": the file ships inside the image.`,
+    });
   }
 
   // Container facts (shared by every host) + the warnings that follow.
@@ -502,6 +518,7 @@ export async function preflightDeploy(input: {
     hasTimeTriggers,
     values,
     valueFile,
+    valueFileExists,
     modelAuth,
     modelKeyInDefinition,
     authPath,

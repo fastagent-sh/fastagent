@@ -85,15 +85,20 @@ export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { env
 }
 
 /**
- * EVERY provider whose `models.json` entry writes its key as a LITERAL — the form that ships the credential inside
- * the image. `"$NAME"` is an ordinary declared secret and `"!cmd"` runs on the box, so neither qualifies.
+ * EVERY provider whose `models.json` entry writes its key as a LITERAL, and whether that provider is reachable from
+ * outside the deployment. `"$NAME"` is an ordinary declared secret and `"!cmd"` runs on the box, so neither
+ * qualifies.
  *
  * Read from the FILE, not from `getProviderAuthStatus`: that answers "what satisfies this provider right now" and
  * returns `stored` first, so a provider that has both an `auth.json` entry and a literal in the file would report
  * `stored` and the literal would ship unreported. The question here is what the definition DECLARES, and only the
  * file answers it. The three-way split mirrors pi's `configuredRequestAuthStatus`, which is not exported.
+ *
+ * `public` is what separates a leaked credential from a placeholder: pi's own docs tell you to write `"apiKey":
+ * "ollama"` for a keyless local server (omitting it makes the model load but stay unusable), and a string presented
+ * only to `http://localhost:11434` is not a credential at all. A literal sent to an endpoint anyone can reach is.
  */
-export async function literalKeyProviders(agentDir: string): Promise<string[]> {
+export async function literalKeyProviders(agentDir: string): Promise<{ id: string; public: boolean }[]> {
   const file = join(agentDir, AGENT_MODELS_FILE);
   let raw: string;
   try {
@@ -105,15 +110,47 @@ export async function literalKeyProviders(agentDir: string): Promise<string[]> {
   }
   // Malformed JSON already threw out of createPiModelRuntime before this runs, so a parse failure here would be a
   // genuine surprise and must not be swallowed.
-  const providers = (JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown }> }).providers ?? {};
+  const providers =
+    (JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown; baseUrl?: unknown }> }).providers ?? {};
   return Object.entries(providers)
     .filter(([, provider]) => isLiteralKey(provider?.apiKey))
-    .map(([id]) => id);
+    .map(([id, provider]) => ({ id, public: isPublicEndpoint(provider?.baseUrl) }));
 }
 
-/** `!cmd` runs on the box; `$NAME` / `${NAME}` reads the environment; anything else is the key itself. */
+/**
+ * `!cmd` runs on the box; `$NAME` / `${NAME}` reads the environment; anything else is the key itself.
+ *
+ * `$$` is pi's escape for a literal `$`, so it is removed BEFORE looking for a reference — otherwise `"sk$$abc"`
+ * (which resolves to the literal `sk$abc`) would read as a reference and a real credential would ship unreported.
+ * This gate may over-report; it must never under-report.
+ */
 function isLiteralKey(apiKey: unknown): boolean {
-  return typeof apiKey === "string" && apiKey !== "" && !apiKey.startsWith("!") && !/\$\{?[A-Za-z_]/.test(apiKey);
+  if (typeof apiKey !== "string" || apiKey === "" || apiKey.startsWith("!")) return false;
+  return !/\$\{?[A-Za-z_]/.test(apiKey.replaceAll("$$", ""));
+}
+
+/**
+ * Can something outside this deployment reach `baseUrl`? Loopback and the private ranges cannot be, so a literal
+ * sent there is a placeholder for a keyless server rather than a credential. An unparseable or absent URL counts as
+ * public: the gate must not be opened by a value it failed to understand.
+ */
+function isPublicEndpoint(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string") return true;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return true; // not a URL we can classify — treat it as reachable
+  }
+  if (host === "localhost" || host === "::1" || host.endsWith(".localhost") || host.endsWith(".internal")) {
+    return false; // names that resolve inside the deployment only
+  }
+  return !(
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  );
 }
 
 /** Per-provider auth status for the first-run model picker. */

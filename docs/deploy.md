@@ -71,7 +71,9 @@ The Quick Tunnel URL is ephemeral. Its service deliberately has no restart polic
 
 Operate the generated topology. The generated Compose interpolates every declared name as `${NAME:-}`, and Compose
 fills those from the shell or the **project** `.env` — never from the agent's `.secrets/.env`. So a command that
-starts containers needs `--env-file`, or it starts them with every declared value empty and says nothing:
+starts containers needs `--env-file`, or it starts them with every declared value empty and says nothing. The
+other commands need no values, and `--env-file` is a hard failure on a missing path, so only `up` carries it (the
+generated runbook omits it entirely until the value file exists):
 
 ```bash
 docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build
