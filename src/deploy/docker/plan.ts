@@ -137,7 +137,8 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   if (required.length > 0) {
     runbook.push(
-      `# Required environment values (put them in the agent's .secrets/.env or export them):`,
+      `# Required environment values. Put them in the agent's .secrets/.env — that file declares the deployed`,
+      `# environment, and \`--run\` reads only it (in CI, write the file before running the command):`,
       ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
     );
   }

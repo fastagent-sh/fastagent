@@ -36,6 +36,13 @@ interface DeployFacts {
   channels: DeclaredChannel[];
   /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). */
   hasTimeTriggers: boolean;
+  /**
+   * The deployed environment's declaration, read ONCE here so the plan side and the run side cannot disagree about
+   * what this deployment carries. The environment running `deploy` is deliberately absent from it (§9).
+   */
+  values: ReadonlyMap<string, string>;
+  /** That file, workspace-relative — the name every "set it here" message must use. */
+  valueFile: string;
   /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
@@ -126,7 +133,8 @@ export async function preflightDeploy(input: {
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
   const valueFile = relative(workspace, dotEnvPath(agentDir));
-  const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)), valueFile);
+  const values = loadEnvValues(dotEnvPath(agentDir));
+  const model = resolveDeployModel(config, values, valueFile);
   if (model.invalid !== undefined) {
     // A gate rather than a warning even without `--run`: the release manifest validates the spec on the way out, so
     // there is no artifact to produce either. Same class as the agent-directory-name gate above.
@@ -473,6 +481,8 @@ export async function preflightDeploy(input: {
     messages,
     channels,
     hasTimeTriggers,
+    values,
+    valueFile,
     modelAuth,
     modelKeyInDefinition,
     authPath,
