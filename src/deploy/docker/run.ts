@@ -12,14 +12,12 @@ export interface DockerRunPlan {
   composeFile: string;
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
-  /** Values interpolated by Compose. */
-  secrets: Record<string, string>;
   /**
-   * Every name the generated Compose interpolates (`composeInterpolatedNames`). The child's environment inherits
-   * this process's, so any of these left unset here would be filled from the BUILDER'S SHELL — exactly the source
-   * the value file replaced. They are blanked first, then overwritten by `secrets`.
+   * What `--run` assembled. The container reads the value file itself through the generated `env_file`, so the only
+   * entry that has to travel through this process is `FASTAGENT_AUTH_SEED`, which is minted here; the rest is
+   * reported to the operator and otherwise unused.
    */
-  interpolated: readonly string[];
+  secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
   /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
@@ -116,16 +114,10 @@ export async function deployDockerRun(
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
-  // Blank-then-override: `spawnRunner` merges over `process.env`, so a declared credential name the value file does
-  // not supply would otherwise inherit the builder's shell and reach the container. A deployment carries what the
-  // value file says and nothing else — including for the optional names the missing-values gate never sees
-  // (FASTAGENT_CONTROL_TOKEN, *_ENCRYPT_KEY, FASTAGENT_AUTH_SEED). `NO_PROXY`/`no_proxy` are deliberately NOT in
-  // this list (the operator's bypass list is meant to survive), and a KEPT older compose file may interpolate names
-  // this definition no longer declares — those still inherit.
-  const env: Record<string, string> = {
-    ...Object.fromEntries(plan.interpolated.map((name) => [name, ""])),
-    ...plan.secrets,
-  };
+  // The ONE value that is not in the value file, so the ONE that has to cross this process. Set even when absent, so
+  // a same-named variable in the builder's shell cannot interpolate into the container in its place — `spawnRunner`
+  // merges over `process.env`.
+  const env: Record<string, string> = { FASTAGENT_AUTH_SEED: plan.secrets.FASTAGENT_AUTH_SEED ?? "" };
 
   // CLI/plugin gate first: unlike a daemon error, spawn ENOENT becomes 127 at the shared runner seam.
   const version = await docker(["compose", "version"], { capture: true });

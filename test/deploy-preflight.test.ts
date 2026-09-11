@@ -119,22 +119,31 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
   });
 
-  it("gates a hand-written Dockerfile when the model lives ONLY in the value file", async () => {
-    // The manifest is always written, but only a Dockerfile setting FASTAGENT_RELEASE_FILE is read from —
-    // `prepareStartWorkspace` returns early without it. So this combination reports a model here and crash-loops
-    // there: exactly the silent degradation this chain exists to remove.
+  it("gates a Dockerfile that cannot read the manifest — by the INSTRUCTION, not by who wrote the file", async () => {
+    // `prepareStartWorkspace` returns early without FASTAGENT_RELEASE_FILE, so a model living only in the value
+    // file would be reported here and missing on the box. The question is whether that ENV is set, not whether we
+    // generated the file: a hand-written Dockerfile that sets it works, and must not be refused.
     const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
     const gated = await call(dir, {}, { run: true });
     expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/hand-written Dockerfile.*FASTAGENT_RELEASE_FILE/s);
+    if (!gated.ok) expect(gated.gate).toMatch(/does not set FASTAGENT_RELEASE_FILE/);
 
-    // `--force` does not rescue it either: the hand-written file stays, so the gate must still fire.
+    // `--force` does not rescue it: writeArtifacts keeps a file it did not generate whatever the flag says.
     expect((await call(dir, {}, { run: true, force: true })).ok).toBe(false);
 
-    // Generate-only warns; and a config model needs no manifest at all, so it is unaffected.
+    // Generate-only warns instead of refusing.
     const planned = await call(dir, {});
     expect(planned.ok && planned.messages.some((m) => /FASTAGENT_RELEASE_FILE/.test(m.text))).toBe(true);
+
+    // A hand-written Dockerfile that DOES set it is fine — the manifest is read whoever wrote the file.
+    const own = await workspace({
+      Dockerfile: "FROM node:22-slim\nENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json\n",
+    });
+    await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    expect((await call(own, {}, { run: true })).ok).toBe(true);
+
+    // And a config model needs no manifest at all.
     const fromConfig = await workspace({ Dockerfile: "FROM node:22-slim\n" });
     expect((await call(fromConfig, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });
@@ -567,25 +576,24 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     }
   });
 
-  it("a LITERAL key for a REACHABLE endpoint gates --run: the file ships inside the image", async () => {
-    // Same rule the `.dockerignore` check enforces — any configuration that would put a credential into the image
-    // stops `--run`. A key presented to an endpoint anyone can reach is a credential, and it has two forms
-    // (`$NAME`, `!command`) that do not ship.
-    const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file") });
-    const gated = await call(dir, { model: "mygw/m1" }, { run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/literal apiKey for "mygw".*ships inside the image/s);
-
-    // Generate-only warns: the operator may be producing artifacts they will not deploy from here.
-    const planned = await call(dir, { model: "mygw/m1" });
-    expect(planned.ok).toBe(true);
-    if (planned.ok) {
-      expect(planned.modelKeyInDefinition).toBe(true); // still nothing for `--run` to carry
-      expect(planned.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/literal apiKey/) });
-    }
+  it("a literal key WARNS, whatever it points at — the framework does not decide what is a credential", () => {
+    // FastAgent gates what IT causes (a packing rule that would put `.secrets/auth.json` in the image); this is the
+    // author's own committed file, and no static rule separates a leaked key from the placeholder pi's docs
+    // prescribe for a keyless local server (`"apiKey": "ollama"`). So: report, never refuse.
+    return (async () => {
+      for (const baseUrl of ["https://gw.example.com/v1", "http://localhost:11434/v1"]) {
+        const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file", baseUrl) });
+        const pre = await call(dir, { model: "mygw/m1" }, { run: true });
+        expect(pre.ok).toBe(true);
+        if (pre.ok) {
+          expect(pre.modelKeyInDefinition).toBe(true); // still nothing for `--run` to carry
+          expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/literal apiKey/) });
+        }
+      }
+    })();
   });
 
-  it("a literal on a provider NOTHING selects is gated too — the file ships whole", async () => {
+  it("every provider is reported, not just the selected model's — the file ships whole", async () => {
     const dir = await workspace({
       "models.json": JSON.stringify({
         providers: {
@@ -605,23 +613,11 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       }),
     });
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });
-    expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toMatch(/literal apiKey for "unused"/);
-  });
-
-  it("a literal for an UNREACHABLE endpoint only warns — pi's docs prescribe it for a keyless local server", async () => {
-    // `"apiKey": "ollama"` against http://localhost:11434 is the documented way to make a keyless server's models
-    // usable. Gating it would make "local ollama for dev, cloud model for deploy" undeployable, and that string is
-    // not a credential: nothing outside the deployment can be reached with it.
-    const dir = await workspace({ "models.json": GATEWAY("ollama", "http://localhost:11434/v1") });
-    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);
-    if (pre.ok) {
-      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/not reachable from outside/) });
-    }
+    if (pre.ok) expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/"unused"/) });
   });
 
-  it("a !command key is NOT gated — it runs on the box and the credential never travels", async () => {
+  it("a !command key is not reported — it runs on the box and the credential never travels", async () => {
     const dir = await workspace({ "models.json": GATEWAY("!printf sk-from-a-command") });
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);

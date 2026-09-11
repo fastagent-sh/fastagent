@@ -24,7 +24,6 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   secrets: {},
   missingSecrets: [],
   valueFile: "fastagent/.secrets/.env",
-  interpolated: [],
   needsModelCredential: false,
   requireTunnel: false,
   announce: async () => [],
@@ -63,28 +62,28 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(healthUrls).toEqual(["http://127.0.0.1:9876/health"]);
   });
 
-  it("blanks every interpolated name, so the builder's shell cannot reach the container", async () => {
-    // Compose fills `${NAME:-}` from the environment it is spawned with, and that environment inherits this
-    // process's. Without the blanking, any interpolated name the value file does not declare would be filled from
-    // the builder's shell — including the ones the missing-values gate never sees (optional channel keys, the
-    // control token, the auth seed), which is exactly the source the value file replaced.
-    const before = process.env.FA_TEST_LEAK;
-    process.env.FA_TEST_LEAK = "from-the-builders-shell";
+  it("passes ONLY the auth seed, and sets it even when absent", async () => {
+    // The container reads the value file itself through the generated `env_file`, so nothing else has to cross this
+    // process. The seed is the exception (`--run` mints it from the local auth.json) and is set unconditionally:
+    // `spawnRunner` merges over `process.env`, so leaving it unset would let a same-named variable in the builder's
+    // shell interpolate into the container in its place.
+    const before = process.env.FASTAGENT_AUTH_SEED;
+    process.env.FASTAGENT_AUTH_SEED = "from-the-builders-shell";
     try {
       const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
-      await deployDockerRun(
-        plan({ interpolated: ["FA_TEST_LEAK", "FA_TEST_DECLARED"], secrets: { FA_TEST_DECLARED: "from-the-file" } }),
-        docker,
-        () => {},
-        healthy,
-      );
+      await deployDockerRun(plan({ secrets: { TELEGRAM_BOT_TOKEN: "t" } }), docker, () => {}, healthy);
       const passed = calls.find((call) => call.env)?.env;
-      expect(passed?.FA_TEST_LEAK).toBe(""); // present but empty — never the shell's value
-      expect(passed?.FA_TEST_DECLARED).toBe("from-the-file");
+      expect(passed).toEqual({ FASTAGENT_AUTH_SEED: "" }); // blanked, and nothing else travels
     } finally {
-      if (before === undefined) delete process.env.FA_TEST_LEAK;
-      else process.env.FA_TEST_LEAK = before;
+      if (before === undefined) delete process.env.FASTAGENT_AUTH_SEED;
+      else process.env.FASTAGENT_AUTH_SEED = before;
     }
+  });
+
+  it("carries the minted auth seed when there is one", async () => {
+    const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
+    await deployDockerRun(plan({ secrets: { FASTAGENT_AUTH_SEED: "b64" } }), docker, () => {}, healthy);
+    expect(calls.find((call) => call.env)?.env).toEqual({ FASTAGENT_AUTH_SEED: "b64" });
   });
 
   it("tells the health probe when the agent container is gone (a crashed boot must not spend the budget)", async () => {
@@ -233,7 +232,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(lines.filter((line) => line.startsWith("warn:"))).toEqual([]);
   });
 
-  it("passes secret values through the child environment, never argv", async () => {
+  it("never puts a secret value in argv — the container reads the value file itself", async () => {
     const { docker, calls } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\n" };
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
@@ -248,7 +247,8 @@ describe("deploy/docker/run: local Compose journey", () => {
 
     expect(calls.some((call) => call.args.join(" ").includes("sk-secret"))).toBe(false);
     const up = calls.find((call) => call.args.includes("up"))!;
-    expect(up.env).toEqual({ OPENAI_API_KEY: "sk-secret", FASTAGENT_AUTH_SEED: "base64-secret" });
+    // The declared key rides `env_file` in the generated Compose, so it does not travel through this process at all.
+    expect(up.env).toEqual({ FASTAGENT_AUTH_SEED: "base64-secret" });
   });
 
   it("names the secrets it carries — the list is no longer only what the author typed", async () => {

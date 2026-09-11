@@ -79,14 +79,17 @@ describe("deploy/docker: planDockerDeploy", () => {
       modelAuth: undefined,
       channels: [...declaredChannels(["feishu"], "long-connection")],
     });
-    const yaml = compose(plan);
-    expect(yaml).toContain("FEISHU_APP_ID");
-    expect(yaml).toContain("FEISHU_APP_SECRET");
-    expect(yaml).not.toContain("FEISHU_VERIFICATION_TOKEN");
-    expect(runbook(plan)).not.toContain("https://<your-domain>/feishu");
+    const out = runbook(plan);
+    expect(out).toContain("FEISHU_APP_ID");
+    expect(out).toContain("FEISHU_APP_SECRET");
+    expect(out).not.toContain("FEISHU_VERIFICATION_TOKEN");
+    expect(out).not.toContain("https://<your-domain>/feishu");
   });
 
-  it("commits secret NAMES/interpolation only, including the absent-only auth seed seam", () => {
+  it("names the value file instead of interpolating each secret, and keeps only the auth-seed seam", () => {
+    // Interpolation resolves from the SHELL or the project `.env` — exactly the source a deployment must not have.
+    // `env_file` points Compose at the deployed environment's own declaration, so no declared name appears here at
+    // all, by hand or under `--run`. The seed is the one value that is not in that file.
     const yaml = compose(
       planDockerDeploy({
         ...base,
@@ -95,18 +98,18 @@ describe("deploy/docker: planDockerDeploy", () => {
         extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
       }),
     );
-    for (const name of [
-      "OPENAI_API_KEY",
-      "TELEGRAM_BOT_TOKEN",
-      "TELEGRAM_SECRET_TOKEN",
-      "FEISHU_APP_ID",
-      "GH_TOKEN",
-      "FASTAGENT_AUTH_SEED",
-    ]) {
-      expect(yaml).toContain(`${name}: "\${${name}:-}"`);
+    expect(yaml).toContain("env_file:\n      - .secrets/.env");
+    for (const name of ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "FEISHU_APP_ID", "GH_TOKEN"]) {
+      expect(yaml).not.toContain(name);
     }
+    expect(yaml).toContain(`FASTAGENT_AUTH_SEED: "\${FASTAGENT_AUTH_SEED:-}"`);
     expect(yaml).not.toContain("<value>");
     expect(yaml).not.toContain("sk-");
+
+    // No value file yet → no entry pointing at a missing path (Compose refuses one), and the runbook says so.
+    const absent = planDockerDeploy({ ...base, valueFileExists: false, modelAuth: "OPENAI_API_KEY", channels: [] });
+    expect(compose(absent)).not.toContain("env_file");
+    expect(runbook(absent)).toMatch(/does not exist yet.*regenerate a Compose file that reads it/s);
   });
 
   it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {
@@ -124,33 +127,13 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(plan)).toContain("Run from the WORKSPACE ROOT");
   });
 
-  it("omits --env-file when the value file does not exist yet, and says why", () => {
-    // `fastagent init` writes .env.example, not .env, so an OAuth-only agent has no value file. `--env-file` on a
-    // missing path is `couldn't find env file: …`, which would take the whole runbook's `up` down with it.
-    const out = runbook(
-      planDockerDeploy({
-        ...base,
-        valueFileExists: false,
-        modelAuth: "OPENAI_API_KEY",
-        channels: declaredChannels(["telegram"]),
-      }),
-    );
-    expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
-    expect(out).not.toContain("docker compose --env-file"); // the note mentions the flag; no command uses it
-    expect(out).toMatch(/does not exist yet.*--env-file fails on a missing path/s);
-  });
-
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(
       planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "github"]) }),
     );
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
-    expect(out).toContain(
-      "docker compose --env-file 'fastagent/.secrets/.env' -f fastagent/fastagent.compose.yml up -d --build",
-    );
-    // ONLY `up` interpolates, so only `up` carries --env-file: `--env-file` is a hard failure on a missing path,
-    // and these three need no values at all.
-    for (const cmd of ["logs -f agent", "ps", "down"]) {
+    // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
+    for (const cmd of ["up -d --build", "logs -f agent", "ps", "down"]) {
       expect(out).toContain(`docker compose -f fastagent/fastagent.compose.yml ${cmd}`);
     }
     expect(out).toContain("down        # stops containers; keeps the state volume");

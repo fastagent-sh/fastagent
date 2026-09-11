@@ -1,4 +1,5 @@
 /** `fastagent deploy docker` — the local-Docker plan. */
+import { dirname, relative } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
@@ -20,7 +21,7 @@ export interface DockerPlanInput extends ContainerInput {
   extraSecrets?: readonly DeclaredSecret[];
   /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), workspace-relative. */
   valueFile: string;
-  /** Whether that file is on disk — `--env-file` fails outright on a missing path. */
+  /** Whether that file is on disk: Compose refuses an `env_file` entry pointing at a missing path. */
   valueFileExists: boolean;
 }
 
@@ -66,29 +67,15 @@ function composeInterpolation(name: string): string {
   return `\${${name}:-}`;
 }
 
-/**
- * Every DECLARED CREDENTIAL name the generated Compose interpolates. Compose fills each from the shell or the
- * project `.env` and silently substitutes `""` for the rest, so this list is BOTH what the file declares and what
- * the run path must neutralize before handing the child an environment (see `deployDockerRun`).
- *
- * Not every interpolation: the tunnel service also interpolates `NO_PROXY`/`no_proxy`, deliberately, so the
- * operator's own bypass list survives into the container. Those are not credentials and carry nothing from the
- * definition, so they stay inherited.
- */
-export function composeInterpolatedNames(input: {
-  modelAuth: string | undefined;
-  channels: readonly DeclaredChannel[];
-  extraSecrets?: readonly DeclaredSecret[];
-}): string[] {
-  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
-  // Always leave the auth-seed seam in the committed topology.
-  return [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
-}
-
 function composeYaml(input: DockerPlanInput): string {
-  const secretEnv = composeInterpolatedNames(input)
-    .map((name) => `      ${name}: "${composeInterpolation(name)}"`)
-    .join("\n");
+  // `env_file`, not per-name `${NAME:-}` interpolation: interpolation resolves from the SHELL or the project `.env`,
+  // which is exactly the source a deployment must not have (docs/design/configuration.md §9). Naming the value file
+  // here makes `docker compose up` read the deployed environment's own declaration directly — by hand and under
+  // `--run` alike — so nothing has to be carried through, filtered, or blanked. Written only when the file exists:
+  // `env_file`'s `required: false` needs Compose 2.24 and the floor here is ${MIN_DOCKER_COMPOSE_VERSION}.
+  const valueFileEntry = input.valueFileExists
+    ? `    env_file:\n      - ${relative(dirname(`${input.agentPrefix}${DOCKER_COMPOSE_FILE}`), input.valueFile)}\n`
+    : "";
   // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the WORKSPACE, so it
   // climbs back out of the one-level prefix deploy requires.
   const context = "..";
@@ -126,12 +113,14 @@ services:
       dockerfile: ${dockerfile}
     ports:
       - "127.0.0.1:${input.port}:${input.port}"
-    environment:
+${valueFileEntry}    environment:
       PORT: "${input.port}"
       # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets.
       FASTAGENT_STATE_DIR: "${MOUNT}/.state"
       FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
-${secretEnv}
+      # The ONE value that is not in the value file: \`--run\` mints it from the local auth.json. Left as a seam in
+      # the committed topology so a hand-run \`up\` can supply it the same way.
+      FASTAGENT_AUTH_SEED: "${composeInterpolation("FASTAGENT_AUTH_SEED")}"
     volumes:
       - state:${MOUNT}
     restart: unless-stopped
@@ -145,17 +134,9 @@ volumes:
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   const composePath = `${input.agentPrefix}${DOCKER_COMPOSE_FILE}`;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
+  // One spelling for every command: the generated file names the value file itself (`env_file`), so no command
+  // needs a flag to reach the deployed environment's declaration.
   const compose = `docker compose -f ${composePath}`;
-  // Only the command that STARTS containers interpolates, and only it gets `--env-file`: Compose fills `${NAME:-}`
-  // from the shell or the PROJECT `.env` and substitutes `""` for anything it cannot find, so a hand-run `up`
-  // without it boots an agent whose declared values are all empty — no error, no log line. `logs`/`ps`/`down` need
-  // no values, and `--env-file` is a HARD failure on a missing path (`couldn't find env file: …`), which would take
-  // the whole runbook down with it on an agent that has no value file yet.
-  // Quoted: `valueFile` follows `FASTAGENT_SECRETS_DIR` and may contain spaces, which would split into a
-  // `couldn't find env file` for whoever pastes the line. `composePath` cannot — `isReleaseAgentName` gates it.
-  const composeUp = input.valueFileExists
-    ? `docker compose --env-file '${input.valueFile}' -f ${composePath}`
-    : compose;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const required = secrets.filter((secret) => secret.required);
   const optional = secrets.filter((secret) => !secret.required);
@@ -175,8 +156,8 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
       ...(input.valueFileExists
         ? []
         : [
-            `# It does not exist yet, so the \`up\` below cannot read it (--env-file fails on a missing path).`,
-            `# Create it, then re-run \`fastagent deploy docker\` for an \`up\` that reads it.`,
+            `# It does not exist yet, so ${composePath} does not reference it. Create it, then re-run`,
+            `# \`fastagent deploy docker\` to regenerate a Compose file that reads it.`,
           ]),
     );
   }
@@ -202,7 +183,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     ``,
     `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
     `# The Compose volume at ${MOUNT} retains the workspace, state and credentials.`,
-    `${composeUp} up -d --build`,
+    `${compose} up -d --build`,
     `curl --fail http://127.0.0.1:${input.port}/health`,
     ``,
     `# Operate it:`,

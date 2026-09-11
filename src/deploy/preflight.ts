@@ -259,30 +259,20 @@ export async function preflightDeploy(input: {
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
   }
-  // Same rule the `.dockerignore` check enforces: any configuration that would put a credential into the image gates
-  // `--run`. Asked of EVERY provider, not just the selected model's — the file ships whole, so a literal on a
-  // provider nothing selects today is in the image all the same. A literal aimed at a PRIVATE endpoint is not a
-  // credential, though: pi's docs tell you to write `"apiKey": "ollama"` for a keyless local server, so that one
-  // only warns — gating it would make a "local ollama for dev, cloud model for deploy" definition undeployable.
+  // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
+  // `"apiKey": "ollama"` for a keyless local server, and no static rule separates that from a leaked key. The
+  // `.dockerignore` check next to this one IS a gate because it catches a packing rule putting FastAgent's OWN
+  // `.secrets/auth.json` into the image — the framework's doing. This is the author's own committed file.
+  // Asked of EVERY provider, not just the selected model's: the file ships whole.
   const literalKeys = await literalKeyProviders(agentDir);
-  const named = (ids: { id: string }[]) => ids.map(({ id }) => `"${id}"`).join(", ");
-  const exposed = literalKeys.filter((provider) => provider.public);
-  if (exposed.length > 0) {
-    const issue =
-      `${AGENT_MODELS_FILE} carries a literal apiKey for ${named(exposed)} — that file ships inside the image, ` +
-      `where anyone who can pull it reads the layer. Use "$YOUR_ENV_VAR" (deploy carries it like any provider key) ` +
-      `or "!command" (it runs on the box and never travels).`;
-    if (run) return { ok: false, gate: issue };
-    messages.push({ level: "warn", text: issue });
-  }
-  const placeholders = literalKeys.filter((provider) => !provider.public);
-  if (placeholders.length > 0) {
+  if (literalKeys.length > 0) {
     messages.push({
       level: "warn",
       text:
-        `${AGENT_MODELS_FILE} carries a literal apiKey for ${named(placeholders)}, whose baseUrl is not reachable ` +
-        `from outside the deployment — read as a placeholder for a keyless server, not a credential. If it IS one, ` +
-        `move it to "$YOUR_ENV_VAR" or "!command": the file ships inside the image.`,
+        `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
+        `file ships inside the image, where anyone who can pull it reads the layer. If it is a credential, use ` +
+        `"$YOUR_ENV_VAR" (deploy carries it like any provider key) or "!command" (it runs on the box and never ` +
+        `travels); a placeholder for a keyless local server is fine as it is.`,
     });
   }
 
@@ -511,24 +501,27 @@ export async function preflightDeploy(input: {
   // hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
   // `--run --force` ship the crash-loop this gate exists to stop.
   const dockerfileHome = join(agentDir, "Dockerfile");
-  if ((config.deploy?.apt?.length || model.envValue !== undefined) && (await exists(dockerfileHome))) {
-    if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
-      if (config.deploy?.apt?.length) {
-        messages.push({
-          level: "warn",
-          text:
-            `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
-            `NOT applied; install those packages in your Dockerfile.`,
-        });
-      }
-      if (model.envValue !== undefined) {
-        const issue =
-          `kept your hand-written Dockerfile, and the model comes from ${valueFile} — it travels in the release ` +
-          `manifest, which only a Dockerfile setting FASTAGENT_RELEASE_FILE is read from. Add that ENV (see a ` +
-          `generated Dockerfile), or set \`model\` in fastagent.config.* so it ships in the config instead.`;
-        if (run) return { ok: false, gate: issue };
-        messages.push({ level: "warn", text: issue });
-      }
+  const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
+  if (dockerfileText !== undefined && !isGeneratedDockerfile(dockerfileText)) {
+    if (config.deploy?.apt?.length) {
+      messages.push({
+        level: "warn",
+        text:
+          `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
+          `NOT applied; install those packages in your Dockerfile.`,
+      });
+    }
+    // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without
+    // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
+    // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
+    // missing on the box.
+    if (model.envValue !== undefined && !/^\s*ENV\s+FASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
+      const issue =
+        `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
+        `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
+        `Dockerfile), or set \`model\` in fastagent.config.* so it ships in the config instead.`;
+      if (run) return { ok: false, gate: issue };
+      messages.push({ level: "warn", text: issue });
     }
   }
 

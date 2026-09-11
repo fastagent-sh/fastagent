@@ -69,24 +69,25 @@ fastagent deploy docker --run           # starts the existing app+tunnel topolog
 
 The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
 
-Operate the generated topology. The generated Compose interpolates every declared name as `${NAME:-}`, and Compose
-fills those from the shell or the **project** `.env` — never from the agent's `.secrets/.env`. So a command that
-starts containers needs `--env-file`, or it starts them with every declared value empty and says nothing. The
-other commands need no values, and `--env-file` is a hard failure on a missing path, so only `up` carries it (the
-generated runbook omits it entirely until the value file exists):
+Operate the generated topology. The generated Compose names the value file itself (`env_file`), so every command
+is spelled the same way and none needs a flag to reach the deployed environment's declaration:
 
 ```bash
-docker compose --env-file 'fastagent/.secrets/.env' -f fastagent/fastagent.compose.yml up -d --build
+docker compose -f fastagent/fastagent.compose.yml up -d --build
 docker compose -f fastagent/fastagent.compose.yml logs -f agent
 docker compose -f fastagent/fastagent.compose.yml ps
 docker compose -f fastagent/fastagent.compose.yml down     # state volume is kept
 docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: deletes all state
 ```
 
-`--run` does the same thing for you, and additionally blanks every **declared credential name** the value file does
-not supply, so nothing exported on the build machine reaches the container as one. Two things stay inherited on
-purpose or by nature: `NO_PROXY`/`no_proxy` (the tunnel service interpolates them so your own bypass list survives),
-and any name a *kept older* Compose file still interpolates but the current definition no longer declares.
+`env_file` rather than per-name `${NAME:-}` interpolation is the point: interpolation resolves from your shell or
+the *project* `.env`, which is exactly the source a deployment must not have. Naming the file means the container
+reads the same declaration by hand and under `--run` alike, so nothing has to be carried through the build machine,
+filtered, or blanked. The one value not in that file is `FASTAGENT_AUTH_SEED`, which `--run` mints from your local
+`auth.json`; it stays a seam in the committed topology so a hand-run `up` can supply it the same way.
+
+If the value file does not exist yet, the generated Compose omits the `env_file` entry (Compose refuses one pointing
+at a missing path) and the runbook says so — create the file and re-run `fastagent deploy docker`.
 
 ### Taking ownership of Docker files
 

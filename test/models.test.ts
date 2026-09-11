@@ -197,12 +197,9 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       }),
     );
     await writeFile(join(dir, "auth.json"), JSON.stringify({ literal: { type: "api_key", key: "sk-stored" } }));
-    expect(await literalKeyProviders(dir)).toEqual([
-      { id: "literal", public: true },
-      { id: "escaped", public: true },
-      { id: "local", public: false }, // a keyless server's placeholder, not a credential
-      { id: "lan", public: false },
-    ]);
+    // Every literal is reported, wherever it points: the caller warns, and whether a given string is a credential
+    // is the author's knowledge. `escaped` is the one that would slip through a naive reference check.
+    expect(await literalKeyProviders(dir)).toEqual(["literal", "escaped", "local", "lan"]);
     expect(await literalKeyProviders(join(dir, "no-such-dir"))).toEqual([]); // no models.json is the normal case
   });
 

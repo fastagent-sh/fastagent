@@ -3,7 +3,6 @@ import { basename, join } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
   composeHasTunnelService,
-  composeInterpolatedNames,
   isGeneratedCompose,
   planDockerDeploy,
   toDockerProjectName,
@@ -110,12 +109,11 @@ async function runDeployDocker(
     valueFile: string;
   },
 ): Promise<void> {
-  const { agentDir, workspace, composeFile, port, requireTunnel, channels, modelAuth, extraSecrets } = params;
+  const { agentDir, workspace, composeFile, port, requireTunnel, channels } = params;
   const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
   const outcome = await deployDockerRun(
     {
       composeFile,
-      interpolated: composeInterpolatedNames({ modelAuth, channels, extraSecrets }),
       port,
       secrets,
       missingSecrets,

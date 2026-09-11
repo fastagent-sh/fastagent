@@ -148,20 +148,19 @@ Custom endpoints are **additive** — built-in providers stay available alongsid
 variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal.
 
 **Use one of the first two for a real key.** A literal credential in this file ships inside the image,
-where anyone who can pull it reads the layer — so `deploy` **refuses `--run`** on a literal `apiKey`
-whose `baseUrl` is reachable from outside the deployment, and warns when only generating artifacts.
-Every declared provider is checked, not just the selected model's: the file ships whole, so a literal
-on a provider nothing selects today is in the image all the same. This is the same rule that makes a
-`.dockerignore` which fails to exclude `.secrets/auth.json` stop a run: any configuration that would
-put a credential into the image gates `--run`. The general form of it: **literal credentials belong in
-`.secrets/` or the platform's secret storage, and every file inside the definition may only carry a
-reference.**
+where anyone who can pull it reads the layer, so `deploy` **warns** about every literal `apiKey` it
+finds — every declared provider, not just the selected model's, because the file ships whole.
 
-A literal against a **loopback or private-range `baseUrl`** only warns. A keyless local server needs a
-placeholder (`"apiKey": "ollama"` for `http://localhost:11434/v1` — omitting it loads the model but
-leaves it unusable), and a string presented only to an address nothing outside can reach is not a
-credential. `headers` values are not checked at all (FastAgent cannot tell a credential from an org id
-there), so apply the same rule to them by hand.
+It warns rather than refuses, and that line is deliberate: whether a given string is a credential is
+*your* knowledge, not FastAgent's. pi's own docs prescribe a placeholder for a keyless local server
+(`"apiKey": "ollama"` for `http://localhost:11434/v1` — omitting it loads the model but leaves it
+unusable), and no static rule separates that from a leaked key. **FastAgent gates what it causes and
+reports what you chose**: a `.dockerignore` that fails to exclude `.secrets/auth.json` *does* stop a
+run, because there a packing rule of ours would put a credential in the image. This file is yours.
+
+The rule to apply yourself: **literal credentials belong in `.secrets/` or the platform's secret
+storage, and every file inside the definition should carry only a reference.** `headers` values are not
+inspected at all (FastAgent cannot tell a credential from an org id there).
 
 `deploy` recognizes the variable backing the selected model and carries its value to the host like any
 provider key, listing it in the runbook and refusing `--run` when it has no local value. You do not
