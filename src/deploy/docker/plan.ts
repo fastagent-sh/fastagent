@@ -67,9 +67,13 @@ function composeInterpolation(name: string): string {
 }
 
 /**
- * Every name the generated Compose interpolates. Compose fills each from the shell or the project `.env` and
- * silently substitutes `""` for the rest, so this list is BOTH what the file declares and what the run path must
- * neutralize before handing the child an environment (see `deployDockerRun`).
+ * Every DECLARED CREDENTIAL name the generated Compose interpolates. Compose fills each from the shell or the
+ * project `.env` and silently substitutes `""` for the rest, so this list is BOTH what the file declares and what
+ * the run path must neutralize before handing the child an environment (see `deployDockerRun`).
+ *
+ * Not every interpolation: the tunnel service also interpolates `NO_PROXY`/`no_proxy`, deliberately, so the
+ * operator's own bypass list survives into the container. Those are not credentials and carry nothing from the
+ * definition, so they stay inherited.
  */
 export function composeInterpolatedNames(input: {
   modelAuth: string | undefined;

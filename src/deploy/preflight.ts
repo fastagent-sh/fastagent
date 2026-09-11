@@ -497,17 +497,29 @@ export async function preflightDeploy(input: {
   if (config.sessionControl === true) {
     extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
   }
-  // deploy.apt only shapes the GENERATED Dockerfile. (The resolved model does not: it rides the release manifest,
-  // which every host writes unconditionally, so a hand-written Dockerfile changes nothing about it.)
+  // What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
+  // looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
+  // FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
+  // ONLY in the value file would be reported here and absent on the box.
   const dockerfileHome = join(agentDir, "Dockerfile");
-  if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
+  if ((config.deploy?.apt?.length || model.envValue !== undefined) && !force && (await exists(dockerfileHome))) {
     if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
-      messages.push({
-        level: "warn",
-        text:
-          `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
-          `NOT applied; install those packages in your Dockerfile.`,
-      });
+      if (config.deploy?.apt?.length) {
+        messages.push({
+          level: "warn",
+          text:
+            `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
+            `NOT applied; install those packages in your Dockerfile.`,
+        });
+      }
+      if (model.envValue !== undefined) {
+        const issue =
+          `kept your hand-written Dockerfile, and the model comes from ${valueFile} — it travels in the release ` +
+          `manifest, which only a Dockerfile setting FASTAGENT_RELEASE_FILE is read from. Add that ENV (see a ` +
+          `generated Dockerfile), or set \`model\` in fastagent.config.* so it ships in the config instead.`;
+        if (run) return { ok: false, gate: issue };
+        messages.push({ level: "warn", text: issue });
+      }
     }
   }
 

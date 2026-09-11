@@ -29,7 +29,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 
 | Requirement | Why | How |
 |---|---|---|
-| **A model resolves** | The usual `flag > environment > config` chain, evaluated in **the environment being deployed** rather than this machine's. That environment is declared by `.secrets/.env`, so its `FASTAGENT_MODEL` wins and `deploy` records it in the release manifest (`fastagent.release.json`, rewritten by every deploy); `config.model` is the fallback and ships in the config file. Your shell is not part of the deployed environment, and `deploy` has no `--model` flag — a deployment's inputs are files, so that they survive the next deploy that omits them. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. |
+| **A model resolves** | The usual `flag > environment > config` chain, evaluated in **the environment being deployed** rather than this machine's. That environment is declared by `.secrets/.env`, so its `FASTAGENT_MODEL` wins and `deploy` records it in the release manifest (`fastagent.release.json`, rewritten by every deploy); `config.model` is the fallback and ships in the config file. Your shell is not part of the deployed environment, and `deploy` has no `--model` flag — a deployment's inputs are files, so that they survive the next deploy that omits them. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. A **hand-written** Dockerfile is read only if it sets `ENV FASTAGENT_RELEASE_FILE` — without it the manifest is never read, so a model that lives only in `.secrets/.env` would not reach the box; `deploy` gates that combination. |
 | **Secrets are declared, and their values are in the value file** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). `--run` reads the values from the agent's `.secrets/.env` and nowhere else — that file declares the deployed environment, so a variable exported in your shell does not reach the deployment. In CI, write the file before running the command. |
 | **Workspace, state and secrets are durable** | Local directories remain where you created them. | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`, and a new release replaces only the nested definition. AgentCore uses managed SessionStorage at `/mnt/data`, which the platform resets on every deploy. |
 
@@ -83,8 +83,10 @@ docker compose -f fastagent/fastagent.compose.yml down     # state volume is kep
 docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: deletes all state
 ```
 
-`--run` does the same thing for you, and additionally blanks every interpolated name the value file does not
-declare, so nothing exported on the build machine reaches the container.
+`--run` does the same thing for you, and additionally blanks every **declared credential name** the value file does
+not supply, so nothing exported on the build machine reaches the container as one. Two things stay inherited on
+purpose or by nature: `NO_PROXY`/`no_proxy` (the tunnel service interpolates them so your own bypass list survives),
+and any name a *kept older* Compose file still interpolates but the current definition no longer declares.
 
 ### Taking ownership of Docker files
 

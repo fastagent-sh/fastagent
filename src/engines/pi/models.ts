@@ -145,11 +145,19 @@ function isPublicEndpoint(baseUrl: unknown): boolean {
   if (host === "localhost" || host === "::1" || host.endsWith(".localhost") || host.endsWith(".internal")) {
     return false; // names that resolve inside the deployment only
   }
+  // A single-label host is a Compose/K8s service name (`http://ollama:11434/v1`) — resolvable only on the
+  // deployment's own network, and the most common shape for exactly the keyless local server this exempts.
+  if (!host.includes(".") && !host.includes(":")) return false;
   return !(
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    (
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      /^169\.254\./.test(host) || // link-local
+      /^f[cd][0-9a-f]{2}:/i.test(host) || // IPv6 unique local (fc00::/7)
+      /^fe80:/i.test(host)
+    ) // IPv6 link-local
   );
 }
 

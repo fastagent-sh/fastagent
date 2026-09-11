@@ -116,10 +116,12 @@ export async function deployDockerRun(
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
-  // Blank-then-override: `spawnRunner` merges over `process.env`, so an interpolated name the value file does not
-  // declare would otherwise inherit the builder's shell and reach the container. A deployment carries what the
+  // Blank-then-override: `spawnRunner` merges over `process.env`, so a declared credential name the value file does
+  // not supply would otherwise inherit the builder's shell and reach the container. A deployment carries what the
   // value file says and nothing else — including for the optional names the missing-values gate never sees
-  // (FASTAGENT_CONTROL_TOKEN, *_ENCRYPT_KEY, FASTAGENT_AUTH_SEED).
+  // (FASTAGENT_CONTROL_TOKEN, *_ENCRYPT_KEY, FASTAGENT_AUTH_SEED). `NO_PROXY`/`no_proxy` are deliberately NOT in
+  // this list (the operator's bypass list is meant to survive), and a KEPT older compose file may interpolate names
+  // this definition no longer declares — those still inherit.
   const env: Record<string, string> = {
     ...Object.fromEntries(plan.interpolated.map((name) => [name, ""])),
     ...plan.secrets,

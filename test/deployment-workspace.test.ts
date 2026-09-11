@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyDeploymentRelease,
+  applyReleaseEnv,
   assertStorageMounted,
   leaseDeployment,
   parseDeploymentRelease,
@@ -175,5 +176,56 @@ describe("storage boundary", () => {
     const { root } = await fixture();
     await mkdir(root);
     await expect(assertStorageMounted(root)).rejects.toThrow();
+  });
+});
+
+describe("applyReleaseEnv: the receiving half of the model chain", () => {
+  // The deploy side decides the model; this is what makes it reach the process. It runs BEFORE the workspace's
+  // own `.env` is read, so whatever it sets outranks a FASTAGENT_MODEL edited on the box.
+  const withModel = (model?: string): DeploymentRelease => ({
+    version: 1,
+    id: "r1",
+    agent: "fastagent",
+    ...(model ? { model } : {}),
+  });
+
+  it("projects the release's model when the environment declares none", () => {
+    const env = {} as NodeJS.ProcessEnv;
+    applyReleaseEnv(withModel("p/m"), env);
+    expect(env.FASTAGENT_MODEL).toBe("p/m");
+  });
+
+  it("never overwrites a platform-set variable — the deployment declares only the half of the environment it can", () => {
+    const env = { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv;
+    applyReleaseEnv(withModel("p/m"), env);
+    expect(env.FASTAGENT_MODEL).toBe("platform/one");
+  });
+
+  it("is a no-op when the release names no model", () => {
+    const env = {} as NodeJS.ProcessEnv;
+    applyReleaseEnv(withModel(), env);
+    expect(env.FASTAGENT_MODEL).toBeUndefined();
+  });
+
+  it("reports the source that actually won, because the remedies differ", async () => {
+    const { log } = await import("../src/log.ts");
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      applyReleaseEnv(withModel("p/m"), {} as NodeJS.ProcessEnv);
+      expect(info.mock.calls.flat().join(" ")).toMatch(/the release manifest \(redeploy to change it\)/);
+
+      info.mockClear();
+      applyReleaseEnv(withModel("p/m"), { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv);
+      expect(info.mock.calls.flat().join(" ")).toMatch(/outranks the release manifest/);
+
+      // A redeploy would not change a value no release ever declared, so that half is dropped.
+      info.mockClear();
+      applyReleaseEnv(withModel(), { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv);
+      const said = info.mock.calls.flat().join(" ");
+      expect(said).toMatch(/already set in this environment/);
+      expect(said).not.toMatch(/outranks the release manifest/);
+    } finally {
+      info.mockRestore();
+    }
   });
 });

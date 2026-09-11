@@ -119,14 +119,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
   });
 
-  it("a hand-written Dockerfile does not affect the model — the manifest carries it either way", async () => {
-    // The carrier is the release manifest, which every host writes unconditionally (`alwaysWrite`), so owning the
-    // Dockerfile costs the operator `deploy.apt` and nothing else.
+  it("gates a hand-written Dockerfile when the model lives ONLY in the value file", async () => {
+    // The manifest is always written, but only a Dockerfile setting FASTAGENT_RELEASE_FILE is read from —
+    // `prepareStartWorkspace` returns early without it. So this combination reports a model here and crash-loops
+    // there: exactly the silent degradation this chain exists to remove.
     const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    const pre = await call(dir, {}, { run: true });
-    expect(pre.ok).toBe(true);
-    if (pre.ok) expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
+    const gated = await call(dir, {}, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/hand-written Dockerfile.*FASTAGENT_RELEASE_FILE/s);
+
+    // Generate-only warns; and a config model needs no manifest at all, so it is unaffected.
+    const planned = await call(dir, {});
+    expect(planned.ok && planned.messages.some((m) => /FASTAGENT_RELEASE_FILE/.test(m.text))).toBe(true);
+    const fromConfig = await workspace({ Dockerfile: "FROM node:22-slim\n" });
+    expect((await call(fromConfig, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
