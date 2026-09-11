@@ -221,7 +221,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | 2 | `config.name` + one model chain (`FASTAGENT_MODEL` travels with the value file; delete `modelTravelIssue`) | All of day one; the single-instance path is unchanged |
 | 2b | class D reads the value file only — the same rule the model already follows | Removes the last path by which the builder's environment reaches a deployment |
 | 2c | literal-`apiKey` **warning** + `$NAME` references treated as declared secrets | Reports the second route by which a credential enters the image, without the framework deciding what is one |
-| 3 | Credential project > global fallback + `login -g` + drop `--auth-path` | One global login serves every project |
+| 3 | Credential project > global fallback (per provider, refresh written back to the layer read) + `login -g` | One global login serves every project |
 | 4 | The env addition: `--env` + `.secrets/<env>/.env` + `<name>-<env>` prefix | Pure addition; day-two capability |
 
 Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are medium.

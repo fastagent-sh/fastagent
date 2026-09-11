@@ -41,12 +41,19 @@ export async function buildAgentSessionRuntime(
   async function resolveAssembly(cwd: string) {
     // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving opener uses
     // (open.ts).
-    const { config, modelSpec, agentDir, authPath, stateRoot, tools, toolCollisions, toolFailures } =
+    const { config, modelSpec, agentDir, authPath, fallbackAuthPath, stateRoot, tools, toolCollisions, toolFailures } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth.
-    const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
+    // The fallback layer travels too: `chat` resolving credentials differently from dev/start/invoke is exactly the
+    // divergence the layer exists to remove.
+    const modelRuntime = await createPiModelRuntime({
+      authPath,
+      agentDir,
+      stateRoot,
+      ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+    });
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
     reportFindingsIfChanged(definition.dir, definition);

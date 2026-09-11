@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { createPiAgentFromDir, createPiModels, listModels, probeAuthSource, resolveModel } from "../src/index.ts";
+import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import {
   defaultAuthPath,
   defaultSessionsDir,
   loadConfig,
+  resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
   resolveSessionsDirOverride,
@@ -134,6 +136,19 @@ describe("config: resolveAuthPath (auth-file precedence)", () => {
     expect(resolveAuthPath("/app", undefined, env)).toBe(resolve("envauth.json")); // env when no flag
     expect(resolveAuthPath("/app", undefined, {} as NodeJS.ProcessEnv)).toBe("/app/.secrets/auth.json"); // neither
     expect(resolveAuthPath("/app", "/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
+  });
+
+  it("resolveAuthFallback layers the global store under the DEFAULT path only", () => {
+    // "Use this file" is an instruction, so an explicitly named path gets no second layer; the default location is
+    // a preference, so it reads the user-global store for providers it does not have.
+    expect(resolveAuthFallback(undefined, {} as NodeJS.ProcessEnv)).toBe(GLOBAL_AUTH_PATH);
+    expect(resolveAuthFallback("flagauth.json", {} as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(resolveAuthFallback(undefined, { FASTAGENT_AUTH_PATH: "env.json" } as NodeJS.ProcessEnv)).toBeUndefined();
+    // FASTAGENT_SECRETS_DIR names the file just as explicitly, and is what the Fly/Railway/AgentCore artifacts set:
+    // a deployed container reads its mounted credentials, never a second layer under its own $HOME.
+    expect(
+      resolveAuthFallback(undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv),
+    ).toBeUndefined();
   });
 
   it("resolveAuthPath falls back to the workspace project auth file (not the global default)", () => {

@@ -9,6 +9,7 @@ import {
   type LoadedConfig,
   defaultSessionsDir,
   loadConfig,
+  resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
 } from "./config.ts";
@@ -60,6 +61,9 @@ export interface AgentAssembly {
   stateRoot: string;
   /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
+  /** Where a provider `authPath` does not have is read from instead ({@link resolveAuthFallback}); unset when an
+   *  explicit path was named. */
+  fallbackAuthPath?: string;
   /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
   tools: MountedTool[];
   toolNames: string[];
@@ -103,6 +107,7 @@ export async function resolveAgentAssembly(
   const stateRoot = resolveStateRoot(agentDir);
   // The credentials file: project-level by default (under `<agentDir>/.secrets`).
   const authPath = resolveAuthPath(agentDir, options.authPath);
+  const fallbackAuthPath = resolveAuthFallback(options.authPath);
   return {
     config,
     configPath,
@@ -111,6 +116,7 @@ export async function resolveAgentAssembly(
     workspace,
     stateRoot,
     authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     tools,
     toolNames,
     deferredToolNames,
@@ -144,6 +150,9 @@ export async function createPiAgentFromDir(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
+  /** The second layer that file reads through ({@link AgentAssembly.fallbackAuthPath}) — the startup report names
+   *  whichever layer the credential came from, so it needs both. */
+  fallbackAuthPath?: string;
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
@@ -168,6 +177,7 @@ export async function createPiAgentFromDir(
     workspace,
     stateRoot,
     authPath,
+    fallbackAuthPath,
     tools,
     toolNames,
     deferredToolNames,
@@ -186,6 +196,7 @@ export async function createPiAgentFromDir(
     cwd: workspace,
     tools: mountedTools,
     authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
   });
@@ -247,6 +258,7 @@ export async function createPiAgentFromDir(
     stateRoot,
     sessionsDir,
     authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     toolNames,
     deferredToolNames,
     toolCollisions,

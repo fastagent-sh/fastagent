@@ -142,35 +142,62 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
 }
 
 /**
- * A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH}; the directory
- * opener passes the project-level `<root>/.secrets/auth.json`).
+ * A read-write `CredentialStore` over the given credentials file (default {@link GLOBAL_AUTH_PATH}; the directory
+ * opener passes the project-level `<root>/.secrets/auth.json`), optionally falling back to a second file.
+ *
+ * The fallback is PER PROVIDER, not per file: logging one provider into a project must not hide the others a person
+ * already has globally. And the layer a credential was READ from is the layer its refresh is written back to —
+ * anything else would conjure a second holder of the same OAuth grant, which is the failure this whole area exists
+ * to avoid. A provider present in neither layer is new, and new credentials belong to the primary.
  */
 export function fastagentCredentialStore(
   authPath: string = GLOBAL_AUTH_PATH,
-  options: FastagentAuthOptions = {},
+  options: FastagentAuthOptions & { fallbackPath?: string } = {},
 ): CredentialStore {
   const warn = options.warn ?? ((message: string) => log.warn(message));
+  const fallback =
+    options.fallbackPath !== undefined && options.fallbackPath !== authPath ? options.fallbackPath : undefined;
+  /**
+   * The file that owns this provider: where it already is, else the primary.
+   *
+   * Known ceiling: this read is UNLOCKED, so a concurrent `fastagent login` writing the same provider into the
+   * primary between here and the lock below sends this refresh to the fallback instead — the one window in which the
+   * "one grant, one copy" rule can be lost. Re-checking under the lock means locking both files in a fixed order;
+   * worth it only if concurrent logins stop being a rounding error.
+   */
+  const owner = (providerId: string): string => {
+    if (fallback === undefined) return authPath;
+    const primary = readCreds(authPath, warn);
+    if (primary && pick(primary, providerId)) return authPath;
+    const secondary = readCreds(fallback, warn);
+    return secondary && pick(secondary, providerId) ? fallback : authPath;
+  };
 
   return {
     async read(providerId) {
-      const creds = readCreds(authPath, warn);
-      return creds ? pick(creds, providerId) : undefined;
+      for (const path of fallback === undefined ? [authPath] : [authPath, fallback]) {
+        const creds = readCreds(path, warn);
+        const found = creds && pick(creds, providerId);
+        if (found) return found;
+      }
+      return undefined;
     },
     async list() {
-      // Metadata only, never secrets (the pi-ai `list` contract).
-      const creds = readCreds(authPath, warn);
-      if (!creds) return [];
-      const infos: CredentialInfo[] = [];
-      for (const [providerId, cred] of Object.entries(creds)) {
-        if (cred && (cred.type === "oauth" || cred.type === "api_key")) {
-          infos.push({ providerId, type: cred.type });
+      // Metadata only, never secrets (the pi-ai `list` contract). Reverse order, so the primary's entry for a
+      // provider present in both overwrites the fallback's — the same precedence `read` applies.
+      const infos = new Map<string, CredentialInfo>();
+      for (const path of fallback === undefined ? [authPath] : [fallback, authPath]) {
+        for (const [providerId, cred] of Object.entries(readCreds(path, warn) ?? {})) {
+          if (cred && (cred.type === "oauth" || cred.type === "api_key"))
+            infos.set(providerId, { providerId, type: cred.type });
         }
       }
-      return infos;
+      return [...infos.values()];
     },
     modify(providerId, fn) {
-      return withLockedAuthFile(authPath, async (current) => {
-        const creds = parseForWrite(current, authPath); // corrupt → throw → no clobber
+      const path = owner(providerId);
+      return withLockedAuthFile(path, async (current) => {
+        const creds = parseForWrite(current, path); // corrupt → throw → no clobber
         const next = await fn(pick(creds, providerId));
         if (next === undefined) return { result: pick(creds, providerId) }; // unchanged: no write
         creds[providerId] = next;
@@ -178,11 +205,12 @@ export function fastagentCredentialStore(
       });
     },
     async delete(providerId) {
+      const path = owner(providerId);
       // No-op when nothing is stored: do NOT take the lock (which would create the file) on a machine that never
       // stored this provider.
-      if (!existsSync(authPath)) return;
-      await withLockedAuthFile(authPath, async (current) => {
-        const creds = parseForWrite(current, authPath);
+      if (!existsSync(path)) return;
+      await withLockedAuthFile(path, async (current) => {
+        const creds = parseForWrite(current, path);
         if (!(providerId in creds)) return { result: undefined }; // absent: no write
         delete creds[providerId];
         return { result: undefined, next: `${JSON.stringify(creds, null, 2)}\n` };

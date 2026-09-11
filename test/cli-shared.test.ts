@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enterAgentCommand, loginWithKeyCheck, reportAssembly } from "../src/cli/shared.ts";
+import { enterAgentCommand, loginWithKeyCheck, reportAssembly, reportAuth } from "../src/cli/shared.ts";
 import { setLogLevel } from "../src/log.ts";
 import { LoginCancelled, type LoginMethod } from "../src/engines/pi/login.ts";
 import * as models from "../src/engines/pi/models.ts";
@@ -176,5 +176,57 @@ describe("enterAgentCommand: --no-input never reaches the picker", () => {
 
     expect(placement.agentDir).toBe(dir);
     expect(runtime).not.toHaveBeenCalled();
+  });
+});
+
+describe("reportAuth (which layer the line names)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  /** A primary + fallback auth file pair; `where` (if given) gets the stored credential for provider `p`. */
+  const layers = (where?: "primary" | "fallback") => {
+    const dir = mkdtempSync(join(tmpdir(), "fastagent-auth-layer-"));
+    dirs.push(dir);
+    const primary = join(dir, "project.json");
+    const fallback = join(dir, "global.json");
+    writeFileSync(primary, "{}\n");
+    writeFileSync(fallback, "{}\n");
+    if (where)
+      writeFileSync(
+        where === "primary" ? primary : fallback,
+        `${JSON.stringify({ p: { type: "api_key", key: "k" } })}\n`,
+      );
+    return { dir, primary, fallback };
+  };
+
+  /** The single `auth:` line, at the default `info` level. */
+  const authLine = async (agentDir: string, primary: string, fallback: string): Promise<string> => {
+    const out: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
+    try {
+      await reportAuth(agentDir, "p/m", primary, fallback);
+    } finally {
+      spy.mockRestore();
+    }
+    return out.find((l) => l.includes("auth:")) ?? "";
+  };
+
+  it("names the fallback only when the fallback is the layer holding the credential", async () => {
+    // Provider "p" is not a real pi provider, so nothing satisfies auth and the line reports what is STORED —
+    // which is the read this test is about.
+    const held = layers("fallback");
+    expect(await authLine(held.dir, held.primary, held.fallback)).toContain(held.fallback);
+
+    const mine = layers("primary");
+    expect(await authLine(mine.dir, mine.primary, mine.fallback)).toContain(mine.primary);
+
+    // Neither layer: the file to edit is the one `fastagent login` writes — the primary.
+    const none = layers();
+    const line = await authLine(none.dir, none.primary, none.fallback);
+    expect(line).toContain("(none found)");
+    expect(line).toContain(none.primary);
   });
 });
