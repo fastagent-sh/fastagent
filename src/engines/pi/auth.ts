@@ -3,7 +3,7 @@
  * `Models` collection (models.ts). The write path refuses to overwrite a corrupt file, so a torn read never clobbers
  * the other providers' credentials.
  */
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE, ensureSecretsDir } from "../../paths.ts";
@@ -82,8 +82,11 @@ async function withLockedAuthFile<T>(
     const out = await fn(current);
     throwIfCompromised();
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
-    // the mode before the content is reachable.
-    if (out.next !== undefined) writeFileAtomic(authPath, out.next, SECRET_FILE_MODE);
+    // the mode before the content is reachable. Through the LINK's target when the auth file is a symlink: renaming
+    // over the link would replace it with a regular file, and from then on this tool and pi (which writes in place)
+    // would be editing two different files — the same split the shared lock above exists to prevent, arriving one
+    // write later. `realpathSync` is safe here because the lock path was created if missing before it was taken.
+    if (out.next !== undefined) writeFileAtomic(realpathSync(authPath), out.next, SECRET_FILE_MODE);
     throwIfCompromised();
     result = out.result;
   } catch (error) {

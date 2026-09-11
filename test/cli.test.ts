@@ -152,6 +152,32 @@ describe("cli papercuts", () => {
     expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
   });
 
+  it("deploy docker refuses --run from a generated artifact that drifted from the definition", async () => {
+    // Reporting the drift is enough when only producing artifacts. `--run` would deploy FROM it, which is a
+    // determinate mismatch between what ships and what the definition says — so it stops before Docker is touched.
+    // (writeArtifacts owns WHICH files are stale; this is the dispatcher's wiring of that fact to an exit code.)
+    const dir = await agentWorkspace("fa-deploy-stale-", {
+      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+    });
+    expect((await run(["deploy", "docker", dir])).code).toBe(0);
+    const compose = join(dir, "fastagent", "fastagent.compose.yml");
+    // Keep the marker (still ours), change the content: exactly "config changed or fastagent was upgraded".
+    await writeFile(compose, `${await readFile(compose, "utf8")}# drifted\n`);
+
+    const planned = await run(["deploy", "docker", dir]);
+    expect(planned.code).toBe(0);
+    expect(planned.stderr).toMatch(/no longer matches what deploy would generate/);
+
+    const gated = await run(["deploy", "docker", dir, "--run"]);
+    expect(gated.code).toBe(1);
+    expect(gated.stderr).toMatch(/deploy stopped: fastagent\/fastagent\.compose\.yml no longer match/);
+    expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
+
+    // --force regenerates it, so the same command proceeds past the gate.
+    const forced = await run(["deploy", "docker", dir, "--run", "--force"]);
+    expect(forced.stderr).not.toMatch(/no longer match/);
+  });
+
   it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
     const dir = await agentWorkspace("fa-deploy-tunnel-", {
       "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,

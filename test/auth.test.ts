@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -269,5 +269,11 @@ describe("fastagentCredentialStore: the lock must be the one pi takes", () => {
     });
     expect(lockBesideLink).toBe(true);
     expect(lockBesideTarget).toBe(false);
+
+    // And the write goes THROUGH the link. A rename over the link would replace it with a regular file, after
+    // which this tool and pi (which writes in place) would edit two different files — the same split one write
+    // later, with the shared lock no longer meaning anything.
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(await readFile(real, "utf8")).anthropic.key).toBe("k");
   });
 });

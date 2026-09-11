@@ -96,13 +96,15 @@ export const agentcoreHost: HostDeploy = {
     if (!opts.force && templateArtifact && (await exists(templateHome))) {
       const existing = await readFile(templateHome, "utf8");
       if (isGeneratedAgentcoreTemplate(existing) && existing !== templateArtifact.content) {
-        const msg =
-          `${templateArtifact.path} no longer matches this definition (channels/schedules/selfSchedule or a ` +
-          `deploy.agentcore setting changed) — ` +
-          `the kept template would silently drop the difference. Pass --force to regenerate (hand edits are lost), ` +
-          `or delete the file.`;
-        if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
-        console.error(`[fastagent] warn: ${msg}`);
+        // WHY it matters here, not WHETHER to stop: the template IS the topology, so a kept one drops the
+        // difference rather than degrading visibly. Stopping a `--run` on a stale artifact is the dispatcher's
+        // rule (deploy.ts) for every host and every path — stating it a second time here is how the two
+        // wordings drift apart.
+        console.error(
+          `[fastagent] warn: ${templateArtifact.path} no longer matches this definition ` +
+            `(channels/schedules/selfSchedule or a deploy.agentcore setting changed) — the kept template would ` +
+            `silently drop the difference.`,
+        );
       }
     }
     await write(plan.artifacts, {
