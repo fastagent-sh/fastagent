@@ -145,8 +145,16 @@ Custom endpoints are **additive** — built-in providers stay available alongsid
 ### Keys stay out of the file
 
 `apiKey` (and any `headers` value) resolves at request time: `"$MYGW_API_KEY"` reads an environment
-variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal. Prefer the env
-form — the file then stays safe to commit and to bake into an image.
+variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal.
+
+**Use one of the first two.** A literal credential in this file ships inside the image, where anyone
+who can pull it reads the layer — so `deploy` **refuses `--run`** on a literal `apiKey` for the
+selected model, and warns when only generating artifacts. This is the same rule that makes a
+`.dockerignore` which fails to exclude `.secrets/auth.json` stop a run: any configuration that would
+put a credential into the image gates `--run`. The general form of it: **literal credentials belong in
+`.secrets/` or the platform's secret storage, and every file inside the definition may only carry a
+reference.** `headers` values are not checked (FastAgent cannot tell a credential from an org id
+there), so apply the same rule by hand.
 
 `deploy` recognizes the variable backing the selected model and carries its value to the host like any
 provider key, listing it in the runbook and refusing `--run` when it has no local value. You do not

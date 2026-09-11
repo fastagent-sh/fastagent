@@ -72,15 +72,25 @@ export async function createPiModelRuntime(
   return runtime;
 }
 
-/** How a model's credential will REACH a deployed agent. */
-export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { envVar?: string; inDefinition: boolean } {
+/**
+ * How a model's credential will REACH a deployed agent — and whether the way it does so is legitimate.
+ *
+ * `models.json` resolves an `apiKey` three ways, and they are NOT interchangeable for a deployment: `"$NAME"` is an
+ * ordinary declared secret, `"!cmd"` runs on the box and never travels, and a literal is a credential written into a
+ * file that ships inside the image — readable by anyone who can pull it. pi already tells the three apart
+ * (`models_json_key` vs `models_json_command` vs `environment`), so the distinction costs nothing to make here.
+ */
+export function modelCredentialCarry(
+  runtime: ModelRuntime,
+  spec: string,
+): { envVar?: string; inDefinition: boolean; literalKey: boolean } {
   const status = runtime.getProviderAuthStatus(providerOf(spec));
-  if (!status.configured) return { inDefinition: false };
+  if (!status.configured) return { inDefinition: false, literalKey: false };
   // An env-var name is only useful downstream if it IS one.
   if (status.source === "environment" && status.label && /^[A-Z][A-Z0-9_]*$/.test(status.label)) {
-    return { envVar: status.label, inDefinition: false };
+    return { envVar: status.label, inDefinition: false, literalKey: false };
   }
-  return { inDefinition: status.source !== "stored" };
+  return { inDefinition: status.source !== "stored", literalKey: status.source === "models_json_key" };
 }
 
 /** Per-provider auth status for the first-run model picker. */

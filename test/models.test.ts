@@ -153,17 +153,22 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       expect(modelCredentialCarry(runtime, "mygw/deepseek-v3")).toEqual({
         envVar: "FASTAGENT_TEST_GW_KEY",
         inDefinition: false,
+        literalKey: false,
       });
     } finally {
       delete process.env.FASTAGENT_TEST_GW_KEY;
     }
   });
 
-  it("a key written into models.json (literal or command) is carried BY the definition, not by deploy", async () => {
-    // These travel inside the image with the file itself. Reported as such so the deploy gate does not
-    // demand a credential that is already there — its remedies (`fastagent login`, a provider env key)
-    // are both impossible for a custom provider.
-    for (const apiKey of ["sk-literal-in-file", "!echo sk-from-command"]) {
+  it("a key written into models.json is definition-carried, and a LITERAL one is reported as such", async () => {
+    // Both travel inside the image with the file itself, so neither gives `deploy` anything to carry — its
+    // remedies (`fastagent login`, a provider env key) are both impossible for a custom provider. But only the
+    // literal puts a CREDENTIAL in the image, and preflight gates `--run` on that, so the two must be told apart
+    // here: pi already does (`models_json_key` vs `models_json_command`).
+    for (const [apiKey, literalKey] of [
+      ["sk-literal-in-file", true],
+      ["!echo sk-from-command", false],
+    ] as const) {
       const dir = await agentWith(
         JSON.stringify({
           providers: {
@@ -172,7 +177,7 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
         }),
       );
       const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
-      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true });
+      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true, literalKey });
     }
   });
 

@@ -560,11 +560,32 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     }
   });
 
-  it("a key written into the file is reported as definition-carried (nothing to carry, nothing to gate)", async () => {
+  it("a LITERAL key gates --run: the file ships inside the image, where any puller reads the layer", async () => {
+    // Same rule the `.dockerignore` check enforces — any configuration that would put a credential into the image
+    // stops `--run`. A literal has no legitimate use: an endpoint needing no key omits it, and one that needs a key
+    // has two forms (`$NAME`, `!command`) that do not ship it.
     const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file") });
-    const pre = await call(dir, { model: "mygw/m1" });
+    const gated = await call(dir, { model: "mygw/m1" }, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/literal apiKey for "mygw".*ships inside the image/s);
+
+    // Generate-only warns: the operator may be producing artifacts they will not deploy from here.
+    const planned = await call(dir, { model: "mygw/m1" });
+    expect(planned.ok).toBe(true);
+    if (planned.ok) {
+      expect(planned.modelKeyInDefinition).toBe(true); // still nothing for `--run` to carry
+      expect(planned.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/literal apiKey/) });
+    }
+  });
+
+  it("a !command key is NOT gated — it runs on the box and the credential never travels", async () => {
+    const dir = await workspace({ "models.json": GATEWAY("!printf sk-from-a-command") });
+    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);
-    if (pre.ok) expect(pre.modelKeyInDefinition).toBe(true);
+    if (pre.ok) {
+      expect(pre.modelKeyInDefinition).toBe(true);
+      expect(pre.messages.some((m) => /literal apiKey/.test(m.text))).toBe(false);
+    }
   });
 
   it("carries what tools and schedules DECLARED, without a second list to keep in sync", async () => {
