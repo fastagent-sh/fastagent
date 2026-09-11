@@ -127,6 +127,14 @@ export async function preflightDeploy(input: {
   // cannot disagree about it.
   const valueFile = relative(workspace, dotEnvPath(agentDir));
   const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)), valueFile);
+  if (model.invalid !== undefined) {
+    // A gate rather than a warning even without `--run`: the release manifest validates the spec on the way out, so
+    // there is no artifact to produce either. Same class as the agent-directory-name gate above.
+    return {
+      ok: false,
+      gate: `the model in ${model.source} is not a "provider/modelId" spec: ${JSON.stringify(model.invalid)}`,
+    };
+  }
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
@@ -413,8 +421,8 @@ export async function preflightDeploy(input: {
         ? `nothing outside the container can reach the serve (published port, health check, webhooks).`
         : `that address does not exist, so the container fails to bind at start.`) +
       ` Drop it and use \`--bind ${config.http?.host}\` locally instead.`;
-    // Same disposition as the model-travel issue: warn when producing artifacts (the operator may be deploying
-    // somewhere that fronts the port), gate `--run`.
+    // Warn when only producing artifacts (the operator may be deploying somewhere that fronts the port), gate
+    // `--run`, where the unreachable bind is a certainty rather than a possibility.
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   }
@@ -493,16 +501,17 @@ function resolveDeployModel(
   values: ReadonlyMap<string, string>,
   /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
   valueFile: string,
-): { spec?: string; source: string; envValue?: string } {
+): { spec?: string; source: string; envValue?: string; invalid?: string } {
   const fromEnv = values.get("FASTAGENT_MODEL");
-  // The manifest this ends up in is validated on the way out AND on the way in, so a typo must be refused here,
-  // where the file that holds it can be named.
-  if (fromEnv && !isModelSpec(fromEnv)) {
-    throw new Error(`FASTAGENT_MODEL in ${valueFile} is not a "provider/modelId" spec: ${JSON.stringify(fromEnv)}`);
-  }
+  const source = fromEnv ? valueFile : "fastagent.config";
+  // BOTH sources are checked, at the one point that reads them: a `provider`-less spec resolves to nothing on the
+  // box, so letting `config.model` through would ship exactly the crash-loop this resolution exists to prevent —
+  // `probeAuthSource` reports "unconfigured" for it here and the failure only appears after deployment.
+  const spec = fromEnv || config.model;
+  if (spec && !isModelSpec(spec)) return { source, invalid: spec };
   // `envValue` is what the release manifest records (ContainerInput.modelSpec), so it is set only when the value file
   // is the source: a `config.model` already travels in the config itself. The manifest is rewritten by every deploy,
   // so deleting the line and redeploying simply drops it — nothing stale survives.
-  if (fromEnv) return { spec: fromEnv, source: valueFile, envValue: fromEnv };
-  return { spec: config.model, source: "fastagent.config" };
+  if (fromEnv) return { spec: fromEnv, source, envValue: fromEnv };
+  return { spec: config.model, source };
 }

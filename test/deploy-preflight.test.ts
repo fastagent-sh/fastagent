@@ -96,15 +96,24 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.container.modelSpec).toBeUndefined();
   });
 
-  it("refuses a FASTAGENT_MODEL that is not a spec, but accepts a multi-segment modelId", async () => {
-    // The manifest validates this on the way out and on the way in, so a typo must be refused HERE, where the file
-    // holding it can be named. A `/` inside the modelId is not a typo — 795 of pi's 1354 built-in specs look like
-    // `baseten/zai-org/GLM-5.3`, and resolution splits on the first slash.
+  it("gates a model that is not a spec — in EITHER source — but accepts a multi-segment modelId", async () => {
+    // A provider-less spec resolves to nothing on the box, so letting it past this point ships the crash-loop the
+    // gate exists to stop. `config.model` was the half that used to go unchecked. A `/` inside the modelId is not a
+    // typo: 795 of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolution splits on the first
+    // slash. Gated with or without `--run` — the manifest validates the spec on the way out, so there is no artifact
+    // to produce either.
     const dir = await workspace();
     for (const bad of ["openai/gpt-4o mini", "gpt-4o"]) {
       await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
-      await expect(call(dir, {})).rejects.toThrow(/not a "provider\/modelId" spec/);
+      const pre = await call(dir, {});
+      expect(pre.ok).toBe(false);
+      if (!pre.ok) expect(pre.gate).toMatch(/is not a "provider\/modelId" spec/);
     }
+    await writeFile(join(dir, ".secrets", ".env"), "");
+    const fromConfig = await call(dir, { model: "gpt-4o" });
+    expect(fromConfig.ok).toBe(false);
+    if (!fromConfig.ok) expect(fromConfig.gate).toMatch(/model in fastagent\.config is not a "provider\/modelId"/);
+
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=baseten/zai-org/GLM-5.3\n");
     const pre = await call(dir, {}, { run: true });
     expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
