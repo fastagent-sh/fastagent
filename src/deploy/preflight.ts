@@ -55,8 +55,6 @@ interface DeployFacts {
   values: ReadonlyMap<string, string>;
   /** That file, workspace-relative — the name every "set it here" message must use. */
   valueFile: string;
-  /** Whether it is on disk. `--env-file` is a hard failure on a missing path, so a runbook must not assume one. */
-  valueFileExists: boolean;
   /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
@@ -147,7 +145,6 @@ export async function preflightDeploy(input: {
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
   const valueFile = relative(workspace, dotEnvPath(agentDir));
-  const valueFileExists = await exists(dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
   const model = resolveDeployModel(config, values, valueFile);
   if (model.invalid !== undefined) {
@@ -532,7 +529,6 @@ export async function preflightDeploy(input: {
     hasTimeTriggers,
     values,
     valueFile,
-    valueFileExists,
     modelAuth,
     modelKeyInDefinition,
     authPath,

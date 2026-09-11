@@ -251,9 +251,10 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(up.env).toEqual({ FASTAGENT_AUTH_SEED: "base64-secret" });
   });
 
-  it("names the secrets it carries — the list is no longer only what the author typed", async () => {
-    // A mounted tool/channel/schedule declares its own names, so what `--run` reads from THIS machine
-    // and pushes to the host has to be visible, not a count.
+  it("names the values the container must find, and the file it reads them from", async () => {
+    // A mounted tool/channel/schedule declares its own names, so the list has to be visible, not a count. It is
+    // NOT "passing N secrets to Compose": the container reads the value file itself, and a hand-owned Compose
+    // file may have no `env_file` entry at all — saying we handed them over would be false.
     const { docker } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\n" };
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
@@ -266,7 +267,9 @@ describe("deploy/docker/run: local Compose journey", () => {
       (message) => logs.push(message),
       healthy,
     );
-    expect(logs.join("\n")).toContain("2 secret(s) to Compose: OPENAI_API_KEY, X_API_KEY");
+    expect(logs.join("\n")).toContain(
+      "2 value(s) the container reads from fastagent/.secrets/.env: OPENAI_API_KEY, X_API_KEY",
+    );
   });
 
   it("accepts a running custom topology with no host-published port (operator-owned ingress)", async () => {

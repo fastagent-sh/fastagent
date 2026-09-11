@@ -1,5 +1,6 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
-import { basename, join } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
   composeHasTunnelService,
@@ -10,7 +11,16 @@ import {
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { openExternalUrl } from "../../../open-url.ts";
-import { type ResolvedPlacement, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
+import {
+  type ResolvedPlacement,
+  SECRETS_DIRNAME,
+  SECRET_FILE_MODE,
+  ensureSecretsDir,
+  exists,
+  readTextIfExists,
+  resolveStateRoot,
+} from "../../../paths.ts";
+import { dotEnvPath } from "../../../env.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials } from "./shared.ts";
@@ -21,17 +31,31 @@ export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
-    const {
-      modelAuth,
-      modelKeyInDefinition,
-      authPath,
-      container,
-      port,
-      extraSecrets,
-      values,
-      valueFile,
-      valueFileExists,
-    } = pre;
+    const { modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets, values, valueFile } = pre;
+    // The generated Compose names `<agent>/.secrets/.env` unconditionally, so it has to be there — Compose refuses
+    // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
+    // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
+    const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
+    await ensureSecretsDir(dirname(composeValueFile));
+    if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
+    // `--run` reads whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a builder's
+    // path would not mean the same thing anywhere else.
+    if (resolve(dotEnvPath(agentDir)) !== resolve(composeValueFile)) {
+      console.error(
+        `[fastagent] warn: FASTAGENT_SECRETS_DIR points --run at ${valueFile}, but the generated Compose reads ` +
+          `${relative(workspace, composeValueFile)} (a committed artifact cannot carry this machine's path). A ` +
+          `hand-run \`docker compose up\` sees only the latter.`,
+      );
+    }
+    // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
+    // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
+    const dollarValues = [...values].filter(([, value]) => value.includes("$")).map(([name]) => name);
+    if (dollarValues.length > 0) {
+      console.error(
+        `[fastagent] warn: ${dollarValues.join(", ")} contain "$", which Compose expands when reading the value ` +
+          `file (an undefined name becomes empty). Escape each one as "$$" in ${valueFile}.`,
+      );
+    }
     const hasDeclaredChannels = channels.length > 0;
     const projectName = toDockerProjectName(basename(workspace));
     const dockerPlan = (tunnel: boolean) =>
@@ -43,7 +67,6 @@ export const dockerHost: HostDeploy = {
         tunnel,
         extraSecrets,
         valueFile,
-        valueFileExists,
         ...container,
       });
     const requestedTunnel = !!opts.tunnel && (!hasDeclaredChannels || webhookChannels.length > 0);

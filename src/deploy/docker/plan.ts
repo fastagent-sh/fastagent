@@ -1,9 +1,9 @@
 /** `fastagent deploy docker` — the local-Docker plan. */
-import { dirname, relative } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface DockerPlanInput extends ContainerInput {
@@ -21,8 +21,6 @@ export interface DockerPlanInput extends ContainerInput {
   extraSecrets?: readonly DeclaredSecret[];
   /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), workspace-relative. */
   valueFile: string;
-  /** Whether that file is on disk: Compose refuses an `env_file` entry pointing at a missing path. */
-  valueFileExists: boolean;
 }
 
 export interface DockerPlan {
@@ -68,14 +66,6 @@ function composeInterpolation(name: string): string {
 }
 
 function composeYaml(input: DockerPlanInput): string {
-  // `env_file`, not per-name `${NAME:-}` interpolation: interpolation resolves from the SHELL or the project `.env`,
-  // which is exactly the source a deployment must not have (docs/design/configuration.md §9). Naming the value file
-  // here makes `docker compose up` read the deployed environment's own declaration directly — by hand and under
-  // `--run` alike — so nothing has to be carried through, filtered, or blanked. Written only when the file exists:
-  // `env_file`'s `required: false` needs Compose 2.24 and the floor here is ${MIN_DOCKER_COMPOSE_VERSION}.
-  const valueFileEntry = input.valueFileExists
-    ? `    env_file:\n      - ${relative(dirname(`${input.agentPrefix}${DOCKER_COMPOSE_FILE}`), input.valueFile)}\n`
-    : "";
   // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the WORKSPACE, so it
   // climbs back out of the one-level prefix deploy requires.
   const context = "..";
@@ -113,11 +103,21 @@ services:
       dockerfile: ${dockerfile}
     ports:
       - "127.0.0.1:${input.port}:${input.port}"
-${valueFileEntry}    environment:
+    # The deployed environment's own declaration, read by the container itself. \`env_file\`, not per-name
+    # \${NAME:-} interpolation: interpolation resolves from the SHELL or the project .env, which is exactly the
+    # source a deployment must not have. A FIXED path, never the builder's FASTAGENT_SECRETS_DIR — this file is a
+    # committed artifact and must mean the same thing on every machine. \`deploy\` creates it if it is missing.
+    env_file:
+      - ${SECRETS_DIRNAME}/.env
+    environment:
       PORT: "${input.port}"
-      # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets.
+      # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets. Pinned AFTER
+      # env_file so a local path in that file (the scaffold lists these) cannot send the container's state, sessions
+      # or credentials somewhere outside the volume — or at a host path that does not exist here at all.
       FASTAGENT_STATE_DIR: "${MOUNT}/.state"
       FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
+      FASTAGENT_SESSIONS_DIR: "${MOUNT}/.state/sessions"
+      FASTAGENT_AUTH_PATH: "${MOUNT}/.secrets/auth.json"
       # The ONE value that is not in the value file: \`--run\` mints it from the local auth.json. Left as a seam in
       # the committed topology so a hand-run \`up\` can supply it the same way.
       FASTAGENT_AUTH_SEED: "${composeInterpolation("FASTAGENT_AUTH_SEED")}"
@@ -153,12 +153,6 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
       `# Required environment values. Put them in ${input.valueFile} — that file declares the deployed`,
       `# environment (in CI, write it before running the command):`,
       ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
-      ...(input.valueFileExists
-        ? []
-        : [
-            `# It does not exist yet, so ${composePath} does not reference it. Create it, then re-run`,
-            `# \`fastagent deploy docker\` to regenerate a Compose file that reads it.`,
-          ]),
     );
   }
   if (optional.length > 0) {

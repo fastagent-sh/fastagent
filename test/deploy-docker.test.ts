@@ -17,7 +17,6 @@ const base = {
   releaseId: "release-one",
   agentPrefix: "fastagent/",
   valueFile: "fastagent/.secrets/.env",
-  valueFileExists: true,
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,
@@ -106,10 +105,16 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("<value>");
     expect(yaml).not.toContain("sk-");
 
-    // No value file yet → no entry pointing at a missing path (Compose refuses one), and the runbook says so.
-    const absent = planDockerDeploy({ ...base, valueFileExists: false, modelAuth: "OPENAI_API_KEY", channels: [] });
-    expect(compose(absent)).not.toContain("env_file");
-    expect(runbook(absent)).toMatch(/does not exist yet.*regenerate a Compose file that reads it/s);
+    // The path is FIXED, never the builder's FASTAGENT_SECRETS_DIR: this file is committed and must mean the same
+    // thing on every machine. `deploy` creates the file so the entry is never a missing path.
+    expect(
+      compose(planDockerDeploy({ ...base, modelAuth: undefined, channels: [], valueFile: "somewhere/else/.env" })),
+    ).toContain("env_file:\n      - .secrets/.env");
+
+    // Machinery pinned AFTER env_file, so a local path in that file (the scaffold lists these) cannot send the
+    // container's sessions or credentials to a host path that does not exist inside it.
+    expect(yaml).toContain('FASTAGENT_SESSIONS_DIR: "/data/.state/sessions"');
+    expect(yaml).toContain('FASTAGENT_AUTH_PATH: "/data/.secrets/auth.json"');
   });
 
   it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {

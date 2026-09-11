@@ -86,8 +86,21 @@ reads the same declaration by hand and under `--run` alike, so nothing has to be
 filtered, or blanked. The one value not in that file is `FASTAGENT_AUTH_SEED`, which `--run` mints from your local
 `auth.json`; it stays a seam in the committed topology so a hand-run `up` can supply it the same way.
 
-If the value file does not exist yet, the generated Compose omits the `env_file` entry (Compose refuses one pointing
-at a missing path) and the runbook says so — create the file and re-run `fastagent deploy docker`.
+The entry is a **fixed** path, `<agent>/.secrets/.env`, never whatever `FASTAGENT_SECRETS_DIR` resolves to on the
+build machine: this file is committed, so it has to mean the same thing everywhere. `deploy` creates the file when it
+is missing (empty — a deployment that declares nothing declares it in an empty file), because Compose refuses an
+`env_file` entry pointing at a path that does not exist. If `FASTAGENT_SECRETS_DIR` sends `--run` somewhere else,
+`deploy` warns: a hand-run `docker compose up` still reads only the fixed path.
+
+Two things follow from Compose's own behaviour and are worth knowing:
+
+- The machinery variables (`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_SESSIONS_DIR`,
+  `FASTAGENT_AUTH_PATH`) are pinned in `environment:`, which Compose applies **after** `env_file`. The scaffolded
+  `.env.example` lists some of them as local overrides; pinning keeps a laptop path from sending the container's
+  sessions or credentials outside the volume.
+- Compose expands `$VAR` **inside** `env_file` values (raw mode needs Compose 2.30, above our floor). A value
+  containing `$` reaches the container rewritten, and an undefined name becomes empty — so escape it as `$$`.
+  `deploy` warns when it finds one.
 
 ### Taking ownership of Docker files
 
