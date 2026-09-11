@@ -46,6 +46,31 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
   return r;
 }
 
+/**
+ * Project a release's own declarations into the environment it was resolved FOR — the receiving half of the model
+ * chain, run by `prepareStartWorkspace` BEFORE the workspace's `.env` is read (so either source outranks a value
+ * edited on the box).
+ *
+ * `||=`: a variable the platform already holds still wins, because the deployment declares only the half of this
+ * environment it can. The log names whichever source actually won — the remedies differ, and a redeploy does
+ * nothing at all to a platform-set variable.
+ */
+export function applyReleaseEnv(release: DeploymentRelease, env: NodeJS.ProcessEnv = process.env): void {
+  const fromPlatform = env.FASTAGENT_MODEL;
+  if (release.model && !fromPlatform) env.FASTAGENT_MODEL = release.model;
+  const effective = env.FASTAGENT_MODEL;
+  if (!effective) return;
+  log.info(
+    `[fastagent] model ${effective} — from ${
+      fromPlatform
+        ? `a FASTAGENT_MODEL already set in this environment${
+            release.model ? ", which outranks the release manifest" : ""
+          }`
+        : "the release manifest (redeploy to change it)"
+    }; editing FASTAGENT_MODEL in this workspace's .env does not override it`,
+  );
+}
+
 /** A `provider/modelId` spec. The id itself may carry `/` and `~` (`baseten/zai-org/GLM-5.3`, openrouter aliases);
  *  resolution only ever splits on the first slash. */
 export function isModelSpec(value: string): boolean {

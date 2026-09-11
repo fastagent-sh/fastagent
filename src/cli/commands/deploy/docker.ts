@@ -1,5 +1,6 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
-import { basename, join } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
   composeHasTunnelService,
@@ -10,7 +11,16 @@ import {
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { openExternalUrl } from "../../../open-url.ts";
-import { type ResolvedPlacement, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
+import {
+  type ResolvedPlacement,
+  SECRETS_DIRNAME,
+  SECRET_FILE_MODE,
+  ensureSecretsDir,
+  exists,
+  readTextIfExists,
+  resolveStateRoot,
+} from "../../../paths.ts";
+import { dotEnvPath } from "../../../env.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials } from "./shared.ts";
@@ -21,7 +31,38 @@ export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
-    const { modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets, values } = pre;
+    const { modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets, values, valueFile } = pre;
+    // The generated Compose names `<agent>/.secrets/.env` unconditionally, so it has to be there — Compose refuses
+    // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
+    // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
+    const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
+    await ensureSecretsDir(dirname(composeValueFile));
+    if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
+    // The pre-flight read whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a
+    // builder's path would not mean the same thing anywhere else. Under `--run` the two files disagreeing is a
+    // DETERMINISTIC failure and gates like every other one: the missing-values gate would pass on the file this
+    // machine reads while `compose up` starts a container whose declared secrets and model are all absent.
+    if (resolve(dotEnvPath(agentDir)) !== resolve(composeValueFile)) {
+      const issue =
+        `FASTAGENT_SECRETS_DIR points this run's values at ${valueFile}, but the generated Compose reads ` +
+        `${relative(workspace, composeValueFile)} (a committed artifact cannot carry this machine's path), so the ` +
+        `container would start with none of them. Unset FASTAGENT_SECRETS_DIR, or put the values in that file.`;
+      if (opts.run) failStartup(new Error(`deploy stopped: ${issue}`));
+      console.error(`[fastagent] warn: ${issue}`);
+    }
+    // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
+    // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
+    // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and pushed
+    // as-is by every other host, so `$$` would fix Docker by corrupting all of them.
+    const dollarValues = [...values].filter(([, value]) => value.includes("$")).map(([name]) => name);
+    if (dollarValues.length > 0) {
+      console.error(
+        `[fastagent] warn: ${dollarValues.join(", ")} contain "$", which Compose expands when reading ${valueFile} ` +
+          `(an undefined name becomes empty), so the container sees a different value. "$$" escapes it for Compose ` +
+          `ONLY — \`fastagent dev\`/\`start\` and the other hosts read this file literally and would keep the extra ` +
+          `"$". Prefer a value without "$".`,
+      );
+    }
     const hasDeclaredChannels = channels.length > 0;
     const projectName = toDockerProjectName(basename(workspace));
     const dockerPlan = (tunnel: boolean) =>
@@ -32,6 +73,7 @@ export const dockerHost: HostDeploy = {
         channels,
         tunnel,
         extraSecrets,
+        valueFile,
         ...container,
       });
     const requestedTunnel = !!opts.tunnel && (!hasDeclaredChannels || webhookChannels.length > 0);
@@ -65,6 +107,7 @@ export const dockerHost: HostDeploy = {
         channels,
         extraSecrets,
         values,
+        valueFile,
       });
     }
     if (keptWithoutRequestedTunnel) {
@@ -93,6 +136,7 @@ async function runDeployDocker(
     channels: readonly DeclaredChannel[];
     extraSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
+    valueFile: string;
   },
 ): Promise<void> {
   const { agentDir, workspace, composeFile, port, requireTunnel, channels } = params;
@@ -103,6 +147,7 @@ async function runDeployDocker(
       port,
       secrets,
       missingSecrets,
+      valueFile: params.valueFile,
       needsModelCredential,
       requireTunnel,
       announce: (tunnelUrl) =>

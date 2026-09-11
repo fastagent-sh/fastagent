@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import {
   createPiModelRuntime,
+  literalKeyProviders,
   modelCredentialCarry,
   probeApiKey,
   probeAuthSource,
@@ -174,6 +175,32 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
       expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true });
     }
+  });
+
+  it("literalKeyProviders reads the FILE, so a stored credential cannot hide a literal that still ships", async () => {
+    // getProviderAuthStatus answers "what satisfies this provider now" and returns `stored` first, so a provider
+    // with both an auth.json entry and a literal in the file would report `stored` — and the literal would ship
+    // unreported. The gate asks what the definition DECLARES, which only the file answers.
+    const dir = await agentWith(
+      JSON.stringify({
+        providers: {
+          literal: { baseUrl: "https://a.example.com/v1", api: "o", apiKey: "sk-in-file", models: [{ id: "m" }] },
+          // `$$` is pi's escape for a literal `$`, so this resolves to `sk$abc` — a credential, not a reference.
+          escaped: { baseUrl: "https://f.example.com/v1", api: "o", apiKey: "sk$$abc", models: [{ id: "m" }] },
+          local: { baseUrl: "http://localhost:11434/v1", api: "o", apiKey: "ollama", models: [{ id: "m" }] },
+          lan: { baseUrl: "http://10.0.0.7:8000/v1", api: "o", apiKey: "placeholder", models: [{ id: "m" }] },
+          reference: { baseUrl: "https://b.example.com/v1", api: "o", apiKey: "$GW_KEY", models: [{ id: "m" }] },
+          braced: { baseUrl: "https://c.example.com/v1", api: "o", apiKey: `\${GW_KEY}`, models: [{ id: "m" }] },
+          command: { baseUrl: "https://d.example.com/v1", api: "o", apiKey: "!echo sk", models: [{ id: "m" }] },
+          none: { baseUrl: "https://e.example.com/v1", api: "o", models: [{ id: "m" }] },
+        },
+      }),
+    );
+    await writeFile(join(dir, "auth.json"), JSON.stringify({ literal: { type: "api_key", key: "sk-stored" } }));
+    // Every literal is reported, wherever it points: the caller warns, and whether a given string is a credential
+    // is the author's knowledge. `escaped` is the one that would slip through a naive reference check.
+    expect(await literalKeyProviders(dir)).toEqual(["literal", "escaped", "local", "lan"]);
+    expect(await literalKeyProviders(join(dir, "no-such-dir"))).toEqual([]); // no models.json is the normal case
   });
 
   it("on an id collision the file wins over an injected Provider (models.json composes over the native base)", async () => {

@@ -27,6 +27,7 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   mountPath: "/data",
   secrets: {},
   missingSecrets: [],
+  valueFile: "fastagent/.secrets/.env",
   channels: [],
   intoLinked: false,
   dockerfilePath: "/fastagent/Dockerfile",

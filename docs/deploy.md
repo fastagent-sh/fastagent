@@ -29,7 +29,7 @@ Three things must be true, or the deployed box crash-loops on boot:
 
 | Requirement | Why | How |
 |---|---|---|
-| **A model resolves** | The usual `flag > environment > config` chain, evaluated in **the environment being deployed** rather than this machine's. That environment is declared by `.secrets/.env`, so its `FASTAGENT_MODEL` wins and `deploy` records it in the release manifest (`fastagent.release.json`, rewritten by every deploy); `config.model` is the fallback and ships in the config file. Your shell is not part of the deployed environment, and `deploy` has no `--model` flag — a deployment's inputs are files, so that they survive the next deploy that omits them. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. |
+| **A model resolves** | The usual `flag > environment > config` chain, evaluated in **the environment being deployed** rather than this machine's. That environment is declared by `.secrets/.env`, so its `FASTAGENT_MODEL` wins and `deploy` records it in the release manifest (`fastagent.release.json`, rewritten by every deploy); `config.model` is the fallback and ships in the config file. Your shell is not part of the deployed environment, and `deploy` has no `--model` flag — a deployment's inputs are files, so that they survive the next deploy that omits them. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. A **hand-written** Dockerfile is read only if it sets `ENV FASTAGENT_RELEASE_FILE` — without it the manifest is never read, so a model that lives only in `.secrets/.env` would not reach the box; `deploy` gates that combination. |
 | **Secrets are declared, and their values are in the value file** | The host needs the model API key and every channel's verification secret. | Env-key model auth + channel secrets are auto-listed; declare anything else in `config.deploy.secrets` (see [Configuration](configuration.md)). `--run` reads the values from the agent's `.secrets/.env` and nowhere else — that file declares the deployed environment, so a variable exported in your shell does not reach the deployment. In CI, write the file before running the command. |
 | **Workspace, state and secrets are durable** | Local directories remain where you created them. | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`, and a new release replaces only the nested definition. AgentCore uses managed SessionStorage at `/mnt/data`, which the platform resets on every deploy. |
 
@@ -69,14 +69,42 @@ fastagent deploy docker --run           # starts the existing app+tunnel topolog
 
 The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
 
-Operate the generated topology:
+Operate the generated topology. The generated Compose names the value file itself (`env_file`), so every command
+is spelled the same way and none needs a flag to reach the deployed environment's declaration:
 
 ```bash
-docker compose -f fastagent.compose.yml logs -f agent
-docker compose -f fastagent.compose.yml ps
-docker compose -f fastagent.compose.yml down     # state volume is kept
-docker compose -f fastagent.compose.yml down -v  # destructive: deletes all state
+docker compose -f fastagent/fastagent.compose.yml up -d --build
+docker compose -f fastagent/fastagent.compose.yml logs -f agent
+docker compose -f fastagent/fastagent.compose.yml ps
+docker compose -f fastagent/fastagent.compose.yml down     # state volume is kept
+docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: deletes all state
 ```
+
+`env_file` rather than per-name `${NAME:-}` interpolation is the point: interpolation resolves from your shell or
+the *project* `.env`, which is exactly the source a deployment must not have. Naming the file means the container
+reads the same declaration by hand and under `--run` alike, so nothing has to be carried through the build machine,
+filtered, or blanked. The one value not in that file is `FASTAGENT_AUTH_SEED`, which `--run` mints from your local
+`auth.json`; it stays a seam in the committed topology so a hand-run `up` can supply it **from that command's own
+environment**. Writing this one key into the value file has no effect: `environment:` is applied after `env_file`, so
+the pinned `${FASTAGENT_AUTH_SEED:-}` line blanks it and the container starts without seeding `auth.json`.
+
+The entry is a **fixed** path, `<agent>/.secrets/.env`, never whatever `FASTAGENT_SECRETS_DIR` resolves to on the
+build machine: this file is committed, so it has to mean the same thing everywhere. `deploy` creates the file when it
+is missing (empty — a deployment that declares nothing declares it in an empty file), because Compose refuses an
+`env_file` entry pointing at a path that does not exist. If `FASTAGENT_SECRETS_DIR` sends this machine's read
+somewhere else, generating artifacts warns and `--run` gates: the credential check would pass on one file while the
+container reads the other and starts with nothing declared.
+
+Two things follow from Compose's own behaviour and are worth knowing:
+
+- The machinery variables (`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_SESSIONS_DIR`,
+  `FASTAGENT_AUTH_PATH`) are pinned in `environment:`, which Compose applies **after** `env_file`. The scaffolded
+  `.env.example` lists some of them as local overrides; pinning keeps a laptop path from sending the container's
+  sessions or credentials outside the volume.
+- Compose expands `$VAR` **inside** `env_file` values (raw mode needs Compose 2.30, above our floor). A value
+  containing `$` reaches the container rewritten, and an undefined name becomes empty. `deploy` warns when it finds
+  one, and does not tell you to escape it: `$$` works for Compose only, while `fastagent dev`/`start` and every other
+  host read this same file literally and would keep the extra `$`. Prefer a value without `$`.
 
 ### Taking ownership of Docker files
 

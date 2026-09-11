@@ -3,6 +3,7 @@
  * (per-request credential resolution). fastagent builds one per opener and threads it into the engine alongside the
  * selected `model`; the two must come from the same collection so the model's provider auth is in scope.
  */
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
@@ -81,6 +82,49 @@ export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { env
     return { envVar: status.label, inDefinition: false };
   }
   return { inDefinition: status.source !== "stored" };
+}
+
+/**
+ * EVERY provider whose `models.json` entry writes its key as a LITERAL rather than a `"$NAME"` reference or a
+ * `"!cmd"`. The file ships inside the image, so a literal there is a credential in a readable layer.
+ *
+ * Read from the FILE, not from `getProviderAuthStatus`: that answers "what satisfies this provider right now" and
+ * returns `stored` first, so a provider that has both an `auth.json` entry and a literal in the file would report
+ * `stored` and the literal would go unreported. The question is what the definition DECLARES, and only the file
+ * answers it. The three-way split mirrors pi's `configuredRequestAuthStatus`, which is not exported.
+ *
+ * The caller WARNS on this; it does not refuse. Whether a given string is a credential is the author's knowledge,
+ * not the framework's — pi's own docs prescribe `"apiKey": "ollama"` for a keyless local server, and no static rule
+ * separates that from a leaked key (an endpoint's reachability is not decidable from its URL either). FastAgent
+ * gates what IT causes; what the author wrote into their own committed file, it reports.
+ */
+export async function literalKeyProviders(agentDir: string): Promise<string[]> {
+  const file = join(agentDir, AGENT_MODELS_FILE);
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch (error) {
+    // No custom endpoints is the normal case; anything else (unreadable, a directory) is the caller's problem.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  // Malformed JSON already threw out of createPiModelRuntime before this runs, so a parse failure here would be a
+  // genuine surprise and must not be swallowed.
+  const providers = (JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown }> }).providers ?? {};
+  return Object.entries(providers)
+    .filter(([, provider]) => isLiteralKey(provider?.apiKey))
+    .map(([id]) => id);
+}
+
+/**
+ * `!cmd` runs on the box; `$NAME` / `${NAME}` reads the environment; anything else is the key itself.
+ *
+ * `$$` is pi's escape for a literal `$`, so it is removed BEFORE looking for a reference — otherwise `"sk$$abc"`
+ * (which resolves to the literal `sk$abc`) would read as a reference and go unmentioned.
+ */
+function isLiteralKey(apiKey: unknown): boolean {
+  if (typeof apiKey !== "string" || apiKey === "" || apiKey.startsWith("!")) return false;
+  return !/\$\{?[A-Za-z_]/.test(apiKey.replaceAll("$$", ""));
 }
 
 /** Per-provider auth status for the first-run model picker. */

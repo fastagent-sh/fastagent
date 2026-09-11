@@ -16,6 +16,7 @@ const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join
 const base = {
   releaseId: "release-one",
   agentPrefix: "fastagent/",
+  valueFile: "fastagent/.secrets/.env",
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,
@@ -77,14 +78,17 @@ describe("deploy/docker: planDockerDeploy", () => {
       modelAuth: undefined,
       channels: [...declaredChannels(["feishu"], "long-connection")],
     });
-    const yaml = compose(plan);
-    expect(yaml).toContain("FEISHU_APP_ID");
-    expect(yaml).toContain("FEISHU_APP_SECRET");
-    expect(yaml).not.toContain("FEISHU_VERIFICATION_TOKEN");
-    expect(runbook(plan)).not.toContain("https://<your-domain>/feishu");
+    const out = runbook(plan);
+    expect(out).toContain("FEISHU_APP_ID");
+    expect(out).toContain("FEISHU_APP_SECRET");
+    expect(out).not.toContain("FEISHU_VERIFICATION_TOKEN");
+    expect(out).not.toContain("https://<your-domain>/feishu");
   });
 
-  it("commits secret NAMES/interpolation only, including the absent-only auth seed seam", () => {
+  it("names the value file instead of interpolating each secret, and keeps only the auth-seed seam", () => {
+    // Interpolation resolves from the SHELL or the project `.env` — exactly the source a deployment must not have.
+    // `env_file` points Compose at the deployed environment's own declaration, so no declared name appears here at
+    // all, by hand or under `--run`. The seed is the one value that is not in that file.
     const yaml = compose(
       planDockerDeploy({
         ...base,
@@ -93,18 +97,24 @@ describe("deploy/docker: planDockerDeploy", () => {
         extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
       }),
     );
-    for (const name of [
-      "OPENAI_API_KEY",
-      "TELEGRAM_BOT_TOKEN",
-      "TELEGRAM_SECRET_TOKEN",
-      "FEISHU_APP_ID",
-      "GH_TOKEN",
-      "FASTAGENT_AUTH_SEED",
-    ]) {
-      expect(yaml).toContain(`${name}: "\${${name}:-}"`);
+    expect(yaml).toContain("env_file:\n      - .secrets/.env");
+    for (const name of ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "FEISHU_APP_ID", "GH_TOKEN"]) {
+      expect(yaml).not.toContain(name);
     }
+    expect(yaml).toContain(`FASTAGENT_AUTH_SEED: "\${FASTAGENT_AUTH_SEED:-}"`);
     expect(yaml).not.toContain("<value>");
     expect(yaml).not.toContain("sk-");
+
+    // The path is FIXED, never the builder's FASTAGENT_SECRETS_DIR: this file is committed and must mean the same
+    // thing on every machine. `deploy` creates the file so the entry is never a missing path.
+    expect(
+      compose(planDockerDeploy({ ...base, modelAuth: undefined, channels: [], valueFile: "somewhere/else/.env" })),
+    ).toContain("env_file:\n      - .secrets/.env");
+
+    // Machinery pinned AFTER env_file, so a local path in that file (the scaffold lists these) cannot send the
+    // container's sessions or credentials to a host path that does not exist inside it.
+    expect(yaml).toContain('FASTAGENT_SESSIONS_DIR: "/data/.state/sessions"');
+    expect(yaml).toContain('FASTAGENT_AUTH_PATH: "/data/.secrets/auth.json"');
   });
 
   it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {
@@ -127,7 +137,10 @@ describe("deploy/docker: planDockerDeploy", () => {
       planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "github"]) }),
     );
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
-    expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
+    // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
+    for (const cmd of ["up -d --build", "logs -f agent", "ps", "down"]) {
+      expect(out).toContain(`docker compose -f fastagent/fastagent.compose.yml ${cmd}`);
+    }
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");
     expect(out).toContain("Public ingress is operator-owned");

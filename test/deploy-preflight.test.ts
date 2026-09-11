@@ -119,14 +119,37 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
   });
 
-  it("a hand-written Dockerfile does not affect the model — the manifest carries it either way", async () => {
-    // The carrier is the release manifest, which every host writes unconditionally (`alwaysWrite`), so owning the
-    // Dockerfile costs the operator `deploy.apt` and nothing else.
+  it("gates a Dockerfile that cannot read the manifest — by the INSTRUCTION, not by who wrote the file", async () => {
+    // `prepareStartWorkspace` returns early without FASTAGENT_RELEASE_FILE, so a model living only in the value
+    // file would be reported here and missing on the box. The question is whether that ENV is set, not whether we
+    // generated the file: a hand-written Dockerfile that sets it works, and must not be refused.
     const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    const pre = await call(dir, {}, { run: true });
-    expect(pre.ok).toBe(true);
-    if (pre.ok) expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
+    const gated = await call(dir, {}, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/does not set FASTAGENT_RELEASE_FILE/);
+
+    // `--force` does not rescue it: writeArtifacts keeps a file it did not generate whatever the flag says.
+    expect((await call(dir, {}, { run: true, force: true })).ok).toBe(false);
+
+    // Generate-only warns instead of refusing.
+    const planned = await call(dir, {});
+    expect(planned.ok && planned.messages.some((m) => /FASTAGENT_RELEASE_FILE/.test(m.text))).toBe(true);
+
+    // A hand-written Dockerfile that DOES set it is fine — the manifest is read whoever wrote the file. Including
+    // the ordinary multi-variable spelling: reading only the first name after `ENV` false-gates a working file.
+    for (const env of [
+      "ENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
+      "ENV FASTAGENT_STORAGE_DIR=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
+    ]) {
+      const own = await workspace({ Dockerfile: `FROM node:22-slim\n${env}\n` });
+      await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+      expect((await call(own, {}, { run: true })).ok).toBe(true);
+    }
+
+    // And a config model needs no manifest at all.
+    const fromConfig = await workspace({ Dockerfile: "FROM node:22-slim\n" });
+    expect((await call(fromConfig, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
@@ -482,20 +505,19 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
-  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach; --force suppresses it", async () => {
+  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach, --force included", async () => {
+    // `--force` does not rescue it: writeArtifacts refuses a file it did not generate whatever the flag says, so the
+    // packages are dropped either way. Suppressing the warning under `--force` only hid that.
     const dir = await workspace({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
     const config: FastagentConfig = { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };
 
-    const kept = await call(dir, config, { force: false });
-    expect(kept.ok).toBe(true);
-    if (kept.ok) {
-      expect(kept.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+    for (const force of [false, true]) {
+      const pre = await call(dir, config, { force });
+      expect(pre.ok).toBe(true);
+      if (pre.ok) {
+        expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+      }
     }
-
-    // --force regenerates the Dockerfile, so the kept-hand-written warning does not apply.
-    const forced = await call(dir, config, { force: true });
-    expect(forced.ok).toBe(true);
-    if (forced.ok) expect(forced.messages.some((m) => /NOT applied/.test(m.text))).toBe(false);
   });
 
   it("detects time triggers: schedules/ files OR config.selfSchedule → hasTimeTriggers + a keep-1 note", async () => {
@@ -535,11 +557,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 });
 
 describe("preflight: how a models.json endpoint's credential reaches the host", () => {
-  const GATEWAY = (apiKey: string) =>
+  const GATEWAY = (apiKey: string, baseUrl = "https://gw.example.com/v1") =>
     JSON.stringify({
-      providers: {
-        mygw: { baseUrl: "http://vllm.internal:8000/v1", api: "openai-completions", apiKey, models: [{ id: "m1" }] },
-      },
+      providers: { mygw: { baseUrl, api: "openai-completions", apiKey, models: [{ id: "m1" }] } },
     });
 
   it("an env-keyed endpoint reports the VARIABLE NAME, so the value carries like any provider key", async () => {
@@ -560,11 +580,55 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     }
   });
 
-  it("a key written into the file is reported as definition-carried (nothing to carry, nothing to gate)", async () => {
-    const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file") });
-    const pre = await call(dir, { model: "mygw/m1" });
+  it("a literal key WARNS, whatever it points at — the framework does not decide what is a credential", () => {
+    // FastAgent gates what IT causes (a packing rule that would put `.secrets/auth.json` in the image); this is the
+    // author's own committed file, and no static rule separates a leaked key from the placeholder pi's docs
+    // prescribe for a keyless local server (`"apiKey": "ollama"`). So: report, never refuse.
+    return (async () => {
+      for (const baseUrl of ["https://gw.example.com/v1", "http://localhost:11434/v1"]) {
+        const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file", baseUrl) });
+        const pre = await call(dir, { model: "mygw/m1" }, { run: true });
+        expect(pre.ok).toBe(true);
+        if (pre.ok) {
+          expect(pre.modelKeyInDefinition).toBe(true); // still nothing for `--run` to carry
+          expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/literal apiKey/) });
+        }
+      }
+    })();
+  });
+
+  it("every provider is reported, not just the selected model's — the file ships whole", async () => {
+    const dir = await workspace({
+      "models.json": JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "https://a.example.com/v1",
+            api: "openai-completions",
+            apiKey: "$K",
+            models: [{ id: "m1" }],
+          },
+          unused: {
+            baseUrl: "https://b.example.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-u",
+            models: [{ id: "m2" }],
+          },
+        },
+      }),
+    });
+    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);
-    if (pre.ok) expect(pre.modelKeyInDefinition).toBe(true);
+    if (pre.ok) expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/"unused"/) });
+  });
+
+  it("a !command key is not reported — it runs on the box and the credential never travels", async () => {
+    const dir = await workspace({ "models.json": GATEWAY("!printf sk-from-a-command") });
+    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.modelKeyInDefinition).toBe(true);
+      expect(pre.messages.some((m) => /literal apiKey/.test(m.text))).toBe(false);
+    }
   });
 
   it("carries what tools and schedules DECLARED, without a second list to keep in sync", async () => {

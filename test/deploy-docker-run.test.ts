@@ -23,6 +23,7 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   port: 8787,
   secrets: {},
   missingSecrets: [],
+  valueFile: "fastagent/.secrets/.env",
   needsModelCredential: false,
   requireTunnel: false,
   announce: async () => [],
@@ -59,6 +60,30 @@ describe("deploy/docker/run: local Compose journey", () => {
       "compose -f fastagent.compose.yml port agent 8787",
     ]);
     expect(healthUrls).toEqual(["http://127.0.0.1:9876/health"]);
+  });
+
+  it("passes ONLY the auth seed, and sets it even when absent", async () => {
+    // The container reads the value file itself through the generated `env_file`, so nothing else has to cross this
+    // process. The seed is the exception (`--run` mints it from the local auth.json) and is set unconditionally:
+    // `spawnRunner` merges over `process.env`, so leaving it unset would let a same-named variable in the builder's
+    // shell interpolate into the container in its place.
+    const before = process.env.FASTAGENT_AUTH_SEED;
+    process.env.FASTAGENT_AUTH_SEED = "from-the-builders-shell";
+    try {
+      const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
+      await deployDockerRun(plan({ secrets: { TELEGRAM_BOT_TOKEN: "t" } }), docker, () => {}, healthy);
+      const passed = calls.find((call) => call.env)?.env;
+      expect(passed).toEqual({ FASTAGENT_AUTH_SEED: "" }); // blanked, and nothing else travels
+    } finally {
+      if (before === undefined) delete process.env.FASTAGENT_AUTH_SEED;
+      else process.env.FASTAGENT_AUTH_SEED = before;
+    }
+  });
+
+  it("carries the minted auth seed when there is one", async () => {
+    const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
+    await deployDockerRun(plan({ secrets: { FASTAGENT_AUTH_SEED: "b64" } }), docker, () => {}, healthy);
+    expect(calls.find((call) => call.env)?.env).toEqual({ FASTAGENT_AUTH_SEED: "b64" });
   });
 
   it("tells the health probe when the agent container is gone (a crashed boot must not spend the budget)", async () => {
@@ -207,7 +232,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(lines.filter((line) => line.startsWith("warn:"))).toEqual([]);
   });
 
-  it("passes secret values through the child environment, never argv", async () => {
+  it("never puts a secret value in argv — the container reads the value file itself", async () => {
     const { docker, calls } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\n" };
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
@@ -222,12 +247,14 @@ describe("deploy/docker/run: local Compose journey", () => {
 
     expect(calls.some((call) => call.args.join(" ").includes("sk-secret"))).toBe(false);
     const up = calls.find((call) => call.args.includes("up"))!;
-    expect(up.env).toEqual({ OPENAI_API_KEY: "sk-secret", FASTAGENT_AUTH_SEED: "base64-secret" });
+    // The declared key rides `env_file` in the generated Compose, so it does not travel through this process at all.
+    expect(up.env).toEqual({ FASTAGENT_AUTH_SEED: "base64-secret" });
   });
 
-  it("names the secrets it carries — the list is no longer only what the author typed", async () => {
-    // A mounted tool/channel/schedule declares its own names, so what `--run` reads from THIS machine
-    // and pushes to the host has to be visible, not a count.
+  it("names the values the container must find, and the file it reads them from", async () => {
+    // A mounted tool/channel/schedule declares its own names, so the list has to be visible, not a count. It is
+    // NOT "passing N secrets to Compose": the container reads the value file itself, and a hand-owned Compose
+    // file may have no `env_file` entry at all — saying we handed them over would be false.
     const { docker } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\n" };
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
@@ -240,7 +267,9 @@ describe("deploy/docker/run: local Compose journey", () => {
       (message) => logs.push(message),
       healthy,
     );
-    expect(logs.join("\n")).toContain("2 secret(s) to Compose: OPENAI_API_KEY, X_API_KEY");
+    expect(logs.join("\n")).toContain(
+      "2 value(s) the container reads from fastagent/.secrets/.env: OPENAI_API_KEY, X_API_KEY",
+    );
   });
 
   it("accepts a running custom topology with no host-published port (operator-owned ingress)", async () => {

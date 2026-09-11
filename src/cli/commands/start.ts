@@ -8,7 +8,7 @@ import { once } from "node:events";
 import * as Effect from "effect/Effect";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
-import { parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
+import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import {
@@ -115,24 +115,10 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   process.env.FASTAGENT_AGENT = manifest.agent;
-  // The release's own answer for the one chain (`flag > environment > config`), projected into the environment it was
-  // resolved FOR. `||=`, so a variable the platform already holds still wins — the deployment declares the half of
-  // this environment it can, and never more.
-  const platformModel = process.env.FASTAGENT_MODEL;
-  if (manifest.model) process.env.FASTAGENT_MODEL ||= manifest.model;
-  // Both of these land BEFORE the workspace's own `.env` is read, so either one outranks a FASTAGENT_MODEL edited on
-  // the box — and an operator who edits that file and restarts has no other way to see why nothing changed. Report
-  // the source that actually won, because the remedy differs: a redeploy replaces the manifest's answer and does
-  // nothing at all to a platform-set variable.
-  if (process.env.FASTAGENT_MODEL) {
-    log.info(
-      `[fastagent] model ${process.env.FASTAGENT_MODEL} — from ${
-        platformModel
-          ? "a FASTAGENT_MODEL already set in this environment, which outranks the release manifest"
-          : "the release manifest (redeploy to change it)"
-      }; editing FASTAGENT_MODEL in this workspace's .env does not override it`,
-    );
-  }
+  // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
+  // `enterAgentEnv` reads the workspace's `.env`, which is what makes either source outrank a value edited on the
+  // box (applyReleaseEnv's own tests pin the precedence).
+  applyReleaseEnv(manifest);
   process.chdir(dir);
   return { dir, deployed: { root, agent: manifest.agent } };
 }

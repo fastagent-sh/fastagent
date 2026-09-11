@@ -5,16 +5,23 @@ import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import type { CliRunner } from "../runner.ts";
+import { missingValuesGate } from "../secrets.ts";
 
 export interface DockerRunPlan {
   /** Compose file relative to the runner cwd (the workspace root). */
   composeFile: string;
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
-  /** Values interpolated by Compose. */
+  /**
+   * What `--run` assembled. The container reads the value file itself through the generated `env_file`, so the only
+   * entry that has to travel through this process is `FASTAGENT_AUTH_SEED`, which is minted here; the rest is
+   * reported to the operator and otherwise unused.
+   */
   secrets: Record<string, string>;
-  /** Required names with no local value; gate before build/create. */
+  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
+  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  valueFile: string;
   /** Neither an env-key credential nor a readable auth.json is available. */
   needsModelCredential: boolean;
   /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
@@ -107,7 +114,10 @@ export async function deployDockerRun(
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
-  const env = plan.secrets;
+  // The ONE value that is not in the value file, so the ONE that has to cross this process. Set even when absent, so
+  // a same-named variable in the builder's shell cannot interpolate into the container in its place — `spawnRunner`
+  // merges over `process.env`.
+  const env: Record<string, string> = { FASTAGENT_AUTH_SEED: plan.secrets.FASTAGENT_AUTH_SEED ?? "" };
 
   // CLI/plugin gate first: unlike a daemon error, spawn ENOENT becomes 127 at the shared runner seam.
   const version = await docker(["compose", "version"], { capture: true });
@@ -122,18 +132,17 @@ export async function deployDockerRun(
   if (plan.needsModelCredential) {
     return gate("no model credential — run `fastagent login`, or set a provider API key in .env, then re-run");
   }
-  if (plan.missingSecrets.length > 0) {
-    return gate(
-      `no value for: ${plan.missingSecrets.join(", ")} — the deployed environment is declared by the agent's
-        .secrets/.env, and this deploy reads only that file (exporting the variable here does not reach the
-        deployment). Add them there and re-run`,
-    );
-  }
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
 
-  // Name what travels from THIS machine's environment into the container: the list is no longer
-  // only what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
-  const secretNames = Object.keys(plan.secrets);
-  if (secretNames.length > 0) log(`passing ${secretNames.length} secret(s) to Compose: ${secretNames.join(", ")}`);
+  // Name what the container must find, and WHERE — the generated Compose reads the value file itself, so this run
+  // hands Compose nothing but the seed. Saying "passing N secrets to Compose" would be false, and doubly so on a
+  // hand-owned Compose file that has no `env_file` entry at all. The list is no longer only what the author typed
+  // in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  const secretNames = Object.keys(plan.secrets).filter((name) => name !== "FASTAGENT_AUTH_SEED");
+  if (secretNames.length > 0) {
+    log(`${secretNames.length} value(s) the container reads from ${plan.valueFile}: ${secretNames.join(", ")}`);
+  }
 
   if ((await docker(["info"], { capture: true })).code !== 0) {
     return gate("Docker daemon is unavailable — start Docker Engine/Desktop, then re-run");

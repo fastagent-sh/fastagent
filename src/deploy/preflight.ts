@@ -9,12 +9,24 @@ import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
-import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists, readTextIfExists } from "../paths.ts";
+import {
+  AGENT_MODELS_FILE,
+  type ResolvedPlacement,
+  resolveSecretsDir,
+  resolveStateRoot,
+  exists,
+  readTextIfExists,
+} from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadSchedules } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
-import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
+import {
+  createPiModelRuntime,
+  literalKeyProviders,
+  modelCredentialCarry,
+  probeAuthSource,
+} from "../engines/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
@@ -90,7 +102,7 @@ export async function preflightDeploy(input: {
   config: FastagentConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
-  /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
+  /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
   force: boolean;
   /** The target delivers cron slots from an external clock and holds no resident process (AgentCore). */
   externalClock?: boolean;
@@ -243,6 +255,22 @@ export async function preflightDeploy(input: {
     const carry = modelCredentialCarry(models, modelSpec);
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
+  }
+  // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
+  // `"apiKey": "ollama"` for a keyless local server, and no static rule separates that from a leaked key. The
+  // `.dockerignore` check next to this one IS a gate because it catches a packing rule putting FastAgent's OWN
+  // `.secrets/auth.json` into the image — the framework's doing. This is the author's own committed file.
+  // Asked of EVERY provider, not just the selected model's: the file ships whole.
+  const literalKeys = await literalKeyProviders(agentDir);
+  if (literalKeys.length > 0) {
+    messages.push({
+      level: "warn",
+      text:
+        `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
+        `file ships inside the image, where anyone who can pull it reads the layer. If it is a credential, use ` +
+        `"$YOUR_ENV_VAR" (deploy carries it like any provider key) or "!command" (it runs on the box and never ` +
+        `travels); a placeholder for a keyless local server is fine as it is.`,
+    });
   }
 
   // Container facts (shared by every host) + the warnings that follow.
@@ -462,17 +490,38 @@ export async function preflightDeploy(input: {
   if (config.sessionControl === true) {
     extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
   }
-  // deploy.apt only shapes the GENERATED Dockerfile. (The resolved model does not: it rides the release manifest,
-  // which every host writes unconditionally, so a hand-written Dockerfile changes nothing about it.)
+  // What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
+  // looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
+  // FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
+  // ONLY in the value file would be reported here and absent on the box.
+  // NOT conditioned on `!force`: `writeArtifacts` refuses a file it did not generate whatever the flag says, so a
+  // hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
+  // `--run --force` ship the crash-loop this gate exists to stop.
   const dockerfileHome = join(agentDir, "Dockerfile");
-  if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
-    if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
+  const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
+  if (dockerfileText !== undefined && !isGeneratedDockerfile(dockerfileText)) {
+    if (config.deploy?.apt?.length) {
       messages.push({
         level: "warn",
         text:
           `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
           `NOT applied; install those packages in your Dockerfile.`,
       });
+    }
+    // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without
+    // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
+    // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
+    // missing on the box.
+    // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
+    // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
+    // (covering it means joining lines first) — the remaining over-strict edge.
+    if (model.envValue !== undefined && !/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
+      const issue =
+        `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
+        `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
+        `Dockerfile), or set \`model\` in fastagent.config.* so it ships in the config instead.`;
+      if (run) return { ok: false, gate: issue };
+      messages.push({ level: "warn", text: issue });
     }
   }
 

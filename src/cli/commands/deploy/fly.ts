@@ -21,7 +21,17 @@ export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, longConnectionChannels, pre, write } = ctx;
-    const { hasTimeTriggers, modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets, values } = pre;
+    const {
+      hasTimeTriggers,
+      modelAuth,
+      modelKeyInDefinition,
+      authPath,
+      container,
+      port,
+      extraSecrets,
+      values,
+      valueFile,
+    } = pre;
     // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store).
     if (channels.some((channel) => channel.name === "github")) {
       console.error(
@@ -91,6 +101,7 @@ export const flyHost: HostDeploy = {
         flyTomlPath,
         extraSecrets,
         values,
+        valueFile,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -110,6 +121,7 @@ async function runDeployFly(
     flyTomlPath: string;
     extraSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
+    valueFile: string;
   },
 ): Promise<void> {
   const { agentDir, workspace, agentPrefix, appName, channels, flyTomlPath } = params;
@@ -129,6 +141,7 @@ async function runDeployFly(
       region,
       secrets,
       missingSecrets,
+      valueFile: params.valueFile,
       channels,
       flyConfig: `${agentPrefix}fly.toml`,
       dockerfile: `${agentPrefix}Dockerfile`,

@@ -55,7 +55,13 @@ Where a credential's **literal value** may appear follows from B/C versus D/E, a
 
 > Literal credentials exist in exactly two places: `.secrets/` (0700, gitignored, excluded from the image) and the platform's secret storage. **Every file inside the definition may only carry a reference**: `"$MY_API_KEY"` or `!command` in `models.json` (pi resolves both), and a declared name everywhere else.
 
-A literal `apiKey` in `models.json` is therefore not an author's choice but an error — it ships inside the image, where any puller reads the layer. `deploy` gates `--run` on it, under the rule the `.dockerignore` check already enforces: **any configuration that would put a credential into the image gates `--run`.**
+That rule is advice to the author, and FastAgent can only report on it — which brings the executable form of question 4:
+
+> **Gate what FastAgent causes. Warn about what the author chose.**
+
+A `.dockerignore` that fails to exclude `.secrets/auth.json` **gates `--run`**: a packing rule of ours would put a credential in the image, and we can decide that with certainty. A literal `apiKey` in `models.json` only **warns**: the author wrote that string into their own committed file, and whether it is a credential is knowledge the framework does not have — pi's docs prescribe `"apiKey": "ollama"` for a keyless local server, and no static property separates that from a leaked key. (An endpoint's reachability is not one: `gw.example.com` may be internal DNS and `10.0.0.1` may be NAT-exposed.)
+
+This is the rule §3's question 4 already implied, written as something a reviewer can apply. It was learned the expensive way: a gate built on "is this string sensitive?" took five rounds of patches enumerating private address ranges before the premise itself turned out to be undecidable.
 
 ## 4. Files
 
@@ -203,8 +209,8 @@ Dropped from the RFC, and from earlier drafts of this document:
 | "credential present + ready" precondition | `src/deploy/registration-gate.ts` |
 | report the effective model **and its source**; validate that model's provider; gate `--run` when **no** source resolves a model (the replacement for the deleted gate — without it the deletion leaves a silent-degradation window) | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
 | carry the resolved model to the deployed environment | the release manifest (`DeploymentRelease.model` in `src/deploy/workspace.ts`), projected into `process.env` beside `FASTAGENT_AGENT` by `prepareStartWorkspace`. It is rewritten unconditionally by every deploy, so it cannot go stale, and nothing on the way in can interpolate the operator's shell. **Non-credential configuration only** — the manifest rides inside a readable image and is rebuilt every deploy, both of which are the opposite of what a credential needs (§8) |
-| class D reads the **value file only** (§9), so `assembleSecrets` takes that Map instead of `env: NodeJS.ProcessEnv` | `src/deploy/secrets.ts` + `src/cli/commands/deploy/shared.ts`; every host's runbook then tells CI to write the file rather than export variables |
-| a literal `apiKey` in `models.json` gates `--run` (§3); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list, not in `modelKeyInDefinition` | `src/engines/pi/models.ts` (`modelCredentialCarry`) + `src/deploy/preflight.ts` |
+| class D reads the **value file only** (§9), so `assembleSecrets` takes that Map instead of `env: NodeJS.ProcessEnv` | `src/deploy/secrets.ts` + `src/cli/commands/deploy/shared.ts`; every host's runbook then tells CI to write the file rather than export variables. Docker reaches it through Compose's own `env_file`, not per-name interpolation — interpolation resolves from the shell, the one source §9 excludes |
+| a literal `apiKey` in `models.json` WARNS (§3: gate what we cause, warn what the author chose); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list, not in `modelKeyInDefinition` | `src/engines/pi/models.ts` (`literalKeyProviders`) + `src/deploy/preflight.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
 | Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0700, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
@@ -214,7 +220,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | 1 | Deployment phase ordering: no entrance opens before credential + readiness | A correctness fix unrelated to env; worth having today |
 | 2 | `config.name` + one model chain (`FASTAGENT_MODEL` travels with the value file; delete `modelTravelIssue`) | All of day one; the single-instance path is unchanged |
 | 2b | class D reads the value file only — the same rule the model already follows | Removes the last path by which the builder's environment reaches a deployment |
-| 2c | literal-`apiKey` gate + `$NAME` references treated as declared secrets | Closes the second route by which a credential enters the image |
+| 2c | literal-`apiKey` **warning** + `$NAME` references treated as declared secrets | Reports the second route by which a credential enters the image, without the framework deciding what is one |
 | 3 | Credential project > global fallback + `login -g` + drop `--auth-path` | One global login serves every project |
 | 4 | The env addition: `--env` + `.secrets/<env>/.env` + `<name>-<env>` prefix | Pure addition; day-two capability |
 

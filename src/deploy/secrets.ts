@@ -126,6 +126,19 @@ export function assembleSecrets(input: {
   return { secrets, missingSecrets, needsModelCredential };
 }
 
+/**
+ * The ONE refusal for declared names the deployed environment does not supply a value for — every host reaches it
+ * before its first side effect. Host-neutral because the reason is: the value file IS the declaration, so a name
+ * missing from it is missing from the deployment, whatever platform receives it.
+ */
+export function missingValuesGate(missing: readonly string[], valueFile: string): string | undefined {
+  if (missing.length === 0) return undefined;
+  return (
+    `no value for: ${missing.join(", ")} — the deployed environment is declared by ${valueFile}, and this deploy ` +
+    `reads only that file (exporting the variable here does not reach the deployment). Add them there and re-run`
+  );
+}
+
 /** The bytes to seed to the auth file, or undefined to leave it alone. */
 export function authSeedBytes(seed: string | undefined, fileExists: boolean): Buffer | undefined {
   return !seed || fileExists ? undefined : Buffer.from(seed, "base64");

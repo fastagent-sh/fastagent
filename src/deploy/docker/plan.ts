@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface DockerPlanInput extends ContainerInput {
@@ -18,6 +19,8 @@ export interface DockerPlanInput extends ContainerInput {
   tunnel: boolean;
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule declarations). */
   extraSecrets?: readonly DeclaredSecret[];
+  /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), workspace-relative. */
+  valueFile: string;
 }
 
 export interface DockerPlan {
@@ -63,10 +66,6 @@ function composeInterpolation(name: string): string {
 }
 
 function composeYaml(input: DockerPlanInput): string {
-  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
-  // Always leave the auth-seed seam in the committed topology.
-  const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
-  const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
   // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the WORKSPACE, so it
   // climbs back out of the one-level prefix deploy requires.
   const context = "..";
@@ -104,12 +103,26 @@ services:
       dockerfile: ${dockerfile}
     ports:
       - "127.0.0.1:${input.port}:${input.port}"
+    # The deployed environment's own declaration, read by the container itself. \`env_file\`, not per-name
+    # \${NAME:-} interpolation: interpolation resolves from the SHELL or the project .env, which is exactly the
+    # source a deployment must not have. A FIXED path, never the builder's FASTAGENT_SECRETS_DIR — this file is a
+    # committed artifact and must mean the same thing on every machine. \`deploy\` creates it if it is missing.
+    env_file:
+      - ${SECRETS_DIRNAME}/.env
     environment:
       PORT: "${input.port}"
-      # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets.
+      # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets. Pinned AFTER
+      # env_file so a local path in that file (the scaffold lists these) cannot send the container's state, sessions
+      # or credentials somewhere outside the volume — or at a host path that does not exist here at all.
       FASTAGENT_STATE_DIR: "${MOUNT}/.state"
       FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
-${secretEnv}
+      FASTAGENT_SESSIONS_DIR: "${MOUNT}/.state/sessions"
+      FASTAGENT_AUTH_PATH: "${MOUNT}/.secrets/auth.json"
+      # The ONE value that is not in the value file: \`--run\` mints it from the local auth.json. Left as a seam in
+      # the committed topology so a hand-run \`up\` can supply it the same way — from the ENVIRONMENT of that \`up\`.
+      # Writing this one key into the value file does nothing: \`environment:\` is applied after \`env_file\`, so the
+      # line below would blank it and the container would start without seeding auth.json.
+      FASTAGENT_AUTH_SEED: "${composeInterpolation("FASTAGENT_AUTH_SEED")}"
     volumes:
       - state:${MOUNT}
     restart: unless-stopped
@@ -123,6 +136,8 @@ volumes:
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   const composePath = `${input.agentPrefix}${DOCKER_COMPOSE_FILE}`;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
+  // One spelling for every command: the generated file names the value file itself (`env_file`), so no command
+  // needs a flag to reach the deployed environment's declaration.
   const compose = `docker compose -f ${composePath}`;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const required = secrets.filter((secret) => secret.required);
@@ -137,8 +152,8 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   if (required.length > 0) {
     runbook.push(
-      `# Required environment values. Put them in the agent's .secrets/.env — that file declares the deployed`,
-      `# environment, and \`--run\` reads only it (in CI, write the file before running the command):`,
+      `# Required environment values. Put them in ${input.valueFile} — that file declares the deployed`,
+      `# environment (in CI, write it before running the command):`,
       ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
     );
   }
