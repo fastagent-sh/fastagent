@@ -118,7 +118,16 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // The release's own answer for the one chain (`flag > environment > config`), projected into the environment it was
   // resolved FOR. `||=`, so a variable the platform already holds still wins — the deployment declares the half of
   // this environment it can, and never more.
-  if (manifest.model) process.env.FASTAGENT_MODEL ||= manifest.model;
+  if (manifest.model) {
+    process.env.FASTAGENT_MODEL ||= manifest.model;
+    // Projected BEFORE the workspace's own `.env` is read, so it outranks a FASTAGENT_MODEL edited on the box. That
+    // is the intended direction (the deployment's answer is the one that was reviewed), but without this line an
+    // operator who edits that file and restarts has no way to see why nothing changed.
+    log.info(
+      `[fastagent] model ${process.env.FASTAGENT_MODEL} — from the release manifest unless the platform set the ` +
+        `variable; editing FASTAGENT_MODEL in this workspace's .env does not override it, redeploy instead`,
+    );
+  }
   process.chdir(dir);
   return { dir, deployed: { root, agent: manifest.agent } };
 }

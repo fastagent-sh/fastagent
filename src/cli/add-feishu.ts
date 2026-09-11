@@ -395,7 +395,7 @@ async function createFeishuAppFlow(
 
 /**
  * Active agent `.env` (`.secrets/.env`) values for the requested names — decided by THE .env parser, so this check can
- * never disagree with what `loadEnvFile` reads.
+ * never disagree with what `loadDotEnv` reads.
  */
 async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
   let content: string;

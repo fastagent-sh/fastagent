@@ -130,12 +130,14 @@ export async function preflightDeploy(input: {
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
-      `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy bakes that one into the image)` +
-      // The operator most likely to hit this gate is the one who has the variable set right here: `fastagent info`
-      // shows a model, so "no model resolves" reads like a bug until the message names WHICH environment was read.
+      `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy records that one in the release manifest)` +
+      // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
+      // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
+      // value: it may be the operator's shell, or the first-run picker's own pick a second earlier (which prints
+      // its own "set `model:` in your config" hint), and the two remedies are the two sources named above.
       (process.env.FASTAGENT_MODEL
-        ? `. FASTAGENT_MODEL is set in THIS machine's environment, which is not the environment being deployed — ` +
-          `declare it in ${valueFile}`
+        ? `. Note that a FASTAGENT_MODEL in the environment running deploy is not one of those sources — it ` +
+          `belongs to this machine, not to the deployment`
         : ``);
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
