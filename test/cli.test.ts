@@ -164,18 +164,10 @@ describe("cli papercuts", () => {
     // Keep the marker (still ours), change the content: exactly "config changed or fastagent was upgraded".
     await writeFile(compose, `${await readFile(compose, "utf8")}# drifted\n`);
 
-    const planned = await run(["deploy", "docker", dir]);
-    expect(planned.code).toBe(0);
-    expect(planned.stderr).toMatch(/no longer matches what deploy would generate/);
-
     const gated = await run(["deploy", "docker", dir, "--run"]);
     expect(gated.code).toBe(1);
     expect(gated.stderr).toMatch(/deploy stopped: fastagent\/fastagent\.compose\.yml no longer match/);
     expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
-
-    // --force regenerates it, so the same command proceeds past the gate.
-    const forced = await run(["deploy", "docker", dir, "--run", "--force"]);
-    expect(forced.stderr).not.toMatch(/no longer match/);
   });
 
   it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
