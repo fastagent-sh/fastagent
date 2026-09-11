@@ -129,7 +129,7 @@ Implemented today:
 - Cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit.
 - `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
-- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
+- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
 
 Not implemented yet:
 

@@ -35,7 +35,6 @@ export interface StartOptions {
   bind?: string;
   model?: string;
   sessionsDir?: string;
-  authPath?: string;
   tunnel?: boolean;
   input?: boolean;
 }
@@ -177,11 +176,10 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 /** Internal entry loaded from the active workspace's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
-  await maybeSeedAuth(resolveAuthPath(placement.agentDir, opts.authPath));
+  await maybeSeedAuth(resolveAuthPath(placement.agentDir));
   const opened = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
-    authPath: opts.authPath,
     serving: true,
   });
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;

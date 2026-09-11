@@ -281,8 +281,9 @@ export function resolveSessionsDirOverride(
 }
 
 /**
- * The auth-file override: `--auth-path` flag > `FASTAGENT_AUTH_PATH` env > undefined (the opener then falls back to
- * {@link defaultAuthPath} under the {@link resolveSecretsDir} dir).
+ * The auth-file override: the SDK's `authPath` option > `FASTAGENT_AUTH_PATH` env > undefined (the opener then falls
+ * back to {@link defaultAuthPath} under the {@link resolveSecretsDir} dir). The CLI has no flag for it: a second
+ * spelling of one environment variable buys nothing, and the variable is what a deployed container reads anyway.
  */
 function resolveAuthPathOverride(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
   return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
@@ -294,7 +295,7 @@ export function defaultAuthPath(secretsDir: string): string {
 }
 
 /** The effective auth file for an agent: override if present, else `<secrets dir>/auth.json`. */
-export function resolveAuthPath(dir: string, flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
   return resolveAuthPathOverride(flag, env) ?? defaultAuthPath(resolveSecretsDir(dir, env));
 }
 
@@ -307,10 +308,7 @@ export function resolveAuthPath(dir: string, flag: string | undefined, env: Node
  * the Fly/Railway/AgentCore artifacts set, and a deployed container must read its mounted credentials and nothing
  * else (the artifact is the truth).
  */
-export function resolveAuthFallback(
-  flag: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+export function resolveAuthFallback(flag?: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const explicit = resolveAuthPathOverride(flag, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
   return explicit === undefined ? GLOBAL_AUTH_PATH : undefined;
 }

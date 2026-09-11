@@ -250,7 +250,7 @@ export async function ensureSecretsDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true, mode: SECRETS_DIR_MODE });
   await chmod(dir, SECRETS_DIR_MODE).catch((e: Error) => {
     throw new Error(
-      `cannot secure secrets dir ${dir} (fastagent keeps it 0700): ${e.message} — point --auth-path/FASTAGENT_SECRETS_DIR at a directory this process owns`,
+      `cannot secure secrets dir ${dir} (fastagent keeps it 0700): ${e.message} — point FASTAGENT_AUTH_PATH/FASTAGENT_SECRETS_DIR at a directory this process owns`,
       { cause: e },
     );
   });

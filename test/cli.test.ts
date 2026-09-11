@@ -585,9 +585,12 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/no agent here \(no fastagent\.config\.\*, here or one level inside\)/);
     await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
 
-    // …and it is silent when --auth-path outranks the fallback: an announcement naming a file the run
-    // does not write would be worse than none.
-    const directed = await run(["login", "no-such-provider", "--auth-path", join(cwd, "auth.json")], cwd, env);
+    // …and it is silent when FASTAGENT_AUTH_PATH outranks the fallback: an announcement naming a file the
+    // run does not write would be worse than none.
+    const directed = await run(["login", "no-such-provider"], cwd, {
+      ...env,
+      FASTAGENT_AUTH_PATH: join(cwd, "auth.json"),
+    });
     expect(directed.stderr).not.toMatch(/logging in GLOBALLY/);
 
     // Standing INSIDE an agent is NOT "outside an agent" — resolvePlacement refuses that position with
@@ -601,16 +604,16 @@ describe("cli papercuts", () => {
     expect(nested.stderr).not.toMatch(/logging in GLOBALLY/);
   });
 
-  it("login --auth-path at the user-global credential is the documented sharing path, not a leak", async () => {
-    // `--auth-path ~/.fastagent/.secrets/auth.json` from inside an agent is how docs/cli.md says to run
-    // several agents off one account. Warning about it would be advice against our own documentation:
+  it("FASTAGENT_AUTH_PATH at the user-global credential is the documented sharing path, not a leak", async () => {
+    // `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` from inside an agent is how docs/cli.md says to
+    // pin every agent to one account. Warning about it would be advice against our own documentation:
     // that directory is fastagent's own machinery home and needs no .gitignore.
     const home = await mkdtemp(join(tmpdir(), "fa-share-home-"));
     const cwd = join(await agentWorkspace("fa-share-agent-"), "fastagent");
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
     delete env.FASTAGENT_AUTH_PATH;
     const shared = join(home, ".fastagent", ".secrets", "auth.json");
-    const { stderr } = await run(["login", "no-such-provider", "--auth-path", shared], cwd, env);
+    const { stderr } = await run(["login", "no-such-provider"], cwd, { ...env, FASTAGENT_AUTH_PATH: shared });
     expect(stderr).not.toMatch(/cannot be committed/);
   });
 

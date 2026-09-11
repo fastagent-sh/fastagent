@@ -106,11 +106,6 @@ export async function preflightDeploy(input: {
   force: boolean;
   /** The target delivers cron slots from an external clock and holds no resident process (AgentCore). */
   externalClock?: boolean;
-  /**
-   * The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<agentDir>/.secrets/auth.json`) is resolved
-   * HERE via {@link resolveAuthPath}.
-   */
-  authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {
   const {
     placement: { agentDir, workspace },
@@ -118,7 +113,6 @@ export async function preflightDeploy(input: {
     run,
     force,
     externalClock,
-    authPathFlag,
   } = input;
   // The ONE derived placement fact every host plan needs: where the agent's files sit relative to the build context
   // (the workspace).
@@ -245,7 +239,7 @@ export async function preflightDeploy(input: {
   }
 
   // Probe auth from the SAME project-level file the opener/login use.
-  const authPath = resolveAuthPath(agentDir, authPathFlag);
+  const authPath = resolveAuthPath(agentDir);
   const models = await createPiModelRuntime({ agentDir, authPath });
   let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
   let modelKeyInDefinition = false;

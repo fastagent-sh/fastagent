@@ -25,7 +25,7 @@ import { resolveAgentAssembly } from "./open.ts";
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). */
   model?: string;
-  /** Credentials file override (the CLI --auth-path flag). */
+  /** Credentials file override (the SDK `authPath` option; the CLI has only `FASTAGENT_AUTH_PATH`). */
   authPath?: string;
 }
 

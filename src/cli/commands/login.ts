@@ -1,6 +1,6 @@
 /**
  * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
- * (`<agentDir>/.secrets/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`.
+ * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,6 @@ import { failStartup, placementOrExit } from "../fail.ts";
 import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
-  authPath?: string;
   /** `-g`: store in the user-global file every agent on this machine falls back to. */
   global?: boolean;
   /** false ⇔ `--no-input`. */
@@ -31,14 +30,14 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
   // through that proxy (region-locked providers).
   enterAgentEnv(loginDir);
-  // `-g` names the global file outright. Otherwise: flag > FASTAGENT_AUTH_PATH > default — the one owner. The
+  // `-g` names the global file outright. Otherwise: FASTAGENT_AUTH_PATH > default — the one owner. The
   // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
   // exactly where the operator said, or a second `login` for a provider they already have globally would silently
   // rewrite the global credential instead of creating the project-level override they asked for.
-  const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(loginDir, opts.authPath);
+  const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(loginDir);
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
-  if (!agentDir && !opts.global && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
+  if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
       `[fastagent] no agent here (no fastagent.config.*, here or one level inside) — ` +
         `logging in GLOBALLY (${authPath}). Every agent on this machine reads this file for providers its own ` +

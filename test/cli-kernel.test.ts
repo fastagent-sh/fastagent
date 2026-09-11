@@ -175,7 +175,7 @@ describe("cli kernel: help styling — bold headings, NO colors; errors carry th
 describe("cli kernel: the option-key naming rule", () => {
   it("optionKey: camelCase of the long name; --no-x negates and stores under x", () => {
     expect(optionKey("--json")).toBe("json");
-    expect(optionKey("--auth-path <file>")).toBe("authPath");
+    expect(optionKey("--sessions-dir <dir>")).toBe("sessionsDir");
     expect(optionKey("--no-input")).toBe("input");
     expect(optionKey("--no-scale-to-zero")).toBe("scaleToZero");
     expect(optionKey("-h, --help")).toBe("help");

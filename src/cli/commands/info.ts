@@ -26,7 +26,6 @@ import { failStartup, placementOrExit } from "../fail.ts";
 export interface InfoOptions {
   json?: boolean;
   model?: string;
-  authPath?: string;
   sessionsDir?: string;
 }
 
@@ -92,10 +91,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // info must not).
   const stateRoot = resolveStateRoot(agentDir);
   const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
-  const authPath = resolveAuthPath(agentDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
+  const authPath = resolveAuthPath(agentDir); // FASTAGENT_AUTH_PATH > default — the one owner
   // The second layer this agent reads through: "what is this agent's state" is the question `info` answers, and a
   // credential it runs on can live in a file the agent dir does not contain.
-  const fallbackAuthPath = resolveAuthFallback(opts.authPath);
+  const fallbackAuthPath = resolveAuthFallback();
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
   // surface (built-ins + its models.json), which is exactly what a custom endpoint changes.

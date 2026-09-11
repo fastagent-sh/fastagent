@@ -43,7 +43,7 @@ import { failStartup, failUsage, placementOrExit } from "./fail.ts";
 /** How every command that runs the model enters its agent directory, in the one order that works. */
 export async function enterAgentCommand(
   dirArg: string,
-  opts: { model?: string; authPath?: string; input?: boolean },
+  opts: { model?: string; input?: boolean },
 ): Promise<ResolvedPlacement> {
   const placement = placementOrExit(resolve(dirArg));
   enterAgentEnv(placement.agentDir);
@@ -174,15 +174,15 @@ export async function reportAuth(
  */
 async function resolveFirstRunModel(
   agentDir: string,
-  options: { model?: string; authPath?: string; input?: boolean } = {},
+  options: { model?: string; input?: boolean } = {},
 ): Promise<void> {
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   if (resolveModelSpec(options.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
   if (options.input === false) return; // --no-input: never prompt (clig) — the opener raises the clear error
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
-  const authPath = resolveAuthPath(agentDir, options.authPath);
-  const fallbackAuthPath = resolveAuthFallback(options.authPath);
+  const authPath = resolveAuthPath(agentDir);
+  const fallbackAuthPath = resolveAuthFallback();
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
   const models = await createPiModelRuntime({

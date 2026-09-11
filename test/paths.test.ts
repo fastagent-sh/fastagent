@@ -194,7 +194,7 @@ describe("paths: the secrets directory carries a mode", () => {
     denyChmod.armed = true;
     try {
       await expect(ensureSecretsDir(dir)).rejects.toThrow(
-        /cannot secure secrets dir .*\.secrets \(fastagent keeps it 0700\): EPERM.*--auth-path\/FASTAGENT_SECRETS_DIR/,
+        /cannot secure secrets dir .*\.secrets \(fastagent keeps it 0700\): EPERM.*FASTAGENT_AUTH_PATH\/FASTAGENT_SECRETS_DIR/,
       );
     } finally {
       denyChmod.armed = false;

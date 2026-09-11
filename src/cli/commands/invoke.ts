@@ -7,7 +7,6 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface InvokeOptions {
   model?: string;
-  authPath?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
 }
@@ -16,7 +15,6 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   const placement = await enterAgentCommand(dirArg, opts);
   const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
-    authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
   // BOTH directories, like dev/start: from the workspace, `placement.workspace` alone equals the dir you typed, so it
   // cannot tell you which agent actually ran.

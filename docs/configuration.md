@@ -224,7 +224,7 @@ FastAgent resolves model credentials through the model provider layer. Common op
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Writes OAuth/API-key credentials to the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded); `-g` (or running outside any agent) writes the user-global `~/.fastagent/.secrets/auth.json`. An agent **reads** that global file for any provider its own lacks, per provider, and writes a refresh back to the layer it read from. |
+| `fastagent login` | Writes OAuth/API-key credentials to the project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, a leading `~` is expanded); `-g` (or running outside any agent) writes the user-global `~/.fastagent/.secrets/auth.json`. An agent **reads** that global file for any provider its own lacks, per provider, and writes a refresh back to the layer it read from. |
 | Provider env vars | Good for servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Agent `.env` | Local development secrets at `<agent dir>/.secrets/.env`, loaded by CLI commands. Excluded by the `.secrets/.gitignore` that `init` scaffolds. |
 
@@ -309,7 +309,7 @@ The finer knobs still override their specific path on top:
 state root: FASTAGENT_STATE_DIR                          > <agent dir>/.state
 secrets:    FASTAGENT_SECRETS_DIR                        > <agent dir>/.secrets
 sessions:   --sessions-dir > FASTAGENT_SESSIONS_DIR      > <state root>/sessions
-auth:       --auth-path    > FASTAGENT_AUTH_PATH         > <secrets>/auth.json
+auth:       FASTAGENT_AUTH_PATH                          > <secrets>/auth.json
 ```
 
 A leading `~` in any of these is expanded to your home dir.

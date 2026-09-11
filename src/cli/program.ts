@@ -16,10 +16,6 @@ const MODEL: FlagSpec = {
   flags: "--model <provider/modelId>",
   description: "model override (precedence: --model > FASTAGENT_MODEL > config)",
 };
-const AUTH_PATH: FlagSpec = {
-  flags: "--auth-path <file>",
-  description: "credentials file (default: <agent dir>/.secrets/auth.json; env: FASTAGENT_AUTH_PATH)",
-};
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
 const NO_INPUT: FlagSpec = {
   flags: "--no-input",
@@ -92,15 +88,7 @@ const dev: CommandSpec = {
     "fastagent.config.*, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
     "work product never trigger a restart.",
   args: [DIR_ARG],
-  flags: [
-    PORT,
-    BIND,
-    MODEL,
-    AUTH_PATH,
-    { flags: "--no-watch", description: "serve once, no file-watching" },
-    TUNNEL,
-    NO_INPUT,
-  ],
+  flags: [PORT, BIND, MODEL, { flags: "--no-watch", description: "serve once, no file-watching" }, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent dev" },
     { cmd: "fastagent dev --tunnel", note: "public URL + registered/guided webhooks" },
@@ -110,7 +98,6 @@ const dev: CommandSpec = {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
-      authPath: f.authPath as string | undefined,
       watch: f.watch !== false,
       tunnel: f.tunnel === true,
       input: f.input !== false,
@@ -147,12 +134,11 @@ const chat: CommandSpec = {
     "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
     "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
   args: [DIR_ARG],
-  flags: [MODEL, AUTH_PATH],
+  flags: [MODEL],
   examples: [{ cmd: "fastagent chat" }],
   run: async (args, f) =>
     (await import("./commands/chat.ts")).runChat(args[0] as string, {
       model: f.model as string | undefined,
-      authPath: f.authPath as string | undefined,
     }),
 };
 
@@ -165,13 +151,12 @@ const info: CommandSpec = {
     "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [DIR_ARG],
-  flags: [JSON_FLAG, MODEL, AUTH_PATH, { flags: "--sessions-dir <dir>", description: "sessions directory override" }],
+  flags: [JSON_FLAG, MODEL, { flags: "--sessions-dir <dir>", description: "sessions directory override" }],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
       json: f.json === true,
       model: f.model as string | undefined,
-      authPath: f.authPath as string | undefined,
       sessionsDir: f.sessionsDir as string | undefined,
     }),
 };
@@ -203,12 +188,11 @@ const invoke: CommandSpec = {
     "stdout, tool/diagnostics to stderr, a failed turn exits non-zero. The all-agent counterpart of " +
     "`tool`, for CI smoke and quick checks. Same model resolution as dev.",
   args: [{ name: "<message>", description: "the user message for the turn" }, DIR_ARG],
-  flags: [MODEL, AUTH_PATH, NO_INPUT],
+  flags: [MODEL, NO_INPUT],
   examples: [{ cmd: `fastagent invoke "summarize today's inbox"` }],
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string, args[1] as string, {
       model: f.model as string | undefined,
-      authPath: f.authPath as string | undefined,
       input: f.input !== false,
     }),
 };
@@ -220,12 +204,11 @@ const fire: CommandSpec = {
     "Run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts now " +
     "without waiting for its cron. Reply→stdout; does NOT advance the schedule's fire state.",
   args: [{ name: "<name>", description: "the schedule name (schedules/<name>.ts)" }, DIR_ARG],
-  flags: [MODEL, AUTH_PATH, NO_INPUT],
+  flags: [MODEL, NO_INPUT],
   examples: [{ cmd: "fastagent fire daily-digest" }],
   run: async (args, f) =>
     (await import("./commands/fire.ts")).runFire(args[0] as string, args[1] as string, {
       model: f.model as string | undefined,
-      authPath: f.authPath as string | undefined,
       input: f.input !== false,
     }),
 };
@@ -256,7 +239,6 @@ const start: CommandSpec = {
     BIND,
     MODEL,
     { flags: "--sessions-dir <dir>", description: "sessions directory override" },
-    AUTH_PATH,
     TUNNEL,
     NO_INPUT,
   ],
@@ -273,7 +255,7 @@ const start: CommandSpec = {
     "            volume so a redeploy that replaces the directory never wipes it\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets — .env + auth.json\n" +
     "  sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions\n" +
-    "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
+    "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
     "            share one credential across projects)",
   run: async (args, f) =>
@@ -282,7 +264,6 @@ const start: CommandSpec = {
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
       sessionsDir: f.sessionsDir as string | undefined,
-      authPath: f.authPath as string | undefined,
       tunnel: f.tunnel === true,
       input: f.input !== false,
     }),
@@ -455,7 +436,6 @@ const deploy: CommandSpec = {
         "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
         "default --run refuses a pre-existing link (could be unrelated/production)",
     },
-    AUTH_PATH,
     NO_INPUT,
   ],
   examples: [
@@ -476,7 +456,6 @@ const deploy: CommandSpec = {
       stop: f.stop === true,
       scaleToZero: f.scaleToZero !== false,
       intoLinked: f.intoLinked === true,
-      authPath: f.authPath as string | undefined,
       input: f.input !== false,
     }),
 };
@@ -578,14 +557,12 @@ const login: CommandSpec = {
       flags: "-g, --global",
       description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for providers its own file lacks`,
     },
-    AUTH_PATH,
     NO_INPUT,
   ],
   examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai" }, { cmd: "fastagent login openai -g" }],
   notes: "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0], {
-      authPath: f.authPath as string | undefined,
       global: f.global === true,
       input: f.input !== false,
     }),

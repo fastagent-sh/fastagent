@@ -702,7 +702,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     runbook.push(
       ``,
       input.modelAuth === undefined
-        ? `# Model auth: none found at the local auth path — pass --auth-path <file>, or \`--run\` carries it`
+        ? `# Model auth: none found at the local auth path — set FASTAGENT_AUTH_PATH, or \`--run\` carries it`
         : `# Model auth: your local auth is "${input.modelAuth}" — the plan can't read its value; \`--run\` carries it`,
       `#   as the FastagentAuthSeed parameter (base64 of auth.json), materialized on first boot.`,
     );

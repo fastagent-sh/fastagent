@@ -14,7 +14,6 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface FireOptions {
   model?: string;
-  authPath?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
 }
@@ -50,7 +49,6 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
   const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
-    authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
   console.error(`[fastagent] fire: ${name} (${modelSpec})`);
   await reportAuth(placement.agentDir, modelSpec, authPath, fallbackAuthPath);
