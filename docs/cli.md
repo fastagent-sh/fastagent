@@ -107,6 +107,8 @@ Authenticates a model provider and **writes** to the project-level `<agent dir>/
 
 The fallback is **per provider, not per file**: logging Anthropic into a project does not hide the OpenAI credential you have globally. And a refresh is written back to the layer it was read from — a global credential stays global. That matters because both providers rotate refresh tokens: two copies of one grant each invalidate the other, so FastAgent never creates a second copy.
 
+**`deploy` does not read the global file.** A deployment carries the project-level `auth.json` only — the artifact is the truth, never the builder machine's state — so after a `login -g` a `deploy … --run` still reports `no model credential`. Carry the global one explicitly with `--auth-path ~/.fastagent/.secrets/auth.json`, or `fastagent login` (no `-g`) in the agent dir. Note this moves an OAuth grant into a second file: see the warning at the end of this section.
+
 An API-key login is verified immediately with one minimal request (OAuth needs no check — completing
 the flow proves the credential): a definitive rejection (HTTP 401) removes the bad key and prompts
 for it again on the spot (cancel to stop), so a mistyped key is corrected at login time instead of

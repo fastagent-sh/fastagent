@@ -157,7 +157,14 @@ export function fastagentCredentialStore(
   const warn = options.warn ?? ((message: string) => log.warn(message));
   const fallback =
     options.fallbackPath !== undefined && options.fallbackPath !== authPath ? options.fallbackPath : undefined;
-  /** The file that owns this provider: where it already is, else the primary. */
+  /**
+   * The file that owns this provider: where it already is, else the primary.
+   *
+   * Known ceiling: this read is UNLOCKED, so a concurrent `fastagent login` writing the same provider into the
+   * primary between here and the lock below sends this refresh to the fallback instead — the one window in which the
+   * "one grant, one copy" rule can be lost. Re-checking under the lock means locking both files in a fixed order;
+   * worth it only if concurrent logins stop being a rounding error.
+   */
   const owner = (providerId: string): string => {
     if (fallback === undefined) return authPath;
     const primary = readCreds(authPath, warn);

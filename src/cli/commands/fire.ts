@@ -48,12 +48,12 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   // were printed above: its guarantee must not depend on this call site remembering (a repeated line
   // on the refusal path is the cheaper failure).
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
-  const { agent, modelSpec, authPath } = await createPiAgentFromDir(placement.workspace, {
+  const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
   console.error(`[fastagent] fire: ${name} (${modelSpec})`);
-  await reportAuth(placement.agentDir, modelSpec, authPath);
+  await reportAuth(placement.agentDir, modelSpec, authPath, fallbackAuthPath);
   const exitCode = await runInvokeStream(
     agent.invoke({ session: scheduleSession(name) }, { text: schedule.prompt }),
     (text) => process.stdout.write(text),

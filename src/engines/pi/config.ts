@@ -302,12 +302,17 @@ export function resolveAuthPath(dir: string, flag: string | undefined, env: Node
  * Where a credential the project does not have is read from instead: the user-global store, because a login is a
  * PERSON on a machine and not a project — one `login -g` then serves every agent here. Undefined when an explicit
  * path was named: "use this file" is an instruction, not a preference, so it gets no second layer.
+ *
+ * BOTH knobs {@link resolveAuthPath} reads count as that instruction, `FASTAGENT_SECRETS_DIR` included — it is what
+ * the Fly/Railway/AgentCore artifacts set, and a deployed container must read its mounted credentials and nothing
+ * else (the artifact is the truth).
  */
 export function resolveAuthFallback(
   flag: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return resolveAuthPathOverride(flag, env) === undefined ? GLOBAL_AUTH_PATH : undefined;
+  const explicit = resolveAuthPathOverride(flag, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
+  return explicit === undefined ? GLOBAL_AUTH_PATH : undefined;
 }
 
 /** The default sessions dir under a resolved state root ({@link resolveStateRoot}). */

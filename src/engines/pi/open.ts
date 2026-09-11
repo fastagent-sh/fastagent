@@ -150,6 +150,9 @@ export async function createPiAgentFromDir(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
+  /** The second layer that file reads through ({@link AgentAssembly.fallbackAuthPath}) — the startup report names
+   *  whichever layer the credential came from, so it needs both. */
+  fallbackAuthPath?: string;
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
@@ -255,6 +258,7 @@ export async function createPiAgentFromDir(
     stateRoot,
     sessionsDir,
     authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     toolNames,
     deferredToolNames,
     toolCollisions,

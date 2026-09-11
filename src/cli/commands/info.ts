@@ -5,6 +5,7 @@ import { inspectChannels } from "../../channels/discover.ts";
 import {
   defaultSessionsDir,
   loadConfig,
+  resolveAuthFallback,
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
@@ -92,11 +93,18 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const stateRoot = resolveStateRoot(agentDir);
   const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
   const authPath = resolveAuthPath(agentDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
+  // The second layer this agent reads through: "what is this agent's state" is the question `info` answers, and a
+  // credential it runs on can live in a file the agent dir does not contain.
+  const fallbackAuthPath = resolveAuthFallback(opts.authPath);
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
   // surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
   const modelError = modelSpec
-    ? await createPiModelRuntime({ agentDir, authPath })
+    ? await createPiModelRuntime({
+        agentDir,
+        authPath,
+        ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+      })
         .then((models) => {
           resolveModel(models, modelSpec);
           return undefined as string | undefined;
@@ -129,6 +137,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           stateRoot,
           sessionsDir,
           authPath,
+          fallbackAuthPath: fallbackAuthPath ?? null,
           diagnostics: definition.diagnostics,
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
@@ -177,7 +186,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     cont(`⚠ no value here (carried by deploy only): ${unsetElsewhere.map((s) => s.name).join(", ")}`);
   line("state", stateRoot);
   line("sessions", sessionsDir);
-  line("auth", authPath);
+  line("auth", fallbackAuthPath === undefined ? authPath : `${authPath} (then ${fallbackAuthPath})`);
   reportToolCollisions(tools.collisions);
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);

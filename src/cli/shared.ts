@@ -142,7 +142,6 @@ export async function reportAuth(
   authPath: string,
   fallbackAuthPath?: string,
 ): Promise<void> {
-  const layers = fallbackAuthPath !== undefined ? { fallbackPath: fallbackAuthPath } : {};
   const provider = providerOf(modelSpec);
   const models = await createPiModelRuntime({
     agentDir,
@@ -150,23 +149,21 @@ export async function reportAuth(
     ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
   }).catch(failStartup);
   const source = await probeAuthSource(models, modelSpec);
-  // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from "stored but
-  // unusable".
-  const stored =
-    source === undefined
-      ? await fastagentCredentialStore(authPath, layers)
-          .read(provider)
-          .catch(() => undefined)
-      : undefined;
-  // Name the layer the credential actually came from: "which file do I edit" is the question this line answers, and
-  // a global credential lives in a file the agent dir does not contain.
-  const found =
-    fallbackAuthPath !== undefined &&
-    !(await fastagentCredentialStore(authPath)
+  // One refresh-FREE read per layer, serving both questions below. A read failure is already warned about by the
+  // store itself; this line degrades to "nothing stored" rather than taking down the startup report.
+  const readFrom = (path: string) =>
+    fastagentCredentialStore(path)
       .read(provider)
-      .catch(() => undefined))
-      ? fallbackAuthPath
-      : authPath;
+      .catch(() => undefined);
+  const inPrimary = await readFrom(authPath);
+  const inFallback = inPrimary || fallbackAuthPath === undefined ? undefined : await readFrom(fallbackAuthPath);
+  // Name the layer the credential actually came from: "which file do I edit" is the question this line answers, and
+  // a global credential lives in a file the agent dir does not contain. With NEITHER layer holding it, the answer is
+  // the primary — that is the file the `fastagent login` this report recommends writes.
+  const found = fallbackAuthPath !== undefined && inFallback ? fallbackAuthPath : authPath;
+  // Only when nothing satisfies auth does the stored credential matter: it tells "nothing stored" from "stored but
+  // unusable".
+  const stored = source === undefined ? (inPrimary ?? inFallback) : undefined;
   const report = formatAuthReport(provider, found, source, stored);
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);

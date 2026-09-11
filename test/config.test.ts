@@ -144,6 +144,11 @@ describe("config: resolveAuthPath (auth-file precedence)", () => {
     expect(resolveAuthFallback(undefined, {} as NodeJS.ProcessEnv)).toBe(GLOBAL_AUTH_PATH);
     expect(resolveAuthFallback("flagauth.json", {} as NodeJS.ProcessEnv)).toBeUndefined();
     expect(resolveAuthFallback(undefined, { FASTAGENT_AUTH_PATH: "env.json" } as NodeJS.ProcessEnv)).toBeUndefined();
+    // FASTAGENT_SECRETS_DIR names the file just as explicitly, and is what the Fly/Railway/AgentCore artifacts set:
+    // a deployed container reads its mounted credentials, never a second layer under its own $HOME.
+    expect(
+      resolveAuthFallback(undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv),
+    ).toBeUndefined();
   });
 
   it("resolveAuthPath falls back to the workspace project auth file (not the global default)", () => {
