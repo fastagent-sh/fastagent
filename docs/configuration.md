@@ -309,7 +309,7 @@ The finer knobs still override their specific path on top:
 state root: FASTAGENT_STATE_DIR                          > <agent dir>/.state
 secrets:    FASTAGENT_SECRETS_DIR                        > <agent dir>/.secrets
 sessions:   --sessions-dir > FASTAGENT_SESSIONS_DIR      > <state root>/sessions
-auth:       FASTAGENT_AUTH_PATH                             > <secrets>/auth.json
+auth:       FASTAGENT_AUTH_PATH                          > <secrets>/auth.json
 ```
 
 A leading `~` in any of these is expanded to your home dir.

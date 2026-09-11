@@ -8,7 +8,7 @@ status: partially implemented
 
 **Status: partially implemented.** This is the design conclusion for [#482](https://github.com/fastagent-sh/fastagent/issues/482). It replaces that RFC's file layout and command surface with a smaller one; §11 lists what was dropped and why. The code truth is `src/`; §12 is the sequencing and carries what has landed.
 
-**The day-one tier is built (steps 1–3). The env dimension (§2's day two, step 4) is not, and is deliberately not scheduled** — it is a pure addition with no demand behind it yet, so every `--env` sentence below describes a design that is ready rather than code that exists. §12 also lists the three day-one leftovers that are still open.
+**The day-one tier is built (steps 1–3). The env dimension (§2's day two, step 4) is not, and is deliberately not scheduled** — it is a pure addition with no demand behind it yet, so every `--env` sentence below describes a design that is ready rather than code that exists. §12 also lists the day-one leftover that is still open.
 
 The user-facing document for what exists today is [configuration.md](../configuration.md).
 
