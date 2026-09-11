@@ -32,16 +32,30 @@ That second tier is not a preference, it is what both providers ask for. OpenAI:
 
 ## 3. Where each fact lives
 
-| Fact | Lifecycle | In git | Home |
+Classify by what decides the **carrier**, not by whether the word "secret" appears in the name — that word bundles two different properties and is why the model took three attempts to place. Four questions:
+
+1. **Where does the consumer run?** The `deploy` process on the builder, or the agent process on the box. A builder-local value needs no carrier at all.
+2. **May it enter a readable artifact?** Image layers and committed files are readable by anyone who can pull or clone.
+3. **Is it rewritten on the target?** Only a self-refreshing credential is.
+4. **Who produces it?** This one decides whether *FastAgent* knows the answer to question 2. It knows for values it derives itself; it cannot know for values an author declares.
+
+Questions 2 and 3 give four boxes, and **only three are inhabited**. Something both non-sensitive and rewritten on the target is not configuration at all — it is state, and it lives in `.state/`.
+
+| Class | Definition | Carrier, and why only it | Members |
 |---|---|---|---|
-| What the agent is | version history | yes | `persona.md`, `skills/`, `tools/`, `channels/`, `schedules/` |
-| Which external values it needs | with the code | yes (names only) | `defineTool/defineChannel/defineSchedule({ secrets })` — already implemented |
-| Application identity and defaults | version history | yes | `fastagent.config.ts` (`name`, `model`, …) |
-| Where to deploy (host, env) | per invocation | — | **the command line**, stated every time |
-| Host tuning that follows the workload (`deploy.agentcore.idleTimeoutSeconds`) | version history | yes | `fastagent.config.ts` — the same value in every env, because it describes the agent's traffic shape, not where it runs |
-| Host parameters that locate the deployment (region, account) | per environment | no | environment variables (`AWS_REGION` already is one), from `.secrets/<env>/.env` or CI |
-| Application/tool values, including API keys | per environment | no | same |
-| Model OAuth credentials | refreshes itself | no | `.secrets/auth.json` (project) / `~/.fastagent/.secrets/auth.json` (global) |
+| **A. Builder-local** | The consumer is the `deploy` process itself | **None.** Delivering a value nothing reads only creates drift | `deploy.apt`, `deploy.agentcore.idleTimeoutSeconds`, the declared secret *names*, host location (AWS account/region, fly region), `http.host` (it describes a runtime, so putting it in committed config is the misplacement that gate exists for) |
+| **B. Derived, non-sensitive** | FastAgent computes it and knows it is not sensitive | **Release manifest.** Rewritten by every deploy (cannot go stale), rides an immutable image (cannot go stale on the platform, cannot interpolate a shell), is JSON (no code-generation syntax to escape) | the resolved model, `releaseId`, the agent directory |
+| **C. Authored application defaults** | In git, identical in every deployment | **The definition itself.** It already ships; a second copy would be a second truth | `model`, `thinkingLevel`, `http.port`, `selfSchedule`, `sessionControl` |
+| **D. Operator-supplied environment values** | Differs per deployment, not in git, **sensitivity known only to the author** | **The platform's secret storage.** Must not enter a readable artifact, and must be rotatable on the target without rebuilding the image | channel secrets, provider API keys, `FASTAGENT_CONTROL_TOKEN`, anything a `{ secrets: […] }` declaration names, the secrets `deploy` mints (`FASTAGENT_WAKE_SECRET`, `FASTAGENT_INGRESS_SECRET`) |
+| **E. Self-refreshing credentials** | The target rewrites it | Secret storage as a **seed**, the target's volume as the **authority** — the seed is written only when the target has none (`authSeedBytes`), because the target's copy is newer by definition | `auth.json` |
+
+**D is treated as sensitive wholesale**, even though members like a `SLACK_DIGEST_CHANNEL` are not credentials. That follows from question 4: `{ secrets: […] }` declares "this value comes from the environment", not "this value is a credential", and FastAgent has no basis to guess. The cost is bounded and real (a runbook lists it as required, AgentCore makes it a `NoEcho` parameter so `describe-stacks` cannot show it). The escape hatch is a `sensitive: false` on the declaration, and it is not built until the diagnosability actually hurts — the framework must not guess.
+
+Where a credential's **literal value** may appear follows from B/C versus D/E, and is absolute:
+
+> Literal credentials exist in exactly two places: `.secrets/` (0700, gitignored, excluded from the image) and the platform's secret storage. **Every file inside the definition may only carry a reference**: `"$MY_API_KEY"` or `!command` in `models.json` (pi resolves both), and a declared name everywhere else.
+
+A literal `apiKey` in `models.json` is therefore not an author's choice but an error — it ships inside the image, where any puller reads the layer. `deploy` gates `--run` on it, under the rule the `.dockerignore` check already enforces: **any configuration that would put a credential into the image gates `--run`.**
 
 ## 4. Files
 
@@ -146,6 +160,8 @@ the selected value file  →  validate/preview  →  the platform's variable sto
 
 No `secret push` / `env sync` prerequisite lifecycle (the lesson Kamal 2 encodes by deleting `envify`): edit the file, deploy. CI materializes the same file before running the same command.
 
+**The selected value file is the only source. The environment running `deploy` is not consulted**, so there is no precedence rule to remember and no way for a deployment to carry a value that was written down nowhere. The industry splits on this exactly along the line of what the tool is configuring: dotenv never overrides an already-set variable and Compose lets the shell beat `env_file`, because both configure *this* process; Terraform checks `TF_VAR_*` **last**, after `terraform.tfvars`, because it declares a *remote* object; Kamal 2 goes furthest and stopped loading `.env` into the environment at all. A deployment is the second kind. CI supplies values the same way it supplies `auth.json` in OpenAI's own guide — by writing the file before running the command.
+
 **Ownership is derived, not tracked remotely**: the keys FastAgent owns are every `{ secrets }` declaration ∪ the keys in the selected value file. Nothing outside that union is written, so platform-owned variables survive.
 
 That union describes the *current* intent and cannot say which remote key a past deploy set, so **nothing is deleted implicitly**. The plan lists the remote key names (names only — every supported host allows listing names without values) and reports the ones outside the union as unmanaged; removing them is the operator's call. Tracking a "previously managed" set would mean either a remote registry or local state that CI does not have, and the whole point of §9 is that neither exists.
@@ -187,6 +203,8 @@ Dropped from the RFC, and from earlier drafts of this document:
 | "credential present + ready" precondition | `src/deploy/registration-gate.ts` |
 | report the effective model **and its source**; validate that model's provider; gate `--run` when **no** source resolves a model (the replacement for the deleted gate — without it the deletion leaves a silent-degradation window) | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
 | carry the resolved model to the deployed environment | the release manifest (`DeploymentRelease.model` in `src/deploy/workspace.ts`), projected into `process.env` beside `FASTAGENT_AGENT` by `prepareStartWorkspace`. It is rewritten unconditionally by every deploy, so it cannot go stale, and nothing on the way in can interpolate the operator's shell. **Non-credential configuration only** — the manifest rides inside a readable image and is rebuilt every deploy, both of which are the opposite of what a credential needs (§8) |
+| class D reads the **value file only** (§9), so `assembleSecrets` takes that Map instead of `env: NodeJS.ProcessEnv` | `src/deploy/secrets.ts` + `src/cli/commands/deploy/shared.ts`; every host's runbook then tells CI to write the file rather than export variables |
+| a literal `apiKey` in `models.json` gates `--run` (§3); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list, not in `modelKeyInDefinition` | `src/engines/pi/models.ts` (`modelCredentialCarry`) + `src/deploy/preflight.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
 | Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0700, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
@@ -195,6 +213,8 @@ Dropped from the RFC, and from earlier drafts of this document:
 |---|---|---|
 | 1 | Deployment phase ordering: no entrance opens before credential + readiness | A correctness fix unrelated to env; worth having today |
 | 2 | `config.name` + one model chain (`FASTAGENT_MODEL` travels with the value file; delete `modelTravelIssue`) | All of day one; the single-instance path is unchanged |
+| 2b | class D reads the value file only — the same rule the model already follows | Removes the last path by which the builder's environment reaches a deployment |
+| 2c | literal-`apiKey` gate + `$NAME` references treated as declared secrets | Closes the second route by which a credential enters the image |
 | 3 | Credential project > global fallback + `login -g` + drop `--auth-path` | One global login serves every project |
 | 4 | The env addition: `--env` + `.secrets/<env>/.env` + `<name>-<env>` prefix | Pure addition; day-two capability |
 
