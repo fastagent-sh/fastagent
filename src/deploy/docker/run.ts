@@ -14,6 +14,12 @@ export interface DockerRunPlan {
   port: number;
   /** Values interpolated by Compose. */
   secrets: Record<string, string>;
+  /**
+   * Every name the generated Compose interpolates (`composeInterpolatedNames`). The child's environment inherits
+   * this process's, so any of these left unset here would be filled from the BUILDER'S SHELL — exactly the source
+   * the value file replaced. They are blanked first, then overwritten by `secrets`.
+   */
+  interpolated: readonly string[];
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
   /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
@@ -110,7 +116,14 @@ export async function deployDockerRun(
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
-  const env = plan.secrets;
+  // Blank-then-override: `spawnRunner` merges over `process.env`, so an interpolated name the value file does not
+  // declare would otherwise inherit the builder's shell and reach the container. A deployment carries what the
+  // value file says and nothing else — including for the optional names the missing-values gate never sees
+  // (FASTAGENT_CONTROL_TOKEN, *_ENCRYPT_KEY, FASTAGENT_AUTH_SEED).
+  const env: Record<string, string> = {
+    ...Object.fromEntries(plan.interpolated.map((name) => [name, ""])),
+    ...plan.secrets,
+  };
 
   // CLI/plugin gate first: unlike a daemon error, spawn ENOENT becomes 127 at the shared runner seam.
   const version = await docker(["compose", "version"], { capture: true });

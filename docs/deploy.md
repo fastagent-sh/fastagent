@@ -69,14 +69,20 @@ fastagent deploy docker --run           # starts the existing app+tunnel topolog
 
 The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
 
-Operate the generated topology:
+Operate the generated topology. The generated Compose interpolates every declared name as `${NAME:-}`, and Compose
+fills those from the shell or the **project** `.env` — never from the agent's `.secrets/.env`. So a command that
+starts containers needs `--env-file`, or it starts them with every declared value empty and says nothing:
 
 ```bash
-docker compose -f fastagent.compose.yml logs -f agent
-docker compose -f fastagent.compose.yml ps
-docker compose -f fastagent.compose.yml down     # state volume is kept
-docker compose -f fastagent.compose.yml down -v  # destructive: deletes all state
+docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build
+docker compose -f fastagent/fastagent.compose.yml logs -f agent
+docker compose -f fastagent/fastagent.compose.yml ps
+docker compose -f fastagent/fastagent.compose.yml down     # state volume is kept
+docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: deletes all state
 ```
+
+`--run` does the same thing for you, and additionally blanks every interpolated name the value file does not
+declare, so nothing exported on the build machine reaches the container.
 
 ### Taking ownership of Docker files
 

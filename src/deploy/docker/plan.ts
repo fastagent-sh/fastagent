@@ -3,6 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface DockerPlanInput extends ContainerInput {
@@ -62,11 +63,25 @@ function composeInterpolation(name: string): string {
   return `\${${name}:-}`;
 }
 
-function composeYaml(input: DockerPlanInput): string {
+/**
+ * Every name the generated Compose interpolates. Compose fills each from the shell or the project `.env` and
+ * silently substitutes `""` for the rest, so this list is BOTH what the file declares and what the run path must
+ * neutralize before handing the child an environment (see `deployDockerRun`).
+ */
+export function composeInterpolatedNames(input: {
+  modelAuth: string | undefined;
+  channels: readonly DeclaredChannel[];
+  extraSecrets?: readonly DeclaredSecret[];
+}): string[] {
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   // Always leave the auth-seed seam in the committed topology.
-  const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
-  const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
+  return [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
+}
+
+function composeYaml(input: DockerPlanInput): string {
+  const secretEnv = composeInterpolatedNames(input)
+    .map((name) => `      ${name}: "${composeInterpolation(name)}"`)
+    .join("\n");
   // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the WORKSPACE, so it
   // climbs back out of the one-level prefix deploy requires.
   const context = "..";
@@ -123,7 +138,11 @@ volumes:
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   const composePath = `${input.agentPrefix}${DOCKER_COMPOSE_FILE}`;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
-  const compose = `docker compose -f ${composePath}`;
+  // `--env-file`, not a bare `-f`: Compose interpolates `${NAME:-}` from the shell or the PROJECT `.env` and
+  // substitutes `""` for anything it cannot find, so a hand-run command without it starts a container whose
+  // declared values are all empty — no error, no log line. Pointing it at the value file makes the manual path read
+  // the same declaration `--run` does.
+  const compose = `docker compose --env-file ${input.agentPrefix}${SECRETS_DIRNAME}/.env -f ${composePath}`;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const required = secrets.filter((secret) => secret.required);
   const optional = secrets.filter((secret) => !secret.required);
@@ -137,8 +156,9 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   if (required.length > 0) {
     runbook.push(
-      `# Required environment values. Put them in the agent's .secrets/.env — that file declares the deployed`,
-      `# environment, and \`--run\` reads only it (in CI, write the file before running the command):`,
+      `# Required environment values. Put them in ${input.agentPrefix}${SECRETS_DIRNAME}/.env — that file declares`,
+      `# the deployed environment, and every command below reads it through --env-file (in CI, write the file`,
+      `# before running the command):`,
       ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
     );
   }

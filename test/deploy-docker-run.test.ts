@@ -24,6 +24,7 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   secrets: {},
   missingSecrets: [],
   valueFile: "fastagent/.secrets/.env",
+  interpolated: [],
   needsModelCredential: false,
   requireTunnel: false,
   announce: async () => [],
@@ -60,6 +61,30 @@ describe("deploy/docker/run: local Compose journey", () => {
       "compose -f fastagent.compose.yml port agent 8787",
     ]);
     expect(healthUrls).toEqual(["http://127.0.0.1:9876/health"]);
+  });
+
+  it("blanks every interpolated name, so the builder's shell cannot reach the container", async () => {
+    // Compose fills `${NAME:-}` from the environment it is spawned with, and that environment inherits this
+    // process's. Without the blanking, any interpolated name the value file does not declare would be filled from
+    // the builder's shell — including the ones the missing-values gate never sees (optional channel keys, the
+    // control token, the auth seed), which is exactly the source the value file replaced.
+    const before = process.env.FA_TEST_LEAK;
+    process.env.FA_TEST_LEAK = "from-the-builders-shell";
+    try {
+      const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
+      await deployDockerRun(
+        plan({ interpolated: ["FA_TEST_LEAK", "FA_TEST_DECLARED"], secrets: { FA_TEST_DECLARED: "from-the-file" } }),
+        docker,
+        () => {},
+        healthy,
+      );
+      const passed = calls.find((call) => call.env)?.env;
+      expect(passed?.FA_TEST_LEAK).toBe(""); // present but empty — never the shell's value
+      expect(passed?.FA_TEST_DECLARED).toBe("from-the-file");
+    } finally {
+      if (before === undefined) delete process.env.FA_TEST_LEAK;
+      else process.env.FA_TEST_LEAK = before;
+    }
   });
 
   it("tells the health probe when the agent container is gone (a crashed boot must not spend the budget)", async () => {

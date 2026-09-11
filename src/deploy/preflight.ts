@@ -254,7 +254,7 @@ export async function preflightDeploy(input: {
   // `--run`. Asked of EVERY provider, not just the selected model's — the file ships whole, so a literal on a
   // provider nothing selects today is in the image all the same. A literal has no legitimate use: an endpoint that
   // needs no key omits it, and one that needs a key has two forms that do not ship it.
-  const literalKeys = literalKeyProviders(models);
+  const literalKeys = await literalKeyProviders(agentDir);
   if (literalKeys.length > 0) {
     const issue =
       `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +

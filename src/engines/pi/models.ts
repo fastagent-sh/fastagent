@@ -3,6 +3,7 @@
  * (per-request credential resolution). fastagent builds one per opener and threads it into the engine alongside the
  * selected `model`; the two must come from the same collection so the model's provider auth is in scope.
  */
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
@@ -72,36 +73,47 @@ export async function createPiModelRuntime(
   return runtime;
 }
 
-/**
- * How a model's credential will REACH a deployed agent — and whether the way it does so is legitimate.
- *
- * `models.json` resolves an `apiKey` three ways, and they are NOT interchangeable for a deployment: `"$NAME"` is an
- * ordinary declared secret, `"!cmd"` runs on the box and never travels, and a literal is a credential written into a
- * file that ships inside the image — readable by anyone who can pull it. pi already tells the three apart
- * (`models_json_key` vs `models_json_command` vs `environment`), so the distinction costs nothing to make here.
- */
-export function modelCredentialCarry(
-  runtime: ModelRuntime,
-  spec: string,
-): { envVar?: string; inDefinition: boolean; literalKey: boolean } {
+/** How a model's credential will REACH a deployed agent. */
+export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { envVar?: string; inDefinition: boolean } {
   const status = runtime.getProviderAuthStatus(providerOf(spec));
-  if (!status.configured) return { inDefinition: false, literalKey: false };
+  if (!status.configured) return { inDefinition: false };
   // An env-var name is only useful downstream if it IS one.
   if (status.source === "environment" && status.label && /^[A-Z][A-Z0-9_]*$/.test(status.label)) {
-    return { envVar: status.label, inDefinition: false, literalKey: false };
+    return { envVar: status.label, inDefinition: false };
   }
-  return { inDefinition: status.source !== "stored", literalKey: status.source === "models_json_key" };
+  return { inDefinition: status.source !== "stored" };
 }
 
 /**
- * EVERY provider whose key is a literal in `models.json`, not just the selected model's. The file ships whole, so a
- * literal on a provider nothing currently selects is in the image all the same.
+ * EVERY provider whose `models.json` entry writes its key as a LITERAL — the form that ships the credential inside
+ * the image. `"$NAME"` is an ordinary declared secret and `"!cmd"` runs on the box, so neither qualifies.
+ *
+ * Read from the FILE, not from `getProviderAuthStatus`: that answers "what satisfies this provider right now" and
+ * returns `stored` first, so a provider that has both an `auth.json` entry and a literal in the file would report
+ * `stored` and the literal would ship unreported. The question here is what the definition DECLARES, and only the
+ * file answers it. The three-way split mirrors pi's `configuredRequestAuthStatus`, which is not exported.
  */
-export function literalKeyProviders(runtime: ModelRuntime): string[] {
-  return runtime
-    .getProviders()
-    .filter((provider) => runtime.getProviderAuthStatus(provider.id).source === "models_json_key")
-    .map((provider) => provider.id);
+export async function literalKeyProviders(agentDir: string): Promise<string[]> {
+  const file = join(agentDir, AGENT_MODELS_FILE);
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch (error) {
+    // No custom endpoints is the normal case; anything else (unreadable, a directory) is the caller's problem.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  // Malformed JSON already threw out of createPiModelRuntime before this runs, so a parse failure here would be a
+  // genuine surprise and must not be swallowed.
+  const providers = (JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown }> }).providers ?? {};
+  return Object.entries(providers)
+    .filter(([, provider]) => isLiteralKey(provider?.apiKey))
+    .map(([id]) => id);
+}
+
+/** `!cmd` runs on the box; `$NAME` / `${NAME}` reads the environment; anything else is the key itself. */
+function isLiteralKey(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey !== "" && !apiKey.startsWith("!") && !/\$\{?[A-Za-z_]/.test(apiKey);
 }
 
 /** Per-provider auth status for the first-run model picker. */

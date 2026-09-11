@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import {
   createPiModelRuntime,
+  literalKeyProviders,
   modelCredentialCarry,
   probeApiKey,
   probeAuthSource,
@@ -153,22 +154,17 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       expect(modelCredentialCarry(runtime, "mygw/deepseek-v3")).toEqual({
         envVar: "FASTAGENT_TEST_GW_KEY",
         inDefinition: false,
-        literalKey: false,
       });
     } finally {
       delete process.env.FASTAGENT_TEST_GW_KEY;
     }
   });
 
-  it("a key written into models.json is definition-carried, and a LITERAL one is reported as such", async () => {
-    // Both travel inside the image with the file itself, so neither gives `deploy` anything to carry — its
-    // remedies (`fastagent login`, a provider env key) are both impossible for a custom provider. But only the
-    // literal puts a CREDENTIAL in the image, and preflight gates `--run` on that, so the two must be told apart
-    // here: pi already does (`models_json_key` vs `models_json_command`).
-    for (const [apiKey, literalKey] of [
-      ["sk-literal-in-file", true],
-      ["!echo sk-from-command", false],
-    ] as const) {
+  it("a key written into models.json (literal or command) is carried BY the definition, not by deploy", async () => {
+    // These travel inside the image with the file itself. Reported as such so the deploy gate does not
+    // demand a credential that is already there — its remedies (`fastagent login`, a provider env key)
+    // are both impossible for a custom provider.
+    for (const apiKey of ["sk-literal-in-file", "!echo sk-from-command"]) {
       const dir = await agentWith(
         JSON.stringify({
           providers: {
@@ -177,8 +173,28 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
         }),
       );
       const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
-      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true, literalKey });
+      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true });
     }
+  });
+
+  it("literalKeyProviders reads the FILE, so a stored credential cannot hide a literal that still ships", async () => {
+    // getProviderAuthStatus answers "what satisfies this provider now" and returns `stored` first, so a provider
+    // with both an auth.json entry and a literal in the file would report `stored` — and the literal would ship
+    // unreported. The gate asks what the definition DECLARES, which only the file answers.
+    const dir = await agentWith(
+      JSON.stringify({
+        providers: {
+          literal: { baseUrl: "http://a/v1", api: "openai-completions", apiKey: "sk-in-file", models: [{ id: "m" }] },
+          reference: { baseUrl: "http://b/v1", api: "openai-completions", apiKey: "$GW_KEY", models: [{ id: "m" }] },
+          braced: { baseUrl: "http://c/v1", api: "openai-completions", apiKey: `\${GW_KEY}`, models: [{ id: "m" }] },
+          command: { baseUrl: "http://d/v1", api: "openai-completions", apiKey: "!echo sk", models: [{ id: "m" }] },
+          none: { baseUrl: "http://e/v1", api: "openai-completions", models: [{ id: "m" }] },
+        },
+      }),
+    );
+    await writeFile(join(dir, "auth.json"), JSON.stringify({ literal: { type: "api_key", key: "sk-stored" } }));
+    expect(await literalKeyProviders(dir)).toEqual(["literal"]);
+    expect(await literalKeyProviders(join(dir, "no-such-dir"))).toEqual([]); // no models.json is the normal case
   });
 
   it("on an id collision the file wins over an injected Provider (models.json composes over the native base)", async () => {

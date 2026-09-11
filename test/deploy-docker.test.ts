@@ -127,7 +127,9 @@ describe("deploy/docker: planDockerDeploy", () => {
       planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "github"]) }),
     );
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
-    expect(out).toContain("docker compose -f fastagent/fastagent.compose.yml up -d --build");
+    expect(out).toContain(
+      "docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build",
+    );
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");
     expect(out).toContain("Public ingress is operator-owned");
