@@ -3,9 +3,9 @@
  * `Models` collection (models.ts). The write path refuses to overwrite a corrupt file, so a torn read never clobbers
  * the other providers' credentials.
  */
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE, ensureSecretsDir } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
@@ -39,6 +39,21 @@ interface LockResult<T> {
   next?: string;
 }
 
+/**
+ * The file a write must land IN, which is not always the path it is addressed BY. pi writes the auth file in place,
+ * so it follows a symlink to the target; an atomic rename would replace the link with a regular file instead, and
+ * from then on the two tools would be editing different files — the same split the shared lock exists to prevent,
+ * arriving one write later. A dangling link (a dotfile manager that has not checked the target out yet) still names
+ * where the credentials belong, so it is followed too rather than overwritten.
+ */
+function writeTarget(authPath: string): string {
+  if (existsSync(authPath)) return realpathSync(authPath);
+  const link = lstatSync(authPath, { throwIfNoEntry: false });
+  // ponytail: one hop. A chain of dangling links would have its second link replaced; resolve iteratively if that
+  // ever shows up in a real layout.
+  return link?.isSymbolicLink() ? resolve(dirname(authPath), readlinkSync(authPath)) : authPath;
+}
+
 /** Serialized cross-process read-modify-write of the credentials file. */
 async function withLockedAuthFile<T>(
   authPath: string,
@@ -51,8 +66,9 @@ async function withLockedAuthFile<T>(
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
       chmodSync(authPath, SECRET_FILE_MODE);
     } catch (error) {
-      // EEXIST: another process created the file between the existence check and this exclusive create; its content
-      // (possibly already-written credentials) must not be clobbered.
+      // EEXIST: the path IS taken, by something `existsSync` does not see through — either another process created
+      // the file just now (its credentials must not be clobbered) or the path is a dangling symlink. Both are left
+      // alone: the write below resolves where they belong.
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
   }
@@ -63,6 +79,12 @@ async function withLockedAuthFile<T>(
   };
 
   const release = await lockfile.lock(authPath, {
+    // MUST match pi-coding-agent's `core/auth-storage.js`, which locks with `realpath: false`. When the auth file
+    // itself is a symlink (dotfile managers do this), the two settings name DIFFERENT lock files and both locks can
+    // be held at once — so `pi` and `fastagent` would refresh the same provider concurrently, and a rotated refresh
+    // token logs one of them out. Resolving the link would be the stronger rule, but only if BOTH sides did it, and
+    // we do not own the other side.
+    realpath: false,
     retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 10_000, randomize: true },
     stale: 30_000,
     onCompromised: (error) => {
@@ -77,7 +99,13 @@ async function withLockedAuthFile<T>(
     throwIfCompromised();
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
-    if (out.next !== undefined) writeFileAtomic(authPath, out.next, SECRET_FILE_MODE);
+    if (out.next !== undefined) {
+      const file = writeTarget(authPath);
+      // The resolved directory is a DIFFERENT one from the link's, so it owes the same 0700 repair — otherwise the
+      // rule has an exception exactly where an operator cannot see it.
+      if (file !== authPath) await ensureSecretsDir(dirname(file));
+      writeFileAtomic(file, out.next, SECRET_FILE_MODE);
+    }
     throwIfCompromised();
     result = out.result;
   } catch (error) {

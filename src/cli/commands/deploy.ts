@@ -11,9 +11,9 @@ import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
 import { railwayHost } from "./deploy/railway.ts";
-import { type DeployOptions, type HostDeploy, writeArtifacts } from "./deploy/shared.ts";
+import { type DeployOptions, type HostDeploy, applyArtifactPlan, planArtifacts } from "./deploy/shared.ts";
 
-export { writeArtifacts };
+export { applyArtifactPlan, planArtifacts };
 
 /** Every host, by the name the CLI takes. */
 export const HOSTS: Record<DeployHost, HostDeploy> = {
@@ -115,6 +115,23 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     longConnectionChannels: channels.filter((channel) => channel.ingress === "long-connection"),
     // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
     // one.
-    write: (artifacts, options) => writeArtifacts(workspace, artifacts, { ...options, isOurs: target.isOurs }),
+    // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But
+    // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says,
+    // the same class as an unreachable `http.host` or a Dockerfile that cannot read the manifest, and gated the
+    // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
+    // line is how an operator takes a path back on purpose.
+    write: async (artifacts, options) => {
+      const plan = await planArtifacts(workspace, artifacts, { ...options, isOurs: target.isOurs });
+      if (opts.run && plan.stale.length > 0) {
+        failStartup(
+          new Error(
+            `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates, and --run ` +
+              `would deploy from them. Re-run with --force to regenerate, or remove each file's generated-by ` +
+              `marker to own it yourself.`,
+          ),
+        );
+      }
+      await applyArtifactPlan(plan);
+    },
   });
 }
