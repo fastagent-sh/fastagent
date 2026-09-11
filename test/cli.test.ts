@@ -161,7 +161,7 @@ describe("cli papercuts", () => {
     });
     expect((await run(["deploy", "docker", dir])).code).toBe(0);
     const compose = join(dir, "fastagent", "fastagent.compose.yml");
-    // Keep the marker (still ours), change the content: exactly "config changed or fastagent was upgraded".
+    // Keep the marker (it is still ours), change the content: drifted, not disowned.
     await writeFile(compose, `${await readFile(compose, "utf8")}# drifted\n`);
 
     const release = join(dir, "fastagent", "fastagent.release.json");

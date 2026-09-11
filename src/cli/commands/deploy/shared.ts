@@ -157,8 +157,8 @@ export async function planArtifacts(
       keep(
         abs,
         existing !== a.content
-          ? `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
-              `you edited it); pass --force to regenerate.`
+          ? `[fastagent] kept ${a.path} — it no longer matches what deploy would generate; pass --force to ` +
+              `regenerate.`
           : `[fastagent] kept ${a.path} (unchanged)`,
       );
       continue;

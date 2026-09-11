@@ -125,9 +125,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       if (opts.run && plan.stale.length > 0) {
         failStartup(
           new Error(
-            `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates (config changed, ` +
-              `fastagent was upgraded, or you edited them), and --run would deploy from them. Re-run with --force ` +
-              `to regenerate, or remove each file's generated-by marker to own it yourself.`,
+            `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates, and --run ` +
+              `would deploy from them. Re-run with --force to regenerate, or remove each file's generated-by ` +
+              `marker to own it yourself.`,
           ),
         );
       }
