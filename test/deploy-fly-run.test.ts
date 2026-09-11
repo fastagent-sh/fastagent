@@ -255,20 +255,25 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: [],
-      env: { OPENAI_API_KEY: "sk-x" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "sk-x" })),
     });
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "sk-x" });
     expect(r.needsModelCredential).toBe(false);
   });
 
   it("OAuth/stored auth (no env key) rides as a base64 FASTAGENT_AUTH_SEED", () => {
-    const r = assembleSecrets({ modelAuth: "OAuth", authFile: Buffer.from('{"a":1}'), channels: [], env: {} });
+    const r = assembleSecrets({
+      modelAuth: "OAuth",
+      authFile: Buffer.from('{"a":1}'),
+      channels: [],
+      values: new Map(),
+    });
     expect(r.secrets.FASTAGENT_AUTH_SEED).toBe(Buffer.from('{"a":1}').toString("base64"));
     expect(r.needsModelCredential).toBe(false);
   });
 
   it("no env key AND no auth file → needsModelCredential (its own login gate, NOT missingSecrets)", () => {
-    const r = assembleSecrets({ modelAuth: undefined, authFile: undefined, channels: [], env: {} });
+    const r = assembleSecrets({ modelAuth: undefined, authFile: undefined, channels: [], values: new Map() });
     expect(r.needsModelCredential).toBe(true);
     expect(r.missingSecrets).toEqual([]);
   });
@@ -283,23 +288,47 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelKeyInDefinition: true,
       authFile: undefined,
       channels: [],
-      env: {},
+      values: new Map(),
     });
     expect(r.needsModelCredential).toBe(false);
     expect(r.secrets).toEqual({}); // nothing to carry — and nothing invented
     expect(r.missingSecrets).toEqual([]);
   });
 
-  it("channel secrets come from env; never minted (a re-run is stable; a human-shared secret stays known)", () => {
-    const env = { OPENAI_API_KEY: "k", TELEGRAM_BOT_TOKEN: "bot", TELEGRAM_SECRET_TOKEN: "sec" };
+  it("channel secrets come from the value file; never minted (a re-run is stable; a human-shared secret stays known)", () => {
+    const values = new Map(
+      Object.entries({ OPENAI_API_KEY: "k", TELEGRAM_BOT_TOKEN: "bot", TELEGRAM_SECRET_TOKEN: "sec" }),
+    );
     const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: declaredChannels(["telegram"]),
-      env,
+      values,
     });
-    expect(r.secrets.TELEGRAM_SECRET_TOKEN).toBe("sec"); // from env, not a mint
+    expect(r.secrets.TELEGRAM_SECRET_TOKEN).toBe("sec"); // read from the file, not a mint
     expect(r.missingSecrets).toEqual([]);
+  });
+
+  it("the environment running deploy is NOT a source — only the value file is", () => {
+    // A deployment must be reproducible from what it carries, and an exported variable is written down nowhere.
+    // Same rule the model already follows; the industry draws this line by what the tool configures (dotenv and
+    // Compose let the shell win for THIS process, Terraform checks TF_VAR_* last, Kamal 2 stopped reading .env).
+    const before = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "from-the-builders-shell";
+    try {
+      const r = assembleSecrets({
+        modelAuth: "OPENAI_API_KEY",
+        authFile: undefined,
+        channels: [],
+        extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
+        values: new Map([["OPENAI_API_KEY", "k"]]),
+      });
+      expect(r.secrets.GH_TOKEN).toBeUndefined();
+      expect(r.missingSecrets).toEqual(["GH_TOKEN"]);
+    } finally {
+      if (before === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = before;
+    }
   });
 
   it("any absent required channel secret — including a scaffold `generate` one — lands in missingSecrets", () => {
@@ -308,7 +337,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: declaredChannels(["github", "telegram"]),
-      env: { OPENAI_API_KEY: "k" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     });
     expect(r.missingSecrets).toEqual(["GITHUB_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "k" }); // no minted values
@@ -329,7 +358,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
         modelAuth: "OPENAI_API_KEY",
         authFile: undefined,
         channels: declaredChannels([kind]),
-        env: baseEnv,
+        values: new Map(Object.entries(baseEnv)),
       });
       expect(absent.missingSecrets).toEqual([]);
       expect(absent.secrets[`${prefix}_ENCRYPT_KEY`]).toBeUndefined();
@@ -338,7 +367,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
         modelAuth: "OPENAI_API_KEY",
         authFile: undefined,
         channels: declaredChannels([kind]),
-        env: { ...baseEnv, [`${prefix}_ENCRYPT_KEY`]: "encrypt" },
+        values: new Map(Object.entries({ ...baseEnv, [`${prefix}_ENCRYPT_KEY`]: "encrypt" })),
       });
       expect(present.missingSecrets).toEqual([]);
       expect(present.secrets[`${prefix}_ENCRYPT_KEY`]).toBe("encrypt");
@@ -351,7 +380,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       authFile: undefined,
       channels: [],
       extraSecrets: [{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }],
-      env: { OPENAI_API_KEY: "k", GH_TOKEN: "ghp_x" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "k", GH_TOKEN: "ghp_x" })),
     });
     expect(present.secrets.GH_TOKEN).toBe("ghp_x"); // value from the local env
     expect(present.missingSecrets).toEqual([]);
@@ -360,7 +389,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       authFile: undefined,
       channels: [],
       extraSecrets: [{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }],
-      env: { OPENAI_API_KEY: "k" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     });
     expect(absent.missingSecrets).toEqual(["GH_TOKEN"]); // declared but no local value → gates --run
 
@@ -370,7 +399,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       authFile: undefined,
       channels: declaredChannels(["telegram"]),
       extraSecrets: [{ name: "TELEGRAM_BOT_TOKEN", source: "fastagent.config deploy.secrets" }],
-      env: { OPENAI_API_KEY: "k" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     });
     expect(dup.missingSecrets.filter((n) => n === "TELEGRAM_BOT_TOKEN")).toHaveLength(1);
   });
@@ -380,7 +409,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: [] as const,
-      env: { OPENAI_API_KEY: "k" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     };
     const absent = assembleSecrets({
       ...base,
@@ -392,7 +421,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       ...base,
       channels: [],
       extraSecrets: [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
-      env: { OPENAI_API_KEY: "k", [CONTROL_TOKEN_ENV]: "t0ken" },
+      values: new Map(Object.entries({ OPENAI_API_KEY: "k", [CONTROL_TOKEN_ENV]: "t0ken" })),
     });
     expect(present.secrets[CONTROL_TOKEN_ENV]).toBe("t0ken");
     // The runbook lists it as optional for the same reason — required would gate every host.
