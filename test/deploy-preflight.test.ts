@@ -129,6 +129,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/hand-written Dockerfile.*FASTAGENT_RELEASE_FILE/s);
 
+    // `--force` does not rescue it either: the hand-written file stays, so the gate must still fire.
+    expect((await call(dir, {}, { run: true, force: true })).ok).toBe(false);
+
     // Generate-only warns; and a config model needs no manifest at all, so it is unaffected.
     const planned = await call(dir, {});
     expect(planned.ok && planned.messages.some((m) => /FASTAGENT_RELEASE_FILE/.test(m.text))).toBe(true);
@@ -489,20 +492,19 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
-  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach; --force suppresses it", async () => {
+  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach, --force included", async () => {
+    // `--force` does not rescue it: writeArtifacts refuses a file it did not generate whatever the flag says, so the
+    // packages are dropped either way. Suppressing the warning under `--force` only hid that.
     const dir = await workspace({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
     const config: FastagentConfig = { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };
 
-    const kept = await call(dir, config, { force: false });
-    expect(kept.ok).toBe(true);
-    if (kept.ok) {
-      expect(kept.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+    for (const force of [false, true]) {
+      const pre = await call(dir, config, { force });
+      expect(pre.ok).toBe(true);
+      if (pre.ok) {
+        expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+      }
     }
-
-    // --force regenerates the Dockerfile, so the kept-hand-written warning does not apply.
-    const forced = await call(dir, config, { force: true });
-    expect(forced.ok).toBe(true);
-    if (forced.ok) expect(forced.messages.some((m) => /NOT applied/.test(m.text))).toBe(false);
   });
 
   it("detects time triggers: schedules/ files OR config.selfSchedule → hasTimeTriggers + a keep-1 note", async () => {

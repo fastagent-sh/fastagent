@@ -151,7 +151,11 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   // without it boots an agent whose declared values are all empty — no error, no log line. `logs`/`ps`/`down` need
   // no values, and `--env-file` is a HARD failure on a missing path (`couldn't find env file: …`), which would take
   // the whole runbook down with it on an agent that has no value file yet.
-  const composeUp = input.valueFileExists ? `docker compose --env-file ${input.valueFile} -f ${composePath}` : compose;
+  // Quoted: `valueFile` follows `FASTAGENT_SECRETS_DIR` and may contain spaces, which would split into a
+  // `couldn't find env file` for whoever pastes the line. `composePath` cannot — `isReleaseAgentName` gates it.
+  const composeUp = input.valueFileExists
+    ? `docker compose --env-file '${input.valueFile}' -f ${composePath}`
+    : compose;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const required = secrets.filter((secret) => secret.required);
   const optional = secrets.filter((secret) => !secret.required);

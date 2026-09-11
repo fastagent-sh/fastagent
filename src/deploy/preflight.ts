@@ -9,7 +9,14 @@ import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
-import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists, readTextIfExists } from "../paths.ts";
+import {
+  AGENT_MODELS_FILE,
+  type ResolvedPlacement,
+  resolveSecretsDir,
+  resolveStateRoot,
+  exists,
+  readTextIfExists,
+} from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadSchedules } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
@@ -20,7 +27,6 @@ import {
   modelCredentialCarry,
   probeAuthSource,
 } from "../engines/pi/models.ts";
-import { AGENT_MODELS_FILE } from "../paths.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
@@ -98,7 +104,7 @@ export async function preflightDeploy(input: {
   config: FastagentConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
-  /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
+  /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
   force: boolean;
   /** The target delivers cron slots from an external clock and holds no resident process (AgentCore). */
   externalClock?: boolean;
@@ -501,8 +507,11 @@ export async function preflightDeploy(input: {
   // looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
   // FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
   // ONLY in the value file would be reported here and absent on the box.
+  // NOT conditioned on `!force`: `writeArtifacts` refuses a file it did not generate whatever the flag says, so a
+  // hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
+  // `--run --force` ship the crash-loop this gate exists to stop.
   const dockerfileHome = join(agentDir, "Dockerfile");
-  if ((config.deploy?.apt?.length || model.envValue !== undefined) && !force && (await exists(dockerfileHome))) {
+  if ((config.deploy?.apt?.length || model.envValue !== undefined) && (await exists(dockerfileHome))) {
     if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
       if (config.deploy?.apt?.length) {
         messages.push({

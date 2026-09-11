@@ -76,7 +76,7 @@ other commands need no values, and `--env-file` is a hard failure on a missing p
 generated runbook omits it entirely until the value file exists):
 
 ```bash
-docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build
+docker compose --env-file 'fastagent/.secrets/.env' -f fastagent/fastagent.compose.yml up -d --build
 docker compose -f fastagent/fastagent.compose.yml logs -f agent
 docker compose -f fastagent/fastagent.compose.yml ps
 docker compose -f fastagent/fastagent.compose.yml down     # state volume is kept

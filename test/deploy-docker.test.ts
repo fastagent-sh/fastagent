@@ -146,7 +146,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     );
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     expect(out).toContain(
-      "docker compose --env-file fastagent/.secrets/.env -f fastagent/fastagent.compose.yml up -d --build",
+      "docker compose --env-file 'fastagent/.secrets/.env' -f fastagent/fastagent.compose.yml up -d --build",
     );
     // ONLY `up` interpolates, so only `up` carries --env-file: `--env-file` is a hard failure on a missing path,
     // and these three need no values at all.
