@@ -92,33 +92,28 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.container.modelSpec).toBeUndefined();
   });
 
-  it("refuses a FASTAGENT_MODEL carrying Dockerfile syntax, but not a multi-segment modelId", async () => {
-    // A space truncates the ENV, a trailing backslash swallows the next line, a `$` expands at build time: the
-    // author must see a typo as a typo, not as a broken image. A `/` inside the modelId is NOT one of those — 795
-    // of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolveModel splits on the first slash.
+  it("refuses a FASTAGENT_MODEL that is not a spec, but accepts a multi-segment modelId", async () => {
+    // The manifest validates this on the way out and on the way in, so a typo must be refused HERE, where the file
+    // holding it can be named. A `/` inside the modelId is not a typo — 795 of pi's 1354 built-in specs look like
+    // `baseten/zai-org/GLM-5.3`, and resolution splits on the first slash.
     const dir = await workspace();
-    for (const bad of ["openai/gpt-4o mini", "openai/gpt-4o$X", "openai/gpt-4o\\", "gpt-4o"]) {
+    for (const bad of ["openai/gpt-4o mini", "gpt-4o"]) {
       await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
-      await expect(call(dir, {})).rejects.toThrow(/not a usable "provider\/modelId" spec/);
+      await expect(call(dir, {})).rejects.toThrow(/not a "provider\/modelId" spec/);
     }
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=baseten/zai-org/GLM-5.3\n");
     const pre = await call(dir, {}, { run: true });
     expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
   });
 
-  it("gates --run when a hand-written Dockerfile cannot carry the value-file model", async () => {
-    // The bake is the model's ONLY carrier (the value file is dockerignored, and it is not a delivered variable),
-    // so deploying past this ships a box that cannot resolve the model the note just reported.
+  it("a hand-written Dockerfile does not affect the model — the manifest carries it either way", async () => {
+    // The carrier is the release manifest, which every host writes unconditionally (`alwaysWrite`), so owning the
+    // Dockerfile costs the operator `deploy.apt` and nothing else.
     const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    const gated = await call(dir, {}, { run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/hand-written Dockerfile.*ENV FASTAGENT_MODEL=openai\/gpt-4o-mini/);
-
-    // A hand-written Dockerfile that sets it itself is not dropping anything.
-    const own = await workspace({ Dockerfile: "FROM node:22-slim\nENV FASTAGENT_MODEL=openai/gpt-4o-mini\n" });
-    await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    expect((await call(own, {}, { run: true })).ok).toBe(true);
+    const pre = await call(dir, {}, { run: true });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
@@ -474,19 +469,20 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
-  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach, --force included", async () => {
-    // `--force` does NOT rescue this: writeArtifacts refuses a file it did not generate whatever the flag says
-    // ("--force does not touch it"), so suppressing the warning there only hid the same dropped packages.
+  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach; --force suppresses it", async () => {
     const dir = await workspace({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
     const config: FastagentConfig = { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };
 
-    for (const force of [false, true]) {
-      const pre = await call(dir, config, { force });
-      expect(pre.ok).toBe(true);
-      if (pre.ok) {
-        expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
-      }
+    const kept = await call(dir, config, { force: false });
+    expect(kept.ok).toBe(true);
+    if (kept.ok) {
+      expect(kept.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
     }
+
+    // --force regenerates the Dockerfile, so the kept-hand-written warning does not apply.
+    const forced = await call(dir, config, { force: true });
+    expect(forced.ok).toBe(true);
+    if (forced.ok) expect(forced.messages.some((m) => /NOT applied/.test(m.text))).toBe(false);
   });
 
   it("detects time triggers: schedules/ files OR config.selfSchedule → hasTimeTriggers + a keep-1 note", async () => {

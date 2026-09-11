@@ -41,10 +41,10 @@ export interface ContainerInput {
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
   /**
-   * The model spec to bake as `ENV FASTAGENT_MODEL`, set only when the VALUE FILE named it — a `config.model` needs
-   * nothing here, since the config itself is in the image. Baking it (rather than delivering a host variable) is what
-   * keeps the answer reproducible from the artifact: an image cannot pick up the operator's shell, and rebuilding
-   * after the line is deleted from the value file simply drops the ENV instead of leaving a stale variable behind.
+   * The model this deployment resolved, recorded in the release manifest — set only when the deployed environment's
+   * VALUE FILE named it (a `config.model` needs nothing: the config ships too). The manifest is the carrier because
+   * it is rebuilt and rewritten on every deploy, so the answer cannot go stale, and nothing on the way in can
+   * interpolate the operator's shell.
    */
   modelSpec?: string;
   /**
@@ -84,9 +84,7 @@ function dockerfile(input: ContainerInput): string {
   // node:22-slim lacks.
   const apt = aptLayer(input.apt);
   // PIN the agent into the image.
-  // Quoted: the value is authored text, and preflight's spec check is what keeps a bad one from reaching here as a
-  // broken instruction rather than as a wrong model.
-  const pin = `ENV FASTAGENT_AGENT=${dir}\n${input.modelSpec ? `ENV FASTAGENT_MODEL=${JSON.stringify(input.modelSpec)}\n` : ""}`;
+  const pin = `ENV FASTAGENT_AGENT=${dir}\n`;
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=/app/${into(RELEASE_FILE)}\nENV FASTAGENT_STORAGE_DIR=/data\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent` from PATH.
@@ -171,6 +169,7 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     version: 1,
     id: input.releaseId,
     agent: input.agentPrefix.replace(/\/$/, ""),
+    ...(input.modelSpec !== undefined ? { model: input.modelSpec } : {}),
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [

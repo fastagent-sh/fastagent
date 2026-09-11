@@ -28,6 +28,8 @@ One misreading to avoid: a Rails environment is a *behavior mode* of one codebas
 
 These two arrive together, and not by coincidence: the hard requirement for several environments shows up in team/release settings, and that is exactly the setting that must stop using one person's coding-plan subscription (it dies when that person leaves). The consequence is the load-bearing simplification of this design: **the second tier introduces no credential machinery**, because a second environment's credential is an API key in its own `.env`.
 
+That second tier is not a preference, it is what both providers ask for. OpenAI: "[the right way to authenticate automation is with an API key](https://learn.chatgpt.com/docs/auth/ci-cd-auth)"; carrying `auth.json` is documented as an advanced path for trusted private infrastructure. Anthropic goes further and makes it a term rather than a recommendation — subscription OAuth is "[intended exclusively for purchasers … to support ordinary use of Claude Code and other native Anthropic applications](https://code.claude.com/docs/en/legal-and-compliance)", third parties may not route requests through Free/Pro/Max credentials on behalf of their users, and the Agent SDK requires an API key.
+
 ## 3. Where each fact lives
 
 | Fact | Lifecycle | In git | Home |
@@ -184,6 +186,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | project > global credential fallback, refresh write-back to the layer read, `login -g` | `src/engines/pi/auth.ts`, `src/engines/pi/login.ts` |
 | "credential present + ready" precondition | `src/deploy/registration-gate.ts` |
 | report the effective model **and its source**; validate that model's provider; gate `--run` when **no** source resolves a model (the replacement for the deleted gate — without it the deletion leaves a silent-degradation window) | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
+| carry the resolved model to the deployed environment | the release manifest (`DeploymentRelease.model` in `src/deploy/workspace.ts`), projected into `process.env` beside `FASTAGENT_AGENT` by `prepareStartWorkspace`. It is rewritten unconditionally by every deploy, so it cannot go stale, and nothing on the way in can interpolate the operator's shell. **Non-credential configuration only** — the manifest rides inside a readable image and is rebuilt every deploy, both of which are the opposite of what a credential needs (§8) |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
 | Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0700, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
@@ -201,7 +204,8 @@ Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are
 
 - **`--host` is typed every time.** Bought with zero binding machinery and a more explicit CI command.
 - **"Which account does prod use" is not in committed FastAgent config.** The review point moves to the CI workflow, which also has branch protection and environment protection rules — a better home for it.
-- **Local and remote hold the same OAuth grant.** If the provider's refresh token is single-use, whoever refreshes first wins. The tools available are not overwriting implicitly (`authSeedBytes`) and printing the source.
+- **Local and remote hold the same OAuth grant, which both providers rotate.** Verified in pi's flows (`auth/oauth/anthropic.js`, `auth/oauth/openai-codex.js`): every refresh returns a new refresh token. OpenAI's [CI/CD auth guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth) says to use one `auth.json` "per runner or per serialized workflow stream" and lists "another machine or concurrent job rotated the token first" as a reason to reseed. So a deployment running on the same grant as the developer's machine is a posture both providers advise against, and the only tools available are not overwriting implicitly (`authSeedBytes`, which is exactly the "seed only if missing" rule that guide calls the critical detail) and reporting the source. `proper-lockfile` makes concurrent refreshes safe *within one filesystem* only.
+- **The deployed box never writes its refreshed `auth.json` back.** OpenAI's ephemeral-runner pattern requires a round trip (restore → run → persist the refreshed file). Hosts with a persistent volume behave like their "persistent runner" case and are fine; **AgentCore is the ephemeral case without the write-back**, so every runtime version update returns to the seed, which by then may already have been rotated away. Use an API key there.
 - **`FASTAGENT_AUTH_SEED` chunking is ugly but effective**, and `auth.json` keeps growing with providers.
 - **Loading a definition under a given env's values costs a subprocess.** Every plan/deploy pays one process start, and channel/schedule discovery errors have to cross a process boundary without losing their diagnosability (§12).
 - **A refresh and a storage write are not one transaction.** A crash after provider-side rotation can still require reauthentication, and each provider's grant issue/invalidate behavior must be verified rather than assumed.

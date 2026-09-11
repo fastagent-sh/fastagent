@@ -115,6 +115,10 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   process.env.FASTAGENT_AGENT = manifest.agent;
+  // The release's own answer for the one chain (`flag > environment > config`), projected into the environment it was
+  // resolved FOR. `||=`, so a variable the platform already holds still wins — the deployment declares the half of
+  // this environment it can, and never more.
+  if (manifest.model) process.env.FASTAGENT_MODEL ||= manifest.model;
   process.chdir(dir);
   return { dir, deployed: { root, agent: manifest.agent } };
 }
