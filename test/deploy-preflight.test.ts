@@ -136,12 +136,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const planned = await call(dir, {});
     expect(planned.ok && planned.messages.some((m) => /FASTAGENT_RELEASE_FILE/.test(m.text))).toBe(true);
 
-    // A hand-written Dockerfile that DOES set it is fine — the manifest is read whoever wrote the file.
-    const own = await workspace({
-      Dockerfile: "FROM node:22-slim\nENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json\n",
-    });
-    await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    expect((await call(own, {}, { run: true })).ok).toBe(true);
+    // A hand-written Dockerfile that DOES set it is fine — the manifest is read whoever wrote the file. Including
+    // the ordinary multi-variable spelling: reading only the first name after `ENV` false-gates a working file.
+    for (const env of [
+      "ENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
+      "ENV FASTAGENT_STORAGE_DIR=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
+    ]) {
+      const own = await workspace({ Dockerfile: `FROM node:22-slim\n${env}\n` });
+      await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+      expect((await call(own, {}, { run: true })).ok).toBe(true);
+    }
 
     // And a config model needs no manifest at all.
     const fromConfig = await workspace({ Dockerfile: "FROM node:22-slim\n" });

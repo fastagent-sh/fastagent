@@ -94,7 +94,7 @@ describe("cli papercuts", () => {
     const first = await run(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
     expect(first.stdout).toContain(
-      "docker compose -f fastagent/fastagent.compose.yml up -d --build", // no value file yet → no --env-file
+      "docker compose -f fastagent/fastagent.compose.yml up -d --build", // one spelling: the generated Compose names the value file itself
     );
     const generatedCompose = await readFile(join(dir, "fastagent", "fastagent.compose.yml"), "utf8");
     expect(generatedCompose).toContain('"127.0.0.1:8787:8787"');
@@ -127,9 +127,29 @@ describe("cli papercuts", () => {
     expect(result.stderr).toMatch(/edit it, delete it and regenerate, or pass --force/);
     expect(result.stdout).not.toContain("logs -f tunnel");
     expect(result.stdout).toContain(
-      "docker compose -f fastagent/fastagent.compose.yml up -d --build", // no value file yet → no --env-file
+      "docker compose -f fastagent/fastagent.compose.yml up -d --build", // one spelling: the generated Compose names the value file itself
     );
     expect(await readFile(composePath, "utf8")).toBe(compose);
+  });
+
+  it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
+    // The generated Compose names a FIXED `.secrets/.env`, so a relocated secrets dir means the pre-flight checks
+    // one file while the container reads another: every declared value is silently absent. Deterministic, so `--run`
+    // refuses before Docker is touched; generating artifacts only warns.
+    const dir = await agentWorkspace("fa-deploy-secrets-dir-", {
+      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+    });
+    const elsewhere = await mkdtemp(join(tmpdir(), "fa-secrets-elsewhere-"));
+    const env = { ...process.env, FASTAGENT_SECRETS_DIR: elsewhere };
+
+    const planned = await run(["deploy", "docker", dir], undefined, env);
+    expect(planned.code).toBe(0);
+    expect(planned.stderr).toMatch(/warn: FASTAGENT_SECRETS_DIR points this run's values at/);
+
+    const gated = await run(["deploy", "docker", dir, "--run"], undefined, env);
+    expect(gated.code).toBe(1);
+    expect(gated.stderr).toMatch(/deploy stopped: FASTAGENT_SECRETS_DIR points this run's values at/);
+    expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
   });
 
   it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {

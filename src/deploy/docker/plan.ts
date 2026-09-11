@@ -119,7 +119,9 @@ services:
       FASTAGENT_SESSIONS_DIR: "${MOUNT}/.state/sessions"
       FASTAGENT_AUTH_PATH: "${MOUNT}/.secrets/auth.json"
       # The ONE value that is not in the value file: \`--run\` mints it from the local auth.json. Left as a seam in
-      # the committed topology so a hand-run \`up\` can supply it the same way.
+      # the committed topology so a hand-run \`up\` can supply it the same way — from the ENVIRONMENT of that \`up\`.
+      # Writing this one key into the value file does nothing: \`environment:\` is applied after \`env_file\`, so the
+      # line below would blank it and the container would start without seeding auth.json.
       FASTAGENT_AUTH_SEED: "${composeInterpolation("FASTAGENT_AUTH_SEED")}"
     volumes:
       - state:${MOUNT}

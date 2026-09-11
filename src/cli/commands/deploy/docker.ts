@@ -38,22 +38,29 @@ export const dockerHost: HostDeploy = {
     const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
     await ensureSecretsDir(dirname(composeValueFile));
     if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
-    // `--run` reads whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a builder's
-    // path would not mean the same thing anywhere else.
+    // The pre-flight read whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a
+    // builder's path would not mean the same thing anywhere else. Under `--run` the two files disagreeing is a
+    // DETERMINISTIC failure and gates like every other one: the missing-values gate would pass on the file this
+    // machine reads while `compose up` starts a container whose declared secrets and model are all absent.
     if (resolve(dotEnvPath(agentDir)) !== resolve(composeValueFile)) {
-      console.error(
-        `[fastagent] warn: FASTAGENT_SECRETS_DIR points --run at ${valueFile}, but the generated Compose reads ` +
-          `${relative(workspace, composeValueFile)} (a committed artifact cannot carry this machine's path). A ` +
-          `hand-run \`docker compose up\` sees only the latter.`,
-      );
+      const issue =
+        `FASTAGENT_SECRETS_DIR points this run's values at ${valueFile}, but the generated Compose reads ` +
+        `${relative(workspace, composeValueFile)} (a committed artifact cannot carry this machine's path), so the ` +
+        `container would start with none of them. Unset FASTAGENT_SECRETS_DIR, or put the values in that file.`;
+      if (opts.run) failStartup(new Error(`deploy stopped: ${issue}`));
+      console.error(`[fastagent] warn: ${issue}`);
     }
     // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
     // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
+    // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and pushed
+    // as-is by every other host, so `$$` would fix Docker by corrupting all of them.
     const dollarValues = [...values].filter(([, value]) => value.includes("$")).map(([name]) => name);
     if (dollarValues.length > 0) {
       console.error(
-        `[fastagent] warn: ${dollarValues.join(", ")} contain "$", which Compose expands when reading the value ` +
-          `file (an undefined name becomes empty). Escape each one as "$$" in ${valueFile}.`,
+        `[fastagent] warn: ${dollarValues.join(", ")} contain "$", which Compose expands when reading ${valueFile} ` +
+          `(an undefined name becomes empty), so the container sees a different value. "$$" escapes it for Compose ` +
+          `ONLY — \`fastagent dev\`/\`start\` and the other hosts read this file literally and would keep the extra ` +
+          `"$". Prefer a value without "$".`,
       );
     }
     const hasDeclaredChannels = channels.length > 0;

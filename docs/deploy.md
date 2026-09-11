@@ -84,13 +84,16 @@ docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: delete
 the *project* `.env`, which is exactly the source a deployment must not have. Naming the file means the container
 reads the same declaration by hand and under `--run` alike, so nothing has to be carried through the build machine,
 filtered, or blanked. The one value not in that file is `FASTAGENT_AUTH_SEED`, which `--run` mints from your local
-`auth.json`; it stays a seam in the committed topology so a hand-run `up` can supply it the same way.
+`auth.json`; it stays a seam in the committed topology so a hand-run `up` can supply it **from that command's own
+environment**. Writing this one key into the value file has no effect: `environment:` is applied after `env_file`, so
+the pinned `${FASTAGENT_AUTH_SEED:-}` line blanks it and the container starts without seeding `auth.json`.
 
 The entry is a **fixed** path, `<agent>/.secrets/.env`, never whatever `FASTAGENT_SECRETS_DIR` resolves to on the
 build machine: this file is committed, so it has to mean the same thing everywhere. `deploy` creates the file when it
 is missing (empty — a deployment that declares nothing declares it in an empty file), because Compose refuses an
-`env_file` entry pointing at a path that does not exist. If `FASTAGENT_SECRETS_DIR` sends `--run` somewhere else,
-`deploy` warns: a hand-run `docker compose up` still reads only the fixed path.
+`env_file` entry pointing at a path that does not exist. If `FASTAGENT_SECRETS_DIR` sends this machine's read
+somewhere else, generating artifacts warns and `--run` gates: the credential check would pass on one file while the
+container reads the other and starts with nothing declared.
 
 Two things follow from Compose's own behaviour and are worth knowing:
 
@@ -99,8 +102,9 @@ Two things follow from Compose's own behaviour and are worth knowing:
   `.env.example` lists some of them as local overrides; pinning keeps a laptop path from sending the container's
   sessions or credentials outside the volume.
 - Compose expands `$VAR` **inside** `env_file` values (raw mode needs Compose 2.30, above our floor). A value
-  containing `$` reaches the container rewritten, and an undefined name becomes empty — so escape it as `$$`.
-  `deploy` warns when it finds one.
+  containing `$` reaches the container rewritten, and an undefined name becomes empty. `deploy` warns when it finds
+  one, and does not tell you to escape it: `$$` works for Compose only, while `fastagent dev`/`start` and every other
+  host read this same file literally and would keep the extra `$`. Prefer a value without `$`.
 
 ### Taking ownership of Docker files
 

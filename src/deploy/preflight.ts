@@ -512,7 +512,10 @@ export async function preflightDeploy(input: {
     // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
     // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
     // missing on the box.
-    if (model.envValue !== undefined && !/^\s*ENV\s+FASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
+    // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
+    // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
+    // (covering it means joining lines first) — the remaining over-strict edge.
+    if (model.envValue !== undefined && !/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
       const issue =
         `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
         `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
