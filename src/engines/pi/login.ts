@@ -1,6 +1,6 @@
 /**
  * `fastagent login`: authenticate a MODEL PROVIDER into the resolved auth file (project-level
- * `<root>/.secrets/auth.json` by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`) via the same {@link
+ * `<root>/.secrets/auth.json` by default, or `FASTAGENT_AUTH_PATH`) via the same {@link
  * fastagentCredentialStore} the runtime uses (one writer, one lock/corruption semantics).
  */
 import type {

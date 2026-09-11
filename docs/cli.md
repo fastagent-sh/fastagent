@@ -21,7 +21,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `init [dir]` | Scaffold a runnable agent. |
 | `info [dir]` | Inspect what an agent assembles into without serving. |
 | `models [search]` | List model specs. |
-| `login [provider]` | Store provider credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`). |
+| `login [provider]` | Store provider credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`). |
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
@@ -67,7 +67,7 @@ Options:
 ## `fastagent info`
 
 ```bash
-fastagent info [dir] [--json] [--model provider/modelId] [--auth-path file] [--sessions-dir dir]
+fastagent info [dir] [--json] [--model provider/modelId] [--sessions-dir dir]
 ```
 
 Prints the assembled surface without starting a server:
@@ -98,16 +98,16 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [-g|--global] [--auth-path file] [--no-input]
+fastagent login [provider] [-g|--global] [--no-input]
 ```
 
-Authenticates a model provider and **writes** to the project-level `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`). `-g` writes the user-global `~/.fastagent/.secrets/auth.json` instead, as does running outside any agent (announced on stderr). Inside an agent but not at its root (`fastagent/tools/`), it refuses and tells you where to `cd`. FastAgent uses its own credential file, separate from pi's CLI state.
+Authenticates a model provider and **writes** to the project-level `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `FASTAGENT_AUTH_PATH`). `-g` writes the user-global `~/.fastagent/.secrets/auth.json` instead, as does running outside any agent (announced on stderr). Inside an agent but not at its root (`fastagent/tools/`), it refuses and tells you where to `cd`. FastAgent uses its own credential file, separate from pi's CLI state.
 
 **Writing and reading are deliberately asymmetric**, the shape npm uses for `-g`. An agent READS the global file for any provider its own file does not have, so one `fastagent login -g openai-codex` serves every agent on the machine. Writing defaults to the project so that giving *one* agent a different account is the explicit act, and so a `login` cannot silently rewrite a credential another agent depends on.
 
 The fallback is **per provider, not per file**: logging Anthropic into a project does not hide the OpenAI credential you have globally. And a refresh is written back to the layer it was read from — a global credential stays global. That matters because both providers rotate refresh tokens: two copies of one grant each invalidate the other, so FastAgent never creates a second copy.
 
-**`deploy` does not read the global file.** A deployment carries the project-level `auth.json` only — the artifact is the truth, never the builder machine's state — so after a `login -g` a `deploy … --run` still reports `no model credential`. Carry the global one explicitly with `--auth-path ~/.fastagent/.secrets/auth.json`, or `fastagent login` (no `-g`) in the agent dir. Note this moves an OAuth grant into a second file: see the warning at the end of this section.
+**`deploy` does not read the global file.** A deployment carries the project-level `auth.json` only — the artifact is the truth, never the builder machine's state — so after a `login -g` a `deploy … --run` still reports `no model credential`. Carry the global one explicitly with `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json fastagent deploy … --run`, or `fastagent login` (no `-g`) in the agent dir. Note this moves an OAuth grant into a second file: see the warning at the end of this section.
 
 An API-key login is verified immediately with one minimal request (OAuth needs no check — completing
 the flow proves the credential): a definitive rejection (HTTP 401) removes the bad key and prompts
@@ -118,15 +118,15 @@ prints the provider's message.
 **The directory holding `auth.json` is managed as a secrets directory**, whichever knob named it:
 every credential write (including an OAuth refresh mid-run) re-applies `0700` to it, and where the
 process cannot chmod it the write fails instead of leaving the credential readable. Point
-`--auth-path` / `FASTAGENT_AUTH_PATH` inside a directory this process owns, not a shared one others
+`FASTAGENT_AUTH_PATH` inside a directory this process owns, not a shared one others
 need to read.
 
-**Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry, a shell env var, or `--auth-path`), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `--auth-path` and `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
+**Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry or a shell env var), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
 
 ## `fastagent dev`
 
 ```bash
-fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel] [--no-input]
+fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
 ```
 
 Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
@@ -146,7 +146,6 @@ Options:
 |---|---|
 | `--port N` | Override `http.port` / default `8787`. |
 | `--model spec` | Override model selection. |
-| `--auth-path file` | Override the credential file (default `<agent dir>/.secrets/auth.json`). |
 | `--no-watch` | Serve once without the watch supervisor. |
 | `--tunnel` | Open a Cloudflare quick tunnel for webhook testing. |
 | `--no-input` | Never prompt (CI/scripts) — e.g. the first-run model pick becomes an actionable error instead of a question. |
@@ -175,12 +174,12 @@ Web panel or desktop app uses (`connectSessionControl`).
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId] [--auth-path file]
+fastagent chat [dir] [--model provider/modelId]
 ```
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
 
-Auth is fastagent's, same as every other command: `--auth-path` > `FASTAGENT_AUTH_PATH` > the
+Auth is fastagent's, same as every other command: `FASTAGENT_AUTH_PATH` > the
 agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
 to the same file). With no model set, `chat` runs the same first-run picker as the serving commands
 (credential-annotated catalog, inline login) and writes the choice back to the config.
@@ -188,7 +187,7 @@ to the same file). With no model set, `chat` runs the same first-run picker as t
 ## `fastagent invoke`
 
 ```bash
-fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file] [--no-input]
+fastagent invoke <message> [dir] [--model provider/modelId] [--no-input]
 ```
 
 Runs one turn through the same agent assembly and exits:
@@ -202,7 +201,7 @@ Use this for smoke tests and scripts.
 ## `fastagent fire`
 
 ```bash
-fastagent fire <name> [dir] [--model provider/modelId] [--auth-path file] [--no-input]
+fastagent fire <name> [dir] [--model provider/modelId] [--no-input]
 ```
 
 Runs ONE schedule's turn immediately — the authoring loop for schedules (like `invoke` is for a
@@ -307,7 +306,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel] [--no-input]
+fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--sessions-dir dir] [--tunnel] [--no-input]
 ```
 
 Runs the agent in production posture: no watch, same assembly as `dev`.
@@ -370,7 +369,6 @@ Recurring per-command options (same meaning everywhere they appear):
 | `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: `127.0.0.1` for `dev`, all interfaces for `start` (containers need it); `--bind 0.0.0.0` opens a dev serve to the LAN. Prefer this flag over `http.host` for a non-wildcard bind — that value travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
-| `--auth-path <file>` | assembly commands, `login` | Credentials file override. |
 | `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
 
 ## Exit codes

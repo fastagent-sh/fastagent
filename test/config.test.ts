@@ -128,7 +128,7 @@ describe("models: createPiModels honors authPath (the project-level credential s
 });
 
 describe("config: resolveAuthPath (auth-file precedence)", () => {
-  it("precedence --auth-path > FASTAGENT_AUTH_PATH > the agent default; a given value goes absolute", () => {
+  it("precedence: the authPath option > FASTAGENT_AUTH_PATH > the agent default; a given value goes absolute", () => {
     // Asserted through the ONE function commands call, not its internal override step: same coverage,
     // one less export existing only for a test.
     const env = { FASTAGENT_AUTH_PATH: "envauth.json" } as NodeJS.ProcessEnv;

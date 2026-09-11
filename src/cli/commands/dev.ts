@@ -30,7 +30,6 @@ export interface DevOptions {
   port?: string;
   bind?: string;
   model?: string;
-  authPath?: string;
   /** false ⇔ `--no-watch`. */
   watch?: boolean;
   tunnel?: boolean;
@@ -60,7 +59,6 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   const tunnel = opts.tunnel ?? false;
   const a = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
-    authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).

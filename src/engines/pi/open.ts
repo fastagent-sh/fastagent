@@ -59,7 +59,7 @@ export interface AgentAssembly {
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
-  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
+  /** Absolute credentials file (`authPath` option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
   /** Where a provider `authPath` does not have is read from instead ({@link resolveAuthFallback}); unset when an
    *  explicit path was named. */

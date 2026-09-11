@@ -97,7 +97,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     run: !!opts.run,
     force: !!opts.force,
     externalClock: host === "agentcore", // cron rides EventBridge there — the resident-host notes don't apply
-    authPathFlag: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by preflight (one owner)
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);

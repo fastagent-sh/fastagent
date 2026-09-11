@@ -99,9 +99,9 @@ The defaults live in different places for exactly one reason: one can be committ
 Two properties of the credential chain are not free choices, and both were paid for:
 
 - **The fallback is per provider, not per file.** A file-level fallback would make every other provider in the global store vanish the instant `login anthropic` created a project `auth.json`.
-- **An explicitly named path takes no second layer.** `--auth-path`, `FASTAGENT_AUTH_PATH`, and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthFallback` in `src/engines/pi/config.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
+- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthFallback` in `src/engines/pi/config.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
 
-`deploy` reads the project file only: the artifact is the truth, so a credential that exists only in the global store is not carried. `fastagent login` inside the agent directory, or `--auth-path` naming the global file, are the two ways to hand it one — and the second makes one grant have two holders (§13).
+`deploy` reads the project file only: the artifact is the truth, so a credential that exists only in the global store is not carried. `fastagent login` inside the agent directory, or `FASTAGENT_AUTH_PATH` naming the global file, are the two ways to hand it one — and the second makes one grant have two holders (§13).
 
 Two rules follow:
 
@@ -127,7 +127,7 @@ fastagent logs agentcore --env production
 |---|---|
 | `deploy <host> [dir]` | add `--env <name>`; drop `--model` (§5: it never reaches the box) and `--auth-path`; `host` stays a required positional (unambiguous, so it does not move) |
 | `logs <host> [dir]` | add `--env <name>` |
-| `login [provider]` | add `-g`; drop the `--auth-path` flag (SDK store injection stays) |
+| `login [provider]` | add `-g`; drop the `--auth-path` flag (the SDK's `authPath` option stays) |
 | `dev`, `chat`, `info`, `invoke`, `fire`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
 | the other six commands | unchanged |
 
@@ -179,7 +179,7 @@ No `secret push` / `env sync` prerequisite lifecycle (the lesson Kamal 2 encodes
 
 **Ownership is derived, not tracked remotely**: the keys FastAgent owns are every `{ secrets }` declaration ∪ the keys in the selected value file. Nothing outside that union is written, so platform-owned variables survive.
 
-That union describes the *current* intent and cannot say which remote key a past deploy set, so **nothing is deleted implicitly**. The plan lists the remote key names (names only — every supported host allows listing names without values) and reports the ones outside the union as unmanaged; removing them is the operator's call. Tracking a "previously managed" set would mean either a remote registry or local state that CI does not have, and the whole point of §9 is that neither exists.
+That union describes the *current* intent and cannot say which remote key a past deploy set, so **nothing is deleted implicitly** — and nothing outside it is reported either. What else lives in the platform's variable storage is the platform's business and the operator's: a tool that writes a subset has no standing to audit the rest, and saying "unmanaged" about a variable someone set on purpose is a warning with no action behind it. Tracking a "previously managed" set would need either a remote registry or local state CI does not have, and the whole point of §9 is that neither exists.
 
 Values are redacted in every output; write-only platform secrets are never read back to build a plan; a plaintext value file never enters an image, a command-line argument, a generated manifest, or a log; framework-owned storage/ingress/bootstrap names are refused.
 
@@ -202,6 +202,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | `login --env`, `auth push`, per-host credential management, per-provider merge | Day two uses API keys; day one has no choice to make |
 | A credential account/alias dimension, `config.accounts` | `--env` plus the two credential layers already covers "different account per environment" |
 | Cross-env value fallback, importing pi's credentials, copying an OAuth grant between local and remote | §5 |
+| Reporting remote variables outside the ownership union as **unmanaged** | §9: writing a subset gives no standing to audit the rest |
 | Moving `.env` out of `.secrets/` | Plaintext credentials in a 0755 directory; see the `ensureSecretsDir` note in `AGENTS.md` |
 | Removing `FASTAGENT_SECRETS_DIR` / `FASTAGENT_STATE_DIR` / `FASTAGENT_AUTH_PATH` | The fly/railway/agentcore plans point them at the mounted volume, and the deployed container locates `auth.json` through that chain. Only the corresponding CLI flags can go |
 | A `--profile` selector, a current-environment switch, arbitrary credential-path options, a custom encryption/key-distribution framework | Orchestration or scope creep |
@@ -239,12 +240,10 @@ Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are
 
 ### Still open from day one
 
-These are inside §6 and §9 but outside any step above, and none of them blocks anything:
+One item is outside every step above, and it blocks nothing:
 
 | Left | Where it is written | Why it is still open |
 |---|---|---|
-| Drop the `--auth-path` flag from all eight commands (`FASTAGENT_AUTH_PATH` stays) | §6 | The flag now has one use the env var does not cover: pointing `deploy` at the global store. Deciding it means deciding whether that route should exist at all (§13's "two holders of one grant") |
-| `deploy` lists remote variable names and reports the ones outside the ownership union as **unmanaged** | §9 | Nothing reads back remote state today; this is the one piece of §9 that needs a per-host call |
 | Every supported host has an end-to-end check | §14 | `test/live/` probes exist, but no host is covered end to end |
 
 ## 13. Known costs
@@ -266,7 +265,7 @@ Checked boxes are covered by a test in the offline suite. The unchecked ones are
 - [ ] `.secrets/production/.env` and `.secrets/alpha/.env` can select different models; preflight, generated configuration, runtime, and diagnostics agree on the effective model and its credential provider.
 - [ ] With `--env`, neither `.secrets/.env` nor the operator's shell `FASTAGENT_MODEL` affects resolution.
 - [ ] A typoed env or a missing declared variable fails visibly and names the declaring file, with no other environment's values substituted.
-- [ ] A deploy delivers the full allowed key set, reports partial failure, deletes no remote key implicitly, and lists remote names outside its ownership union as unmanaged.
+- [ ] A deploy delivers the full allowed key set, reports partial failure, and deletes no remote key implicitly.
 - [ ] Value files, secret values, and credentials appear in no build context, image, manifest, command argument, or log.
 - [x] With no project credential, the global one is used and its source is printed; a credential read from the global store refreshes back into it and leaves no project copy.
 - [x] Concurrent local projects share the global credential file safely.

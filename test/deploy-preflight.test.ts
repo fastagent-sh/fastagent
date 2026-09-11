@@ -28,7 +28,6 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
     config,
     run: false,
     force: false,
-    authPathFlag: undefined,
     ...over,
   });
 
@@ -322,7 +321,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         config: { model: "openai/gpt-4o-mini" },
         run: false,
         force: false,
-        authPathFlag: undefined,
         ...over,
       });
     const saved = process.env.FASTAGENT_SECRETS_DIR;

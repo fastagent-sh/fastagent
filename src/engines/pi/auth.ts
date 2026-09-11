@@ -59,7 +59,7 @@ async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
-  // 0700 unconditionally, including on a directory an operator named with `--auth-path`.
+  // 0700 unconditionally, including on a directory an operator named with FASTAGENT_AUTH_PATH.
   await ensureSecretsDir(dirname(authPath));
   if (!existsSync(authPath)) {
     try {

@@ -11,7 +11,7 @@ interface ArgSpec {
   choices?: string[];
 }
 
-/** One flag, in the flag DSL: `--json`, or `--auth-path <file>` for a value-taking flag. */
+/** One flag, in the flag DSL: `--json`, or `--sessions-dir <dir>` for a value-taking flag. */
 export interface FlagSpec {
   flags: string;
   description: string;
@@ -63,7 +63,7 @@ export interface ProgramOptions {
 
 /**
  * The option key a flag string yields on the parsed-flags record — the naming rule specs rely on: camelCase of the
- * long name (`--auth-path` → `authPath`); a `--no-x` flag negates and stores under `x` (absent ⇒ `x !== false`).
+ * long name (`--sessions-dir` → `sessionsDir`); a `--no-x` flag negates and stores under `x` (absent ⇒ `x !== false`).
  */
 export function optionKey(flags: string): string {
   const long = flags

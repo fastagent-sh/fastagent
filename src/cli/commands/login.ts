@@ -1,6 +1,6 @@
 /**
  * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
- * (`<agentDir>/.secrets/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`.
+ * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
