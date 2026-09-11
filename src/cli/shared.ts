@@ -13,6 +13,7 @@ import {
   listModels,
   loadConfig,
   providerOf,
+  resolveAuthFallback,
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
@@ -66,6 +67,7 @@ export interface ReportableAssembly {
   workspace: string;
   modelSpec: string;
   authPath: string;
+  fallbackAuthPath?: string;
   config: { thinkingLevel?: string };
   definition: LoadedDefinition;
   toolNames: string[];
@@ -89,7 +91,7 @@ export async function reportAssembly(
   reportWorkspaceHint(workspaceHint(a));
   for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
-  await reportAuth(a.agentDir, a.modelSpec, a.authPath);
+  await reportAuth(a.agentDir, a.modelSpec, a.authPath, a.fallbackAuthPath);
   reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (a.definition.persona) reportLine("persona", "persona.md");
   reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
@@ -134,19 +136,38 @@ export function parseBind(value: string | undefined): string | undefined {
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
-export async function reportAuth(agentDir: string, modelSpec: string, authPath: string): Promise<void> {
+export async function reportAuth(
+  agentDir: string,
+  modelSpec: string,
+  authPath: string,
+  fallbackAuthPath?: string,
+): Promise<void> {
+  const layers = fallbackAuthPath !== undefined ? { fallbackPath: fallbackAuthPath } : {};
   const provider = providerOf(modelSpec);
-  const models = await createPiModelRuntime({ agentDir, authPath }).catch(failStartup);
+  const models = await createPiModelRuntime({
+    agentDir,
+    authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+  }).catch(failStartup);
   const source = await probeAuthSource(models, modelSpec);
   // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from "stored but
   // unusable".
   const stored =
     source === undefined
-      ? await fastagentCredentialStore(authPath)
+      ? await fastagentCredentialStore(authPath, layers)
           .read(provider)
           .catch(() => undefined)
       : undefined;
-  const report = formatAuthReport(provider, authPath, source, stored);
+  // Name the layer the credential actually came from: "which file do I edit" is the question this line answers, and
+  // a global credential lives in a file the agent dir does not contain.
+  const found =
+    fallbackAuthPath !== undefined &&
+    !(await fastagentCredentialStore(authPath)
+      .read(provider)
+      .catch(() => undefined))
+      ? fallbackAuthPath
+      : authPath;
+  const report = formatAuthReport(provider, found, source, stored);
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);
 }
@@ -164,9 +185,14 @@ async function resolveFirstRunModel(
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
   const authPath = resolveAuthPath(agentDir, options.authPath);
+  const fallbackAuthPath = resolveAuthFallback(options.authPath);
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
-  const models = await createPiModelRuntime({ agentDir, authPath }).catch(failStartup);
+  const models = await createPiModelRuntime({
+    agentDir,
+    authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+  }).catch(failStartup);
   const chosen = await pickWithCredentials(models, authPath);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it

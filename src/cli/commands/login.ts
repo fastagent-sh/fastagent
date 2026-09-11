@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
+import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -13,6 +14,8 @@ import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
   authPath?: string;
+  /** `-g`: store in the user-global file every agent on this machine falls back to. */
+  global?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
 }
@@ -28,14 +31,19 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
   // through that proxy (region-locked providers).
   enterAgentEnv(loginDir);
-  const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
+  // `-g` names the global file outright. Otherwise: flag > FASTAGENT_AUTH_PATH > default — the one owner. The
+  // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
+  // exactly where the operator said, or a second `login` for a provider they already have globally would silently
+  // rewrite the global credential instead of creating the project-level override they asked for.
+  const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(loginDir, opts.authPath);
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
-  if (!agentDir && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
+  if (!agentDir && !opts.global && !opts.authPath && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
       `[fastagent] no agent here (no fastagent.config.*, here or one level inside) — ` +
-        `logging in GLOBALLY (${authPath}). An agent reads its own .secrets/auth.json: \`cd\` into one ` +
-        `first, or point this run at it with --auth-path.`,
+        `logging in GLOBALLY (${authPath}). Every agent on this machine reads this file for providers its own ` +
+        `.secrets/auth.json does not have, so this is usually what you want; \`cd\` into an agent to give that ` +
+        `one its own account instead.`,
     );
   }
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or prompts for a

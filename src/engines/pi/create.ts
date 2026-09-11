@@ -14,6 +14,7 @@ import {
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
+import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
@@ -254,6 +255,8 @@ function assemblePi(opts: {
   thinkingLevel?: ThinkingLevel;
   providers?: Provider[];
   authPath?: string;
+  /** Read a provider `authPath` lacks from here instead; unset when an explicit path was named. */
+  fallbackAuthPath?: string;
   /** The model registry to run on, used verbatim. */
   models?: ModelRuntime;
   readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
@@ -283,7 +286,12 @@ function assemblePi(opts: {
     engine ??= (async () => {
       // The caller's registry when there is one — the directory rung builds it from the agent's own models.json, so a
       // custom endpoint declared there is the one a turn resolves against.
-      const modelRuntime = opts.models ?? (await createPiModelRuntime({ authPath: opts.authPath }));
+      const modelRuntime =
+        opts.models ??
+        (await createPiModelRuntime({
+          authPath: opts.authPath,
+          ...(opts.fallbackAuthPath !== undefined ? { fallbackAuthPath: opts.fallbackAuthPath } : {}),
+        }));
       // ModelRuntime registers providers by config record, so an injected Provider INSTANCE (a gateway, a self-hosted
       // endpoint, a test fake) goes in through its native seam.
       for (const provider of opts.providers ?? []) modelRuntime.registerNativeProvider(provider);
@@ -339,6 +347,9 @@ export interface CreatePiAgentOptions {
   providers?: Provider[];
   /** Credentials file for stored OAuth/API-key auth. */
   authPath?: string;
+  /** Read a provider `authPath` lacks from here instead; unset when an explicit path was named. */
+  fallbackAuthPath?: string;
+
   sessions?: PiSessionRecordStore;
   /** Supplies the working directory at L1 (default: process.cwd()), which loads no definition. */
   env?: ExecutionEnv;
@@ -357,6 +368,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
       thinkingLevel: options.thinkingLevel,
       providers: options.providers,
       authPath: options.authPath,
+      ...(options.fallbackAuthPath !== undefined ? { fallbackAuthPath: options.fallbackAuthPath } : {}),
       readDefinition: () => ({
         systemPrompt: typeof instructions === "function" ? instructions() : instructions,
         skills,
@@ -389,6 +401,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   providers?: Provider[];
   /** Credentials file (see {@link CreatePiAgentOptions.authPath}). */
   authPath?: string;
+  /** Read a provider `authPath` lacks from here instead; unset when an explicit path was named. */
+  fallbackAuthPath?: string;
+
   sessions?: PiSessionRecordStore;
   /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. */
   env?: ExecutionEnv;
@@ -417,13 +432,21 @@ export async function assemblePiFromDefinition(
   reportFindingsIfChanged(definition.dir, definition);
   // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener passes an explicit
   // authPath, so this only affects direct L2 callers).
+  // A path the CALLER named is an instruction; the default location is a preference, so only that one layers over
+  // the user-global store (resolveAuthFallback says the same thing for the CLI).
   const authPath = options.authPath ?? defaultAuthPath(resolveSecretsDir(dir));
+  const fallbackAuthPath = options.fallbackAuthPath ?? (options.authPath === undefined ? GLOBAL_AUTH_PATH : undefined);
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
     // THE directory rung's model surface: built-ins + the agent's own models.json (custom endpoints, which are
     // definition data and travel with the artifact) + any injected Provider instance.
-    models: await createPiModelRuntime({ agentDir: dir, authPath, providers: options.providers }),
+    models: await createPiModelRuntime({
+      agentDir: dir,
+      authPath,
+      ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+      providers: options.providers,
+    }),
     authPath,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills edits (the
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts

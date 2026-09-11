@@ -191,3 +191,58 @@ describe("fastagentCredentialStore (read-write credential file; fail-visibly dis
     expect(await readFile(present, "utf8")).toBe(before); // unchanged (no write)
   });
 });
+
+describe("fastagentCredentialStore: the global fallback layer", () => {
+  const oauth = (access: string) => ({ type: "oauth" as const, access, refresh: "r", expires: Date.now() + 3_600_000 });
+  const layered = async (project: Record<string, unknown>, global: Record<string, unknown>) => {
+    const projectPath = await authPath(JSON.stringify(project));
+    const globalPath = await authPath(JSON.stringify(global));
+    return { projectPath, globalPath, store: fastagentCredentialStore(projectPath, { fallbackPath: globalPath }) };
+  };
+
+  it("falls back PER PROVIDER, so one project login does not hide the rest", async () => {
+    // The reason this is not per FILE: `fastagent login anthropic` inside a project creates a project auth.json,
+    // and a file-level fallback would make every other provider the person has globally disappear at that moment.
+    const { store } = await layered(
+      { anthropic: oauth("project") },
+      { anthropic: oauth("global"), openai: oauth("g") },
+    );
+    const access = async (id: string) => {
+      const credential = await store.read(id);
+      return credential?.type === "oauth" ? credential.access : undefined;
+    };
+    expect(await access("anthropic")).toBe("project"); // the project's own wins
+    expect(await access("openai")).toBe("g"); // still reachable
+    expect((await store.list()).map((c) => c.providerId).sort()).toEqual(["anthropic", "openai"]);
+  });
+
+  it("writes a refresh back to the layer it was READ from", async () => {
+    // Anything else conjures a second holder of the same OAuth grant — both providers rotate refresh tokens, so
+    // whichever copy refreshes first invalidates the other.
+    const { projectPath, globalPath, store } = await layered({ anthropic: oauth("project") }, { openai: oauth("g") });
+    await store.modify("openai", async () => oauth("rotated"));
+    expect(JSON.parse(await readFile(globalPath, "utf8")).openai.access).toBe("rotated");
+    expect(JSON.parse(await readFile(projectPath, "utf8")).openai).toBeUndefined();
+
+    await store.modify("anthropic", async () => oauth("rotated-too"));
+    expect(JSON.parse(await readFile(projectPath, "utf8")).anthropic.access).toBe("rotated-too");
+    expect(JSON.parse(await readFile(globalPath, "utf8")).anthropic).toBeUndefined();
+  });
+
+  it("a provider in neither layer is new, and belongs to the primary", async () => {
+    const { projectPath, globalPath, store } = await layered({}, { openai: oauth("g") });
+    await store.modify("anthropic", async () => oauth("fresh"));
+    expect(JSON.parse(await readFile(projectPath, "utf8")).anthropic.access).toBe("fresh");
+    expect(JSON.parse(await readFile(globalPath, "utf8")).anthropic).toBeUndefined();
+  });
+
+  it("deletes from the owning layer, and no fallback path means no second layer", async () => {
+    const { projectPath, globalPath, store } = await layered({ anthropic: oauth("p") }, { openai: oauth("g") });
+    await store.delete("openai");
+    expect(JSON.parse(await readFile(globalPath, "utf8")).openai).toBeUndefined();
+
+    // An explicitly named path is an instruction, not a preference: no layering at all.
+    const plain = fastagentCredentialStore(projectPath);
+    expect(await plain.read("openai")).toBeUndefined();
+  });
+});

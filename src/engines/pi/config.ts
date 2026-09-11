@@ -10,6 +10,7 @@ import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
+import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
@@ -295,6 +296,18 @@ export function defaultAuthPath(secretsDir: string): string {
 /** The effective auth file for an agent: override if present, else `<secrets dir>/auth.json`. */
 export function resolveAuthPath(dir: string, flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
   return resolveAuthPathOverride(flag, env) ?? defaultAuthPath(resolveSecretsDir(dir, env));
+}
+
+/**
+ * Where a credential the project does not have is read from instead: the user-global store, because a login is a
+ * PERSON on a machine and not a project — one `login -g` then serves every agent here. Undefined when an explicit
+ * path was named: "use this file" is an instruction, not a preference, so it gets no second layer.
+ */
+export function resolveAuthFallback(
+  flag: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveAuthPathOverride(flag, env) === undefined ? GLOBAL_AUTH_PATH : undefined;
 }
 
 /** The default sessions dir under a resolved state root ({@link resolveStateRoot}). */

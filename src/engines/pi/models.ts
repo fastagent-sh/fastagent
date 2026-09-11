@@ -18,6 +18,11 @@ import { AGENT_MODELS_FILE, resolveStateRoot } from "../../paths.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   authPath?: string;
+  /**
+   * Read a provider the primary file does not have from here instead (`resolveAuthFallback`: the user-global store).
+   * Omitted by an embedder that named its own store — "use this file" is an instruction, not a preference.
+   */
+  fallbackAuthPath?: string;
   /** Extra providers registered on top of the built-ins (same id overrides a built-in). */
   providers?: Provider[];
 }
@@ -25,7 +30,10 @@ export interface CreatePiModelsOptions extends FastagentAuthOptions {
 /** A `Models` with every built-in pi provider, wired to fastagent's auth. */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   const models = builtinModels({
-    credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
+    credentials: fastagentCredentialStore(options.authPath, {
+      warn: options.warn,
+      ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
+    }),
     authContext: defaultProviderAuthContext(),
   });
   for (const provider of options.providers ?? []) models.setProvider(provider);
@@ -46,6 +54,8 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 export async function createPiModelRuntime(
   options: FastagentAuthOptions & {
     authPath?: string;
+    /** Read a provider the primary file does not have from here instead ({@link CreatePiModelsOptions}). */
+    fallbackAuthPath?: string;
     /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
     agentDir?: string;
     /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
@@ -56,7 +66,10 @@ export async function createPiModelRuntime(
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
   const runtime = await ModelRuntime.create({
-    credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
+    credentials: fastagentCredentialStore(options.authPath, {
+      warn: options.warn,
+      ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
+    }),
     modelsPath: agentDir ? join(agentDir, AGENT_MODELS_FILE) : null,
     // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
     // write a generated cache INTO the author's agent dir.

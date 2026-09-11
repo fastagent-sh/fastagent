@@ -570,14 +570,23 @@ const login: CommandSpec = {
     "agent it writes the global ~/.fastagent/.secrets/auth.json, and says so): pick a method " +
     "(subscription/OAuth or API " +
     "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
-    "what that provider supports, asked only when both.",
+    "what that provider supports, asked only when both. An agent READS the global store for any provider " +
+    "its own file does not have, so `-g` logs in once for every agent on this machine.",
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
-  flags: [AUTH_PATH, NO_INPUT],
-  examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai" }],
+  flags: [
+    {
+      flags: "-g, --global",
+      description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for providers its own file lacks`,
+    },
+    AUTH_PATH,
+    NO_INPUT,
+  ],
+  examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai" }, { cmd: "fastagent login openai -g" }],
   notes: "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0], {
       authPath: f.authPath as string | undefined,
+      global: f.global === true,
       input: f.input !== false,
     }),
 };

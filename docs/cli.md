@@ -98,10 +98,14 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [--auth-path file] [--no-input]
+fastagent login [provider] [-g|--global] [--auth-path file] [--no-input]
 ```
 
-Authenticates a model provider and stores credentials in the **project-level** `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it OUTSIDE any agent — no `./fastagent/` in the current directory — to write the global `~/.fastagent/.secrets/auth.json`, which it announces on stderr). Inside an agent but not at its root (`fastagent/tools/`), it refuses and tells you where to `cd`. There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
+Authenticates a model provider and **writes** to the project-level `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`). `-g` writes the user-global `~/.fastagent/.secrets/auth.json` instead, as does running outside any agent (announced on stderr). Inside an agent but not at its root (`fastagent/tools/`), it refuses and tells you where to `cd`. FastAgent uses its own credential file, separate from pi's CLI state.
+
+**Writing and reading are deliberately asymmetric**, the shape npm uses for `-g`. An agent READS the global file for any provider its own file does not have, so one `fastagent login -g openai-codex` serves every agent on the machine. Writing defaults to the project so that giving *one* agent a different account is the explicit act, and so a `login` cannot silently rewrite a credential another agent depends on.
+
+The fallback is **per provider, not per file**: logging Anthropic into a project does not hide the OpenAI credential you have globally. And a refresh is written back to the layer it was read from — a global credential stays global. That matters because both providers rotate refresh tokens: two copies of one grant each invalidate the other, so FastAgent never creates a second copy.
 
 An API-key login is verified immediately with one minimal request (OAuth needs no check — completing
 the flow proves the credential): a definitive rejection (HTTP 401) removes the bad key and prompts
