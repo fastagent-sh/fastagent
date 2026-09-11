@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fastagentCredentialStore } from "../src/index.ts";
 
@@ -275,5 +275,22 @@ describe("fastagentCredentialStore: the lock must be the one pi takes", () => {
     // later, with the shared lock no longer meaning anything.
     expect((await lstat(link)).isSymbolicLink()).toBe(true);
     expect(JSON.parse(await readFile(real, "utf8")).anthropic.key).toBe("k");
+  });
+
+  it("a DANGLING symlink names where the credentials belong — it is followed, not replaced", async () => {
+    // What a dotfile manager leaves before the target is checked out. `existsSync` sees through the link and says
+    // no, but an exclusive create on it fails EEXIST, so the file never appears: resolving it with `realpathSync`
+    // threw ENOENT and `login` dropped the grant it had just completed.
+    const target = await mkdtemp(join(tmpdir(), "fa-dangle-target-"));
+    const via = await mkdtemp(join(tmpdir(), "fa-dangle-link-"));
+    const real = join(target, "nested", "auth.json"); // the directory does not exist yet either
+    const link = join(via, "auth.json");
+    await symlink(real, link);
+
+    await fastagentCredentialStore(link).modify("anthropic", async () => ({ type: "api_key", key: "k" }));
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(await readFile(real, "utf8")).anthropic.key).toBe("k");
+    expect((await stat(dirname(real))).mode & 0o777).toBe(0o700); // the resolved dir owes the same repair
   });
 });

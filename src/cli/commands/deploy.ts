@@ -11,9 +11,9 @@ import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
 import { railwayHost } from "./deploy/railway.ts";
-import { type DeployOptions, type HostDeploy, writeArtifacts } from "./deploy/shared.ts";
+import { type DeployOptions, type HostDeploy, applyArtifactPlan, planArtifacts } from "./deploy/shared.ts";
 
-export { writeArtifacts };
+export { applyArtifactPlan, planArtifacts };
 
 /** Every host, by the name the CLI takes. */
 export const HOSTS: Record<DeployHost, HostDeploy> = {
@@ -121,16 +121,17 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
     // line is how an operator takes a path back on purpose.
     write: async (artifacts, options) => {
-      const stale = await writeArtifacts(workspace, artifacts, { ...options, isOurs: target.isOurs });
-      if (opts.run && stale.length > 0) {
+      const plan = await planArtifacts(workspace, artifacts, { ...options, isOurs: target.isOurs });
+      if (opts.run && plan.stale.length > 0) {
         failStartup(
           new Error(
-            `deploy stopped: ${stale.join(", ")} no longer match what this definition generates (config changed, ` +
+            `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates (config changed, ` +
               `fastagent was upgraded, or you edited them), and --run would deploy from them. Re-run with --force ` +
               `to regenerate, or remove each file's generated-by marker to own it yourself.`,
           ),
         );
       }
+      await applyArtifactPlan(plan);
     },
   });
 }
