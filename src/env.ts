@@ -5,14 +5,12 @@ import { installProxyFetch } from "./proxy.ts";
 import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
 
 /**
- * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH axes
- * (verified against Node).
+ * Write parsed values into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH
+ * axes (verified against Node in test/env.test.ts): a real env var wins over the file, and within the file the last
+ * occurrence wins ({@link parseEnvContent}).
  */
-export function loadEnvFile(file: string): void {
-  const parsed = parseEnvContent(readFileSync(file, "utf8"));
-  for (const [key, value] of parsed) {
-    if (!(key in process.env)) process.env[key] = value; // env-vs-file: a real env var wins
-  }
+export function applyEnvValues(values: ReadonlyMap<string, string>): void {
+  for (const [key, value] of values) if (!(key in process.env)) process.env[key] = value;
 }
 
 /** Parse .env content into key → value (the dialect above; last occurrence of a key wins). */
@@ -30,6 +28,21 @@ export function parseEnvContent(content: string): Map<string, string> {
     parsed.set(key, value); // in-file: last occurrence wins (Map overwrite)
   }
   return parsed;
+}
+
+/**
+ * READ a value file without entering it: the values as data, never `process.env`. This is how code reasons about an
+ * environment OTHER than its own — `deploy` resolves configuration in the environment being deployed, which this
+ * file declares, and merging it into the running process would put the two environments in one bag. A missing file
+ * is no values, which is normal.
+ */
+export function loadEnvValues(file: string): Map<string, string> {
+  try {
+    return parseEnvContent(readFileSync(file, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
 }
 
 /** The agent's `.env` file: `<resolved secrets dir>/.env`. */
@@ -59,16 +72,12 @@ export function enterAgentEnv(agentDir: string): void {
 }
 
 /**
- * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link loadEnvFile}), treating a MISSING file as
+ * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link applyEnvValues}), treating a MISSING file as
  * normal (no .env). Commands want {@link enterAgentEnv}, which is this plus the proxy that `.env` may declare.
  */
 export function loadDotEnv(agentDir: string): void {
   const path = dotEnvPath(agentDir);
-  try {
-    loadEnvFile(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+  applyEnvValues(loadEnvValues(path)); // ONE definition of "a missing value file is normal" (loadEnvValues)
   // A `.env` at the agent's root is the file habit puts there, and nothing reads it.
   const stray = join(agentDir, ".env");
   if (stray === path || !existsSync(stray)) return;

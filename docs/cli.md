@@ -131,7 +131,8 @@ With no model set and a terminal attached, `dev` first shows the full model cata
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
 OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
 back to the config (same for `start` / `invoke` / `fire` / `chat` / `deploy`). Pass `--model` or set
-`FASTAGENT_MODEL` to skip the prompt.
+`FASTAGENT_MODEL` to skip the prompt — `deploy` takes no `--model`, so there it is the config value or
+`FASTAGENT_MODEL` in `.secrets/.env`.
 
 Options:
 
@@ -362,7 +363,7 @@ Recurring per-command options (same meaning everywhere they appear):
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: `127.0.0.1` for `dev`, all interfaces for `start` (containers need it); `--bind 0.0.0.0` opens a dev serve to the LAN. Prefer this flag over `http.host` for a non-wildcard bind — that value travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
-| `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
+| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
 | `--auth-path <file>` | assembly commands, `login` | Credentials file override. |
 | `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
 

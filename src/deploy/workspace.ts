@@ -15,6 +15,13 @@ export interface DeploymentRelease {
   version: 1;
   id: string;
   agent: string;
+  /**
+   * The model this release resolved, when the deployed environment's value file named it (`config.model` needs
+   * nothing here — the config ships in the image too). NON-CREDENTIAL configuration only: the manifest travels
+   * inside the image, which is readable by anyone who can pull it, and it is rebuilt on every deploy — both are the
+   * opposite of what a credential needs (see docs/design/configuration.md §8).
+   */
+  model?: string;
 }
 
 /** The manifest names a directory the container joins onto the workspace root, so the spelling is
@@ -31,11 +38,18 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
     typeof r.id !== "string" ||
     !r.id ||
     typeof r.agent !== "string" ||
-    !isReleaseAgentName(r.agent)
+    !isReleaseAgentName(r.agent) ||
+    (r.model !== undefined && !isModelSpec(r.model))
   ) {
     throw new Error("invalid deployment release manifest");
   }
   return r;
+}
+
+/** A `provider/modelId` spec. The id itself may carry `/` and `~` (`baseten/zai-org/GLM-5.3`, openrouter aliases);
+ *  resolution only ever splits on the first slash. */
+export function isModelSpec(value: string): boolean {
+  return /^\S+\/\S+$/.test(value);
 }
 
 interface PendingRelease {

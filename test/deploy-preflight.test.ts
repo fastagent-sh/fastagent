@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import { deploymentSecrets } from "../src/deploy/secrets.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
@@ -26,7 +26,6 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
   preflightDeploy({
     placement: { agentDir: target, workspace: dirname(target) },
     config,
-    modelSpec: config.model,
     run: false,
     force: false,
     authPathFlag: undefined,
@@ -34,6 +33,8 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
   });
 
 describe("deploy/preflight: the host-neutral pre-flight", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("gates a placement the release manifest could not carry, naming the directory", async () => {
     // `init --agent-dir` accepts any single path segment; the manifest joins this name onto the
     // storage root inside the container and accepts fewer. Without this gate the refusal surfaced
@@ -48,12 +49,84 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await rm(host, { recursive: true, force: true });
   });
 
-  it("gates --run when the model isn't in config (would ship a crash-loop)", async () => {
-    const dir = await workspace();
-    // model resolved via --model/FASTAGENT_MODEL, absent from config → won't travel.
-    const pre = await call(dir, {}, { modelSpec: "openai/gpt-4o-mini", run: true });
+  it("gates --run when NO source resolves a model (would ship a crash-loop)", async () => {
+    const dir = await workspace(); // .secrets/.env holds no FASTAGENT_MODEL, config holds no model
+    vi.stubEnv("FASTAGENT_MODEL", undefined);
+    const pre = await call(dir, {}, { run: true });
     expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
+    if (!pre.ok) expect(pre.gate).toMatch(/no model resolves/);
+  });
+
+  it("names WHICH environment was read in that gate, without attributing the variable", async () => {
+    // The chain is the usual one; it is evaluated in the environment being deployed. Someone with
+    // FASTAGENT_MODEL set here sees `fastagent info` report a model, so the gate has to say which environment it
+    // looked in rather than just "no model resolves". It must NOT call the value the operator's, though: the
+    // first-run picker sets the same variable a second earlier when it cannot write the choice back to a config.
+    const dir = await workspace();
+    vi.stubEnv("FASTAGENT_MODEL", "openai/gpt-4o-mini");
+    const pre = await call(dir, {}, { run: true });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) {
+      expect(pre.gate).toMatch(/belongs to this machine, not to the deployment/);
+      expect(pre.gate).not.toMatch(/your shell|you exported/i);
+    }
+  });
+
+  it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
+    // The value file is how a deployment picks a model without editing the committed default; the operator's
+    // shell is deliberately not a source, so this cannot be satisfied by exporting FASTAGENT_MODEL.
+    const dir = await workspace();
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    const pre = await call(dir, { model: "openai/other" }, { run: true });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    const source = `${basename(dir)}/.secrets/.env`; // as READ, relative to the workspace
+    expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
+    // It travels BAKED into the image, not as a host variable: an image cannot interpolate the operator's shell,
+    // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
+    expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
+    expect(pre.extraSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
+  });
+
+  it("a config model bakes nothing extra — the config is already in the image", async () => {
+    const pre = await call(await workspace(), { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4o-mini (source: fastagent.config)" });
+    expect(pre.container.modelSpec).toBeUndefined();
+  });
+
+  it("gates a model that is not a spec — in EITHER source — but accepts a multi-segment modelId", async () => {
+    // A provider-less spec resolves to nothing on the box, so letting it past this point ships the crash-loop the
+    // gate exists to stop. `config.model` was the half that used to go unchecked. A `/` inside the modelId is not a
+    // typo: 795 of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolution splits on the first
+    // slash. Gated with or without `--run` — the manifest validates the spec on the way out, so there is no artifact
+    // to produce either.
+    const dir = await workspace();
+    for (const bad of ["openai/gpt-4o mini", "gpt-4o"]) {
+      await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
+      const pre = await call(dir, {});
+      expect(pre.ok).toBe(false);
+      if (!pre.ok) expect(pre.gate).toMatch(/is not a "provider\/modelId" spec/);
+    }
+    await writeFile(join(dir, ".secrets", ".env"), "");
+    const fromConfig = await call(dir, { model: "gpt-4o" });
+    expect(fromConfig.ok).toBe(false);
+    if (!fromConfig.ok) expect(fromConfig.gate).toMatch(/model in fastagent\.config is not a "provider\/modelId"/);
+
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=baseten/zai-org/GLM-5.3\n");
+    const pre = await call(dir, {}, { run: true });
+    expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
+  });
+
+  it("a hand-written Dockerfile does not affect the model — the manifest carries it either way", async () => {
+    // The carrier is the release manifest, which every host writes unconditionally (`alwaysWrite`), so owning the
+    // Dockerfile costs the operator `deploy.apt` and nothing else.
+    const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    const pre = await call(dir, {}, { run: true });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
@@ -224,7 +297,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       preflightDeploy({
         placement: { agentDir, workspace: host },
         config: { model: "openai/gpt-4o-mini" },
-        modelSpec: "openai/gpt-4o-mini",
         run: false,
         force: false,
         authPathFlag: undefined,
@@ -306,14 +378,13 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("warns (not gates) about the same model issue without --run", async () => {
-    const dir = await workspace();
-    const pre = await call(dir, {}, { modelSpec: "openai/gpt-4o-mini", run: false });
+    const pre = await call(await workspace(), {}, { run: false });
     expect(pre.ok).toBe(true);
     if (pre.ok)
-      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/fastagent\.config/) });
+      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/no model resolves/) });
   });
 
-  it("computes container facts and no model message when the model is in config (markdown agent)", async () => {
+  it("computes container facts and no model WARNING when the model is in config (markdown agent)", async () => {
     const dir = await workspace();
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -321,7 +392,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.container.hasPackageJson).toBe(false); // markdown/skills agent → global-install path
     expect(pre.container.runtime).toBe("node");
     expect(pre.port).toBe(8787);
-    expect(pre.messages.some((m) => /fastagent\.config/.test(m.text))).toBe(false);
+    expect(pre.messages.some((m) => m.level === "warn" && /model/.test(m.text))).toBe(false);
   });
 
   it("recognizes Slack as a first-party route channel for secrets/deploy guidance", async () => {

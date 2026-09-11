@@ -56,6 +56,25 @@ describe("deploy/container: shared Docker context", () => {
     expect(ships(".git/HEAD")).toBe(true);
   });
 
+  it("records a value-file model in the release manifest, and nothing when the config named it", () => {
+    // The carrier is the manifest, not the Dockerfile: every host writes it unconditionally (`alwaysWrite`), it is
+    // rewritten by every deploy so it cannot go stale, and nothing on the way in can interpolate a shell.
+    const manifest = (i: typeof input & { modelSpec?: string }) =>
+      JSON.parse(containerArtifacts(i).find((a) => a.path.endsWith("fastagent.release.json"))!.content);
+    expect(manifest({ ...input, modelSpec: "baseten/zai-org/GLM-5.3" })).toEqual({
+      version: 1,
+      id: "release-one",
+      agent: "fastagent",
+      model: "baseten/zai-org/GLM-5.3",
+    });
+    expect(manifest(input).model).toBeUndefined();
+    // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
+    const dockerfile = containerArtifacts({ ...input, modelSpec: "openai/gpt-4o-mini" }).find(
+      (a) => a.path === "fastagent/Dockerfile",
+    )!.content;
+    expect(dockerfile).not.toContain("FASTAGENT_MODEL");
+  });
+
   it("gives each image a stable release and describes its persistent workspace", () => {
     const values = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }]
       .map((i) => containerArtifacts(i).find((artifact) => artifact.path === "fastagent/Dockerfile")!.content)

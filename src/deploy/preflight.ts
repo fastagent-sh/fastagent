@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { classifyBind } from "../bind.ts";
-import { isReleaseAgentName } from "./workspace.ts";
+import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot, exists, readTextIfExists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
@@ -19,6 +19,7 @@ import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
+import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { isEnvKey } from "./secrets.ts";
 
@@ -80,8 +81,7 @@ function dockerignoreMatcher(text: string): (path: string) => boolean {
 export async function preflightDeploy(input: {
   placement: ResolvedPlacement;
   config: FastagentConfig;
-  modelSpec: string | undefined;
-  /** `--run` fully deploys, so a model that won't travel is a GATE (a known crash-loop); else it warns. */
+  /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
@@ -96,7 +96,6 @@ export async function preflightDeploy(input: {
   const {
     placement: { agentDir, workspace },
     config,
-    modelSpec,
     run,
     force,
     externalClock,
@@ -124,13 +123,36 @@ export async function preflightDeploy(input: {
   const agentPrefix = `${basename(agentDir)}/`;
   const messages: DeployMessage[] = [];
 
-  // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via env/flag/.env
-  // doesn't travel.
-  const modelIssue = modelTravelIssue(config.model, modelSpec);
-  if (modelIssue) {
-    if (run) return { ok: false, gate: modelIssue };
-    messages.push({ level: "warn", text: modelIssue });
+  // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
+  // cannot disagree about it.
+  const valueFile = relative(workspace, dotEnvPath(agentDir));
+  const model = resolveDeployModel(config, loadEnvValues(dotEnvPath(agentDir)), valueFile);
+  if (model.invalid !== undefined) {
+    // A gate rather than a warning even without `--run`: the release manifest validates the spec on the way out, so
+    // there is no artifact to produce either. Same class as the agent-directory-name gate above.
+    return {
+      ok: false,
+      gate: `the model in ${model.source} is not a "provider/modelId" spec: ${JSON.stringify(model.invalid)}`,
+    };
   }
+  if (!model.spec) {
+    const issue =
+      `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
+      `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy records that one in the release manifest)` +
+      // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
+      // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
+      // value: it may be the operator's shell, or the first-run picker's own pick a second earlier (which prints
+      // its own "set `model:` in your config" hint), and the two remedies are the two sources named above.
+      (process.env.FASTAGENT_MODEL
+        ? `. Note that a FASTAGENT_MODEL in the environment running deploy is not one of those sources — it ` +
+          `belongs to this machine, not to the deployment`
+        : ``);
+    if (run) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
+  } else {
+    messages.push({ level: "note", text: `model ${model.spec} (source: ${model.source})` });
+  }
+  const modelSpec = model.spec;
 
   // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*` (steer, stop, rewrite
   // or delete a session) rides the PUBLIC host URL, protected only by the bearer token.
@@ -385,6 +407,7 @@ export async function preflightDeploy(input: {
     hasLockfile,
     version: await fastagentVersion(),
     apt,
+    ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };
   const port = config.http?.port ?? 8787;
@@ -398,8 +421,8 @@ export async function preflightDeploy(input: {
         ? `nothing outside the container can reach the serve (published port, health check, webhooks).`
         : `that address does not exist, so the container fails to bind at start.`) +
       ` Drop it and use \`--bind ${config.http?.host}\` locally instead.`;
-    // Same disposition as the model-travel issue: warn when producing artifacts (the operator may be deploying
-    // somewhere that fronts the port), gate `--run`.
+    // Warn when only producing artifacts (the operator may be deploying somewhere that fronts the port), gate
+    // `--run`, where the unreachable bind is a certainty rather than a possibility.
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   }
@@ -431,7 +454,8 @@ export async function preflightDeploy(input: {
   if (config.sessionControl === true) {
     extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
   }
-  // deploy.apt only shapes the GENERATED Dockerfile.
+  // deploy.apt only shapes the GENERATED Dockerfile. (The resolved model does not: it rides the release manifest,
+  // which every host writes unconditionally, so a hand-written Dockerfile changes nothing about it.)
   const dockerfileHome = join(agentDir, "Dockerfile");
   if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
     if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
@@ -458,11 +482,36 @@ export async function preflightDeploy(input: {
   };
 }
 
-/** Why the resolved model won't reach the deployed box, or undefined if it will — host-neutral. */
-export function modelTravelIssue(configModel: string | undefined, modelSpec: string | undefined): string | undefined {
-  if (configModel) return undefined;
-  return modelSpec
-    ? `model "${modelSpec}" is set via --model/FASTAGENT_MODEL, not fastagent.config.ts — it won't reach ` +
-        `the deployed box. Add \`model: "${modelSpec}"\` to fastagent.config.ts.`
-    : `no model in fastagent.config.ts — the deployed box can't resolve one. Add \`model: "provider/id"\`.`;
+/**
+ * WHICH model this deployment runs on, and where that came from.
+ *
+ * There is ONE precedence chain — `flag > environment > config.model` — and this is it evaluated in the environment
+ * BEING DEPLOYED rather than in this machine's. That environment is declared by the value file, so the operator's
+ * `process.env` simply is not part of it (the same way `dev` never reads another machine's shell); it needs no rule
+ * of its own. `deploy` has no flag layer either, and that follows from the same model rather than from policy: a
+ * generated Dockerfile is rewritten on every deploy, so a flag baked into one would silently vanish on the next run
+ * that omits it. A file does not.
+ *
+ * The value file is the half of the deployed environment we can DECLARE. The other half — variables the platform
+ * already holds — is still on the box and still outranks the image's own `ENV`, which is exactly why the model is
+ * baked rather than delivered as one more platform variable that nothing would ever clear.
+ */
+function resolveDeployModel(
+  config: FastagentConfig,
+  values: ReadonlyMap<string, string>,
+  /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
+  valueFile: string,
+): { spec?: string; source: string; envValue?: string; invalid?: string } {
+  const fromEnv = values.get("FASTAGENT_MODEL");
+  const source = fromEnv ? valueFile : "fastagent.config";
+  // BOTH sources are checked, at the one point that reads them: a `provider`-less spec resolves to nothing on the
+  // box, so letting `config.model` through would ship exactly the crash-loop this resolution exists to prevent —
+  // `probeAuthSource` reports "unconfigured" for it here and the failure only appears after deployment.
+  const spec = fromEnv || config.model;
+  if (spec && !isModelSpec(spec)) return { source, invalid: spec };
+  // `envValue` is what the release manifest records (ContainerInput.modelSpec), so it is set only when the value file
+  // is the source: a `config.model` already travels in the config itself. The manifest is rewritten by every deploy,
+  // so deleting the line and redeploying simply drops it — nothing stale survives.
+  if (fromEnv) return { spec: fromEnv, source, envValue: fromEnv };
+  return { spec: config.model, source };
 }

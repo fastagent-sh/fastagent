@@ -27,7 +27,6 @@ export interface DeployOptions {
   /** false ⇔ `--no-scale-to-zero`. */
   scaleToZero?: boolean;
   intoLinked?: boolean;
-  model?: string;
   authPath?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;

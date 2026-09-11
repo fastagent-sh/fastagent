@@ -307,7 +307,7 @@ export async function appendChannelDotEnv(
       }
       written.push(e.name);
     } else if (!mentionsEnvName(current, e.name)) {
-      // Hint above, never inline after `=` — see appendChannelEnv (this IS the file loadEnvFile reads).
+      // Hint above, never inline after `=` — see appendChannelEnv (this IS the file loadDotEnv reads).
       lines.push(`# ${e.hint}`, `# ${e.name}=`);
     }
   }

@@ -254,13 +254,18 @@ export function rewriteConfigModel(src: string, spec: string): string | null {
   return null;
 }
 
-/** Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. */
+/**
+ * Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. An EMPTY `FASTAGENT_MODEL` is
+ * "unset", not "no model": `export FASTAGENT_MODEL=` in a shell or CI job, and an `environment:`/`env` entry that
+ * interpolates a missing variable, both arrive as `""` — and a set-but-empty value that shadowed `config.model`
+ * would refuse to start an agent whose config names a model.
+ */
 export function resolveModelSpec(
   flag: string | undefined,
   config: FastagentConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return flag ?? env.FASTAGENT_MODEL ?? config.model;
+  return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
 /**

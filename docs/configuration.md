@@ -85,6 +85,24 @@ fastagent dev --model openai-codex/gpt-5.5
 FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 ```
 
+**Same chain, different environment.** `deploy` evaluates the very same precedence in the environment
+*being deployed* instead of this machine's. That environment is declared by `.secrets/.env`, so
+`deploy` reads `FASTAGENT_MODEL` from the file and records it in the release manifest
+(`fastagent.release.json`), falling back to `config.model` (which ships in the config file). Your shell
+is simply not part of the deployed environment — the same way `fastagent dev` never reads another
+machine's shell — so nothing here is a special rule to remember.
+
+`deploy` has no `--model` flag for the same reason it has no other one-off inputs: a deployment's
+inputs have to survive the next deploy that omits them, and a flag does not. A file does. `deploy`
+prints the effective model and which of the two sources it came from.
+
+The value file is the half of the deployed environment you can *declare*. The other half — variables
+the platform already holds (Fly secrets, Compose `environment:`, CloudFormation parameters) — lives on
+the box and wins over the manifest, which the container applies without overwriting anything already
+set. That is also why the model rides the manifest instead of being delivered as one more platform
+variable: the manifest is rewritten by every deploy, so deleting the line from `.secrets/.env` drops
+it, while a platform variable nothing ever clears would keep winning.
+
 ## Custom model endpoints
 
 To run against something the built-in catalog does not know — a self-hosted model (vLLM, SGLang,

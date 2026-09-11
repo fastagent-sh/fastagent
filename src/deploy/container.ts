@@ -41,6 +41,13 @@ export interface ContainerInput {
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
   /**
+   * The model this deployment resolved, recorded in the release manifest — set only when the deployed environment's
+   * VALUE FILE named it (a `config.model` needs nothing: the config ships too). The manifest is the carrier because
+   * it is rebuilt and rewritten on every deploy, so the answer cannot go stale, and nothing on the way in can
+   * interpolate the operator's shell.
+   */
+  modelSpec?: string;
+  /**
    * Where deploy's artifacts and the agent's own files sit, relative to the BUILD CONTEXT (which is always the
    * workspace).
    */
@@ -162,6 +169,7 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     version: 1,
     id: input.releaseId,
     agent: input.agentPrefix.replace(/\/$/, ""),
+    ...(input.modelSpec !== undefined ? { model: input.modelSpec } : {}),
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [
