@@ -107,12 +107,17 @@ export function gateOnModelCredential(needsModelCredential: boolean): void {
   );
 }
 
-/** Write each generated artifact under `target`, under ONE ownership rule. */
+/**
+ * Write each generated artifact under `target`, under ONE ownership rule. Returns the paths it KEPT while they no
+ * longer match what this definition generates — a fact, not a verdict: the caller decides what a stale artifact
+ * means, because only it knows whether this run is about to deploy from one.
+ */
 export async function writeArtifacts(
   target: string,
   artifacts: { path: string; content: string }[],
   options: { force: boolean; alwaysWrite?: string[]; isOurs: HostDeploy["isOurs"] },
-): Promise<void> {
+): Promise<string[]> {
+  const stale: string[] = [];
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
@@ -138,6 +143,7 @@ export async function writeArtifacts(
       continue;
     }
     if (existing !== undefined && !options.force) {
+      if (existing !== a.content) stale.push(a.path);
       console.error(
         existing !== a.content
           ? `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
@@ -150,6 +156,7 @@ export async function writeArtifacts(
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
+  return stale;
 }
 
 /** Did fastagent generate the file at `path`? */

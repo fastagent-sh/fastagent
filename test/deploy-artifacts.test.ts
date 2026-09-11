@@ -45,7 +45,7 @@ async function attempt(
   path: Kind,
   existing: string | undefined,
   force: boolean,
-): Promise<{ content: string; said: string }> {
+): Promise<{ content: string; said: string; stale: string[] }> {
   const dir = await mkdtemp(join(tmpdir(), "fa-own-"));
   if (existing !== undefined) {
     await mkdir(dirname(join(dir, path)), { recursive: true });
@@ -53,12 +53,13 @@ async function attempt(
   }
   const said: string[] = [];
   const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => said.push(String(m)));
+  let stale: string[];
   try {
-    await writeArtifacts(dir, [{ path, content: generatedFor(path) }], { force, isOurs: isOursFor(path) });
+    stale = await writeArtifacts(dir, [{ path, content: generatedFor(path) }], { force, isOurs: isOursFor(path) });
   } finally {
     spy.mockRestore();
   }
-  return { content: await readFile(join(dir, path), "utf8"), said: said.join("\n") };
+  return { content: await readFile(join(dir, path), "utf8"), said: said.join("\n"), stale };
 }
 
 describe("deploy: ownership decides what --force may replace", () => {
@@ -121,10 +122,18 @@ describe("deploy: ownership decides what --force may replace", () => {
     const kept = await attempt(path, stale, false);
     expect(kept.content).toBe(stale); // the edit survives
     expect(kept.said).toMatch(/no longer matches what deploy would generate/); // …and names --force
+    // REPORTED as stale, so the caller can decide: `--run` would deploy FROM this file, which is a determinate
+    // mismatch between what ships and what the definition says.
+    expect(kept.stale).toEqual([path]);
 
     const forced = await attempt(path, stale, true);
     expect(forced.content).toBe(generatedFor(path));
     expect(forced.said).toMatch(/wrote fastagent\/Dockerfile/);
+    expect(forced.stale).toEqual([]); // regenerated, so nothing to decide about
+
+    // A file we did NOT generate is never stale: `--force` does not touch it either, and taking a path back is
+    // what deleting the marker line is for.
+    expect((await attempt(path, "FROM node:22-slim\n", false)).stale).toEqual([]);
   });
 
   it("ours and unchanged says so; an absent artifact is simply written", async () => {

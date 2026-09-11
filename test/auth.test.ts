@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -244,5 +244,30 @@ describe("fastagentCredentialStore: the global fallback layer", () => {
     // An explicitly named path is an instruction, not a preference: no layering at all.
     const plain = fastagentCredentialStore(projectPath);
     expect(await plain.read("openai")).toBeUndefined();
+  });
+});
+
+describe("fastagentCredentialStore: the lock must be the one pi takes", () => {
+  it("locks beside the PATH, not the symlink's target — pi-coding-agent uses realpath:false", async () => {
+    // Verified against proper-lockfile: with `realpath: true` the lock lands beside the resolved file, so a
+    // dotfile-managed auth.json (a symlink) gets TWO different lock files and `pi` and `fastagent` can both hold
+    // one. They would then refresh the same provider concurrently, and a rotated refresh token logs one out.
+    const target = await mkdtemp(join(tmpdir(), "fa-lock-target-"));
+    const via = await mkdtemp(join(tmpdir(), "fa-lock-link-"));
+    const real = join(target, "auth.json");
+    const link = join(via, "auth.json");
+    await writeFile(real, "{}");
+    await symlink(real, link);
+
+    let lockBesideLink = false;
+    let lockBesideTarget = false;
+    await fastagentCredentialStore(link).modify("anthropic", async () => {
+      // Inside the callback the lock is held, so this is the only moment either file can be observed.
+      lockBesideLink = existsSync(`${link}.lock`);
+      lockBesideTarget = existsSync(`${real}.lock`);
+      return { type: "api_key", key: "k" };
+    });
+    expect(lockBesideLink).toBe(true);
+    expect(lockBesideTarget).toBe(false);
   });
 });

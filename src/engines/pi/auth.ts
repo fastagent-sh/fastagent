@@ -63,6 +63,12 @@ async function withLockedAuthFile<T>(
   };
 
   const release = await lockfile.lock(authPath, {
+    // MUST match pi-coding-agent's `core/auth-storage.js`, which locks with `realpath: false`. When the auth file
+    // itself is a symlink (dotfile managers do this), the two settings name DIFFERENT lock files and both locks can
+    // be held at once — so `pi` and `fastagent` would refresh the same provider concurrently, and a rotated refresh
+    // token logs one of them out. Resolving the link would be the stronger rule, but only if BOTH sides did it, and
+    // we do not own the other side.
+    realpath: false,
     retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 10_000, randomize: true },
     stale: 30_000,
     onCompromised: (error) => {
