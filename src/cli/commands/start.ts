@@ -128,7 +128,11 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
     log.info(
       `[fastagent] model ${process.env.FASTAGENT_MODEL} — from ${
         platformModel
-          ? "a FASTAGENT_MODEL already set in this environment, which outranks the release manifest"
+          ? `a FASTAGENT_MODEL already set in this environment${
+              // Only claim it beat the manifest when the manifest actually named one; otherwise a redeploy would
+              // look like the remedy for a value no deployment ever declared.
+              manifest.model ? ", which outranks the release manifest" : ""
+            }`
           : "the release manifest (redeploy to change it)"
       }; editing FASTAGENT_MODEL in this workspace's .env does not override it`,
     );

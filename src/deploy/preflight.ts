@@ -14,8 +14,12 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadSchedules } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
-import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
-import { providerOf } from "../engines/pi/config.ts";
+import {
+  createPiModelRuntime,
+  literalKeyProviders,
+  modelCredentialCarry,
+  probeAuthSource,
+} from "../engines/pi/models.ts";
 import { AGENT_MODELS_FILE } from "../paths.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
@@ -245,17 +249,19 @@ export async function preflightDeploy(input: {
     const carry = modelCredentialCarry(models, modelSpec);
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
-    if (carry.literalKey) {
-      // Same rule the `.dockerignore` check enforces: any configuration that would put a credential into the image
-      // gates `--run`. A literal has no legitimate use here — an endpoint that needs no key can omit it, and one
-      // that needs a key has two forms that do not ship it.
-      const issue =
-        `${AGENT_MODELS_FILE} carries a literal apiKey for "${providerOf(modelSpec)}" — that file ships inside the ` +
-        `image, where anyone who can pull it reads the layer. Use "$YOUR_ENV_VAR" (deploy carries it like any ` +
-        `provider key) or "!command" (it runs on the box and never travels).`;
-      if (run) return { ok: false, gate: issue };
-      messages.push({ level: "warn", text: issue });
-    }
+  }
+  // Same rule the `.dockerignore` check enforces: any configuration that would put a credential into the image gates
+  // `--run`. Asked of EVERY provider, not just the selected model's — the file ships whole, so a literal on a
+  // provider nothing selects today is in the image all the same. A literal has no legitimate use: an endpoint that
+  // needs no key omits it, and one that needs a key has two forms that do not ship it.
+  const literalKeys = literalKeyProviders(models);
+  if (literalKeys.length > 0) {
+    const issue =
+      `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
+      `file ships inside the image, where anyone who can pull it reads the layer. Use "$YOUR_ENV_VAR" (deploy ` +
+      `carries it like any provider key) or "!command" (it runs on the box and never travels).`;
+    if (run) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
   }
 
   // Container facts (shared by every host) + the warnings that follow.

@@ -3,7 +3,13 @@ import { type FlyRunPlan, deployFlyRun } from "../src/deploy/fly/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { CONTROL_TOKEN_ENV } from "../src/channels/control.ts";
-import { assembleSecrets, authSeedBytes, collectAuthSeed, deploymentSecrets } from "../src/deploy/secrets.ts";
+import {
+  assembleSecrets,
+  authSeedBytes,
+  collectAuthSeed,
+  deploymentSecrets,
+  missingValuesGate,
+} from "../src/deploy/secrets.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
@@ -24,6 +30,7 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   region: "iad",
   secrets: {},
   missingSecrets: [],
+  valueFile: "fastagent/.secrets/.env",
   channels: [],
   flyConfig: "fastagent/fly.toml",
   dockerfile: "fastagent/Dockerfile",
@@ -431,6 +438,18 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
     );
     expect(listed.find((s) => s.name === CONTROL_TOKEN_ENV)?.required).toBe(false);
+  });
+});
+
+describe("deploy/secrets: missingValuesGate (one refusal, every host)", () => {
+  it("names the file this deploy actually read, not a hardcoded path", () => {
+    // `FASTAGENT_SECRETS_DIR` moves the value file, and four hosts each spelling the message would each have to
+    // remember that. The gate takes the resolved name so it cannot point at a file deploy never opened.
+    expect(missingValuesGate([], "fastagent/.secrets/.env")).toBeUndefined();
+    const gate = missingValuesGate(["GH_TOKEN", "X_API_KEY"], "/data/.secrets/.env");
+    expect(gate).toContain("GH_TOKEN, X_API_KEY");
+    expect(gate).toContain("/data/.secrets/.env");
+    expect(gate).not.toMatch(/\n/); // one line: it is printed straight into an Error
   });
 });
 

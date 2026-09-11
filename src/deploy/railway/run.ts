@@ -2,6 +2,7 @@
 import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
+import { missingValuesGate } from "../secrets.ts";
 
 export interface RailwayRunPlan {
   /** Names both the project (`railway init --name`) and the service (`railway add --service`). */
@@ -16,8 +17,10 @@ export interface RailwayRunPlan {
    * + channel secrets.
    */
   secrets: Record<string, string>;
-  /** Required secret names with NO local value — the run gates on these before any side effect. */
+  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
+  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  valueFile: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /** Opt-in (CLI `--into-linked`) to provision INTO the project this directory is already linked to. */
@@ -101,13 +104,8 @@ export async function deployRailwayRun(
   }
 
   // 2. Gate missing required secret VALUES before any side effect (no half-created infra).
-  if (plan.missingSecrets.length > 0) {
-    return gate(
-      `no value for: ${plan.missingSecrets.join(", ")} — the deployed environment is declared by the agent's
-        .secrets/.env, and this deploy reads only that file (exporting the variable here does not reach the
-        deployment). Add them there and re-run`,
-    );
-  }
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
 
   // 3.
   const status = await railway(["status", "--json"], { capture: true });
@@ -153,9 +151,9 @@ export async function deployRailwayRun(
     `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
     `RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`,
   ];
-  // The secret NAMES, not a count: what `--run` uploads is read from THIS machine's environment and
-  // is no longer only what the author typed in deploy.secrets (a mounted tool/channel/schedule
-  // declares its own), so the operator has to be able to see the list on every host.
+  // The secret NAMES, not a count: what `--run` uploads is read from the value file and is no longer
+  // only what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own),
+  // so the operator has to be able to see the list on every host.
   const secretNames = Object.keys(plan.secrets);
   log(
     `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${secretNames.length} secret(s)` +

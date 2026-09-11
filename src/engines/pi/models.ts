@@ -93,6 +93,17 @@ export function modelCredentialCarry(
   return { inDefinition: status.source !== "stored", literalKey: status.source === "models_json_key" };
 }
 
+/**
+ * EVERY provider whose key is a literal in `models.json`, not just the selected model's. The file ships whole, so a
+ * literal on a provider nothing currently selects is in the image all the same.
+ */
+export function literalKeyProviders(runtime: ModelRuntime): string[] {
+  return runtime
+    .getProviders()
+    .filter((provider) => runtime.getProviderAuthStatus(provider.id).source === "models_json_key")
+    .map((provider) => provider.id);
+}
+
 /** Per-provider auth status for the first-run model picker. */
 export type ProviderAuthStatus =
   | { state: "ready"; source?: string }

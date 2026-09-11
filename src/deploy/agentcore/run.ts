@@ -15,6 +15,7 @@ import {
   deploymentBucketName,
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
+import { missingValuesGate } from "../secrets.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -32,8 +33,10 @@ export interface AgentcoreRunPlan {
   region?: string;
   /** Secret env-var name → value (model key or FASTAGENT_AUTH_SEED + channel secrets). */
   secrets: Record<string, string>;
-  /** Required secret names with NO local value — gated before any side effect. */
+  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
+  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  valueFile: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /**
@@ -190,13 +193,8 @@ export async function deployAgentcoreRun(
   }
 
   // 3. Gate missing required secret VALUES before any side effect (no half-created infra).
-  if (plan.missingSecrets.length > 0) {
-    return gate(
-      `no value for: ${plan.missingSecrets.join(", ")} — the deployed environment is declared by the agent's
-        .secrets/.env, and this deploy reads only that file (exporting the variable here does not reach the
-        deployment). Add them there and re-run`,
-    );
-  }
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
   // 3b.
   const seed = plan.secrets.FASTAGENT_AUTH_SEED;
   if (seed && seed.length > AUTH_SEED_CHUNK_SIZE * AUTH_SEED_MAX_CHUNKS) {
@@ -210,8 +208,8 @@ export async function deployAgentcoreRun(
       return gate(`secret ${k} is ${v.length} chars — AgentCore environment values cap at 2048; shorten it`);
     }
   }
-  // Name what travels from THIS machine's environment onto the runtime: the list is no longer only
-  // what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  // Name what travels from the value file onto the runtime: the list is no longer only what the
+  // author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
   const secretNames = Object.keys(plan.secrets);
   if (secretNames.length > 0) log(`carrying ${secretNames.length} secret(s): ${secretNames.join(", ")}`);
 

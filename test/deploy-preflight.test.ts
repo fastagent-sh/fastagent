@@ -578,6 +578,20 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     }
   });
 
+  it("a literal on a provider NOTHING selects is gated too — the file ships whole", async () => {
+    const dir = await workspace({
+      "models.json": JSON.stringify({
+        providers: {
+          mygw: { baseUrl: "http://a/v1", api: "openai-completions", apiKey: "$FA_GW_KEY", models: [{ id: "m1" }] },
+          unused: { baseUrl: "http://b/v1", api: "openai-completions", apiKey: "sk-unused", models: [{ id: "m2" }] },
+        },
+      }),
+    });
+    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.gate).toMatch(/literal apiKey for "unused"/);
+  });
+
   it("a !command key is NOT gated — it runs on the box and the credential never travels", async () => {
     const dir = await workspace({ "models.json": GATEWAY("!printf sk-from-a-command") });
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });

@@ -5,6 +5,7 @@ import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import type { CliRunner } from "../runner.ts";
+import { missingValuesGate } from "../secrets.ts";
 
 export interface DockerRunPlan {
   /** Compose file relative to the runner cwd (the workspace root). */
@@ -13,8 +14,10 @@ export interface DockerRunPlan {
   port: number;
   /** Values interpolated by Compose. */
   secrets: Record<string, string>;
-  /** Required names with no local value; gate before build/create. */
+  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
+  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  valueFile: string;
   /** Neither an env-key credential nor a readable auth.json is available. */
   needsModelCredential: boolean;
   /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
@@ -122,16 +125,11 @@ export async function deployDockerRun(
   if (plan.needsModelCredential) {
     return gate("no model credential — run `fastagent login`, or set a provider API key in .env, then re-run");
   }
-  if (plan.missingSecrets.length > 0) {
-    return gate(
-      `no value for: ${plan.missingSecrets.join(", ")} — the deployed environment is declared by the agent's
-        .secrets/.env, and this deploy reads only that file (exporting the variable here does not reach the
-        deployment). Add them there and re-run`,
-    );
-  }
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
 
-  // Name what travels from THIS machine's environment into the container: the list is no longer
-  // only what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  // Name what travels from the value file into the container: the list is no longer only what the
+  // author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
   const secretNames = Object.keys(plan.secrets);
   if (secretNames.length > 0) log(`passing ${secretNames.length} secret(s) to Compose: ${secretNames.join(", ")}`);
 

@@ -202,8 +202,8 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (idle !== undefined && (!Number.isInteger(idle) || idle < 60 || idle > 1209600)) {
     throw new Error(`${path}: "deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600 (seconds)`);
   }
-  // secrets are UPPER_SNAKE env-var names (deploy reads their VALUES from the local env); apt entries are Debian
-  // package names.
+  // secrets are UPPER_SNAKE env-var names (deploy reads their VALUES from the agent's .secrets/.env); apt entries
+  // are Debian package names.
   validateStringList(c.deploy?.secrets, "deploy.secrets", /^[A-Z_][A-Z0-9_]*$/, "an UPPER_SNAKE env-var name", path);
   validateStringList(c.deploy?.apt, "deploy.apt", /^[a-z0-9][a-z0-9.+-]*$/, "a Debian package name", path);
   return { config: c, path };

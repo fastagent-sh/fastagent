@@ -23,6 +23,7 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   port: 8787,
   secrets: {},
   missingSecrets: [],
+  valueFile: "fastagent/.secrets/.env",
   needsModelCredential: false,
   requireTunnel: false,
   announce: async () => [],

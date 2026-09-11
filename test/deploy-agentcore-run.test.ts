@@ -45,6 +45,7 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   region: "us-west-2",
   secrets: {},
   missingSecrets: [],
+  valueFile: "fastagent/.secrets/.env",
   channels: [],
   topology: NO_FORWARDER,
   ...over,

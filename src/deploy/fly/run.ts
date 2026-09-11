@@ -2,14 +2,17 @@
 import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
+import { missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
   appName: string;
   region: string;
   /** `KEY=value` secrets to set on Fly: model key (env auth) or `FASTAGENT_AUTH_SEED` (file auth) + channel secrets. */
   secrets: Record<string, string>;
-  /** Required secret names with NO local value — the run gates on these before any side effect. */
+  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
+  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  valueFile: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace root). */
@@ -93,13 +96,8 @@ export async function deployFlyRun(
   }
 
   // 2. Gate missing required secret VALUES before any side effect (no half-created infra).
-  if (plan.missingSecrets.length > 0) {
-    return gate(
-      `no value for: ${plan.missingSecrets.join(", ")} — the deployed environment is declared by the agent's
-        .secrets/.env, and this deploy reads only that file (exporting the variable here does not reach the
-        deployment). Add them there and re-run`,
-    );
-  }
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
 
   // 3.
   const appExists = await readList(fly, ["apps", "list", "--json"], (out) => listHasName(out, plan.appName));

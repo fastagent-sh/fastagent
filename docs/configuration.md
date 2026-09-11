@@ -148,8 +148,10 @@ Custom endpoints are **additive** — built-in providers stay available alongsid
 variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal.
 
 **Use one of the first two.** A literal credential in this file ships inside the image, where anyone
-who can pull it reads the layer — so `deploy` **refuses `--run`** on a literal `apiKey` for the
-selected model, and warns when only generating artifacts. This is the same rule that makes a
+who can pull it reads the layer — so `deploy` **refuses `--run`** on a literal `apiKey`, and warns when
+only generating artifacts. Every declared provider is checked, not just the selected model's: the file
+ships whole, so a literal on a provider nothing selects today is in the image all the same. This is the
+same rule that makes a
 `.dockerignore` which fails to exclude `.secrets/auth.json` stop a run: any configuration that would
 put a credential into the image gates `--run`. The general form of it: **literal credentials belong in
 `.secrets/` or the platform's secret storage, and every file inside the definition may only carry a
