@@ -39,8 +39,7 @@ describe("init: scaffoldAgent", () => {
     await writeFile(join(dir, "AGENTS.md"), "# Project spec\n"); // ② context, must survive untouched
     await writeFile(join(dir, "tsconfig.json"), "{}");
     const before = (await readdir(dir)).sort();
-    const { complete, created } = await scaffoldAgent(dir);
-    expect(complete).toBe(true);
+    const { created } = await scaffoldAgent(dir);
     expect(created.sort()).toEqual(
       [
         agentPath("persona.md"),
@@ -118,35 +117,6 @@ describe("init: scaffoldAgent", () => {
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Project spec");
   });
 
-  it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
-    const dir = await freshDir();
-    const { complete, created } = await scaffoldAgent(dir, { minimal: true });
-    expect(complete).toBe(false);
-    expect(created.sort()).toEqual(
-      [
-        agentPath("persona.md"),
-        agentPath("skills", "writing-great-skills", "SKILL.md"),
-        agentPath("skills", "writing-great-skills", "GLOSSARY.md"),
-        agentPath("skills", "writing-great-skills", "LICENSE"),
-        agentPath(".gitignore"),
-        agentPath(".secrets", ".env.example"),
-        agentPath(".secrets", ".gitignore"),
-        agentPath("fastagent.config.ts"),
-      ].sort(),
-    );
-    expect(await exists(join(dir, "fastagent", "package.json"))).toBe(false);
-    expect(await exists(join(dir, "fastagent", "tools"))).toBe(false);
-    // the bundled skill still mounts in the minimal unit
-    const def = await loadAgentDefinition(join(dir, "fastagent"));
-    expect(def.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
-
-    // No tool to import → dev assembles with zero edits and zero network. The scaffold presets no
-    // model (first-run pick writes it back), so assembly is exercised with an explicit spec.
-    const { agent, modelSpec } = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
-    expect(typeof agent.invoke).toBe("function");
-    expect(modelSpec).toBe("openai-codex/gpt-5.5");
-  });
-
   it("creates a non-existent target dir (both levels)", async () => {
     const base = await freshDir();
     const target = join(base, "some", "project");
@@ -206,14 +176,12 @@ describe("init: scaffoldAgent", () => {
     await writeFile(join(flatAlready, "fastagent.config.ts"), "export default {};\n");
     await expect(scaffoldAgent(flatAlready)).rejects.toThrow(/already resolves to .*never served/s);
 
+    // …but a SIBLING is a supported shape, not a collision: several agents on ONE workspace is how
+    // different roles drive the same repository, and the lookup selects between them.
     const nestedAlready = await freshDir();
     await mkdir(join(nestedAlready, "fastagent"), { recursive: true });
     await writeFile(join(nestedAlready, "fastagent", "fastagent.config.ts"), "export default {};\n");
-    await expect(scaffoldAgent(nestedAlready, { agentDir: "." })).rejects.toThrow(/never served/);
-
-    // …but a SIBLING is a supported shape, not a collision: several agents on ONE workspace is how
-    // different roles drive the same repository, and the lookup selects between them.
-    expect((await scaffoldAgent(nestedAlready, { agentDir: "releaser", minimal: true })).agentDir).toBe("releaser");
+    expect((await scaffoldAgent(nestedAlready, { agentDir: "releaser" })).agentDir).toBe("releaser");
   });
 
   it("refuses init inside an agent's own LOADED surface — the outer agent would load it as content", async () => {
@@ -229,14 +197,12 @@ describe("init: scaffoldAgent", () => {
 
     // The rest of an agent's directory is the AUTHOR's tree — a second agent there is legitimate (the
     // monorepo case), so ownership stops at the loaded surface instead of claiming the whole subtree.
-    expect((await scaffoldAgent(join(inside, "packages", "sub"), { minimal: true })).created).toContain(
-      agentPath("persona.md"),
-    );
+    expect((await scaffoldAgent(join(inside, "packages", "sub"))).created).toContain(agentPath("persona.md"));
   });
 
   it("--agentDir names the agent directory — the name is never a rule, the config is the marker", async () => {
     const host = await freshDir();
-    const { agentDir, created } = await scaffoldAgent(host, { agentDir: "bot", minimal: true });
+    const { agentDir, created } = await scaffoldAgent(host, { agentDir: "bot" });
     expect(agentDir).toBe("bot");
     expect(created).toContain(join("bot", "persona.md"));
     // …and it resolves under that name, with the surrounding tree as its workspace.
@@ -249,7 +215,7 @@ describe("init: scaffoldAgent", () => {
     }
     // …but `./bot` is not a path in any meaningful sense — basename already says it means `bot`, so
     // refusing the spelling would be pedantry rather than a guard.
-    expect((await scaffoldAgent(await freshDir(), { agentDir: "./bot", minimal: true })).agentDir).toBe("bot");
+    expect((await scaffoldAgent(await freshDir(), { agentDir: "./bot" })).agentDir).toBe("bot");
   });
 
   it("`init` nests by DEFAULT — no detection, no prompt; the choice is a flag or nothing", async () => {
@@ -274,25 +240,20 @@ describe("init: scaffoldAgent", () => {
     expect(await cliInit(["init"], done)).toMatch(/already a fastagent agent/);
   });
 
-  it("--flat: the directory IS the agent, existing files are KEPT, and it resolves end to end", async () => {
-    // Case this exists for: a standalone agent repo, or a monorepo package. Agent and workspace are the
-    // same directory, so the agent's tools operate on its own definition — the point of the mode.
+  it("refuses `--agent-dir .` — the definition goes in a subdirectory, the directory around it is the workspace", async () => {
+    // The mode this replaces kept every existing file, so the agent inherited the host repo's package.json — and a
+    // `fastagent.config.ts` under a CommonJS manifest does not load at all. A scaffolded subdirectory carries its
+    // own `type: module`, which removes that failure class rather than pre-checking for it.
     const dir = await freshDir();
-    await writeFile(join(dir, ".gitignore"), "dist\n"); // the author's file: adopted, never rewritten
-    await writeFile(join(dir, "AGENTS.md"), "# House rules\n");
-    const { created, kept, agentDir } = await scaffoldAgent(dir, { agentDir: "." });
-    expect(agentDir).toBe(".");
-    expect(created).toContain("persona.md"); // at the root, no fastagent/ level
-    expect(created).toContain(join(".secrets", ".gitignore")); // credentials still self-protected
-    expect(kept).toEqual([".gitignore"]); // theirs wins
-    expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe("dist\n"); // …verbatim
-    expect(await exists(join(dir, "fastagent"))).toBe(false); // no nested level anywhere
+    await writeFile(join(dir, ".gitignore"), "dist\n");
+    await expect(scaffoldAgent(dir, { agentDir: "." })).rejects.toThrow(/single directory name/);
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe("dist\n"); // side-effect-free refusal
+    expect(await exists(join(dir, "persona.md"))).toBe(false);
 
-    // Resolution: agent === workspace, and the definition + ② context load from the same directory.
-    const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
-    expect([a.agentDir, a.workspace]).toEqual([dir, dir]);
-    expect(a.definition.persona).toContain("Persona");
-    expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("House rules");
+    // The CLI rejects it as USAGE (exit 2), before any scaffold work.
+    expect(await cliInit(["init", "--agent-dir", ".", "--no-install"], dir)).toMatch(/single directory name/);
+    // …and `--flat` is gone with it.
+    expect(await cliInit(["init", "--flat", "--no-install"], dir)).toMatch(/unknown option/);
   });
 
   it("a package inside an agent's own repository is a legitimate init target", async () => {
@@ -300,13 +261,15 @@ describe("init: scaffoldAgent", () => {
     // definition is its loaded surface only, so `packages/foo/` is the author's tree — refusing there
     // would make "an agent inside an agent's repository" unreachable.
     const root = await freshDir();
-    await scaffoldAgent(root, { agentDir: ".", minimal: true });
+    // Written by hand: placement still RESOLVES an agent at a directory (a deployed box is shipped the agent
+    // directory alone), `init` merely no longer creates that shape.
+    await writeFile(join(root, "fastagent.config.ts"), "export default {};\n");
     const pkg = join(root, "packages", "reviewer");
     await mkdir(pkg, { recursive: true });
-    expect((await scaffoldAgent(pkg, { minimal: true })).created).toContain(agentPath("persona.md"));
+    expect((await scaffoldAgent(pkg)).created).toContain(agentPath("persona.md"));
 
     // …but the flat agent's OWN surfaces are still off limits: it would load the new agent as content.
-    await expect(scaffoldAgent(join(root, "skills", "mine"), { minimal: true })).rejects.toThrow(
+    await expect(scaffoldAgent(join(root, "skills", "mine"))).rejects.toThrow(
       /is inside the definition of the agent at/,
     );
   });
@@ -316,12 +279,12 @@ describe("init: scaffoldAgent", () => {
     // parent as its workspace). With the config as the only marker there is nothing to trap.
     const named = join(await freshDir(), "fastagent");
     await mkdir(named);
-    expect((await scaffoldAgent(named, { agentDir: ".", minimal: true })).agentDir).toBe(".");
+    await writeFile(join(named, "fastagent.config.ts"), "export default {};\n");
     const a = await createPiAgentFromDir(named, { model: "openai-codex/gpt-5.5" });
     expect([a.agentDir, a.workspace]).toEqual([named, named]);
 
-    // Already an agent → refuse rather than double-initialize.
-    await expect(scaffoldAgent(named, { agentDir: "." })).rejects.toThrow(/already a fastagent agent/);
+    // Already an agent → refuse rather than double-initialize (the config at `named` shadows a nested one).
+    await expect(scaffoldAgent(named)).rejects.toThrow(/already resolves to .*never served/s);
   });
 
   it("createPiAgentFromDir wires the placement end-to-end: persona/tools from the agent dir, ② context from the workspace", async () => {
