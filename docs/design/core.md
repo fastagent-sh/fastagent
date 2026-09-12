@@ -41,7 +41,7 @@ One agent shape, one marker:
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
 ├── skills/  tools/  channels/  schedules/
-├── fastagent.config.ts    # THE marker
+├── fastagent.config.ts     # THE marker
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image; pi's machine-global ~/.pi one stays unread)
 ├── .gitignore              # scaffolded once by init, yours after
