@@ -8,6 +8,10 @@ Excluded from `npm test`. `npm run test:live` (`vitest.live.config.ts`) opts in,
 credential **fails** rather than skips — you asked for them. Credentials arrive the product's way
 (`FASTAGENT_AUTH_PATH` → an `auth.json`), which is what lets an OAuth-only provider be the model.
 
+Running these LOCALLY against the same grant CI holds will break CI: an OAuth refresh voids the token
+the other copy still has. Give a local run its own (`FASTAGENT_AUTH_PATH=… fastagent login`), which is
+also what `.github/workflows/live.yml` does for CI.
+
 ## Two rules
 
 **Drive a product entry, observe from outside it.** `createPiAgentFromDir`, `deploy docker --run`,
