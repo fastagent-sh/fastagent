@@ -513,10 +513,11 @@ is `createPiModels`'s default when no `authPath` is passed, and the explicit one
 `createPiModels()` bare reads the global file, not a project-level `login` — pass `authPath` explicitly
 to read the project's credential (the `createPiAgentFrom*` openers already do).
 
-**The file is fastagent's, the directory is yours.** Every credential write creates the directory if
-needed and writes `auth.json` with mode `0600`; the directory's own permissions are never changed,
-because fastagent did not create it. A directory others can read leaks the FILENAMES (which providers
-are configured), not the credentials — `chmod 700` it yourself if that matters in your deployment.
+**The file is fastagent's, an existing directory is yours.** Every credential write creates the
+directory if needed (`0700` when this call creates it) and writes `auth.json` with mode `0600`, every
+time rather than only on create. A directory that already exists keeps its own permissions, because
+`mkdir`'s mode is a no-op on one — a directory others can read then leaks the FILENAMES (which
+providers are configured), not the credentials. `chmod 700` it yourself if that matters.
 
 Provider injection:
 

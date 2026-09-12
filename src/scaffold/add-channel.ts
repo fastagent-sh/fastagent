@@ -2,10 +2,10 @@
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
  * `.secrets/.env.example` vars) into an existing agent.
  */
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { SECRETS_DIRNAME, SECRET_FILE_MODE, assertInsideAgentDir, exists } from "../paths.ts";
+import { SECRETS_DIRNAME, SECRETS_DIR_MODE, SECRET_FILE_MODE, assertInsideAgentDir, exists } from "../paths.ts";
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
@@ -256,7 +256,7 @@ export async function appendChannelDotEnv(
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
   const secretsDir = dirname(file);
-  await mkdir(secretsDir, { recursive: true });
+  await mkdir(secretsDir, { recursive: true, mode: SECRETS_DIR_MODE });
   // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into carries its own
   // `.gitignore`.
   const owned = secretsDir === join(dir, SECRETS_DIRNAME);
@@ -311,12 +311,13 @@ export async function appendChannelDotEnv(
       lines.push(`# ${e.hint}`, `# ${e.name}=`);
     }
   }
-  // `mode` applies only when the write CREATES the file, which is exactly the scope of fastagent's opinion: this is
-  // plaintext `.env`, so the file it creates is 0600. An existing one keeps whatever mode its owner gave it.
+  // `mode` on the write covers the file this call CREATES, closing the window where it briefly exists wide open.
   const secret = { mode: SECRET_FILE_MODE } as const;
+  let wrote = false;
   if (replacedInPlace) {
     current = contentLines.join("\n");
     await writeFile(file, current, secret);
+    wrote = true;
   }
   if (lines.length > 0) {
     const marker = `# --- ${kind} channel ---`;
@@ -328,7 +329,14 @@ export async function appendChannelDotEnv(
       const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
       await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`, secret);
     }
+    wrote = true;
   }
+  // …and EVERY write re-applies it, because `mode` is ignored when the file already exists. The documented
+  // `cp .secrets/.env.example .secrets/.env` leaves a 0644 file, and the secrets this call mints
+  // (GITHUB_WEBHOOK_SECRET, TELEGRAM_SECRET_TOKEN — the author contributes nothing to them) would land in it as
+  // plaintext. Same discipline as `writeFileAtomic`, which chmods on every auth.json write; the scope is still a
+  // file whose contents fastagent wrote, never a directory it did not create.
+  if (wrote) await chmod(file, SECRET_FILE_MODE);
   return { written, alreadySet, unprotectedSecretsDir };
 }
 

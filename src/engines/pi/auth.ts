@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRETS_DIR_MODE, SECRET_FILE_MODE } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -68,7 +68,7 @@ async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
-  mkdirSync(dirname(authPath), { recursive: true });
+  mkdirSync(dirname(authPath), { recursive: true, mode: SECRETS_DIR_MODE });
   if (!existsSync(authPath)) {
     try {
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,11 @@ describe("init: scaffoldAgent", () => {
     // carries the same fix, for the same reason).
     expect(await readFile(join(dir, "fastagent", ".gitignore"), "utf8")).toMatch(/^node_modules$/m);
     expect(await readFile(join(dir, "fastagent", ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
+
+    // …and the directory THIS run created is 0700, so the filenames under it (which providers and channels are
+    // configured) are not readable by other accounts. Only on create: `mkdir`'s mode is a no-op on an existing
+    // directory, which is how an operator's own `.secrets/` is never re-decided.
+    expect(((await stat(join(dir, "fastagent", ".secrets"))).mode & 0o777).toString(8)).toBe("700");
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
     // frames auth as a choice (`fastagent login` OR a provider API key), never implying a key is required.

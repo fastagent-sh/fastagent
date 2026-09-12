@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendChannelDotEnv,
@@ -102,6 +102,22 @@ describe("appendChannelDotEnv", () => {
     } finally {
       delete process.env.FASTAGENT_SECRETS_DIR;
     }
+  });
+
+  it("re-applies 0600 to a `.env` it did not create — `cp .env.example .env` leaves a 0644 one", async () => {
+    // The documented copy (and the `replacedInPlace` branch below assumes it) produces a world-readable file, and
+    // `mode` on a write is ignored once the file exists. Without re-applying it, a minted GITHUB_WEBHOOK_SECRET
+    // lands as plaintext in a 0644 file — the gap the old directory 0700 used to hide.
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-copied-"));
+    const env = join(dir, ".secrets", ".env");
+    await mkdir(dirname(env), { recursive: true });
+    await writeFile(env, "# copied from .env.example\n");
+    await chmod(env, 0o644);
+
+    await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
+
+    expect(await readFile(env, "utf8")).toContain("GITHUB_WEBHOOK_SECRET=topsecret");
+    expect(((await stat(env)).mode & 0o777).toString(8)).toBe("600");
   });
 
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {

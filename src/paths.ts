@@ -245,8 +245,19 @@ export function isAgentcoreRuntime(): boolean {
  * `config/` alone (rails/rails@4c6c357), and the aws CLI ships a 0600 `~/.aws/config` inside a 0755 `~/.aws`. This
  * used to also chmod the directory 0700 on every credential write, which repaired a real bug by reaching into
  * something fastagent did not create; the credentials are revocable, so the mechanism cost more than it bought.
+ *
+ * Applied on EVERY write, not only on create: `mode` is ignored once the file exists, and the documented
+ * `cp .secrets/.env.example .secrets/.env` leaves a 0644 file that would then receive minted secrets in plaintext.
  */
 export const SECRET_FILE_MODE = 0o600;
+
+/**
+ * What a `.secrets/` directory fastagent CREATES is created with. Passed to `mkdir`, whose `mode` is a no-op on a
+ * directory that already exists — which is the whole point: fastagent's own scaffold does not hand the filenames
+ * (which providers and channels are configured) to other accounts on the box, and an operator's existing directory
+ * is left exactly as they set it. Same shape as the state root in `src/cli/serve.ts`.
+ */
+export const SECRETS_DIR_MODE = 0o700;
 
 /** Guard that `<agentDir>/<name>` resolves INSIDE the agent dir. */
 export async function assertInsideAgentDir(agentDir: string, name: string): Promise<void> {
