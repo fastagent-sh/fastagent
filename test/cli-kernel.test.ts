@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildProgram, type CommandSpec, optionKey } from "../src/cli/kernel.ts";
+import { type CommandSpec, optionKey } from "../src/cli/kernel.ts";
 import { buildCliProgram, specs } from "../src/cli/program.ts";
 
 /**
@@ -78,7 +78,7 @@ describe("cli kernel: spec conformance", () => {
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
       [["init"], "never its NAME, so --agent-dir"],
-      [["init"], "the agent goes into ./fastagent/"],
+      [["init"], "ALWAYS goes into a subdirectory"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["fire"], "does NOT advance the schedule's fire state"],
       [["schedule", "history"], "did last night's run silently fail"],
@@ -182,21 +182,6 @@ describe("cli kernel: the option-key naming rule", () => {
     expect(() => optionKey("-x")).toThrow(/no long form/);
   });
 
-  it("a conflicts reference to an unknown key fails at BUILD time, not silently at parse time", () => {
-    const bad: CommandSpec = {
-      name: "x",
-      summary: "s",
-      flags: [
-        { flags: "--flat", description: "d", conflicts: ["agentDirTypo"] },
-        { flags: "--agent-dir <name>", description: "d" },
-      ],
-      run: () => {},
-    };
-    expect(() => buildProgram([bad])).toThrow(/unknown option key "agentDirTypo"/);
-  });
-});
-
-describe("cli kernel: help", () => {
   it("per-command help shows usage, arguments, and the Examples section (exit 0)", async () => {
     const r = await parse(["models", "--help"]);
     expect(r.code).toBe(0);
@@ -378,15 +363,13 @@ describe("cli end to end: the thin entry", () => {
     expect(env.stderr).toMatch(/invalid PORT env/);
   });
 
-  it("--flat and --agent-dir name ONE knob, so passing both is a usage error (exit 2), not a precedence", async () => {
+  it("an --agent-dir value that is not one directory name is a usage error (exit 2), not a runtime fault", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-kernel-agentdir-"));
-    const both = await run(["init", dir, "--no-install", "--flat", "--agent-dir", "bot"]);
-    expect(both.code).toBe(2);
-    expect(both.stderr).toMatch(/cannot be used with/);
-    // …and a value that is not one directory name is the same class: a rejected VALUE, not a runtime fault.
-    const path = await run(["init", dir, "--no-install", "--agent-dir", join("nested", "bot")]);
-    expect(path.code).toBe(2);
-    expect(path.stderr).toMatch(/must be a single directory name/);
+    for (const bad of [join("nested", "bot"), "."]) {
+      const out = await run(["init", dir, "--no-install", "--agent-dir", bad]);
+      expect(out.code).toBe(2);
+      expect(out.stderr).toMatch(/must be a single directory name/);
+    }
   });
 
   it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {

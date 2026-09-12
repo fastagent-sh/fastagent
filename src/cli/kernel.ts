@@ -15,8 +15,6 @@ interface ArgSpec {
 export interface FlagSpec {
   flags: string;
   description: string;
-  /** Mutually exclusive with these {@link optionKey} values — validated at build time. */
-  conflicts?: string[];
 }
 
 interface ExampleSpec {
@@ -118,15 +116,6 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
 }
 
 function register(parent: Command, spec: CommandSpec): void {
-  // Validate the spec's option references BEFORE handing anything to commander.
-  const keys = new Set((spec.flags ?? []).map((f) => optionKey(f.flags)));
-  for (const f of spec.flags ?? []) {
-    for (const target of f.conflicts ?? []) {
-      if (!keys.has(target)) {
-        throw new Error(`command "${spec.name}": "${f.flags}" conflicts with unknown option key "${target}"`);
-      }
-    }
-  }
   const cmd = parent.command(spec.name);
   specOf.set(cmd, spec);
   cmd.summary(spec.summary);
@@ -144,11 +133,7 @@ function register(parent: Command, spec: CommandSpec): void {
     }
     cmd.addArgument(arg);
   }
-  for (const f of spec.flags ?? []) {
-    const opt = new Option(f.flags, f.description);
-    if (f.conflicts) opt.conflicts(f.conflicts);
-    cmd.addOption(opt);
-  }
+  for (const f of spec.flags ?? []) cmd.addOption(new Option(f.flags, f.description));
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
   const run = spec.run;
   if (run) {

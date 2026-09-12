@@ -64,7 +64,7 @@ directories or the same directory.
 | Situation | Placement |
 |---|---|
 | New agent or an agent for an existing project | `fastagent init [workspace]` creates `workspace/fastagent/`; existing workspace files stay untouched. |
-| A standalone agent repository or an existing package that is itself the agent | `fastagent init . --flat` puts the definition in the current directory and keeps existing files. Review retained package and ignore files. Not deployable as-is: `deploy` requires the agent to sit inside a workspace. |
+| A standalone agent repository or an existing package that is itself the agent | Run `fastagent init` in it: that repository is the WORKSPACE and the definition lands in `./fastagent/`. This is also the shape `deploy` requires. |
 | An existing application embeds the agent | Keep the application's layout. A nested definition is convenient; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Check the workspace itself and its direct
@@ -96,7 +96,7 @@ my-agent/                         # workspace; run FastAgent commands here
 ```
 
 `init` installs dependencies in `fastagent/`. If installation fails, run `npm --prefix fastagent install`
-before continuing. `--no-install` defers that install; `--minimal` omits the code tool and package manifest.
+before continuing. `--no-install` defers that install.
 A global CLI installation alone does not make package imports available to authored tools.
 
 **Working-directory convention for the rest of this guide:** stay in `my-agent/`, the workspace.

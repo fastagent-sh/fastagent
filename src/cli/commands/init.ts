@@ -1,16 +1,14 @@
 /** `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. */
 import { spawn } from "node:child_process";
-import { basename, join, resolve } from "node:path";
-import { DEFAULT_AGENT_DIRNAME, SECRETS_DIRNAME, agentsAt, displayPath } from "../../paths.ts";
-import { detectRuntime, readPackageJson } from "../../runtime.ts";
+import { basename, resolve } from "node:path";
+import { DEFAULT_AGENT_DIRNAME, agentsAt, displayPath } from "../../paths.ts";
 import { agentDirName, agentDirNameError, scaffoldAgent } from "../../scaffold/init.ts";
 import { failStartup, failUsage } from "../fail.ts";
 
 export interface InitOptions {
-  minimal: boolean;
   /** false ⇔ `--no-install`. */
   install: boolean;
-  /** The agent directory's name inside `dir` — undefined = the default, `"."` = `dir` itself (`--flat`). */
+  /** The agent directory's name inside `dir` — undefined = the default. */
   agentDir?: string;
 }
 
@@ -20,22 +18,11 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const requested = agentDirName(opts.agentDir);
   const invalid = agentDirNameError(requested);
   if (invalid) failUsage(`--agent-dir "${requested}" ${invalid}`);
-  const {
-    complete,
-    agentDir: rel,
-    created,
-    kept,
-  } = await scaffoldAgent(dir, {
-    minimal: opts.minimal,
-    agentDir: requested,
-  }).catch(failStartup);
-  const flat = rel === ".";
-  // The agent dir is where the manifest lives, so any install runs there — never against a surrounding workspace's
+  const { agentDir: rel, created } = await scaffoldAgent(dir, { agentDir: requested }).catch(failStartup);
+  // The agent dir is where the manifest lives, so the install runs there — never against a surrounding workspace's
   // package.json (its deps are its own concern).
   const agentDir = resolve(dir, rel);
-  console.error(
-    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"} — ${flat ? "the directory IS the agent" : `agent in ./${rel}/`}`,
-  );
+  console.error(`[fastagent] initialized ${dir} — agent in ./${rel}/`);
   console.error(`  created: ${created.join(", ")}`);
   // A second agent beside an existing one is a supported shape, not an accident (an engineer's, a PM's and a content
   // owner's agent can drive one repository), but it changes how this workspace resolves from now on — so say it HERE,
@@ -47,38 +34,9 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
       : `set FASTAGENT_AGENT=<name> (in your shell or .envrc) to pick one`;
     console.error(`[fastagent] note: ${dir} now holds ${siblings.length} agents (${siblings.join(", ")}) — ${pick}`);
   }
-  if (kept.length > 0) {
-    // Adopting a directory: its own files win, always.
-    console.error(`  kept your existing: ${kept.join(", ")}`);
-    if (kept.includes(join(rel, "package.json")) && complete) {
-      const add =
-        detectRuntime(agentDir, await readPackageJson(agentDir)).runtime === "bun" ? "bun add" : "npm install";
-      console.error(
-        `[fastagent] note: your package.json is untouched, so it does not list @fastagent-sh/fastagent — ` +
-          `run \`${add} @fastagent-sh/fastagent\` there or the scaffolded tools/ cannot resolve`,
-      );
-    }
-    const keptSecretsIgnore = kept.includes(join(rel, SECRETS_DIRNAME, ".gitignore"));
-    if (kept.includes(join(rel, ".gitignore"))) {
-      // The "credentials are covered either way" reassurance holds only when `.secrets/.gitignore` is OURS.
-      console.error(
-        `[fastagent] note: your .gitignore is untouched — make sure it ignores node_modules, .state ` +
-          `and .cache` +
-          (keptSecretsIgnore ? `` : ` (.secrets/ carries its own .gitignore, so credentials are covered either way)`),
-      );
-    }
-    if (keptSecretsIgnore) {
-      console.error(
-        `[fastagent] note: your ${join(rel, SECRETS_DIRNAME, ".gitignore")} is untouched — verify it ignores ` +
-          `everything but .env.example, because credentials land in that directory`,
-      );
-    }
-  }
-
-  const willInstall = complete && opts.install && !kept.includes(join(rel, "package.json"));
   let installFailed = false;
-  if (willInstall) {
-    console.error(`[fastagent] installing dependencies (npm install${flat ? "" : ` in ${rel}`})…`);
+  if (opts.install) {
+    console.error(`[fastagent] installing dependencies (npm install in ${rel})…`);
     installFailed = (await npmInstall(agentDir)) !== 0;
     if (installFailed)
       console.error(`[fastagent] warn: npm install failed — run it manually in ${agentDir} before \`fastagent dev\``);
@@ -87,9 +45,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   console.error(`  next steps:`);
   const cdTarget = displayPath(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
-  if (complete && (!willInstall || installFailed)) {
-    console.error(`    ${flat ? "npm install" : `(cd ${rel} && npm install)`}`);
-  }
+  if (!opts.install || installFailed) console.error(`    (cd ${rel} && npm install)`);
   console.error(`    fastagent dev   # serve locally and iterate`);
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }
