@@ -23,7 +23,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
   const fix =
     source === "flag"
       ? "bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel"
-      : "set http.host to 0.0.0.0 (or 127.0.0.1) in fastagent.config.*, override it with --bind, or drop --tunnel";
+      : "set http.host to 0.0.0.0 (or 127.0.0.1) in fastagent.config.ts, override it with --bind, or drop --tunnel";
   const message = `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — ${fix}`;
   if (source === "flag") failUsage(message);
   failStartup(new Error(message));

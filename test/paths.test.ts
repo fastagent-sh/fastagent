@@ -12,7 +12,7 @@ import { displayPath, readTextIfExists, resolvePlacement, workspaceHint } from "
 describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
   const config = async (dir: string): Promise<void> => {
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   };
 
   it("the agent is the config holder one level inside; the workspace is what you pointed at", async () => {

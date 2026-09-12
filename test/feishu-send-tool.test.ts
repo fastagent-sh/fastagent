@@ -57,7 +57,7 @@ function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
   });
   beforeEach(async () => {
     state.cwd = await mkdtemp(join(tmpdir(), `fa-${kind}-send-`));
-    await writeFile(join(state.cwd, "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(state.cwd, "fastagent.config.ts"), "export default {};\n");
     vi.stubEnv("FASTAGENT_STATE_DIR", "");
     vi.stubEnv("FASTAGENT_AGENT", "");
     vi.stubEnv(`${prefix}_APP_ID`, "");

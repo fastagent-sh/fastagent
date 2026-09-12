@@ -58,7 +58,7 @@ describe("feishu: registering an event URL the platform verifies by calling it",
   it("the platform's challenge reaches our route and the subscription is stored", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-live-feishu-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
     await mkdir(join(dir, "channels"), { recursive: true });
     // The scaffold's own import is the package name, which resolves through the agent dir's
     // node_modules; a throwaway directory has none. Importing this checkout by path loads the same

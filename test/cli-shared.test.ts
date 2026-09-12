@@ -126,7 +126,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
   });
 
   it("places each command's extras where that command puts them", async () => {
-    const dev = await lines({ beforeModel: [["config", "/w/agent/fastagent.config.mjs"]] });
+    const dev = await lines({ beforeModel: [["config", "/w/agent/fastagent.config.ts"]] });
     expect(dev.indexOf("config")).toBe(2); // after agent/workspace, before model
     expect(dev.indexOf("config")).toBeLessThan(dev.indexOf("model"));
 
@@ -156,7 +156,7 @@ describe("enterAgentCommand: --no-input never reaches the picker", () => {
   const modellessAgent = (): string => {
     const dir = mkdtempSync(join(tmpdir(), "fastagent-prelude-"));
     dirs.push(dir);
-    writeFileSync(join(dir, "fastagent.config.mjs"), "export default {};\n");
+    writeFileSync(join(dir, "fastagent.config.ts"), "export default {};\n");
     return dir;
   };
 

@@ -129,7 +129,7 @@ export async function preflightDeploy(input: {
       ok: false,
       gate:
         `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
-        `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.* inside is what ` +
+        `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.ts inside is what ` +
         `makes it an agent, never its name)`,
     };
   }
@@ -151,7 +151,7 @@ export async function preflightDeploy(input: {
   }
   if (!model.spec) {
     const issue =
-      `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.* (it travels ` +
+      `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.ts (it travels ` +
       `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy records that one in the release manifest)` +
       // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
       // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
@@ -513,7 +513,7 @@ export async function preflightDeploy(input: {
       const issue =
         `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
         `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
-        `Dockerfile), or set \`model\` in fastagent.config.* so it ships in the config instead.`;
+        `Dockerfile), or set \`model\` in fastagent.config.ts so it ships in the config instead.`;
       if (run) return { ok: false, gate: issue };
       messages.push({ level: "warn", text: issue });
     }

@@ -19,7 +19,7 @@ async function agentDir(
   config = `{ model: "openai-codex/gpt-5.5" }`,
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
-  await writeFile(join(dir, "fastagent.config.mjs"), `export default ${config};\n`);
+  await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
   await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
   for (const [rel, body] of Object.entries(files)) {
     await mkdir(join(dir, rel, ".."), { recursive: true });
@@ -64,7 +64,7 @@ describe("createAgentService", () => {
     // repo shipped a version where they did not — /control/* 404'd while control.json advertised it.
     const dir = await mkdtemp(join(tmpdir(), "fa-surface-ctl-"));
     await writeFile(
-      join(dir, "fastagent.config.mjs"),
+      join(dir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
@@ -84,7 +84,7 @@ describe("createAgentService", () => {
     // access at all (the CLI's discovery file is `announceControl`'s, in cli/serve.ts).
     const dir = await mkdtemp(join(tmpdir(), "fa-surface-token-"));
     await writeFile(
-      join(dir, "fastagent.config.mjs"),
+      join(dir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
@@ -102,7 +102,7 @@ describe("createAgentService", () => {
   it("honours an injected control token — the deployed case, where a minted one is unreadable", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-surface-injected-"));
     await writeFile(
-      join(dir, "fastagent.config.mjs"),
+      join(dir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");

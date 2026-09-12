@@ -47,11 +47,11 @@ fastagent init [dir] [--minimal] [--no-install] [--agent-dir <name>|--flat]
 
 Creates a self-iterating agent — it can edit its own definition (persona.md and skills are re-read every turn). A fresh agent has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.secrets/.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore hygiene is two scaffolded files: the agent `.gitignore` (`node_modules/`, `.state/`, a stray `.env`) and `.secrets/.gitignore` (everything but `.env.example`). fastagent writes both once, at `init` — no later command reads, rewrites or verifies them, so they are yours. They are separate on purpose: the root one is the file you will edit, and a nested `.gitignore` outranks it, so the credentials stay protected either way.
 
-**Where the files land** — no detection and no prompt. By default the WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it gets zero writes and becomes the agent's WORKSPACE when you point fastagent there. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when the target already holds a `fastagent.config.*` (already an agent) or any other content.
+**Where the files land** — no detection and no prompt. By default the WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it gets zero writes and becomes the agent's WORKSPACE when you point fastagent there. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when the target already holds a `fastagent.config.ts` (already an agent) or any other content.
 
-`--agent-dir <name>` names that directory anything you like: **the name never decides what IS an agent** — a `fastagent.config.*` does, so `./bot/` and `./fastagent/` are equally agents. The name carries weight in exactly one place, and only among agents already identified: when a workspace holds several and nothing selects, the one named `fastagent` answers (see `FASTAGENT_AGENT` below). It must be a single directory name (a path would put the agent where fastagent's one-level lookup could not find it). To deploy it, keep the name to letters, digits, `-` and `_`: the release manifest carries it into the container, and `deploy` refuses anything else by name.
+`--agent-dir <name>` names that directory anything you like: **the name never decides what IS an agent** — a `fastagent.config.ts` does, so `./bot/` and `./fastagent/` are equally agents. The name carries weight in exactly one place, and only among agents already identified: when a workspace holds several and nothing selects, the one named `fastagent` answers (see `FASTAGENT_AGENT` below). It must be a single directory name (a path would put the agent where fastagent's one-level lookup could not find it). To deploy it, keep the name to letters, digits, `-` and `_`: the release manifest carries it into the container, and `deploy` refuses anything else by name.
 
-`--agent-dir .` (spelled `--flat`) puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package, where the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.*` refuses, because that means it is already an agent. `deploy` does not accept this layout — it needs a workspace containing the agent, because a release replaces the agent directory and nothing else.
+`--agent-dir .` (spelled `--flat`) puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package, where the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.ts` refuses, because that means it is already an agent. `deploy` does not accept this layout — it needs a workspace containing the agent, because a release replaces the agent directory and nothing else.
 
 What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup could never SELECT — an agent already resolving AT `dir`, which wins over anything inside it and would hide the new one. A second agent BESIDE an existing one is fine and supported: several agents can share one workspace (an engineer's, a PM's, a content owner's, all driving the same repository), and `FASTAGENT_AGENT=<name>` picks between them — the one named `fastagent` answers by default. `init` prints the note when a workspace crosses into that shape. The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
 
@@ -93,7 +93,7 @@ fastagent models [search]
 
 Lists available model specs in `provider/modelId` form. Pass a search string to filter.
 
-Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
+Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.ts`.
 
 ## `fastagent login`
 
@@ -135,7 +135,7 @@ fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-wa
 
 Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
 live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
-`tools/`, `channels/`, `schedules/`, `fastagent.config.*`, `package.json`, `.secrets/.env`.
+`tools/`, `channels/`, `schedules/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`.
 
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
@@ -157,7 +157,7 @@ Options:
 Model precedence:
 
 ```txt
---model > FASTAGENT_MODEL > fastagent.config.* model
+--model > FASTAGENT_MODEL > fastagent.config.ts model
 ```
 
 ## `fastagent attach`
@@ -318,13 +318,13 @@ Runs the agent in production posture: no watch, same assembly as `dev`.
 Port precedence:
 
 ```txt
---port > PORT > fastagent.config.* http.port > 8787
+--port > PORT > fastagent.config.ts http.port > 8787
 ```
 
 Bind precedence:
 
 ```txt
---bind > fastagent.config.* http.host > all interfaces
+--bind > fastagent.config.ts http.host > all interfaces
 ```
 
 `dev` reads the same chain but ends it at `127.0.0.1` — see [Bind address](configuration.md#bind-address).

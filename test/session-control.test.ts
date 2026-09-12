@@ -318,7 +318,7 @@ describe("session control: observation plane", () => {
     try {
       await mkdir(join(dir, "fastagent"), { recursive: true });
       await writeFile(
-        join(dir, "fastagent", "fastagent.config.mjs"),
+        join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
       const opened = await createPiAgentFromDir(dir, { sessionControl: true });
@@ -350,7 +350,7 @@ describe("session control: observation plane", () => {
       const { mkdir } = await import("node:fs/promises");
       await mkdir(join(dir, "fastagent"));
       await writeFile(
-        join(dir, "fastagent", "fastagent.config.mjs"),
+        join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
       const opened = await createPiAgentFromDir(dir, { sessionControl: true });
@@ -380,7 +380,7 @@ describe("session control: observation plane", () => {
     try {
       await mkdir(join(dir, "fastagent"));
       await writeFile(
-        join(dir, "fastagent", "fastagent.config.mjs"),
+        join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
       const opened = await createPiAgentFromDir(dir, { sessionControl: true });
@@ -2287,7 +2287,7 @@ describe("session control: boundary mutations", () => {
       const { mkdir } = await import("node:fs/promises");
       await mkdir(join(dir, "fastagent"));
       await writeFile(
-        join(dir, "fastagent", "fastagent.config.mjs"),
+        join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
       const seen: string[] = [];

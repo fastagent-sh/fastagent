@@ -49,7 +49,7 @@ beforeAll(async () => {
   const agentDir = join(workspace, "fastagent");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-  await writeFile(join(agentDir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+  await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(

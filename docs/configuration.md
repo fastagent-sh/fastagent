@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.*."
+description: "Configure a FastAgent agent: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.ts."
 status: current
 ---
 
@@ -9,18 +9,19 @@ status: current
 FastAgent keeps behavior and deployment choices separate:
 
 - agent behavior lives in `persona.md` (identity), `skills/`, `tools/`, and `AGENTS.md` project context,
-- deployment choices live in `fastagent.config.*`, CLI flags, and environment variables,
+- deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables,
 - secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
 ## Config file
 
-An agent may contain exactly one config file:
+An agent is identified by exactly one filename:
 
 ```txt
 fastagent.config.ts
-fastagent.config.js
-fastagent.config.mjs
 ```
+
+One spelling, not a family — fastagent generates this file, so an extension to choose from would buy
+nothing. (Your own `tools/`, `channels/`, and `schedules/` still accept `.ts`, `.js`, or `.mjs`.)
 
 Example:
 
@@ -70,7 +71,7 @@ fastagent models gpt
 Precedence:
 
 ```txt
-CLI --model > FASTAGENT_MODEL > fastagent.config.* model
+CLI --model > FASTAGENT_MODEL > fastagent.config.ts model
 ```
 
 With none of these set, a serving command (`dev` / `start` / `invoke`) run in a terminal prompts you
@@ -237,13 +238,13 @@ Run `fastagent info` or `fastagent dev` to see the resolved auth source for the 
 Port precedence for `dev`:
 
 ```txt
---port > fastagent.config.* http.port > 8787
+--port > fastagent.config.ts http.port > 8787
 ```
 
 Port precedence for `start`:
 
 ```txt
---port > PORT > fastagent.config.* http.port > 8787
+--port > PORT > fastagent.config.ts http.port > 8787
 ```
 
 Use `PORT` in hosted environments that inject a port.
@@ -251,8 +252,8 @@ Use `PORT` in hosted environments that inject a port.
 ## Bind address
 
 ```txt
-dev:   --bind > fastagent.config.* http.host > 127.0.0.1
-start: --bind > fastagent.config.* http.host > all interfaces
+dev:   --bind > fastagent.config.ts http.host > 127.0.0.1
+start: --bind > fastagent.config.ts http.host > all interfaces
 ```
 
 `localhost` is accepted and resolved to `127.0.0.1` as it is read, so what binds, what the startup
@@ -448,7 +449,7 @@ built for serving, and it is concurrency-safe.
 ### When the repo already owns `tools/` or `channels/`
 
 Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,
-never the workspace's names. `fastagent.config.*` identifies the agent directory; `fastagent/` is its
+never the workspace's names. `fastagent.config.ts` identifies the agent directory; `fastagent/` is its
 default name. Within the agent, a broken tool is reported and skipped, while
 a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
 programmatic tools outside the agent, declare them with `config.tools`.
@@ -479,7 +480,7 @@ Share code through packages or real files, not symlinks in code-input directorie
 
 ## Channels
 
-Channels are not configured in `fastagent.config.*`. A channel needs glue code, so its file is the
+Channels are not configured in `fastagent.config.ts`. A channel needs glue code, so its file is the
 enable switch: `.ts` / `.js` / `.mjs` files under `channels/` are enabled; rename one to
 `<name>.ts.disabled` to disable it without introducing a second config source.
 

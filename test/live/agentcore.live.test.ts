@@ -63,7 +63,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // Function URL, the two Lambda permissions, the wake/scheduler IAM roles or an
     // `AWS::Scheduler::Schedule`. This fixture emits all of them and still creates nothing.
     await writeFile(
-      join(agentDir, "fastagent.config.mjs"),
+      join(agentDir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", selfSchedule: true };\n`,
     );
     // A plain default export, not `defineSchedule(...)`: loadSchedules validates the SHAPE, and this

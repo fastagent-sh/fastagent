@@ -16,7 +16,7 @@ async function agentWorkspace(prefix: string, files: Record<string, string> = {}
   const dir = await mkdtemp(join(tmpdir(), prefix));
   await mkdir(join(dir, "fastagent", ".secrets"), { recursive: true });
   await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
-  await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n"); // THE marker
+  await writeFile(join(dir, "fastagent", "fastagent.config.ts"), "export default {};\n"); // THE marker
   await writeFile(join(dir, "fastagent", ".secrets", "auth.json"), "{}\n"); // a real credential to leak
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, "fastagent", dirname(name)), { recursive: true });
@@ -47,7 +47,7 @@ describe("cli papercuts", () => {
     // test/deploy-artifacts.test.ts; eight spawns proving it here made this the slowest and only flaky
     // test in the suite. What a subprocess is for is the WIRING: that the command actually consults it.
     const dir = await agentWorkspace("fa-deploy-ignore-", {
-      "fastagent.config.mjs": `export default { model: "openai-codex/gpt-5.5" };\n`,
+      "fastagent.config.ts": `export default { model: "openai-codex/gpt-5.5" };\n`,
       "package.json": `{"type":"module"}`,
     });
     expect((await run(["deploy", "fly", dir])).code).toBe(0);
@@ -69,7 +69,7 @@ describe("cli papercuts", () => {
 
   it("deploy: generate mode succeeds with the WYSIWYG note; the agentDir config key is retired", async () => {
     const dir = await agentWorkspace("fa-deploy-gen-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });
     const result = await run(["deploy", "fly", dir]);
     expect(result.code).toBe(0);
@@ -78,7 +78,7 @@ describe("cli papercuts", () => {
 
     // The retired config key fails visibly — placement is structural now, never configured.
     const legacy = await agentWorkspace("fa-deploy-legacy-", {
-      "fastagent.config.mjs": `export default { agentDir: "./agent" };\n`,
+      "fastagent.config.ts": `export default { agentDir: "./agent" };\n`,
     });
     const rejected = await run(["deploy", "fly", legacy]);
     expect(rejected.code).toBe(1);
@@ -87,7 +87,7 @@ describe("cli papercuts", () => {
 
   it("deploy docker generates app-only Compose and keeps user-owned Dockerfile/Compose on re-run", async () => {
     const dir = await agentWorkspace("fa-deploy-docker-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
 
@@ -115,7 +115,7 @@ describe("cli papercuts", () => {
 
   it("deploy docker --tunnel keeps an existing app-only topology and prints an actionable runbook", async () => {
     const dir = await agentWorkspace("fa-deploy-kept-no-tunnel-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });
     expect((await run(["deploy", "docker", dir])).code).toBe(0);
     const composePath = join(dir, "fastagent", "fastagent.compose.yml");
@@ -137,7 +137,7 @@ describe("cli papercuts", () => {
     // one file while the container reads another: every declared value is silently absent. Deterministic, so `--run`
     // refuses before Docker is touched; generating artifacts only warns.
     const dir = await agentWorkspace("fa-deploy-secrets-dir-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });
     const elsewhere = await mkdtemp(join(tmpdir(), "fa-secrets-elsewhere-"));
     const env = { ...process.env, FASTAGENT_SECRETS_DIR: elsewhere };
@@ -157,7 +157,7 @@ describe("cli papercuts", () => {
     // determinate mismatch between what ships and what the definition says — so it stops before Docker is touched.
     // (writeArtifacts owns WHICH files are stale; this is the dispatcher's wiring of that fact to an exit code.)
     const dir = await agentWorkspace("fa-deploy-stale-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });
     expect((await run(["deploy", "docker", dir])).code).toBe(0);
     const compose = join(dir, "fastagent", "fastagent.compose.yml");
@@ -179,7 +179,7 @@ describe("cli papercuts", () => {
 
   it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
     const dir = await agentWorkspace("fa-deploy-tunnel-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });
     const result = await run(["deploy", "docker", dir, "--tunnel"]);
     expect(result.code).toBe(0);
@@ -266,7 +266,7 @@ describe("cli papercuts", () => {
 
   it("start fails when a declared channel cannot load instead of exposing the default /invoke route", async () => {
     const dir = await agentWorkspace("fa-cli-channel-fail-", {
-      "fastagent.config.mjs": `export default { model: "openai/gpt-5.5" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-5.5" };\n`,
       "channels/telegram.mjs": `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };\n`,
     });
 
@@ -403,7 +403,7 @@ describe("cli papercuts", () => {
     // apply). An up-to-date generated one is kept quietly. Marker/predicate come from container.ts (single source).
     const setup = async (dockerfileContent: string) => {
       const dir = await agentWorkspace("fa-apt-", {
-        "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };\n`,
+        "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };\n`,
         Dockerfile: dockerfileContent,
       });
       await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
@@ -440,7 +440,7 @@ describe("cli papercuts", () => {
 
   it("info reports the assembled surface as JSON (incl. load diagnostics), read-only (no sessions dir)", async () => {
     const dir = await agentWorkspace("fa-info-", {
-      "fastagent.config.mjs": "export default {};\n",
+      "fastagent.config.ts": "export default {};\n",
       "skills/greet/SKILL.md": "---\nname: greet\ndescription: Greet warmly.\n---\nHi.\n",
       "skills/bad/SKILL.md": "---\nname: bad\n---\nno description.\n", // malformed
       "tools/lookup.mjs":
@@ -582,7 +582,7 @@ describe("cli papercuts", () => {
     const { code, stderr } = await run(["login", "no-such-provider"], cwd, env);
     expect(code).not.toBe(0);
     // The marker names itself, at both positions the lookup checks.
-    expect(stderr).toMatch(/no agent here \(no fastagent\.config\.\*, here or one level inside\)/);
+    expect(stderr).toMatch(/no agent here \(no fastagent\.config\.ts, here or one level inside\)/);
     await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
 
     // …and it is silent when FASTAGENT_AUTH_PATH outranks the fallback: an announcement naming a file the
@@ -598,7 +598,7 @@ describe("cli papercuts", () => {
     // switching scope.
     const inside = join(cwd, "agent", "tools");
     await mkdir(inside, { recursive: true });
-    await writeFile(join(cwd, "agent", "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(cwd, "agent", "fastagent.config.ts"), "export default {};\n");
     const nested = await run(["login", "no-such-provider"], inside, env);
     expect(nested.stderr).toMatch(/is inside the agent .*but is not its root/);
     expect(nested.stderr).not.toMatch(/logging in GLOBALLY/);

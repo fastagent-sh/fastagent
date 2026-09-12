@@ -26,7 +26,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
   const cli = (args: string[]) => node([join(root, "src/cli.ts"), ...args]);
   try {
     await cli(["init", ".", "--no-install"]);
-    const config = await readFile(join(agentDir, "fastagent.config.mjs"), "utf8");
+    const config = await readFile(join(agentDir, "fastagent.config.ts"), "utf8");
     for (const file of [
       "tsconfig.json",
       "persona.md",
@@ -71,7 +71,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       scheduleFailures: [],
       diagnostics: [],
     });
-    expect(await readFile(join(agentDir, "fastagent.config.mjs"), "utf8")).toBe(config);
+    expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toBe(config);
 
     const testFile = join(agentDir, "test/batches.test.ts");
     const valid = await readFile(testFile, "utf8");

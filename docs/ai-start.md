@@ -40,7 +40,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. GitHub is ingress-only. |
 | Clock triggers and deliberate follow-ups | `schedules/` and the opt-in `wake` tool | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
-| Model, serving, and deployment choices | `fastagent.config.*` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
+| Model, serving, and deployment choices | `fastagent.config.ts` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
 | Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, journals, channel state, and scheduling records. Preserve them according to the host. |
 | Business notes and decisions | Existing working files or an explicitly chosen durable store | Record sources, approval decisions, outcomes, and pending work. A session journal is not a business database. |
 
@@ -58,7 +58,7 @@ network, and credentials. Constrain the whole process when isolation is required
 ## 2. Choose placement and initialize once
 
 The **workspace** is the directory passed to FastAgent: the agent's working directory and deployment
-build context. The **agent directory** holds `fastagent.config.*` and the definition. They can be different
+build context. The **agent directory** holds `fastagent.config.ts` and the definition. They can be different
 directories or the same directory.
 
 | Situation | Placement |
@@ -68,7 +68,7 @@ directories or the same directory.
 | An existing application embeds the agent | Keep the application's layout. A nested definition is convenient; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Check the workspace itself and its direct
-children for `fastagent.config.ts`, `.js`, or `.mjs` before running `init`. Reuse an existing definition.
+children for `fastagent.config.ts` before running `init`. Reuse an existing definition.
 `--agent-dir bot` selects another name; multiple sibling agents are selected with `FASTAGENT_AGENT`.
 See [Configuration](configuration.md#more-than-one-agent). Optional directories remain optional.
 
@@ -89,7 +89,7 @@ my-agent/                         # workspace; run FastAgent commands here
     ├── persona.md
     ├── skills/writing-great-skills/
     ├── tools/fetch-url.ts
-    ├── fastagent.config.mjs
+    ├── fastagent.config.ts
     ├── package.json              # type: module; FastAgent is a local dependency
     ├── .secrets/.env.example
     └── .gitignore
@@ -106,10 +106,11 @@ For a flat agent, omit the `fastagent/` path prefix and npm's `--prefix fastagen
 
 ## 3. Use TypeScript for new authored code
 
-Prefer **TypeScript for tools, channels, schedules, library helpers, and tests**. Runtime discovery also
-supports JavaScript (`.js` and `.mjs`); existing JavaScript remains valid. Keep the generated
-`fastagent.config.mjs`, Dockerfile, YAML/JSON host configuration, and generated deployment JavaScript in
-their generated formats. Those artifacts do not set the language for business code.
+Prefer **TypeScript for tools, channels, schedules, library helpers, and tests**. Runtime discovery of
+*your* code also supports JavaScript (`.js` and `.mjs`); existing JavaScript remains valid. The config
+file is the exception with no choice: it is always `fastagent.config.ts`, because fastagent generates it.
+Keep the generated Dockerfile, YAML/JSON host configuration, and generated deployment JavaScript in their
+generated formats. Those artifacts do not set the language for business code.
 
 Use **Node >= 22.19** (`node --version`) and ESM (`"type": "module"` in the agent's `package.json`, already
 set by the default scaffold). Node runs erasable TypeScript directly. It removes types without checking
@@ -265,7 +266,7 @@ Ask the owner to run `fastagent login` in this workspace's terminal, or have the
 provider key in `fastagent/.secrets/.env`. Keep credentials out of chat transcripts, issue comments,
 source files, and logs. The CLI reads the agent's `.secrets/.env`, not a workspace-root `.env`.
 
-Set `model: "provider/model-id"` in the existing `fastagent.config.mjs`, preserving its export. A terminal
+Set `model: "provider/model-id"` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
 from two sources only — that config value, or `FASTAGENT_MODEL` in `fastagent/.secrets/.env`, which
 `deploy` reads from the file and records in the release manifest. A `--model` flag is local to the run
@@ -284,7 +285,7 @@ fastagent dev
 
 `dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, and skills are read on the next turn.
 With watching enabled, changes under the agent's `tools/`, `channels/`, `schedules/`, and `extensions/`
-restart the worker, as do changes to its `fastagent.config.*`, `package.json`, `models.json`, and resolved
+restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
 `.env` (only when that file is inside the agent directory).
 
 **After editing `fastagent/lib/batches.ts` or another imported helper outside those watched directories,

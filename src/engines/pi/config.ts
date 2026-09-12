@@ -3,7 +3,7 @@
  * resolveModelSpec).
  */
 import { existsSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { FastagentTool } from "./tool.ts";
@@ -14,7 +14,7 @@ import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
-import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
+import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -89,18 +89,10 @@ function validateStringList(value: unknown, key: string, shape: RegExp, desc: st
   }
 }
 
-/** Load `<dir>/fastagent.config.ts|.js|.mjs`. */
+/** Load `<dir>/fastagent.config.ts`. */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
-  const found = AGENT_CONFIG_NAMES.map((name) => join(dir, name)).filter((path) => existsSync(path));
-  if (found.length === 0) return { config: {} };
-  if (found.length > 1) {
-    throw new Error(
-      `${dir}: multiple fastagent config files found; keep exactly one (${found.map((p) => basename(p)).join(", ")})`,
-    );
-  }
-
-  // biome-ignore lint/style/noNonNullAssertion: length checked above — exactly one element here
-  const path = found[0]!;
+  const path = join(dir, AGENT_CONFIG_FILE);
+  if (!existsSync(path)) return { config: {} };
   let mod: { default?: unknown };
   try {
     // Cache-bust on file change: ESM `import()` caches by URL, so a config REWRITTEN in this process (the first-run
@@ -116,8 +108,9 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: must default-export defineConfig({...})`);
   }
   const c = config as FastagentConfig;
-  // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a .js/.mjs config (`modle:`) must not
-  // silently degrade to defaults.
+  // Unknown keys throw. This is NOT redundant with `defineConfig`'s types: Node strips types without checking them,
+  // so `modle:` reaches here whatever the editor said, and silently degrading to defaults is the failure it would
+  // otherwise cause.
   for (const key of Object.keys(c)) {
     if (
       key !== "model" &&
