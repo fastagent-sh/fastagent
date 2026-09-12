@@ -14,7 +14,6 @@ import { openExternalUrl } from "../../../open-url.ts";
 import {
   type ResolvedPlacement,
   SECRETS_DIRNAME,
-  SECRETS_DIR_MODE,
   SECRET_FILE_MODE,
   exists,
   readTextIfExists,
@@ -36,7 +35,7 @@ export const dockerHost: HostDeploy = {
     // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
     // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
     const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
-    await mkdir(dirname(composeValueFile), { recursive: true, mode: SECRETS_DIR_MODE });
+    await mkdir(dirname(composeValueFile), { recursive: true });
     if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
     // The pre-flight read whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a
     // builder's path would not mean the same thing anywhere else. Under `--run` the two files disagreeing is a

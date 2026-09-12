@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRETS_DIR_MODE, SECRET_FILE_MODE } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -68,7 +68,7 @@ async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
-  mkdirSync(dirname(authPath), { recursive: true, mode: SECRETS_DIR_MODE });
+  mkdirSync(dirname(authPath), { recursive: true });
   if (!existsSync(authPath)) {
     try {
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
@@ -108,11 +108,7 @@ async function withLockedAuthFile<T>(
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
     if (out.next !== undefined) {
-      const file = writeTarget(authPath);
-      // A resolved symlink target lands in a DIFFERENT directory, which `writeFileAtomic` would create without a
-      // mode — so the same 0700 is stated for it as for `dirname(authPath)` above.
-      mkdirSync(dirname(file), { recursive: true, mode: SECRETS_DIR_MODE });
-      writeFileAtomic(file, out.next, SECRET_FILE_MODE);
+      writeFileAtomic(writeTarget(authPath), out.next, SECRET_FILE_MODE);
     }
     throwIfCompromised();
     result = out.result;

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -104,10 +104,10 @@ describe("appendChannelDotEnv", () => {
     }
   });
 
-  it("re-applies 0600 to a `.env` it did not create — `cp .env.example .env` leaves a 0644 one", async () => {
-    // The documented copy (and the `replacedInPlace` branch below assumes it) produces a world-readable file, and
-    // `mode` on a write is ignored once the file exists. Without re-applying it, a minted GITHUB_WEBHOOK_SECRET
-    // lands as plaintext in a 0644 file — the gap the old directory 0700 used to hide.
+  it("leaves an EXISTING .env's mode alone — creating one is the only time fastagent decides it", async () => {
+    // `cp .secrets/.env.example .secrets/.env` produces a 0644 file the operator owns. fastagent appends to it and
+    // says nothing about its mode: the rule is "who created the file", and re-deciding this one would be the tool
+    // changing permissions on something it did not create. (The case above covers the file it DOES create: 0600.)
     const dir = await mkdtemp(join(tmpdir(), "fa-env-copied-"));
     const env = join(dir, ".secrets", ".env");
     await mkdir(dirname(env), { recursive: true });
@@ -117,30 +117,7 @@ describe("appendChannelDotEnv", () => {
     await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
 
     expect(await readFile(env, "utf8")).toContain("GITHUB_WEBHOOK_SECRET=topsecret");
-    expect(((await stat(env)).mode & 0o777).toString(8)).toBe("600");
-
-    // And again with NOTHING to write: every variable is already set, so a condition on "did this call write"
-    // would leave the file open forever. Tightening is about the file's contents, not about this run's diff.
-    await chmod(env, 0o644);
-    const second = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
-    expect(second.written).toEqual([]);
-    expect(((await stat(env)).mode & 0o777).toString(8)).toBe("600");
-  });
-
-  it("a SYMLINKED .env is written through but not chmod-ed, and the credential lands either way", async () => {
-    // The target is a file the operator placed elsewhere (a shared `app.env`); changing its mode could cut off
-    // whatever else reads it, and this call sits past an irreversible boundary — the minted secret must land.
-    const dir = await mkdtemp(join(tmpdir(), "fa-env-link-"));
-    const shared = join(await mkdtemp(join(tmpdir(), "fa-env-shared-")), "app.env");
-    await writeFile(shared, "");
-    await chmod(shared, 0o644);
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await symlink(shared, join(dir, ".secrets", ".env"));
-
-    await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
-
-    expect(await readFile(shared, "utf8")).toContain("GITHUB_WEBHOOK_SECRET=topsecret");
-    expect(((await stat(shared)).mode & 0o777).toString(8)).toBe("644"); // the operator's mode, untouched
+    expect(((await stat(env)).mode & 0o777).toString(8)).toBe("644");
   });
 
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {

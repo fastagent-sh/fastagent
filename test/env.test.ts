@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyEnvValues, dotEnvPath, loadDotEnv, loadEnvValues } from "../src/env.ts";
-import { log } from "../src/log.ts";
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
   it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
@@ -85,27 +84,6 @@ describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () =>
   it("a dir with no .env is a no-op, not a throw", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-"));
     expect(() => loadDotEnv(dir)).not.toThrow(); // ENOENT swallowed
-  });
-
-  it("a world-readable .env is REPORTED on every read — the only notice an older agent's 0644 file gets", async () => {
-    // `add <channel>` tightens what it writes into; dev/start/login/deploy only read, and changing the mode of a
-    // file the operator has been running with is not fastagent's call. So this is the whole remedy: say it.
-    const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-mode-"));
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    const file = join(dir, ".secrets", ".env");
-    await writeFile(file, "TOKEN=t\n");
-    await chmod(file, 0o644);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      loadDotEnv(dir);
-      expect(warn.mock.calls.flat().join("\n")).toMatch(/readable by other accounts \(mode 644\)/);
-      warn.mockClear();
-      await chmod(file, 0o600);
-      loadDotEnv(dir);
-      expect(warn).not.toHaveBeenCalled(); // fixed ⇒ silent
-    } finally {
-      warn.mockRestore();
-    }
   });
 
   it("a NON-ENOENT read error propagates (a corrupt/unreadable .env fails visibly, never silently)", async () => {

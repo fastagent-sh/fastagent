@@ -5,7 +5,6 @@ import {
   AGENT_CONFIG_NAMES,
   DEFAULT_AGENT_DIRNAME,
   SECRETS_DIRNAME,
-  SECRETS_DIR_MODE,
   agentDefinitionOwner,
   agentsAt,
   displayPath,
@@ -170,13 +169,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   try {
     for (const file of files) {
       const abs = join(dir, file.rel);
-      // `.secrets/` gets 0700 when THIS run creates it; every other scaffold directory is ordinary. `mkdir`
-      // ignores `mode` for a directory that already exists, so this never re-decides an operator's.
-      const parent = dirname(abs);
-      await mkdir(parent, {
-        recursive: true,
-        ...(basename(parent) === SECRETS_DIRNAME ? { mode: SECRETS_DIR_MODE } : {}),
-      });
+      await mkdir(dirname(abs), { recursive: true });
       try {
         await writeFile(abs, file.content, { flag: "wx" });
         created.push(file.rel);

@@ -1,8 +1,8 @@
 /** Production serving. */
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import * as Effect from "effect/Effect";
@@ -11,14 +11,7 @@ import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import {
-  SECRETS_DIR_MODE,
-  SECRET_FILE_MODE,
-  resolveSecretsDir,
-  isAgentcoreRuntime,
-  isUnderDir,
-  exists,
-} from "../../paths.ts";
+import { SECRET_FILE_MODE, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService, type AgentService } from "../../service.ts";
@@ -213,10 +206,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
 async function maybeSeedAuth(authPath: string): Promise<void> {
   const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
-  // `writeFileAtomic` would create the directory without a mode, and on a deployed volume's FIRST boot this is the
-  // call that creates `.secrets/` — so the 0700 is stated here rather than inherited from the umask.
-  await mkdir(dirname(authPath), { recursive: true, mode: SECRETS_DIR_MODE });
-  writeFileAtomic(authPath, bytes, SECRET_FILE_MODE);
+  writeFileAtomic(authPath, bytes, SECRET_FILE_MODE); // creates the directory it needs
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 

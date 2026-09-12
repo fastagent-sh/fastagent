@@ -239,28 +239,18 @@ export function isAgentcoreRuntime(): boolean {
 }
 
 /**
- * What a file under {@link resolveSecretsDir} is written with (auth.json, .env). The mode of a file this process
- * CREATES is the whole extent of fastagent's opinion about permissions — the DIRECTORY's mode is the operator's, and
- * every comparable tool draws the line in the same place: Rails chmods the `master.key` it generates and leaves
- * `config/` alone (rails/rails@4c6c357), and the aws CLI ships a 0600 `~/.aws/config` inside a 0755 `~/.aws`. This
- * used to also chmod the directory 0700 on every credential write, which repaired a real bug by reaching into
- * something fastagent did not create; the credentials are revocable, so the mechanism cost more than it bought.
+ * The mode of a secrets file fastagent CREATES (auth.json, and a `.env` it makes itself). That is the whole extent
+ * of its opinion about permissions: a file it did not create keeps the mode its owner gave it, and no directory's
+ * mode is ever decided or repaired. Every comparable tool draws the line here — Rails chmods the `master.key` it
+ * generates and leaves `config/` alone (rails/rails@4c6c357), the aws CLI ships a 0600 `~/.aws/config` inside a
+ * 0755 `~/.aws`.
  *
- * Re-applied by every path that writes SECRET CONTENT, not only on create: `mode` is ignored once the file exists,
- * and the documented `cp .secrets/.env.example .secrets/.env` leaves a 0644 file that would then receive minted
- * secrets in plaintext. Two writers sit outside that scope, both because they put no secret in: `deploy docker`
- * only guarantees the value file EXISTS (Compose's `env_file` needs one), and the read path
- * (`warnIfWorldReadable` in env.ts) only reports a wide `.env` — an older agent's file is the operator's to fix.
+ * The rule is "who created the file", not "does this write carry a secret", because the second question has a
+ * different answer at every call site and grows one more with each new writer: three rounds of patches went into
+ * chmod-ing an existing `.env`, repairing a directory, following a symlink, and reporting an older agent's mode —
+ * all of it for scenarios with no reported use, and none of it reachable under this rule at all.
  */
 export const SECRET_FILE_MODE = 0o600;
-
-/**
- * What a `.secrets/` directory fastagent CREATES is created with. Passed to `mkdir`, whose `mode` is a no-op on a
- * directory that already exists — which is the whole point: fastagent's own scaffold does not hand the filenames
- * (which providers and channels are configured) to other accounts on the box, and an operator's existing directory
- * is left exactly as they set it. Same shape as the state root in `src/cli/serve.ts`.
- */
-export const SECRETS_DIR_MODE = 0o700;
 
 /** Guard that `<agentDir>/<name>` resolves INSIDE the agent dir. */
 export async function assertInsideAgentDir(agentDir: string, name: string): Promise<void> {
