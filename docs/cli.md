@@ -115,14 +115,22 @@ for it again on the spot (cancel to stop), so a mistyped key is corrected at log
 failing at the first invoke; an inconclusive failure (network, quota, permissions) keeps the key and
 prints the provider's message.
 
-**The files are fastagent's, an existing directory is yours.** Every write of `auth.json` or
-`.secrets/.env` sets mode `0600` — on every write, not only the first, so a `.env` you copied from
-`.env.example` is tightened rather than left world-readable. A `.secrets/` that fastagent CREATES is
-created `0700`; one that already exists keeps the permissions you gave it, because `mkdir` does not
-re-decide an existing directory. Rails draws the same line (it chmods the `master.key` it generates
-and leaves `config/` alone), as does the aws CLI (a `0600` `~/.aws/config` inside a `0755` `~/.aws`).
-So if you point `FASTAGENT_AUTH_PATH` into a directory others can read, the file modes still keep the
-contents in and only the filenames are visible; `chmod 700` it yourself if that matters to you.
+**The files fastagent writes are fastagent's; an existing directory is yours.** Precisely:
+
+- **`auth.json`** — every credential write sets mode `0600`, on every write rather than only the
+  first, and creates the directory it lands in `0700`.
+- **`.secrets/.env`** — `add <channel>` sets `0600` on it before writing a minted secret into it, so
+  a `.env` you copied from `.env.example` is tightened rather than left world-readable. Commands that
+  only READ it (`dev`, `start`, `login`, `deploy`) do not change its mode — they **warn** when it is
+  readable by other accounts. `deploy docker` only guarantees the file exists (Compose's `env_file`
+  needs one) and leaves an existing one as it is.
+- **directories** — one fastagent CREATES is created `0700`; one that already exists keeps the
+  permissions you gave it, because `mkdir` does not re-decide an existing directory.
+
+Rails draws the same line (it chmods the `master.key` it generates and leaves `config/` alone), as
+does the aws CLI (a `0600` `~/.aws/config` inside a `0755` `~/.aws`). So if you point
+`FASTAGENT_AUTH_PATH` into a directory others can read, the file modes still keep the contents in and
+only the filenames are visible; `chmod 700` it yourself if that matters to you.
 
 **Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry or a shell env var), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
 

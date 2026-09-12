@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -125,6 +125,22 @@ describe("appendChannelDotEnv", () => {
     const second = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
     expect(second.written).toEqual([]);
     expect(((await stat(env)).mode & 0o777).toString(8)).toBe("600");
+  });
+
+  it("a SYMLINKED .env is written through but not chmod-ed, and the credential lands either way", async () => {
+    // The target is a file the operator placed elsewhere (a shared `app.env`); changing its mode could cut off
+    // whatever else reads it, and this call sits past an irreversible boundary — the minted secret must land.
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-link-"));
+    const shared = join(await mkdtemp(join(tmpdir(), "fa-env-shared-")), "app.env");
+    await writeFile(shared, "");
+    await chmod(shared, 0o644);
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await symlink(shared, join(dir, ".secrets", ".env"));
+
+    await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
+
+    expect(await readFile(shared, "utf8")).toContain("GITHUB_WEBHOOK_SECRET=topsecret");
+    expect(((await stat(shared)).mode & 0o777).toString(8)).toBe("644"); // the operator's mode, untouched
   });
 
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {

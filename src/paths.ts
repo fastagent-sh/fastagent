@@ -248,9 +248,9 @@ export function isAgentcoreRuntime(): boolean {
  *
  * Re-applied by every path that writes SECRET CONTENT, not only on create: `mode` is ignored once the file exists,
  * and the documented `cp .secrets/.env.example .secrets/.env` leaves a 0644 file that would then receive minted
- * secrets in plaintext. `deploy docker` is the one writer outside that scope — it only guarantees the value file
- * EXISTS (Compose's `env_file` needs it) and never writes a value into it, so it creates one 0600 and leaves an
- * operator's existing file as they have it.
+ * secrets in plaintext. Two writers sit outside that scope, both because they put no secret in: `deploy docker`
+ * only guarantees the value file EXISTS (Compose's `env_file` needs one), and the read path
+ * (`warnIfWorldReadable` in env.ts) only reports a wide `.env` — an older agent's file is the operator's to fix.
  */
 export const SECRET_FILE_MODE = 0o600;
 

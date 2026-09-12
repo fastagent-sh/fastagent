@@ -2,8 +2,9 @@
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
  * `.secrets/.env.example` vars) into an existing agent.
  */
-import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { log } from "../log.ts";
 import { detectRuntime } from "../runtime.ts";
 import { SECRETS_DIRNAME, SECRETS_DIR_MODE, SECRET_FILE_MODE, assertInsideAgentDir, exists } from "../paths.ts";
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
@@ -317,7 +318,7 @@ export async function appendChannelDotEnv(
   // variables are all already set writes nothing — a condition on `wrote` would leave that file open forever, and
   // chmod-ing afterwards would let a minted GITHUB_WEBHOOK_SECRET hit the disk readable first.
   const secret = { mode: SECRET_FILE_MODE } as const;
-  if (await exists(file)) await chmod(file, SECRET_FILE_MODE);
+  await tightenExistingEnv(file);
   if (replacedInPlace) {
     current = contentLines.join("\n");
     await writeFile(file, current, secret);
@@ -334,6 +335,31 @@ export async function appendChannelDotEnv(
     }
   }
   return { written, alreadySet, unprotectedSecretsDir };
+}
+
+/**
+ * Put 0600 on a `.env` that ALREADY exists, before this run writes a credential into it.
+ *
+ * The two ways it declines are both about not deciding for the operator. A SYMLINK is followed by the write but not
+ * by the chmod: the target is a file they placed somewhere else (a shared `app.env`), and changing its mode could
+ * cut off whatever else reads it. And a chmod that FAILS (a file owned by another member of the group, a shared
+ * `FASTAGENT_SECRETS_DIR`) warns instead of throwing, because this call sits past an irreversible boundary — the
+ * remote app exists and its one-time Secret is in memory, so refusing the write to protect the file's mode would
+ * destroy the thing that cannot be re-minted to save the thing the operator can fix with one command.
+ */
+async function tightenExistingEnv(file: string): Promise<void> {
+  const info = await lstat(file).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return undefined; // this call creates it, and `mode` on the write covers that
+    throw e;
+  });
+  if (!info?.isFile()) return;
+  await chmod(file, SECRET_FILE_MODE).catch((e: Error) => {
+    log.warn(
+      `[fastagent] could not set 0600 on ${file} (${e.message}) — the credentials below are being written into it ` +
+        `as plaintext at its current permissions. Fix it with \`chmod 600 ${file}\`, or point ` +
+        `FASTAGENT_SECRETS_DIR at a directory you own.`,
+    );
+  });
 }
 
 /** The path `add <kind>` scaffolds to. */

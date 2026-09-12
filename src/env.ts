@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
@@ -45,6 +45,24 @@ export function loadEnvValues(file: string): Map<string, string> {
   }
 }
 
+/**
+ * Say so when the plaintext value file is readable by other accounts on the box. Reported HERE because this is the
+ * one function every command goes through to read it, and because reporting is all fastagent does about a file's
+ * mode after the fact: `add <channel>` tightens what it is about to write into, but `dev`/`start`/`login`/`deploy`
+ * only read, and silently changing the mode of a file an operator has been running with is not theirs to do.
+ *
+ * The case that makes this worth a line: an agent scaffolded by an older version got a `.env` at the umask, and
+ * nothing since re-writes it, so without this the file stays world-readable with no indication anywhere.
+ */
+function warnIfWorldReadable(path: string): void {
+  const mode = statSync(path, { throwIfNoEntry: false })?.mode;
+  if (mode === undefined || (mode & 0o077) === 0) return;
+  log.warn(
+    `[fastagent] ${path} holds plaintext values and is readable by other accounts (mode ` +
+      `${(mode & 0o777).toString(8)}) — \`chmod 600 ${path}\``,
+  );
+}
+
 /** The agent's `.env` file: `<resolved secrets dir>/.env`. */
 export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
   return join(resolveSecretsDir(agentDir, env), ".env");
@@ -78,6 +96,7 @@ export function enterAgentEnv(agentDir: string): void {
 export function loadDotEnv(agentDir: string): void {
   const path = dotEnvPath(agentDir);
   applyEnvValues(loadEnvValues(path)); // ONE definition of "a missing value file is normal" (loadEnvValues)
+  warnIfWorldReadable(path);
   // A `.env` at the agent's root is the file habit puts there, and nothing reads it.
   const stray = join(agentDir, ".env");
   if (stray === path || !existsSync(stray)) return;
