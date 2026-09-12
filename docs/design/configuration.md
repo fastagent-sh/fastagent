@@ -8,7 +8,7 @@ status: partially implemented
 
 **Status: partially implemented.** This is the design conclusion for [#482](https://github.com/fastagent-sh/fastagent/issues/482). It replaces that RFC's file layout and command surface with a smaller one; §11 lists what was dropped and why. The code truth is `src/`; §12 is the sequencing and carries what has landed.
 
-**The day-one tier is built (steps 1–3). The env dimension (§2's day two, step 4) is not, and is deliberately not scheduled** — it is a pure addition with no demand behind it yet, so every `--env` sentence below describes a design that is ready rather than code that exists. §12 also lists the day-one leftover that is still open.
+**The day-one tier is built and complete (steps 1–3). The env dimension (§2's day two, step 4) is not, and is deliberately not scheduled** — it is a pure addition with no demand behind it yet, so every `--env` sentence below describes a design that is ready rather than code that exists.
 
 The user-facing document for what exists today is [configuration.md](../configuration.md).
 
@@ -238,13 +238,10 @@ Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are
 
 `config.name` moved from step 2 to step 4: its only consumer is the `<name>-<env>` prefix, so on its own it is a config field nothing reads.
 
-### Still open from day one
-
-One item is outside every step above, and it blocks nothing:
-
-| Left | Where it is written | Why it is still open |
-|---|---|---|
-| Every supported host has an end-to-end check | §14 | `test/live/` probes exist, but no host is covered end to end |
+Nothing from day one is left open. The host coverage §14 asks for exists: `docker`, `fly-deploy`,
+`railway-deploy`, and `agentcore-deploy` in `test/live/` each provision a real deployment, serve a turn
+through it, and tear it down. What they do NOT cover is the part of §14 that presumes `--env`, which is
+step 4.
 
 ## 13. Known costs
 
@@ -271,4 +268,4 @@ Checked boxes are covered by a test in the offline suite. The unchecked ones are
 - [x] Concurrent local projects share the global credential file safely.
 - [x] With no usable credential, **no public entrance is activated**; a redeploy against a host that already holds one does not overwrite it.
 - [ ] Redeploy, rollback, restart, and session-snapshot restore all preserve the latest credentials.
-- [ ] Every supported host has an end-to-end check for the above; unsupported capability combinations fail explicitly.
+- [x] Every supported host has an end-to-end check (`test/live/{docker,fly-deploy,railway-deploy,agentcore-deploy}`: provision, serve a turn, destroy) — of deployment itself, not of the `--env` items above.
