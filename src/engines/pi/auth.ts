@@ -3,16 +3,7 @@
  * `Models` collection (models.ts). The write path refuses to overwrite a corrupt file, so a torn read never clobbers
  * the other providers' credentials.
  */
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE } from "../../paths.ts";
@@ -71,8 +62,9 @@ async function withLockedAuthFile<T>(
   mkdirSync(dirname(authPath), { recursive: true });
   if (!existsSync(authPath)) {
     try {
+      // `wx` makes this an exclusive CREATE, which is the one case `writeFileSync` honours `mode` in — so no chmod
+      // after it (unlike writeFileAtomic, whose temp may already exist from a crashed writer).
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
-      chmodSync(authPath, SECRET_FILE_MODE);
     } catch (error) {
       // EEXIST: the path IS taken, by something `existsSync` does not see through — either another process created
       // the file just now (its credentials must not be clobbered) or the path is a dangling symlink. Both are left
