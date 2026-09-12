@@ -2,28 +2,12 @@
  * PLACEMENT and the neutral path helpers (src/paths.ts): engine-neutral by nature, so their spec lives
  * here rather than inside the config or scaffold suites that used to own the rule.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// A directory this process cannot chmod (a mount it does not own) is not reachable from a test that
-// runs as its own user, so the refusal is armed here instead.
-const { denyChmod } = vi.hoisted(() => ({ denyChmod: { path: "", armed: false } }));
-
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    chmod: async (p: unknown, mode: unknown) => {
-      if (denyChmod.armed && p === denyChmod.path)
-        throw new Error(`EPERM: operation not permitted, chmod '${p as string}'`);
-      return actual.chmod(p as string, mode as number);
-    },
-  };
-});
-
-import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
-import { displayPath, ensureSecretsDir, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { displayPath, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
 
 describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
   const config = async (dir: string): Promise<void> => {
@@ -163,42 +147,6 @@ describe("paths: displayPath", () => {
     expect(displayPath("/a/b", "/a/b/..agent")).toBe("..agent"); // a dir literally named "..agent" is INSIDE cwd
     expect(displayPath("/a/b", "/a/b")).toBeUndefined(); // already in cwd → no cd step
     expect(displayPath("/a/b", "/tmp/x")).toBe("/tmp/x"); // outside → absolute, not ../../tmp/x noise
-  });
-});
-
-describe("paths: the secrets directory carries a mode", () => {
-  const modeOf = async (p: string) => ((await stat(p)).mode & 0o777).toString(8);
-
-  it("creates it 0700 — the x bit is what actually protects a credential", async () => {
-    const dir = join(await mkdtemp(join(tmpdir(), "fa-secrets-")), ".secrets");
-    await ensureSecretsDir(dir);
-    expect(await modeOf(dir)).toBe("700");
-  });
-
-  it("REPAIRS a directory another writer already created wide open", async () => {
-    // The case that matters, and the reason this chmods rather than trusting mkdir's `mode`: four
-    // callers create this directory and `mkdir` ignores `mode` when it already exists, so the first
-    // one decides for everyone. The ordinary order is init → add <channel> → login, which put the
-    // careful one LAST — every agent scaffolded before this got a 0755 secrets dir holding .env and
-    // auth.json.
-    const dir = join(await mkdtemp(join(tmpdir(), "fa-secrets-old-")), ".secrets");
-    await mkdir(dir, { recursive: true }); // exactly what init/add-channel used to do
-    expect(await modeOf(dir)).toBe("755");
-    await ensureSecretsDir(dir);
-    expect(await modeOf(dir)).toBe("700");
-  });
-
-  it("names itself and the way out when it cannot chmod — the caller asked to store a credential", async () => {
-    const dir = join(await mkdtemp(join(tmpdir(), "fa-secrets-deny-")), ".secrets");
-    denyChmod.path = dir;
-    denyChmod.armed = true;
-    try {
-      await expect(ensureSecretsDir(dir)).rejects.toThrow(
-        /cannot secure secrets dir .*\.secrets \(fastagent keeps it 0700\): EPERM.*FASTAGENT_AUTH_PATH\/FASTAGENT_SECRETS_DIR/,
-      );
-    } finally {
-      denyChmod.armed = false;
-    }
   });
 });
 

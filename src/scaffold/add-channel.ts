@@ -5,7 +5,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { SECRETS_DIRNAME, assertInsideAgentDir, ensureSecretsDir, exists } from "../paths.ts";
+import { SECRETS_DIRNAME, SECRET_FILE_MODE, assertInsideAgentDir, exists } from "../paths.ts";
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
@@ -256,7 +256,7 @@ export async function appendChannelDotEnv(
 ): Promise<DotEnvWriteResult> {
   const file = dotEnvPath(dir);
   const secretsDir = dirname(file);
-  await ensureSecretsDir(secretsDir);
+  await mkdir(secretsDir, { recursive: true });
   // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into carries its own
   // `.gitignore`.
   const owned = secretsDir === join(dir, SECRETS_DIRNAME);
@@ -311,19 +311,23 @@ export async function appendChannelDotEnv(
       lines.push(`# ${e.hint}`, `# ${e.name}=`);
     }
   }
+  // 0600 on the file this call CREATES, and nothing at all about one it did not: a `.env` the operator made with
+  // `cp .secrets/.env.example .secrets/.env` carries the mode that command gave it, and re-deciding it would be
+  // fastagent changing the permissions of a file it does not own.
+  const secret = { mode: SECRET_FILE_MODE } as const;
   if (replacedInPlace) {
     current = contentLines.join("\n");
-    await writeFile(file, current);
+    await writeFile(file, current, secret);
   }
   if (lines.length > 0) {
     const marker = `# --- ${kind} channel ---`;
     if (current.includes(marker)) {
       // A marker already present (e.g. a .env copied from .env.example) — slot the new lines under it instead of
       // orphaning them at the end of the file.
-      await writeFile(file, current.replace(marker, `${marker}\n${lines.join("\n")}`));
+      await writeFile(file, current.replace(marker, `${marker}\n${lines.join("\n")}`), secret);
     } else {
       const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
-      await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`);
+      await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`, secret);
     }
   }
   return { written, alreadySet, unprotectedSecretsDir };

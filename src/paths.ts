@@ -3,7 +3,7 @@
  * follow from it.
  */
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
-import { access, chmod, mkdir, readFile, realpath } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -238,23 +238,23 @@ export function isAgentcoreRuntime(): boolean {
   return process.env.FASTAGENT_AGENTCORE === "1";
 }
 
-/** What a file under {@link resolveSecretsDir} is written with (auth.json, .env). */
-export const SECRET_FILE_MODE = 0o600;
-const SECRETS_DIR_MODE = 0o700;
-
 /**
- * Create the secrets directory with the mode its contents require — and REPAIR it when it already exists, which is the
- * case that matters.
+ * The mode of a file fastagent CREATES to hold a secret: `auth.json`, a `.env` it makes itself, `control.json`,
+ * a host's parameter file. That is the whole extent of its opinion about permissions — a file it did not create
+ * keeps the mode its owner gave it, and no directory's mode is ever decided or repaired. Every comparable tool
+ * draws the line here: Rails chmods the `master.key` it generates and leaves `config/` alone
+ * (rails/rails@4c6c357), the aws CLI ships a 0600 `~/.aws/config` inside a 0755 `~/.aws`.
+ *
+ * "Who created the file" is the load-bearing half. Asking instead whether a given WRITE carries a secret has a
+ * different answer at every call site and one more with each new writer: three rounds of patches went into
+ * chmod-ing an existing `.env`, repairing a directory, following a symlink, and reporting an older agent's mode —
+ * all for scenarios with no reported use, and none of it reachable under this rule at all.
+ *
+ * One consequence worth knowing: `writeFileAtomic` sets the mode on the temp file it renames into place, so a
+ * file it owns end-to-end (`auth.json`, `control.json`) is 0600 after every write, including one an operator had
+ * placed by hand. Appending to a file fastagent did not create (`.env`) cannot and does not do that.
  */
-export async function ensureSecretsDir(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true, mode: SECRETS_DIR_MODE });
-  await chmod(dir, SECRETS_DIR_MODE).catch((e: Error) => {
-    throw new Error(
-      `cannot secure secrets dir ${dir} (fastagent keeps it 0700): ${e.message} — point FASTAGENT_AUTH_PATH/FASTAGENT_SECRETS_DIR at a directory this process owns`,
-      { cause: e },
-    );
-  });
-}
+export const SECRET_FILE_MODE = 0o600;
 
 /** Guard that `<agentDir>/<name>` resolves INSIDE the agent dir. */
 export async function assertInsideAgentDir(agentDir: string, name: string): Promise<void> {

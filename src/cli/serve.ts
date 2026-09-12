@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import { writeFileAtomic } from "../atomic-write.ts";
+import { SECRET_FILE_MODE } from "../paths.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
 import type { AgentService, MountAgentServiceOptions } from "../service.ts";
@@ -115,10 +116,11 @@ export function announceControl(
   boundPort: number,
 ): () => void {
   if (!control) return () => {};
-  mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  mkdirSync(stateRoot, { recursive: true });
   const path = join(stateRoot, "control.json");
   const url = `http://${clientHost(bind.host)}:${boundPort}`;
-  writeFileAtomic(path, `${JSON.stringify({ url, token: control.token })}\n`, 0o600);
+  // The token rides in a file, so the FILE carries the mode — the directory's is the operator's (paths.ts).
+  writeFileAtomic(path, `${JSON.stringify({ url, token: control.token })}\n`, SECRET_FILE_MODE);
   log.info(`[fastagent] session control on ${control.prefix}/* (token in ${path})`);
   // LAN-reachable with the bearer token as the only protection.
   const reach = classifyBind(bind.host);

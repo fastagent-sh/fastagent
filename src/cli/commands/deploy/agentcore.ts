@@ -18,7 +18,7 @@ import {
 } from "../../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun } from "../../../deploy/agentcore/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { type ResolvedPlacement, exists } from "../../../paths.ts";
+import { SECRET_FILE_MODE, type ResolvedPlacement, exists } from "../../../paths.ts";
 import { loadSchedules } from "../../../schedule/discover.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
@@ -179,7 +179,7 @@ async function runDeployAgentcore(
       (m) => console.error(`[fastagent] ${m}`),
       async (content) => {
         const path = join(paramsDir, "params.json");
-        await writeFile(path, content, { mode: 0o600 });
+        await writeFile(path, content, { mode: SECRET_FILE_MODE });
         return path;
       },
       async (bytes) => {

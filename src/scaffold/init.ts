@@ -8,7 +8,6 @@ import {
   agentDefinitionOwner,
   agentsAt,
   displayPath,
-  ensureSecretsDir,
   exists,
 } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
@@ -170,9 +169,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   try {
     for (const file of files) {
       const abs = join(dir, file.rel);
-      // The secrets dir carries a mode; every other directory here is ordinary.
-      if (basename(dirname(abs)) === SECRETS_DIRNAME) await ensureSecretsDir(dirname(abs));
-      else await mkdir(dirname(abs), { recursive: true });
+      await mkdir(dirname(abs), { recursive: true });
       try {
         await writeFile(abs, file.content, { flag: "wx" });
         created.push(file.rel);

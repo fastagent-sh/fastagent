@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fastagentCredentialStore } from "../src/index.ts";
 
@@ -291,6 +291,22 @@ describe("fastagentCredentialStore: the lock must be the one pi takes", () => {
 
     expect((await lstat(link)).isSymbolicLink()).toBe(true);
     expect(JSON.parse(await readFile(real, "utf8")).anthropic.key).toBe("k");
-    expect((await stat(dirname(real))).mode & 0o777).toBe(0o700); // the resolved dir owes the same repair
+    expect((await stat(real)).mode & 0o777).toBe(0o600); // the FILE carries the mode, wherever it landed
+  });
+});
+
+describe("fastagentCredentialStore: the file carries the mode, the directory is the operator's", () => {
+  it("writes 0600 into a 0755 directory and leaves that directory as it found it", async () => {
+    // The line every comparable tool draws: Rails chmods the master.key it generates and leaves config/ alone;
+    // the aws CLI ships a 0600 ~/.aws/config inside a 0755 ~/.aws. This used to chmod the directory 0700 on every
+    // credential write — repairing a real bug by reaching into something fastagent did not create.
+    const dir = await mkdtemp(join(tmpdir(), "fa-mode-"));
+    await chmod(dir, 0o755);
+    const file = join(dir, "auth.json");
+
+    await fastagentCredentialStore(file).modify("anthropic", async () => ({ type: "api_key", key: "k" }));
+
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(dir)).mode & 0o777).toBe(0o755);
   });
 });

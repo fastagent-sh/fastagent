@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
+import { SECRET_FILE_MODE } from "../../paths.ts";
 import { rotateSlackConfigToken } from "./config-api.ts";
 import type { SlackGroupBehavior } from "./manifest.ts";
 
@@ -70,7 +71,7 @@ export function readSlackOnboardingState(stateRoot: string): SlackOnboardingStat
 
 /** Atomic replacement with owner-only permissions: this file carries a workspace-wide config refresh token. */
 export function writeSlackOnboardingState(stateRoot: string, state: SlackOnboardingState): void {
-  writeFileAtomic(slackOnboardingStatePath(stateRoot), `${JSON.stringify(state, null, 2)}\n`, 0o600);
+  writeFileAtomic(slackOnboardingStatePath(stateRoot), `${JSON.stringify(state, null, 2)}\n`, SECRET_FILE_MODE);
 }
 
 export async function currentSlackConfigToken(

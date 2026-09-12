@@ -115,11 +115,15 @@ for it again on the spot (cancel to stop), so a mistyped key is corrected at log
 failing at the first invoke; an inconclusive failure (network, quota, permissions) keeps the key and
 prints the provider's message.
 
-**The directory holding `auth.json` is managed as a secrets directory**, whichever knob named it:
-every credential write (including an OAuth refresh mid-run) re-applies `0700` to it, and where the
-process cannot chmod it the write fails instead of leaving the credential readable. Point
-`FASTAGENT_AUTH_PATH` inside a directory this process owns, not a shared one others
-need to read.
+**fastagent sets the mode of the files it creates, and nothing else.** `auth.json` is `0600` — and
+stays `0600`, because fastagent owns that file end to end and replaces it whole on every credential
+write, so even one you placed by hand `0644` is tightened. `.secrets/.env` is different: fastagent
+only appends to it, so it is `0600` when `add <channel>` had to create it, and otherwise keeps the
+mode its owner gave it — a `.env` you produced with `cp .secrets/.env.example .secrets/.env` carries
+that command's mode, and `chmod 600` on it is yours to run. Directory permissions are yours too:
+fastagent never sets or repairs them. Rails draws the same line (it chmods the `master.key` it
+generates and leaves `config/` alone), as does the aws CLI (a `0600` `~/.aws/config` inside a `0755`
+`~/.aws`).
 
 **Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry or a shell env var), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
 
