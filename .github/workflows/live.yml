@@ -123,13 +123,15 @@ jobs:
       # refresh, so any file sharing this grant goes stale the moment another one refreshes it — a
       # maintainer's laptop and this workflow must not be the same grant.
       #
-      # The secret is a SNAPSHOT, and rotation makes it single-use: OpenAI returns a NEW refresh token on
-      # every refresh and voids the old one, while CI's copy dies with the runner. So runs succeed for as
-      # long as the stored ACCESS token lasts (no refresh needed), and the first run past its expiry
-      # spends the stored refresh token — every run after that fails `refresh_token_reused`. Re-run the
-      # login above and re-set the secret. An API-key credential in the same variable has no refresh at
-      # all and avoids the question entirely.
+      # An OAuth grant here is SINGLE-USE unless it is carried back: the provider returns a new refresh
+      # token on every refresh and voids the old one, while the runner's copy dies with the job. Runs
+      # therefore succeed for as long as the stored ACCESS token lasts, and the first run past its
+      # expiry spends the stored refresh token — after which every run fails `refresh_token_reused`.
+      # The "Persist a refreshed credential" step below closes that loop; the digest recorded here is
+      # how it knows a refresh happened. (An API-key credential in the same variable has no refresh at
+      # all, and needs neither step.)
       - name: Stage the model credential
+        id: stage
         env:
           FASTAGENT_AUTH_JSON: ${{ secrets.FASTAGENT_AUTH_JSON }}
         run: |
@@ -139,6 +141,7 @@ jobs:
           test -n "$FASTAGENT_AUTH_JSON" || { echo "secrets.FASTAGENT_AUTH_JSON is not set for this environment"; exit 1; }
           install -d -m 700 "$RUNNER_TEMP/secrets"
           umask 077 && printf '%s' "$FASTAGENT_AUTH_JSON" > "$RUNNER_TEMP/secrets/auth.json"
+          echo "digest=$(sha256sum "$RUNNER_TEMP/secrets/auth.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       # The ONE version both probes land on, resolved here so they cannot land on two. `latest`
       # rather than this checkout's version: between a `chore(release)` merge and the Release that
@@ -207,6 +210,44 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: npm run test:live
+
+      # THE OTHER HALF of staging: a refresh that happened during this run exists only on this runner,
+      # and the token it consumed is already void at the provider. Not writing it back is what makes the
+      # stored grant single-use.
+      #
+      # `always()`, because a refresh that already happened must be kept even when a later probe failed
+      # or the job was cancelled — the alternative is a secret whose refresh token the provider has
+      # already voided. Only when the file CHANGED, so an ordinary run (access token still valid, no
+      # refresh) touches nothing.
+      #
+      # This is safe here for one reason worth stating: the `live` concurrency group serializes runs, so
+      # there is never a second job holding the same grant. Two concurrent runs would each refresh and
+      # void the other's token, which is why this pattern belongs to a serialized workflow and not to a
+      # matrix. A LOCAL run against the same grant is the case nothing here can prevent — mint CI its
+      # own (`FASTAGENT_AUTH_PATH=… fastagent login`), never share a developer's.
+      #
+      # The PAT needs exactly one permission: write access to this repository's secrets. It cannot be
+      # GITHUB_TOKEN, which has no secrets scope at all. A failure here FAILS THE RUN rather than
+      # warning: the next run would break with a `refresh_token_reused` that points at the provider
+      # instead of at this step.
+      - name: Persist a refreshed credential
+        if: always() && steps.stage.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.LIVE_AUTH_WRITEBACK_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN" || {
+            echo "secrets.LIVE_AUTH_WRITEBACK_TOKEN is not set — a refreshed credential cannot be kept," \
+                 "and this grant becomes single-use (see the staging step)"
+            exit 1
+          }
+          after=$(sha256sum "$RUNNER_TEMP/secrets/auth.json" | cut -d' ' -f1)
+          if [ "$after" = "${{ steps.stage.outputs.digest }}" ]; then
+            echo "credential unchanged (no refresh this run)"
+            exit 0
+          fi
+          gh secret set FASTAGENT_AUTH_JSON --env live --repo "$GITHUB_REPOSITORY" \
+            < "$RUNNER_TEMP/secrets/auth.json"
+          echo "refreshed credential written back to secrets.FASTAGENT_AUTH_JSON"
 
       # The deploy probe destroys its own app in afterAll, which a job timeout or a cancelled run
       # never reaches — and what it leaves behind is a running Fly app holding the model credential
