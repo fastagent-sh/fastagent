@@ -314,8 +314,9 @@ auth:       FASTAGENT_AUTH_PATH                          > <secrets>/auth.json
 
 A leading `~` in any of these is expanded to your home dir.
 
-Wherever `auth.json` lands, fastagent writes it `0600`. That is the extent of it: a file fastagent did
-not create, and every directory, keep the permissions you gave them.
+Wherever `auth.json` lands, fastagent writes it `0600`, on every write — it owns that file and replaces
+it whole. That is the extent of it: the `.env` it only appends to, and every directory, keep the
+permissions you gave them.
 
 `FASTAGENT_SECRETS_DIR` moves both the agent's `.env` and `auth.json`. The `.env`'s own location
 resolves from the real environment — a `FASTAGENT_SECRETS_DIR` set *inside* `.env` still relocates

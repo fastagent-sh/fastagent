@@ -239,16 +239,20 @@ export function isAgentcoreRuntime(): boolean {
 }
 
 /**
- * The mode of a secrets file fastagent CREATES (auth.json, and a `.env` it makes itself). That is the whole extent
- * of its opinion about permissions: a file it did not create keeps the mode its owner gave it, and no directory's
- * mode is ever decided or repaired. Every comparable tool draws the line here — Rails chmods the `master.key` it
- * generates and leaves `config/` alone (rails/rails@4c6c357), the aws CLI ships a 0600 `~/.aws/config` inside a
- * 0755 `~/.aws`.
+ * The mode of a file fastagent CREATES to hold a secret: `auth.json`, a `.env` it makes itself, `control.json`,
+ * a host's parameter file. That is the whole extent of its opinion about permissions — a file it did not create
+ * keeps the mode its owner gave it, and no directory's mode is ever decided or repaired. Every comparable tool
+ * draws the line here: Rails chmods the `master.key` it generates and leaves `config/` alone
+ * (rails/rails@4c6c357), the aws CLI ships a 0600 `~/.aws/config` inside a 0755 `~/.aws`.
  *
- * The rule is "who created the file", not "does this write carry a secret", because the second question has a
- * different answer at every call site and grows one more with each new writer: three rounds of patches went into
+ * "Who created the file" is the load-bearing half. Asking instead whether a given WRITE carries a secret has a
+ * different answer at every call site and one more with each new writer: three rounds of patches went into
  * chmod-ing an existing `.env`, repairing a directory, following a symlink, and reporting an older agent's mode —
- * all of it for scenarios with no reported use, and none of it reachable under this rule at all.
+ * all for scenarios with no reported use, and none of it reachable under this rule at all.
+ *
+ * One consequence worth knowing: `writeFileAtomic` sets the mode on the temp file it renames into place, so a
+ * file it owns end-to-end (`auth.json`, `control.json`) is 0600 after every write, including one an operator had
+ * placed by hand. Appending to a file fastagent did not create (`.env`) cannot and does not do that.
  */
 export const SECRET_FILE_MODE = 0o600;
 
