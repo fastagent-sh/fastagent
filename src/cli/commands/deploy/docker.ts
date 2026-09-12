@@ -1,5 +1,5 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
@@ -15,7 +15,6 @@ import {
   type ResolvedPlacement,
   SECRETS_DIRNAME,
   SECRET_FILE_MODE,
-  ensureSecretsDir,
   exists,
   readTextIfExists,
   resolveStateRoot,
@@ -36,7 +35,7 @@ export const dockerHost: HostDeploy = {
     // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
     // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
     const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
-    await ensureSecretsDir(dirname(composeValueFile));
+    await mkdir(dirname(composeValueFile), { recursive: true });
     if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
     // The pre-flight read whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a
     // builder's path would not mean the same thing anywhere else. Under `--run` the two files disagreeing is a

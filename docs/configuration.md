@@ -314,9 +314,8 @@ auth:       FASTAGENT_AUTH_PATH                          > <secrets>/auth.json
 
 A leading `~` in any of these is expanded to your home dir.
 
-Wherever `auth.json` lands, its directory is managed as a secrets directory: every credential write
-(including an OAuth refresh mid-run) re-applies `0700` to it, and where the process cannot chmod it
-the write fails rather than leaving the credential readable. Name a directory this process owns.
+Wherever `auth.json` lands, fastagent writes it `0600` and leaves its directory's permissions alone —
+setting the mode of a file it creates is its business, changing a directory it did not create is not.
 
 `FASTAGENT_SECRETS_DIR` moves both the agent's `.env` and `auth.json`. The `.env`'s own location
 resolves from the real environment — a `FASTAGENT_SECRETS_DIR` set *inside* `.env` still relocates

@@ -55,7 +55,7 @@ Questions 2 and 3 give four boxes, and **only three are inhabited**. Something b
 
 Where a credential's **literal value** may appear follows from B/C versus D/E, and is absolute:
 
-> Literal credentials exist in exactly two places: `.secrets/` (0700, gitignored, excluded from the image) and the platform's secret storage. **Every file inside the definition may only carry a reference**: `"$MY_API_KEY"` or `!command` in `models.json` (pi resolves both), and a declared name everywhere else.
+> Literal credentials exist in exactly two places: `.secrets/` (0600 files, gitignored, excluded from the image) and the platform's secret storage. **Every file inside the definition may only carry a reference**: `"$MY_API_KEY"` or `!command` in `models.json` (pi resolves both), and a declared name everywhere else.
 
 That rule is advice to the author, and FastAgent can only report on it — which brings the executable form of question 4:
 
@@ -82,7 +82,7 @@ persona.md  skills/  tools/  channels/  schedules/
 ~/.fastagent/.secrets/auth.json   # this person on this machine (login -g)
 ```
 
-`.secrets/` keeps its 0700 guarantee (`ensureSecretsDir` in `src/paths.ts`), and its existing `*` ignore rule already covers every env subdirectory — git never descends into an ignored directory, so day two adds no ignore rule at all. **A single-instance agent has no `.secrets/<env>/` at all** — the acceptance test for convention over configuration is that a small agent never learns the word "env".
+`.secrets/` keeps its `0600` file mode (`SECRET_FILE_MODE` in `src/paths.ts`; the directory's mode is the operator's), and its existing `*` ignore rule already covers every env subdirectory — git never descends into an ignored directory, so day two adds no ignore rule at all. **A single-instance agent has no `.secrets/<env>/` at all** — the acceptance test for convention over configuration is that a small agent never learns the word "env".
 
 ## 5. Three resolution chains, one rule
 
@@ -203,7 +203,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | A credential account/alias dimension, `config.accounts` | `--env` plus the two credential layers already covers "different account per environment" |
 | Cross-env value fallback, importing pi's credentials, copying an OAuth grant between local and remote | §5 |
 | Reporting remote variables outside the ownership union as **unmanaged** | §9: writing a subset gives no standing to audit the rest |
-| Moving `.env` out of `.secrets/` | Plaintext credentials in a 0755 directory; see the `ensureSecretsDir` note in `AGENTS.md` |
+| Moving `.env` out of `.secrets/` | `.secrets/` is the one directory the `.gitignore` and the image excludes already cover |
 | Removing `FASTAGENT_SECRETS_DIR` / `FASTAGENT_STATE_DIR` / `FASTAGENT_AUTH_PATH` | The fly/railway/agentcore plans point them at the mounted volume, and the deployed container locates `auth.json` through that chain. Only the corresponding CLI flags can go |
 | A `--profile` selector, a current-environment switch, arbitrary credential-path options, a custom encryption/key-distribution framework | Orchestration or scope creep |
 | Reading back deployed state to diff it, moving generated artifacts into `.state/`, narrowing `AGENT_CONFIG_NAMES` to `fastagent.config.ts` | None is needed for anything above, and each is unrelated to env or credential ownership |
@@ -223,7 +223,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | a literal `apiKey` in `models.json` WARNS (§3: gate what we cause, warn what the author chose); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list, not in `modelKeyInDefinition` | `src/engines/pi/models.ts` (`literalKeyProviders`) + `src/deploy/preflight.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
-| Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0700, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
+| Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0600 files, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
 
 | # | Step | Independent value | State |
 |---|---|---|---|

@@ -1,5 +1,5 @@
 /** Production serving. */
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile, rm } from "node:fs/promises";
@@ -11,14 +11,7 @@ import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
-import {
-  SECRET_FILE_MODE,
-  ensureSecretsDir,
-  resolveSecretsDir,
-  isAgentcoreRuntime,
-  isUnderDir,
-  exists,
-} from "../../paths.ts";
+import { SECRET_FILE_MODE, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { mountAgentService, type AgentService } from "../../service.ts";
@@ -213,8 +206,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
 async function maybeSeedAuth(authPath: string): Promise<void> {
   const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
   if (!bytes) return;
-  await ensureSecretsDir(dirname(authPath));
-  writeFileAtomic(authPath, bytes, SECRET_FILE_MODE);
+  writeFileAtomic(authPath, bytes, SECRET_FILE_MODE); // creates the directory itself
   log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 

@@ -3,7 +3,7 @@
  * follow from it.
  */
 import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
-import { access, chmod, mkdir, readFile, realpath } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -238,23 +238,15 @@ export function isAgentcoreRuntime(): boolean {
   return process.env.FASTAGENT_AGENTCORE === "1";
 }
 
-/** What a file under {@link resolveSecretsDir} is written with (auth.json, .env). */
-export const SECRET_FILE_MODE = 0o600;
-const SECRETS_DIR_MODE = 0o700;
-
 /**
- * Create the secrets directory with the mode its contents require — and REPAIR it when it already exists, which is the
- * case that matters.
+ * What a file under {@link resolveSecretsDir} is written with (auth.json, .env). The mode of a file this process
+ * CREATES is the whole extent of fastagent's opinion about permissions — the DIRECTORY's mode is the operator's, and
+ * every comparable tool draws the line in the same place: Rails chmods the `master.key` it generates and leaves
+ * `config/` alone (rails/rails@4c6c357), and the aws CLI ships a 0600 `~/.aws/config` inside a 0755 `~/.aws`. This
+ * used to also chmod the directory 0700 on every credential write, which repaired a real bug by reaching into
+ * something fastagent did not create; the credentials are revocable, so the mechanism cost more than it bought.
  */
-export async function ensureSecretsDir(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true, mode: SECRETS_DIR_MODE });
-  await chmod(dir, SECRETS_DIR_MODE).catch((e: Error) => {
-    throw new Error(
-      `cannot secure secrets dir ${dir} (fastagent keeps it 0700): ${e.message} — point FASTAGENT_AUTH_PATH/FASTAGENT_SECRETS_DIR at a directory this process owns`,
-      { cause: e },
-    );
-  });
-}
+export const SECRET_FILE_MODE = 0o600;
 
 /** Guard that `<agentDir>/<name>` resolves INSIDE the agent dir. */
 export async function assertInsideAgentDir(agentDir: string, name: string): Promise<void> {

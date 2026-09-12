@@ -115,11 +115,11 @@ for it again on the spot (cancel to stop), so a mistyped key is corrected at log
 failing at the first invoke; an inconclusive failure (network, quota, permissions) keeps the key and
 prints the provider's message.
 
-**The directory holding `auth.json` is managed as a secrets directory**, whichever knob named it:
-every credential write (including an OAuth refresh mid-run) re-applies `0700` to it, and where the
-process cannot chmod it the write fails instead of leaving the credential readable. Point
-`FASTAGENT_AUTH_PATH` inside a directory this process owns, not a shared one others
-need to read.
+**`auth.json` is written `0600`; its directory is yours.** fastagent sets the mode of files it
+creates and never changes the permissions of a directory it did not create — the same line ssh, git
+and the aws CLI draw. If you point `FASTAGENT_AUTH_PATH` into a directory others can read, the file
+mode still keeps the contents in, but the filenames are visible; `chmod 700` it yourself if that
+matters to you.
 
 **Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry or a shell env var), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
 

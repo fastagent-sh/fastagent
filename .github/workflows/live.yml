@@ -117,15 +117,18 @@ jobs:
       # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
       # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
       #
-      # The secret holds a grant minted FOR CI and used nowhere else (`fastagent login openai-codex
-      # --auth-path <ci file>`, device-code flow). That isolation is the point: pi persists a NEW
-      # refresh token on every refresh, so any file sharing this grant goes stale the moment another
-      # one refreshes it — a maintainer's laptop and this workflow must not be the same grant.
+      # The secret holds a grant minted FOR CI and used nowhere else
+      # (`FASTAGENT_AUTH_PATH=/tmp/ci-auth.json fastagent login openai-codex`, then set the secret from
+      # that file and delete it). That isolation is the point: pi persists a NEW refresh token on every
+      # refresh, so any file sharing this grant goes stale the moment another one refreshes it — a
+      # maintainer's laptop and this workflow must not be the same grant.
       #
-      # The secret is still a SNAPSHOT: CI's own refreshes live and die with the runner, so the stored
-      # token ages. Whether it eventually stops being accepted is the provider's call, not something
-      # this file should claim. When a run fails to authenticate, re-run the login above and re-set the
-      # secret; an API-key credential in the same variable avoids the question entirely.
+      # The secret is a SNAPSHOT, and rotation makes it single-use: OpenAI returns a NEW refresh token on
+      # every refresh and voids the old one, while CI's copy dies with the runner. So runs succeed for as
+      # long as the stored ACCESS token lasts (no refresh needed), and the first run past its expiry
+      # spends the stored refresh token — every run after that fails `refresh_token_reused`. Re-run the
+      # login above and re-set the secret. An API-key credential in the same variable has no refresh at
+      # all and avoids the question entirely.
       - name: Stage the model credential
         env:
           FASTAGENT_AUTH_JSON: ${{ secrets.FASTAGENT_AUTH_JSON }}

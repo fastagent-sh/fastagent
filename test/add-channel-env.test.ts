@@ -94,10 +94,11 @@ describe("appendChannelDotEnv", () => {
       expect(await readFile(join(secrets, ".env"), "utf8")).toContain("GITHUB_WEBHOOK_SECRET=s");
       // Nothing lands at the workspace default — the write and the leak protection target ONE dir.
       expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
-      // …and the protection this test's name promises: `.env` is written with no mode of its own, so
-      // the DIRECTORY is the only thing keeping `GITHUB_WEBHOOK_SECRET` off other accounts. The
-      // override moves the target; it does not move it out of protection.
-      expect(((await stat(secrets)).mode & 0o777).toString(8)).toBe("700");
+      // …and the protection travels with the FILE, not the directory: the operator's 0755 dir is left as
+      // they set it, while the `.env` this call created is 0600, so the override cannot move
+      // `GITHUB_WEBHOOK_SECRET` out of protection.
+      expect(((await stat(secrets)).mode & 0o777).toString(8)).toBe("755"); // untouched
+      expect(((await stat(join(secrets, ".env"))).mode & 0o777).toString(8)).toBe("600");
     } finally {
       delete process.env.FASTAGENT_SECRETS_DIR;
     }

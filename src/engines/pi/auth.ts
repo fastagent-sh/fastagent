@@ -3,10 +3,19 @@
  * `Models` collection (models.ts). The write path refuses to overwrite a corrupt file, so a torn read never clobbers
  * the other providers' credentials.
  */
-import { chmodSync, existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE, ensureSecretsDir } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -59,8 +68,7 @@ async function withLockedAuthFile<T>(
   authPath: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
 ): Promise<T> {
-  // 0700 unconditionally, including on a directory an operator named with FASTAGENT_AUTH_PATH.
-  await ensureSecretsDir(dirname(authPath));
+  mkdirSync(dirname(authPath), { recursive: true });
   if (!existsSync(authPath)) {
     try {
       writeFileSync(authPath, "{}", { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
@@ -100,11 +108,7 @@ async function withLockedAuthFile<T>(
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
     if (out.next !== undefined) {
-      const file = writeTarget(authPath);
-      // The resolved directory is a DIFFERENT one from the link's, so it owes the same 0700 repair — otherwise the
-      // rule has an exception exactly where an operator cannot see it.
-      if (file !== authPath) await ensureSecretsDir(dirname(file));
-      writeFileAtomic(file, out.next, SECRET_FILE_MODE);
+      writeFileAtomic(writeTarget(authPath), out.next, SECRET_FILE_MODE);
     }
     throwIfCompromised();
     result = out.result;
