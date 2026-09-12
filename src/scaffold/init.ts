@@ -2,7 +2,7 @@
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
-  AGENT_CONFIG_NAMES,
+  AGENT_CONFIG_FILE,
   DEFAULT_AGENT_DIRNAME,
   SECRETS_DIRNAME,
   agentDefinitionOwner,
@@ -74,7 +74,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     skill("SKILL.md"),
     skill("GLOSSARY.md"),
     skill("LICENSE"),
-    { rel: join(root, "fastagent.config.mjs"), content: baseTemplate("fastagent.config.mjs") },
+    { rel: join(root, AGENT_CONFIG_FILE), content: baseTemplate(AGENT_CONFIG_FILE) },
     // Two ignore files, scaffolded ONCE and owned by the author from then on — no command rewrites, reads or verifies
     // them.
     { rel: join(root, ".gitignore"), content: baseTemplate("gitignore") },
@@ -146,9 +146,8 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
   // ONE coordinate system for both refusals — `displayPath` is the shared policy (relative inside the cwd, absolute
   // when it climbs out).
   const target = displayPath(process.cwd(), join(dir, root)) ?? join(dir, root);
-  const config = occupants.filter((f) => (AGENT_CONFIG_NAMES as readonly string[]).includes(f));
-  if (config.length > 0) {
-    throw new Error(`"${target}" already has ${config.join(", ")} — already a fastagent agent`);
+  if (occupants.includes(AGENT_CONFIG_FILE)) {
+    throw new Error(`"${target}" already has ${AGENT_CONFIG_FILE} — already a fastagent agent`);
   }
   // Only a SUBDIRECTORY target must be empty.
   if (!flat && occupants.length > 0) {

@@ -206,7 +206,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | Moving `.env` out of `.secrets/` | `.secrets/` is the one directory the `.gitignore` and the image excludes already cover |
 | Removing `FASTAGENT_SECRETS_DIR` / `FASTAGENT_STATE_DIR` / `FASTAGENT_AUTH_PATH` | The fly/railway/agentcore plans point them at the mounted volume, and the deployed container locates `auth.json` through that chain. Only the corresponding CLI flags can go |
 | A `--profile` selector, a current-environment switch, arbitrary credential-path options, a custom encryption/key-distribution framework | Orchestration or scope creep |
-| Reading back deployed state to diff it, moving generated artifacts into `.state/`, narrowing `AGENT_CONFIG_NAMES` to `fastagent.config.ts` | None is needed for anything above, and each is unrelated to env or credential ownership |
+| Reading back deployed state to diff it, moving generated artifacts into `.state/` | Neither is needed for anything above, and each is unrelated to env or credential ownership |
 
 ## 12. Implementation sketch and sequencing
 

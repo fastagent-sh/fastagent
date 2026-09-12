@@ -34,7 +34,7 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
 describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bust)", () => {
   it("a write-back (the first-run picker) is visible to the next loadConfig — not the cached module", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-fresh-"));
-    const path = join(dir, "fastagent.config.mjs");
+    const path = join(dir, "fastagent.config.ts");
     await writeFile(path, "export default {\n};\n");
     expect((await loadConfig(dir)).config.model).toBeUndefined();
     // Simulate persistModelChoice: rewrite the file AFTER it was imported once. Without the mtime
@@ -54,7 +54,7 @@ describe("config: loadConfig validation", () => {
   it("refuses an unknown key BY NAME — typo, nested typo, retired, or never-a-config-entry", async () => {
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-unknown-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
     await expect(load(`export default { modle: "openai-codex/gpt-5.5" };`)).rejects.toThrow(/unknown key "modle"/);
@@ -68,11 +68,11 @@ describe("config: loadConfig validation", () => {
 
   it("selfSchedule: accepts a boolean (opt-in to the wake tool), rejects a non-boolean", async () => {
     const ok = await mkdtemp(join(tmpdir(), "fa-selfsched-ok-"));
-    await writeFile(join(ok, "fastagent.config.mjs"), `export default { selfSchedule: true };\n`);
+    await writeFile(join(ok, "fastagent.config.ts"), `export default { selfSchedule: true };\n`);
     expect((await loadConfig(ok)).config.selfSchedule).toBe(true);
 
     const bad = await mkdtemp(join(tmpdir(), "fa-selfsched-bad-"));
-    await writeFile(join(bad, "fastagent.config.mjs"), `export default { selfSchedule: "yes" };\n`);
+    await writeFile(join(bad, "fastagent.config.ts"), `export default { selfSchedule: "yes" };\n`);
     await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
   });
 });
@@ -213,28 +213,28 @@ describe("config: loadConfig", () => {
 
   it("a config SYNTAX error names the file (not a raw SyntaxError + ESM stack)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: `); // truncated = parse error
-    await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.mjs: /);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: `); // truncated = parse error
+    await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.ts: /);
   });
 
   it("a config that imports a missing dep gets the same npm-install hint as tools/channels", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `import "totally-not-installed-pkg";\nexport default {};`);
-    await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.mjs: .*npm install/s);
+    await writeFile(join(dir, "fastagent.config.ts"), `import "totally-not-installed-pkg";\nexport default {};`);
+    await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.ts: .*npm install/s);
   });
 
   it("validates http shape as well: non-numeric/out-of-range http.port throws", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: "oops" } };`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { http: { port: "oops" } };`);
     await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be an integer/);
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: 99999 } };`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { http: { port: 99999 } };`);
     await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be an integer/);
   });
 
   it("http.host: an IP literal loads, an unbindable string throws at load (not at listen time)", async () => {
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
     expect((await load(`export default { http: { host: "127.0.0.1" } };`)).config.http?.host).toBe("127.0.0.1");
@@ -246,7 +246,7 @@ describe("config: loadConfig", () => {
   it("thinkingLevel: a valid pi level loads; an invalid value throws (fail visibly, not a silent default)", async () => {
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
     const { config } = await load(`export default { thinkingLevel: "high" };`);
@@ -261,7 +261,7 @@ describe("config: loadConfig", () => {
     // A fresh dir per case: ESM caches a module by URL, so re-writing one file wouldn't re-import.
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
     const { config } = await load(`export default { deploy: { secrets: ["GH_TOKEN"], apt: ["git", "ripgrep"] } };`);
@@ -280,7 +280,7 @@ describe("config: loadConfig", () => {
   it("validates deploy.agentcore.idleTimeoutSeconds against AWS's own bounds", async () => {
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
     const { config } = await load(`export default { deploy: { agentcore: { idleTimeoutSeconds: 900 } } };`);
@@ -299,23 +299,16 @@ describe("config: loadConfig", () => {
     );
   });
 
-  it("multiple config files throw instead of silently choosing one", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.js"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.4" };`);
-    await expect(loadConfig(dir)).rejects.toThrow(/multiple fastagent config files/);
-  });
-
   it("invalid custom tool entries throw during config load", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { tools: [{}] };`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { tools: [{}] };`);
     await expect(loadConfig(dir)).rejects.toThrow(/tools\[0\].*name.*execute/);
 
     // A malformed `secrets` on a config tool is a CONFIG error, refused here with the entry named —
     // not a fault thrown out of tool resolution later, where it would take `info`'s other reporting
     // down with it. A `tools/x.ts` file with the same mistake stays that one file's load failure.
     await writeFile(
-      join(dir, "fastagent.config.mjs"),
+      join(dir, "fastagent.config.ts"),
       `export default { tools: [{ name: "gh", execute: async () => ({}), secrets: "GH_TOKEN" }] };`,
     );
     await expect(loadConfig(dir)).rejects.toThrow(/"tools\[0\]": secrets must be an array of env-var names/);
@@ -339,7 +332,7 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   const agent = join(host, "fastagent");
   await mkdir(agent);
   await writeFile(join(agent, "persona.md"), "You are terse.\n");
-  await writeFile(join(agent, "fastagent.config.mjs"), "export default {};\n"); // THE marker
+  await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n"); // THE marker
   return { host, agent };
 }
 
@@ -348,13 +341,13 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const { host, agent } = await agentWorkspace();
     await writeFile(join(host, "AGENTS.md"), "# Test Agent\nBe concise.\n");
     await writeFile(
-      join(agent, "fastagent.config.mjs"),
+      join(agent, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", http: { port: 9999 } };`,
     );
 
     const ws = await createPiAgentFromDir(host);
     expect(ws.modelSpec).toBe("openai-codex/gpt-5.5"); // from config
-    expect(ws.configPath).toMatch(/fastagent\.config\.mjs$/);
+    expect(ws.configPath).toMatch(/fastagent\.config\.ts$/);
     expect(ws.config.http?.port).toBe(9999);
     expect(typeof ws.agent.invoke).toBe("function");
     expect(ws.definition.dir).toBe(agent);
@@ -369,7 +362,7 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     // library caller's directory got edited behind its back — and an author's own edit could abort
     // the command. Opening resolves paths; it does not have opinions about the user's repo.
     const { host, agent } = await agentWorkspace();
-    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     await createPiAgentFromDir(host);
     expect(existsSync(join(agent, ".state", ".gitignore"))).toBe(false);
     expect(existsSync(join(agent, ".secrets", ".gitignore"))).toBe(false);
@@ -380,7 +373,7 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     // volume) so a redeploy that replaces the dir does not wipe conversations. Lock that the override
     // wins and the default lands under .state (the single opener both commands drive).
     const { host, agent } = await agentWorkspace();
-    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const overridden = await createPiAgentFromDir(host, { sessionsDir: ext });
     expect(overridden.sessionsDir).toBe(ext);
@@ -393,7 +386,7 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     // global file. Lock that the opener defaults project-level and an explicit path (e.g. the shared
     // global one) overrides — the same precedence shape as sessionsDir.
     const { host, agent } = await agentWorkspace();
-    await writeFile(join(agent, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     const defaulted = await createPiAgentFromDir(host);
     expect(defaulted.authPath).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");

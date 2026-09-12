@@ -36,7 +36,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     // --no-install: the scaffold's own npm install would re-fetch the same package for nothing.
     await run(cli, ["init", "demo", "--no-install"], { cwd: dir });
     const agent = join(dir, "demo", "fastagent");
-    for (const file of ["persona.md", "fastagent.config.mjs", "package.json", "tools/fetch-url.ts"]) {
+    for (const file of ["persona.md", "fastagent.config.ts", "package.json", "tools/fetch-url.ts"]) {
       expect(await exists(join(agent, file)), `init did not produce ${file}`).toBe(true);
     }
     // The skill is a DIRECTORY in the payload — the shape most likely to be lost by a copy step.

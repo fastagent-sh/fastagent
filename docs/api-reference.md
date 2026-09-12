@@ -732,7 +732,7 @@ callers already know):
 import { createAgentService } from "@fastagent-sh/fastagent";
 import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 
-// Set `sessionControl: true` in fastagent.config.*; the plane is then mounted on the service's
+// Set `sessionControl: true` in fastagent.config.ts; the plane is then mounted on the service's
 // handler, owning the /control prefix — routes, preflight, 404/405 and a failing handler all carry
 // CORS headers, so a browser client can read every reply. SSE at /control/sessions/{id}/events.
 const service = await createAgentService("./my-agent");

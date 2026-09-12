@@ -41,7 +41,7 @@ One agent shape, one marker:
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
 ├── skills/  tools/  channels/  schedules/
-├── fastagent.config.mjs    # THE marker
+├── fastagent.config.ts     # THE marker
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image; pi's machine-global ~/.pi one stays unread)
 ├── .gitignore              # scaffolded once by init, yours after
@@ -60,7 +60,7 @@ repo/                       # `fastagent dev` here  → agent = repo/agent, work
 ├── src/
 └── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo/agent
     ├── persona.md  skills/  tools/  channels/  schedules/
-    ├── fastagent.config.mjs
+    ├── fastagent.config.ts
     └── .secrets/  .state/
 ```
 
@@ -71,7 +71,7 @@ standalone agent repo, a monorepo package) is the same rule with the two directo
 
 | `dir` | Result |
 |---|---|
-| holds a `fastagent.config.*` | `{ agentDir: dir, workspace: dir }` |
+| holds a `fastagent.config.ts` | `{ agentDir: dir, workspace: dir }` |
 | exactly one directory inside it holds one | `{ agentDir: <that dir>, workspace: dir }` |
 | several do | `FASTAGENT_AGENT` names one, else the one named `fastagent` — else throws, naming them |
 | none | throws: not a fastagent agent, with the exit that fits the position |

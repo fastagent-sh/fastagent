@@ -39,7 +39,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // lands somewhere no agent will read.
   if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
-      `[fastagent] no agent here (no fastagent.config.*, here or one level inside) — ` +
+      `[fastagent] no agent here (no fastagent.config.ts, here or one level inside) — ` +
         `logging in GLOBALLY (${authPath}). Every agent on this machine reads this file for providers its own ` +
         `.secrets/auth.json does not have, so this is usually what you want; \`cd\` into an agent to give that ` +
         `one its own account instead.`,

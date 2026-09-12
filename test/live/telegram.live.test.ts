@@ -77,7 +77,7 @@ describe("telegram: registering a webhook against a live tunnel", () => {
 
     const dir = await mkdtemp(join(tmpdir(), "fa-live-telegram-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
 
     const service = await createAgentService(dir);
     const server = serveNode(service.handler, { port: 0, host: "127.0.0.1" });

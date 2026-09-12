@@ -24,8 +24,12 @@ export const SECRETS_DIRNAME = ".secrets";
 /** The state segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
 export const STATE_DIRNAME = ".state";
 
-/** The config filenames, in load precedence. */
-export const AGENT_CONFIG_NAMES = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"] as const;
+/**
+ * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
+ * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
+ * author writes (`tools/`, `channels/`, `schedules/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
+ */
+export const AGENT_CONFIG_FILE = "fastagent.config.ts";
 
 /** The optional custom-model-endpoint file inside an agent dir (pi's models.json schema). */
 export const AGENT_MODELS_FILE = "models.json";
@@ -50,9 +54,9 @@ function isDir(p: string): boolean {
   return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
 }
 
-/** THE marker: a directory that declares itself an agent with a `fastagent.config.*`. */
+/** THE marker: a directory that declares itself an agent with a {@link AGENT_CONFIG_FILE}. */
 function hasConfig(p: string): boolean {
-  return isDir(p) && AGENT_CONFIG_NAMES.some((name) => existsSync(join(p, name)));
+  return isDir(p) && existsSync(join(p, AGENT_CONFIG_FILE));
 }
 
 /** The agent directories DIRECTLY inside `dir` — the one-level scan that finds an agent without knowing its name. */
@@ -168,7 +172,7 @@ export function resolvePlacement(dir: string, env: NodeJS.ProcessEnv = process.e
     const base = resolve(dir);
     throw new Error(
       placementDeadEnd(base, env) ??
-        `${base} is not a fastagent agent — no fastagent.config.* here, and no directory holding one ` +
+        `${base} is not a fastagent agent — no fastagent.config.ts here, and no directory holding one ` +
           `directly inside; run \`fastagent init\` to scaffold one`,
     );
   }

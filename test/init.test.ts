@@ -48,7 +48,7 @@ describe("init: scaffoldAgent", () => {
         agentPath("skills", "writing-great-skills", "GLOSSARY.md"),
         agentPath("skills", "writing-great-skills", "LICENSE"),
         agentPath("tools", "fetch-url.ts"),
-        agentPath("fastagent.config.mjs"),
+        agentPath("fastagent.config.ts"),
         agentPath("package.json"),
         agentPath(".gitignore"),
         agentPath(".secrets", ".env.example"),
@@ -106,7 +106,7 @@ describe("init: scaffoldAgent", () => {
     const persona = await readFile(join(dir, "fastagent", "persona.md"), "utf8");
     expect(persona).toContain("Use only the tools actually listed in your system prompt");
     expect(persona).not.toContain("where your `read` / `write` / `edit` / `bash` tools operate");
-    const configTemplate = await readFile(join(dir, "fastagent", "fastagent.config.mjs"), "utf8");
+    const configTemplate = await readFile(join(dir, "fastagent", "fastagent.config.ts"), "utf8");
     expect(configTemplate).not.toContain("codingTools");
 
     // The scaffolded agent ASSEMBLES: ① persona + tools from fastagent/, ② context walked from the workspace.
@@ -131,7 +131,7 @@ describe("init: scaffoldAgent", () => {
         agentPath(".gitignore"),
         agentPath(".secrets", ".env.example"),
         agentPath(".secrets", ".gitignore"),
-        agentPath("fastagent.config.mjs"),
+        agentPath("fastagent.config.ts"),
       ].sort(),
     );
     expect(await exists(join(dir, "fastagent", "package.json"))).toBe(false);
@@ -185,7 +185,7 @@ describe("init: scaffoldAgent", () => {
   it("refuses an occupied ./fastagent/: a config means already-an-agent, anything else means don't mix", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "fastagent"), { recursive: true });
-    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(dir, "fastagent", "fastagent.config.ts"), "export default {};\n");
     await expect(scaffoldAgent(dir)).rejects.toThrow(/already a fastagent agent/);
 
     const dir2 = await freshDir();
@@ -208,7 +208,7 @@ describe("init: scaffoldAgent", () => {
 
     const nestedAlready = await freshDir();
     await mkdir(join(nestedAlready, "fastagent"), { recursive: true });
-    await writeFile(join(nestedAlready, "fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(nestedAlready, "fastagent", "fastagent.config.ts"), "export default {};\n");
     await expect(scaffoldAgent(nestedAlready, { agentDir: "." })).rejects.toThrow(/never served/);
 
     // …but a SIBLING is a supported shape, not a collision: several agents on ONE workspace is how
@@ -219,7 +219,7 @@ describe("init: scaffoldAgent", () => {
   it("refuses init inside an agent's own LOADED surface — the outer agent would load it as content", async () => {
     const inside = join(await freshDir(), "fastagent");
     await mkdir(inside);
-    await writeFile(join(inside, "fastagent.config.mjs"), "export default {};\n"); // a real agent
+    await writeFile(join(inside, "fastagent.config.ts"), "export default {};\n"); // a real agent
     // Its skills/tools/channels/schedules are what it LOADS: an agent scaffolded there becomes part of
     // that definition rather than an agent of its own. Every other command refuses this position too.
     const surface = join(inside, "skills");
@@ -260,7 +260,7 @@ describe("init: scaffoldAgent", () => {
     expect(out).toMatch(/agent in \.\/fastagent\//);
     expect(out).not.toMatch(/found tsconfig/); // no detection chatter
     expect(await exists(join(host, "fastagent", "persona.md"))).toBe(true);
-    expect(await exists(join(host, "fastagent.config.mjs"))).toBe(false); // zero writes around the agent
+    expect(await exists(join(host, "fastagent.config.ts"))).toBe(false); // zero writes around the agent
 
     // --embedded stayed deleted: "embedded" means using fastagent as a library, nothing else.
     const gone = await freshDir();
@@ -270,7 +270,7 @@ describe("init: scaffoldAgent", () => {
     // An agent already here → refuse.
     const done = await freshDir();
     await mkdir(join(done, "fastagent"), { recursive: true });
-    await writeFile(join(done, "fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(done, "fastagent", "fastagent.config.ts"), "export default {};\n");
     expect(await cliInit(["init"], done)).toMatch(/already a fastagent agent/);
   });
 
@@ -329,7 +329,7 @@ describe("init: scaffoldAgent", () => {
     await writeFile(join(host, "AGENTS.md"), "# Host repo context\n"); // ② at the workspace
     const root = join(host, "fastagent");
     await mkdir(join(root, "tools"), { recursive: true });
-    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+    await writeFile(join(root, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
     await writeFile(join(root, "persona.md"), "You are the Repo Bot.\n"); // ① in the agent dir
     await writeFile(
       join(root, "tools", "foo.mjs"),
@@ -372,7 +372,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const dir = join(await freshDir(), "fastagent");
     await mkdir(dir);
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
-    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n"); // THE marker
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
     await writeFile(
       join(dir, "package.json"),
       `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
@@ -384,7 +384,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const dir = await freshDir();
     const root = join(dir, "fastagent");
     await mkdir(join(root, ".secrets"), { recursive: true });
-    await writeFile(join(root, "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(root, "fastagent.config.ts"), "export default {};\n");
     await writeFile(join(root, ".secrets", ".env.example"), "# env\n");
     await writeFile(
       join(root, "package.json"),
@@ -551,7 +551,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
       const d = join(await freshDir(), "fastagent");
       await mkdir(d);
       await writeFile(join(d, "persona.md"), "You are terse.\n");
-      await writeFile(join(d, "fastagent.config.mjs"), "export default {};\n"); // THE marker
+      await writeFile(join(d, "fastagent.config.ts"), "export default {};\n"); // THE marker
       if (pkg) await writeFile(join(d, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
       return d;
     };
@@ -625,7 +625,7 @@ describe("add: fastagent add skill (vendor)", () => {
     );
     const dir = await freshDir();
     await mkdir(join(dir, "fastagent"), { recursive: true });
-    await writeFile(join(dir, "fastagent", "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(dir, "fastagent", "fastagent.config.ts"), "export default {};\n");
 
     const out = await cliInit(["add", "skill", join(srcRoot, "greeter")], dir);
     expect(out).toMatch(/vendored skill "greeter"/);

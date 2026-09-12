@@ -22,7 +22,7 @@ agent/
 ├── extensions/         # optional pi extension modules (chat only — see configuration.md)
 ├── AGENTS.md           # optional project context (yours, or a host repo's)
 ├── reference.md        # optional markdown context (any file layout)
-└── fastagent.config.mjs # optional deployment choices
+└── fastagent.config.ts # optional deployment choices
 ```
 
 ## What FastAgent provides
@@ -123,7 +123,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 Implemented today:
 
 - Agent Handler v0.1 reference implementation over pi.
-- Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.*`.
+- Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - HTTP/SSE invoke channel.
 - GitHub, Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit.

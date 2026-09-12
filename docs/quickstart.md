@@ -37,7 +37,7 @@ my-agent/                              # the workspace — the agent's cwd, unto
     ├── persona.md                     # its identity — how to improve yourself
     ├── skills/writing-great-skills/   # the example skill: how to author skills well
     ├── tools/fetch-url.ts             # an example code tool
-    ├── fastagent.config.mjs
+    ├── fastagent.config.ts
     ├── package.json
     ├── .secrets/.env.example          # secrets live here, never committed
     └── .gitignore
@@ -57,22 +57,22 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. A `fastagent.config.*` file identifies the agent; `fastagent/` is only the default directory name.
+**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. A `fastagent.config.ts` file identifies the agent; `fastagent/` is only the default directory name.
 
-**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. Note that `fastagent deploy` needs a workspace that CONTAINS the agent, so a flat agent has to move into one before it can be deployed. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.*` inside is what makes a directory an agent, never its name.
+**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. Note that `fastagent deploy` needs a workspace that CONTAINS the agent, so a flat agent has to move into one before it can be deployed. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.ts` inside is what makes a directory an agent, never its name.
 
 A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
 stored login, or a provider API key in your env/`.env`) come first, annotated with the source; picking
 one that needs auth runs the login flow right there — and writes your pick back to
-`fastagent.config.mjs`. Credentials are stored per project (`<agent dir>/.secrets/auth.json`, no global
+`fastagent.config.ts`. Credentials are stored per project (`<agent dir>/.secrets/auth.json`, no global
 fallback), so a login from another directory is invisible here. To set the model non-interactively
 (or in CI/deploy, where there is no prompt):
 
 ```bash
 fastagent dev --model provider/model-id
 FASTAGENT_MODEL=provider/model-id fastagent dev
-# or edit fastagent.config.mjs
+# or edit fastagent.config.ts
 ```
 
 ## 3. Run locally
@@ -219,7 +219,7 @@ On resident hosts, the cron fires while `dev`/`start` is serving; keep the proce
 `fastagent schedule history <name>` answers "did last night's run silently fail?", and
 `fastagent schedule list` shows the selected local state's pending work. Agents can
 also schedule **themselves** (a built-in `wake` tool — "check the deploy in 10 minutes") — opt in with
-`selfSchedule: true` in `fastagent.config.*`. See the [CLI reference](cli.md) and
+`selfSchedule: true` in `fastagent.config.ts`. See the [CLI reference](cli.md) and
 [API reference](api-reference.md#schedule-authoring).
 
 ## Where next

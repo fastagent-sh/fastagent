@@ -104,7 +104,7 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
 
     const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
     await mkdir(agent);
-    await writeFile(join(agent, "fastagent.config.mjs"), "export default {};\n"); // THE marker
+    await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n"); // THE marker
     await writeFile(join(agent, ".env"), "FASTAGENT_MODEL=prov/m\n"); // NOT the file fastagent reads
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {

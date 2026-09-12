@@ -26,13 +26,13 @@ Set one with any of:
 ```bash
 fastagent dev --model provider/modelId
 FASTAGENT_MODEL=provider/modelId fastagent dev
-# or fastagent.config.mjs: { model: "provider/modelId" }
+# or fastagent.config.ts: { model: "provider/modelId" }
 ```
 
 Precedence:
 
 ```txt
---model > FASTAGENT_MODEL > fastagent.config.* model
+--model > FASTAGENT_MODEL > fastagent.config.ts model
 ```
 
 ## `auth: (none found)`
@@ -93,7 +93,7 @@ For `start`, hosted environments can set `PORT`.
 
 - **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
   with no restart (and no watcher involvement).
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.secrets/.env`) restart the
+- **Code inputs** (`tools/`, `channels/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the
   dev worker — a new process is the only way to drop the ESM module cache.
 
 Nothing else is watched: files the agent itself writes into the workspace (its work product) never
@@ -284,7 +284,7 @@ A broken `schedules/<name>.ts` file is reported by `fastagent info` before it ev
 
 `deploy` resolves the model in **the environment being deployed**, not in yours. That environment is
 declared by `.secrets/.env`, so its `FASTAGENT_MODEL` is recorded in the release manifest
-(`fastagent.release.json`), with `model` in `fastagent.config.*` as the fallback (the config file ships
+(`fastagent.release.json`), with `model` in `fastagent.config.ts` as the fallback (the config file ships
 too). A `FASTAGENT_MODEL` exported in your shell belongs to this machine's environment and never
 reaches the box, and `deploy` has no `--model` flag. Set a source and redeploy — `deploy` prints the
 effective model and where it read it. Note the manifest's value outranks the deployed box's own

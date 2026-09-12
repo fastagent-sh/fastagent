@@ -19,7 +19,7 @@ async function agent(files: Record<string, string>): Promise<string> {
   await mkdir(join(dir, "tools"), { recursive: true });
   await mkdir(join(dir, "schedules"), { recursive: true });
   await mkdir(join(dir, "channels"), { recursive: true });
-  await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+  await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "openai/gpt-4o-mini" };\n`);
   for (const [name, content] of Object.entries(files)) await writeFile(join(dir, name), content);
   return dir;
 }

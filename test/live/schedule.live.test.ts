@@ -40,7 +40,7 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
   it("catches up an overdue slot, runs the turn, and records the outcome", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-live-schedule-"));
     await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
     await mkdir(join(dir, "schedules"), { recursive: true });
     // A plain default export: `defineSchedule` is an identity function, so this is the shape the
     // loader gets either way, and the file stays what an author's `schedules/*.ts` looks like rather

@@ -14,7 +14,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   const dir = join(host, "fastagent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
   await writeFile(join(dir, "persona.md"), "You are terse.\n");
-  await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n"); // THE marker
+  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
   // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
   await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
@@ -41,7 +41,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
     const dir = join(host, "my.agent");
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.gate).toContain('"my.agent"');
@@ -153,7 +153,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
   it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
     const agentDir = await workspace({
-      "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
     });
     await mkdir(join(dirname(agentDir), ".git")); // the workspace is a git repo — the image gets the git binary

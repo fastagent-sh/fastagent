@@ -369,7 +369,7 @@ subpaths. Within a serving process, they share the mounted channel's credentials
 token cache, bounded retries, and UTF-8 text splitting. Feishu and Lark remain isolated even in one
 workspace. With no channel mounted (`fire`, `invoke`, `tool`, or an embedded agent), the transport
 reads the matching `FEISHU_*` / `LARK_*` environment credentials and uses that cloud's default gateway.
-Standalone sending requires no `fastagent.config.*`; an embedded agent can use a bare definition
+Standalone sending requires no `fastagent.config.ts`; an embedded agent can use a bare definition
 directory or an independent `cwd`.
 
 `tools/feishu-send.ts` / `tools/lark-send.ts` are the package's, not authored glue: re-running

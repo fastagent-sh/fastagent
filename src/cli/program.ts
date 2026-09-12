@@ -64,7 +64,7 @@ const init: CommandSpec = {
     { cmd: "fastagent init . --flat", note: "this repo IS the agent" },
   ],
   notes:
-    "An agent is a directory holding a fastagent.config.* — never its NAME, so --agent-dir can call it " +
+    "An agent is a directory holding a fastagent.config.ts — never its NAME, so --agent-dir can call it " +
     "anything (the name decides only which agent answers when a workspace holds several: see " +
     "FASTAGENT_AGENT). What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
     "whatever directory you later point fastagent at: point at the project and the agent inside it " +
@@ -85,7 +85,7 @@ const dev: CommandSpec = {
   description:
     "Assemble the agent in dir (default .) and serve a local HTTP channel. persona.md/AGENTS.md/skills " +
     "are re-read every turn (edits go live next turn); edits to code inputs — tools/, channels/, " +
-    "fastagent.config.*, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
+    "fastagent.config.ts, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
     "work product never trigger a restart.",
   args: [DIR_ARG],
   flags: [PORT, BIND, MODEL, { flags: "--no-watch", description: "serve once, no file-watching" }, TUNNEL, NO_INPUT],

@@ -84,7 +84,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
-  // The picker's write-back lands the model in fastagent.config.*.
+  // The picker's write-back lands the model in fastagent.config.ts.
   const placement = await enterAgentCommand(dirArg, opts);
   // ONE deploy semantic: bake the WORKSPACE (WYSIWYG).
   const { agentDir, workspace } = placement;

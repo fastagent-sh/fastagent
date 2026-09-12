@@ -97,7 +97,7 @@ beforeAll(async () => {
   // container (open.ts, serving + selfSchedule), and it puts the forwarder, its Function URL and the
   // wake/scheduler IAM into the template. Without it there is no chain to test.
   await writeFile(
-    join(agentDir, "fastagent.config.mjs"),
+    join(agentDir, "fastagent.config.ts"),
     `export default { model: ${JSON.stringify(MODEL)}, selfSchedule: true };\n`,
   );
   await writeFile(

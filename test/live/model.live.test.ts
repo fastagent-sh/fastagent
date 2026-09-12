@@ -53,7 +53,7 @@ afterAll(async () => {
 async function agentDirectory(model: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-live-model-"));
   await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-  await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: ${JSON.stringify(model)} };\n`);
+  await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(model)} };\n`);
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, name, ".."), { recursive: true });
     await writeFile(join(dir, name), content);

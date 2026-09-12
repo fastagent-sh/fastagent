@@ -204,7 +204,7 @@ AgentCore differs from the resident-box hosts in kind — the platform has **no 
 
 What to know before choosing it:
 
-- **The idle tail is the standing cost, and you set it.** Compute is reclaimed after `deploy.agentcore.idleTimeoutSeconds` (default 180 s, AWS bounds 60–1209600) of idle, and memory bills for that whole tail; a session past it cold-starts on the next message. A chat agent talked to in bursts is cheaper to keep warm than to restart, a schedule-only agent is not — raise or lower it in `fastagent.config.*`. A turn in flight is never cut short: `/ping` reports `HealthyBusy` while work is running.
+- **The idle tail is the standing cost, and you set it.** Compute is reclaimed after `deploy.agentcore.idleTimeoutSeconds` (default 180 s, AWS bounds 60–1209600) of idle, and memory bills for that whole tail; a session past it cold-starts on the next message. A chat agent talked to in bursts is cheaper to keep warm than to restart, a schedule-only agent is not — raise or lower it in `fastagent.config.ts`. A turn in flight is never cut short: `/ping` reports `HealthyBusy` while work is running.
 - **A deploy resets the state.** Storage is the platform's managed SessionStorage at `/mnt/data`. It keeps the workspace, `.state` and `.secrets` across compute stop/resume — an idle-reclaimed agent resumes with its memory — and AWS **wipes it on every runtime version update, i.e. on every deploy**, and after 14 idle days. So sessions, channel state and pending wake-ups start blank after each deploy. Cross-deploy memory would need EFS or S3 Files, both VPC-only and therefore a NAT gateway for model/channel egress (~$33/mo standing); if you need it, use `deploy fly` or `deploy railway` and their real volumes. The S3 bucket here holds only the forwarder deployment package.
 - **Deploying is re-authenticating.** The credential seed is absent-only, so a restart keeps an `auth.json` the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Caveat for OAuth: a refresh token is single-use and shared with your machine, so the box can lose model access between deploys — deploy again, or use a provider API key.
 - **Nothing opens before the first invocation.** Runtime filesystems appear on invoke, so `/ping` answers immediately while the definition, credentials and channels wait for the first envelope. `deploy --run` probes exactly that path, so a bad credential or a broken `channels/` module fails at deploy time with the runtime's own error text.
@@ -247,7 +247,7 @@ The generated `Dockerfile` runs the directory on any container platform; `fastag
 
 `config.deploy.apt` bakes extra apt packages into the image; a package needing a custom apt repo or a different base image means providing your own `Dockerfile` (`deploy` keeps an existing one). See [Configuration](configuration.md#config-file).
 
-`.git` ships in the image by default (the agent's pull/push loop needs it); for a smaller image with no git needs, add a `.git` line to the generated `.dockerignore`. The git **binary** is baked in exactly when the workspace ships a `.git`; a non-git workspace that still needs git declares `deploy: { apt: ["git"] }` in `fastagent.config.*`.
+`.git` ships in the image by default (the agent's pull/push loop needs it); for a smaller image with no git needs, add a `.git` line to the generated `.dockerignore`. The git **binary** is baked in exactly when the workspace ships a `.git`; a non-git workspace that still needs git declares `deploy: { apt: ["git"] }` in `fastagent.config.ts`.
 
 ## Single-machine tier
 
