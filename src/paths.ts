@@ -246,8 +246,11 @@ export function isAgentcoreRuntime(): boolean {
  * used to also chmod the directory 0700 on every credential write, which repaired a real bug by reaching into
  * something fastagent did not create; the credentials are revocable, so the mechanism cost more than it bought.
  *
- * Applied on EVERY write, not only on create: `mode` is ignored once the file exists, and the documented
- * `cp .secrets/.env.example .secrets/.env` leaves a 0644 file that would then receive minted secrets in plaintext.
+ * Re-applied by every path that writes SECRET CONTENT, not only on create: `mode` is ignored once the file exists,
+ * and the documented `cp .secrets/.env.example .secrets/.env` leaves a 0644 file that would then receive minted
+ * secrets in plaintext. `deploy docker` is the one writer outside that scope — it only guarantees the value file
+ * EXISTS (Compose's `env_file` needs it) and never writes a value into it, so it creates one 0600 and leaves an
+ * operator's existing file as they have it.
  */
 export const SECRET_FILE_MODE = 0o600;
 

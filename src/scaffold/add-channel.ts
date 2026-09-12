@@ -311,13 +311,16 @@ export async function appendChannelDotEnv(
       lines.push(`# ${e.hint}`, `# ${e.name}=`);
     }
   }
-  // `mode` on the write covers the file this call CREATES, closing the window where it briefly exists wide open.
+  // `mode` on the write covers the file this call CREATES. An EXISTING one is tightened BEFORE anything lands in
+  // it, and on "does the file exist" rather than "did this call write": the documented
+  // `cp .secrets/.env.example .secrets/.env` leaves a 0644 file, and re-running `add <channel>` over a `.env` whose
+  // variables are all already set writes nothing — a condition on `wrote` would leave that file open forever, and
+  // chmod-ing afterwards would let a minted GITHUB_WEBHOOK_SECRET hit the disk readable first.
   const secret = { mode: SECRET_FILE_MODE } as const;
-  let wrote = false;
+  if (await exists(file)) await chmod(file, SECRET_FILE_MODE);
   if (replacedInPlace) {
     current = contentLines.join("\n");
     await writeFile(file, current, secret);
-    wrote = true;
   }
   if (lines.length > 0) {
     const marker = `# --- ${kind} channel ---`;
@@ -329,14 +332,7 @@ export async function appendChannelDotEnv(
       const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
       await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`, secret);
     }
-    wrote = true;
   }
-  // …and EVERY write re-applies it, because `mode` is ignored when the file already exists. The documented
-  // `cp .secrets/.env.example .secrets/.env` leaves a 0644 file, and the secrets this call mints
-  // (GITHUB_WEBHOOK_SECRET, TELEGRAM_SECRET_TOKEN — the author contributes nothing to them) would land in it as
-  // plaintext. Same discipline as `writeFileAtomic`, which chmods on every auth.json write; the scope is still a
-  // file whose contents fastagent wrote, never a directory it did not create.
-  if (wrote) await chmod(file, SECRET_FILE_MODE);
   return { written, alreadySet, unprotectedSecretsDir };
 }
 

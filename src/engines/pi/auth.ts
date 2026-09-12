@@ -108,7 +108,11 @@ async function withLockedAuthFile<T>(
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
     if (out.next !== undefined) {
-      writeFileAtomic(writeTarget(authPath), out.next, SECRET_FILE_MODE);
+      const file = writeTarget(authPath);
+      // A resolved symlink target lands in a DIFFERENT directory, which `writeFileAtomic` would create without a
+      // mode — so the same 0700 is stated for it as for `dirname(authPath)` above.
+      mkdirSync(dirname(file), { recursive: true, mode: SECRETS_DIR_MODE });
+      writeFileAtomic(file, out.next, SECRET_FILE_MODE);
     }
     throwIfCompromised();
     result = out.result;

@@ -118,6 +118,13 @@ describe("appendChannelDotEnv", () => {
 
     expect(await readFile(env, "utf8")).toContain("GITHUB_WEBHOOK_SECRET=topsecret");
     expect(((await stat(env)).mode & 0o777).toString(8)).toBe("600");
+
+    // And again with NOTHING to write: every variable is already set, so a condition on "did this call write"
+    // would leave the file open forever. Tightening is about the file's contents, not about this run's diff.
+    await chmod(env, 0o644);
+    const second = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
+    expect(second.written).toEqual([]);
+    expect(((await stat(env)).mode & 0o777).toString(8)).toBe("600");
   });
 
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {

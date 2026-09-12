@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fastagentCredentialStore } from "../src/index.ts";
 
@@ -292,6 +292,9 @@ describe("fastagentCredentialStore: the lock must be the one pi takes", () => {
     expect((await lstat(link)).isSymbolicLink()).toBe(true);
     expect(JSON.parse(await readFile(real, "utf8")).anthropic.key).toBe("k");
     expect((await stat(real)).mode & 0o777).toBe(0o600); // the FILE carries the mode, wherever it landed
+    // The resolved target's directory is one this call created, so it gets the same 0700 as `dirname(authPath)`
+    // would — `writeFileAtomic` creates it without a mode, which would have left this branch at the umask.
+    expect((await stat(dirname(real))).mode & 0o777).toBe(0o700);
   });
 });
 
