@@ -226,10 +226,25 @@ jobs:
       # matrix. A LOCAL run against the same grant is the case nothing here can prevent — mint CI its
       # own (`FASTAGENT_AUTH_PATH=… fastagent login`), never share a developer's.
       #
-      # The PAT needs exactly one permission: write access to this repository's secrets. It cannot be
-      # GITHUB_TOKEN, which has no secrets scope at all. A failure here FAILS THE RUN rather than
-      # warning: the next run would break with a `refresh_token_reused` that points at the provider
-      # instead of at this step.
+      # The PAT needs exactly one fine-grained permission: **Environments: Read and write**. Not
+      # "Secrets" — that one governs REPOSITORY secrets, while this writes an ENVIRONMENT secret, and
+      # GitHub says so itself in the `x-accepted-github-permissions` response header
+      # (`environments=read` for the public key, `environments=write` for the PUT). It cannot be
+      # GITHUB_TOKEN, which cannot write secrets at all.
+      #
+      # Verify a replacement token WITHOUT waiting for a refresh — this step only runs when the
+      # credential actually changed, so a wrong permission would otherwise surface on the one night it
+      # matters, after the stored refresh token has already been spent:
+      #
+      #   curl -sS -D- -o/dev/null -X PUT -H "Authorization: Bearer $PAT" \
+      #     -d '{"encrypted_value":"x","key_id":"1"}' \
+      #     https://api.github.com/repos/$GITHUB_REPOSITORY/environments/live/secrets/PROBE
+      #
+      # 403 with `x-accepted-github-permissions: environments=write` means the permission is missing;
+      # 422 means it is present and only the payload was junk.
+      #
+      # A failure here FAILS THE RUN rather than warning: the next run would break with a
+      # `refresh_token_reused` that points at the provider instead of at this step.
       - name: Persist a refreshed credential
         if: always() && steps.stage.outcome == 'success'
         env:
