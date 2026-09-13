@@ -119,6 +119,19 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
+  it("a wake-up-only scheduler does not read the audit at all", async () => {
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    mkdirSync(join(root, "schedule", "runs.jsonl"), { recursive: true }); // any read of it would fail loudly
+    const { agent } = recordingAgent();
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:30:00Z") });
+    s.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(warns).toEqual([]);
+    s.stop();
+  });
+
   it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
     const root = await freshRoot();
     seedFires(root, { job: "2026-07-07T08:00:00Z" }); // last fired 08:00; now is past several hourly slots

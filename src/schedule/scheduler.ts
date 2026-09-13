@@ -28,6 +28,9 @@ export function scheduleSession(name: string): string {
  * a killed wake-up leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
  */
 function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], fires: Record<string, string>): void {
+  // A wake-up-only agent still starts a scheduler, and its audit is the fastest-growing kind (one line per wake,
+  // reply text included) — with no cron schedule there is nothing to reconcile, so do not read the file at all.
+  if (schedules.length === 0) return;
   let reported: Map<string, string>;
   try {
     reported = latestFiredAt(
