@@ -46,11 +46,18 @@ describe("schedule/audit (runs.jsonl)", () => {
       reply: 'the cron said {"name":"other","firedAt":"1999-01-01T00:00:00.000Z"}',
     });
     appendRun(r, { ...rec("weekly"), firedAt: "2026-07-06T09:00:00.000Z" });
-    expect([...latestFiredAt(r)]).toEqual([
+    expect([...latestFiredAt(r, ["daily", "weekly", "never-ran"])]).toEqual([
       ["daily", "2026-07-07T10:00:00.000Z"],
       ["weekly", "2026-07-06T09:00:00.000Z"],
     ]);
-    expect(latestFiredAt(await root())).toEqual(new Map()); // fresh root, no file
+    expect(latestFiredAt(await root(), ["daily"])).toEqual(new Map()); // fresh root, no file
+  });
+
+  it("latestFiredAt: a name JSON has to escape still matches its own records", async () => {
+    const r = await root();
+    const name = 'a"b\\c'; // a legal POSIX filename, and therefore a legal schedule name
+    appendRun(r, { ...rec("x"), name, firedAt: "2026-07-07T09:00:00.000Z" });
+    expect([...latestFiredAt(r, [name])]).toEqual([[name, "2026-07-07T09:00:00.000Z"]]);
   });
 
   it("skips a malformed line with a warn — one bad line can't poison the history", async () => {

@@ -28,7 +28,19 @@ export function scheduleSession(name: string): string {
  * a killed wake-up leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
  */
 function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], fires: Record<string, string>): void {
-  const reported = latestFiredAt(stateRoot);
+  let reported: Map<string, string>;
+  try {
+    reported = latestFiredAt(
+      stateRoot,
+      schedules.map((s) => s.name),
+    );
+  } catch (e) {
+    // An unreadable audit (EACCES, EIO, a directory where the file should be) is a lost diagnostic, not a lost
+    // schedule: `appendRun` already treats a failed write that way, and `fires.json` — the state correctness
+    // depends on — is read separately and still fatal.
+    log.warn(`[schedule] could not read the run audit — skipping the interrupted-fire check: ${String(e)}`);
+    return;
+  }
   for (const s of schedules) {
     const claimed = fires[s.name];
     // `firedAt` is taken after the claim is written, so any record at or after it accounts for that claim — including

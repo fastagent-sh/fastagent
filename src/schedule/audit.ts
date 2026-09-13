@@ -48,20 +48,24 @@ function readAudit(stateRoot: string): string {
   }
 }
 
-// A JSON string escapes every quote it contains, so this byte sequence cannot occur inside a recorded reply — the
+// A JSON string escapes every quote it contains, so these byte sequences cannot occur inside a recorded reply — the
 // first match on a line is always that line's own field, whatever order the writer emits fields in.
-const NAME = /"name":"((?:[^"\\]|\\.)*)"/;
+const NAME = /"name":("(?:[^"\\]|\\.)*")/;
 const FIRED_AT = /"firedAt":"([^"]+)"/;
 
 /**
- * The latest `firedAt` per schedule name, WITHOUT materializing the records: the audit is append-only and never
- * rotated, and a `completed` line carries the turn's whole reply, so the boot-time claim check must not parse a
- * year of them (`readRuns` is for a history the operator asked to see).
+ * The latest `firedAt` for each of `names`, reading the lines but parsing no records: the audit is append-only and
+ * never rotated, and a `completed` line carries the turn's whole reply, so the boot-time claim check must not parse
+ * a year of them (`readRuns` is for a history the operator asked to see).
+ *
+ * Names are matched in the ESCAPED spelling `appendRun`'s `JSON.stringify` produced, so a schedule whose filename
+ * contains `"` or `\` still matches its own records instead of never matching.
  */
-export function latestFiredAt(stateRoot: string): Map<string, string> {
+export function latestFiredAt(stateRoot: string, names: Iterable<string>): Map<string, string> {
+  const wanted = new Map([...names].map((name) => [JSON.stringify(name), name]));
   const latest = new Map<string, string>();
   for (const line of readAudit(stateRoot).split("\n")) {
-    const name = NAME.exec(line)?.[1];
+    const name = wanted.get(NAME.exec(line)?.[1] ?? "");
     const firedAt = FIRED_AT.exec(line)?.[1];
     if (name === undefined || firedAt === undefined) continue;
     const previous = latest.get(name);

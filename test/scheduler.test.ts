@@ -67,32 +67,56 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("records a claim whose turn never reported as interrupted, once, and never re-fires it", async () => {
+  // The second name is a legal POSIX filename, so it is a legal schedule name — and one JSON has to escape, which is
+  // where a claim can stop matching its own audit records and be re-reported on every boot.
+  it.each(["job", 'a"b\\c'])(
+    "records a claim whose turn never reported as interrupted, once, and never re-fires it (%j)",
+    async (name) => {
+      const root = await freshRoot();
+      const warns: string[] = [];
+      vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+      // The shape a killed process leaves: the slot is claimed, the audit says nothing about it.
+      seedFires(root, { [name]: "2026-07-07T10:00:00Z" });
+      const { agent, calls } = recordingAgent();
+      const options = {
+        agent,
+        stateRoot: root,
+        schedules: [hourly({ name })],
+        now: () => new Date("2026-07-07T10:30:00Z"), // 11:00 is still ahead → no catch-up to confuse this
+      };
+      const s = createScheduler(options);
+      s.start();
+      expect(readRuns(root, name)).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00Z", ms: 0 }]);
+      expect(warns.some((w) => /never finished/.test(w))).toBe(true);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(calls).toHaveLength(0); // accounted for, not replayed
+      s.stop();
+
+      // The record it wrote accounts for the same claim, so a later boot stays quiet.
+      const again = createScheduler(options);
+      again.start();
+      expect(readRuns(root, name)).toHaveLength(1);
+      again.stop();
+    },
+  );
+
+  it("an unreadable run audit costs the check, not the schedule", async () => {
     const root = await freshRoot();
     const warns: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
-    // The shape a killed process leaves: the slot is claimed, the audit says nothing about it.
-    seedFires(root, { job: "2026-07-07T10:00:00Z" });
+    seedFires(root, { job: "2026-07-07T08:00:00Z" });
+    mkdirSync(join(root, "schedule", "runs.jsonl")); // a directory where the audit should be: EISDIR on read
     const { agent, calls } = recordingAgent();
-    const options = {
+    const s = createScheduler({
       agent,
       stateRoot: root,
       schedules: [hourly()],
-      now: () => new Date("2026-07-07T10:30:00Z"), // 11:00 is still ahead → no catch-up to confuse this
-    };
-    const s = createScheduler(options);
-    s.start();
-    expect(readRuns(root, "job")).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00Z", ms: 0 }]);
-    expect(warns.some((w) => /never finished/.test(w))).toBe(true);
-    await new Promise((r) => setTimeout(r, 30));
-    expect(calls).toHaveLength(0); // accounted for, not replayed
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    });
+    expect(() => s.start()).not.toThrow();
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the overdue slot still fires
+    expect(warns.some((w) => /could not read the run audit/.test(w))).toBe(true);
     s.stop();
-
-    // The record it wrote accounts for the same claim, so a later boot stays quiet.
-    const again = createScheduler(options);
-    again.start();
-    expect(readRuns(root, "job")).toHaveLength(1);
-    again.stop();
   });
 
   it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
