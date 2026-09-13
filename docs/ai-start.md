@@ -102,7 +102,8 @@ A global CLI installation alone does not make package imports available to autho
 **Working-directory convention for the rest of this guide:** stay in `my-agent/`, the workspace.
 Use `npm --prefix fastagent ...` for the nested package. Running `fastagent dev` after `cd fastagent`
 makes the definition its own workspace. `deploy` requires the containing workspace instead.
-For a flat agent, omit the `fastagent/` path prefix and npm's `--prefix fastagent`.
+For an existing flat agent, omit the `fastagent/` path prefix and npm's `--prefix fastagent`; serving still
+works, but deployment requires moving the definition into a nested agent directory.
 
 ## 3. Use TypeScript for new authored code
 

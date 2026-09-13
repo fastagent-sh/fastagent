@@ -261,8 +261,7 @@ describe("init: scaffoldAgent", () => {
     // definition is its loaded surface only, so `packages/foo/` is the author's tree — refusing there
     // would make "an agent inside an agent's repository" unreachable.
     const root = await freshDir();
-    // Written by hand: placement still RESOLVES an agent at a directory (a deployed box is shipped the agent
-    // directory alone), `init` merely no longer creates that shape.
+    // Written by hand: placement still RESOLVES an agent at a directory; `init` merely no longer creates that shape.
     await writeFile(join(root, "fastagent.config.ts"), "export default {};\n");
     const pkg = join(root, "packages", "reviewer");
     await mkdir(pkg, { recursive: true });
@@ -306,8 +305,7 @@ describe("init: scaffoldAgent", () => {
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo context"); // ② walked from the workspace
     expect(a.toolNames).toContain("foo"); // discovered from the agent dir, not the workspace
 
-    // Pointing AT the agent makes it work on ITSELF — the workspace is what you aim at, deliberately:
-    // a deployed box may hold nothing but the agent dir, and there the parent is the container root.
+    // Pointing AT the agent makes it work on ITSELF — the workspace is what you aim at, deliberately.
     const b = await createPiAgentFromDir(root);
     expect([b.agentDir, b.workspace]).toEqual([root, root]);
     // What that costs is the WORKSPACE (the agent's cwd, its coding tools' root, deploy's build

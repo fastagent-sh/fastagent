@@ -67,7 +67,8 @@ These are not required to use FastAgent, but they explain public architecture de
 |---|---|
 | [Design notes](design/README.md) | What belongs in public design docs |
 | [Core design](design/core.md) | pi reference implementation, assembly ladder, sessions, auth, and deployment model |
-| [Configuration and credential ownership](design/configuration.md) | Proposed: where each configuration fact lives, deployment environments, and who owns which credential |
+| [Configuration and credential ownership](design/configuration.md) | Where each configuration fact lives, deployment environments, and who owns which credential |
+| [Distribution and provenance](design/distribution.md) | Why a workspace has no manifest, and where a vendored skill's origin should be recorded |
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Session control plane](design/session-control.md) | Serving extension beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions |
 

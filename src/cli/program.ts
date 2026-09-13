@@ -59,8 +59,8 @@ const init: CommandSpec = {
     "anything (the name decides only which agent answers when a workspace holds several: see " +
     "FASTAGENT_AGENT). What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
     "whatever directory you later point fastagent at: point at the project and the agent inside it " +
-    "serves with the project as its workspace; point at the agent directory (all a deployed box may " +
-    "hold) and it works on itself. A directory resolves to ONE agent, at it or one level inside.",
+    "serves with the project as its workspace; point at the agent directory and it works on itself. " +
+    "A directory resolves to ONE agent, at it or one level inside.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,
