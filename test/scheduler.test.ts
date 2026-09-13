@@ -11,7 +11,7 @@ import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSession
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import { readRuns } from "../src/schedule/audit.ts";
+import { appendRun, readRuns } from "../src/schedule/audit.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -38,6 +38,10 @@ function seedFires(root: string, fires: Record<string, string>): void {
   mkdirSync(join(root, "schedule"), { recursive: true });
   writeFileSync(join(root, "schedule", "fires.json"), JSON.stringify(fires));
 }
+/** The audit record a healthy prior fire left behind — without it a seeded claim reads as interrupted. */
+function seedRun(root: string, name: string, firedAt: string): void {
+  appendRun(root, { name, session: scheduleSession(name), firedAt, ms: 1, outcome: "completed" });
+}
 const readFires = async (root: string): Promise<Record<string, string>> =>
   JSON.parse(await readFile(join(root, "schedule", "fires.json"), "utf8"));
 
@@ -63,9 +67,75 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
+  // The second name is a legal POSIX filename, so it is a legal schedule name — and one JSON has to escape, which is
+  // where a claim can stop matching its own audit records and be re-reported on every boot.
+  it.each(["job", 'a"b\\c'])(
+    "records a claim whose turn never reported as interrupted, once, and never re-fires it (%j)",
+    async (name) => {
+      const root = await freshRoot();
+      const warns: string[] = [];
+      vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+      // The shape a killed process leaves: the slot is claimed, the audit says nothing about it.
+      seedFires(root, { [name]: "2026-07-07T10:00:00Z" });
+      const { agent, calls } = recordingAgent();
+      const options = {
+        agent,
+        stateRoot: root,
+        schedules: [hourly({ name })],
+        now: () => new Date("2026-07-07T10:30:00Z"), // 11:00 is still ahead → no catch-up to confuse this
+      };
+      const s = createScheduler(options);
+      s.start();
+      expect(readRuns(root, name)).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00Z", ms: 0 }]);
+      expect(warns.some((w) => /never finished/.test(w))).toBe(true);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(calls).toHaveLength(0); // accounted for, not replayed
+      s.stop();
+
+      // The record it wrote accounts for the same claim, so a later boot stays quiet.
+      const again = createScheduler(options);
+      again.start();
+      expect(readRuns(root, name)).toHaveLength(1);
+      again.stop();
+    },
+  );
+
+  it("an unreadable run audit costs the check, not the schedule", async () => {
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    seedFires(root, { job: "2026-07-07T08:00:00Z" });
+    mkdirSync(join(root, "schedule", "runs.jsonl")); // a directory where the audit should be: EISDIR on read
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    });
+    expect(() => s.start()).not.toThrow();
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the overdue slot still fires
+    expect(warns.some((w) => /could not read the run audit/.test(w))).toBe(true);
+    s.stop();
+  });
+
+  it("a wake-up-only scheduler does not read the audit at all", async () => {
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    mkdirSync(join(root, "schedule", "runs.jsonl"), { recursive: true }); // any read of it would fail loudly
+    const { agent } = recordingAgent();
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:30:00Z") });
+    s.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(warns).toEqual([]);
+    s.stop();
+  });
+
   it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
     const root = await freshRoot();
     seedFires(root, { job: "2026-07-07T08:00:00Z" }); // last fired 08:00; now is past several hourly slots
+    seedRun(root, "job", "2026-07-07T08:00:01Z");
     const { agent, calls } = recordingAgent();
     const s = createScheduler({
       agent,
@@ -78,8 +148,8 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(calls[0]).toEqual({ session: scheduleSession("job"), text: "go" });
     expect((await readFires(root)).job).toBe("2026-07-07T12:30:00.000Z"); // claimed = now
     // The run audit recorded the fire: name, outcome, and the reply's audit copy.
-    await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(1));
-    expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "completed", session: scheduleSession("job") });
+    await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(2)); // the seeded prior run, then this one
+    expect(readRuns(root, "job").at(-1)).toMatchObject({ outcome: "completed", session: scheduleSession("job") });
     s.stop();
   });
 
@@ -192,6 +262,7 @@ describe("schedule/scheduler: fire algorithm", () => {
   it("a failed turn still runs and claims the slot (catch-up, not retried)", async () => {
     const root = await freshRoot();
     seedFires(root, { job: "2026-07-07T08:00:00Z" });
+    seedRun(root, "job", "2026-07-07T08:00:01Z");
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { agent, calls } = recordingAgent([{ type: "failed", retryable: true, details: "boom" }]);
     const s = createScheduler({
@@ -204,9 +275,9 @@ describe("schedule/scheduler: fire algorithm", () => {
     await vi.waitFor(() => expect(calls.length).toBe(1));
     expect((await readFires(root)).job).toBe("2026-07-07T12:30:00.000Z"); // claimed even on failure
     // The audit's FAIL path — the branch the audit exists to answer: outcome failed, the error captured.
-    await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(1));
-    expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "failed", error: "boom" });
-    expect(readRuns(root, "job")[0]?.reply).toBeUndefined(); // no reply copy on a failed run
+    await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(2)); // the seeded prior run, then this one
+    expect(readRuns(root, "job").at(-1)).toMatchObject({ outcome: "failed", error: "boom" });
+    expect(readRuns(root, "job").at(-1)?.reply).toBeUndefined(); // no reply copy on a failed run
     s.stop();
   });
 

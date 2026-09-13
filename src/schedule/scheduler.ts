@@ -7,7 +7,7 @@ import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
-import { appendRun } from "./audit.ts";
+import { appendRun, latestFiredAt } from "./audit.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
 import { loadFires, saveFires } from "./state.ts";
@@ -18,8 +18,54 @@ export function scheduleSession(name: string): string {
   return `schedule:${name}`;
 }
 
+/**
+ * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
+ * for that turn (see `AgentService.close`), so a redeploy landing mid-fire leaves a claim that the next boot skips
+ * with nothing in `runs.jsonl` — the exact silence that audit exists to prevent. Recorded once, at the next boot.
+ *
+ * NOT re-fired: a turn that kills its own process would then replay on every boot. Resident path only — a host
+ * without a persistent volume loses `runs.jsonl` between runs, where every claim would look interrupted. Cron only:
+ * a killed wake-up leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
+ */
+function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], fires: Record<string, string>): void {
+  // A wake-up-only agent still starts a scheduler, and its audit is the fastest-growing kind (one line per wake,
+  // reply text included) — with no cron schedule there is nothing to reconcile, so do not read the file at all.
+  if (schedules.length === 0) return;
+  let reported: Map<string, string>;
+  try {
+    reported = latestFiredAt(
+      stateRoot,
+      schedules.map((s) => s.name),
+    );
+  } catch (e) {
+    // An unreadable audit (EACCES, EIO, a directory where the file should be) is a lost diagnostic, not a lost
+    // schedule: `appendRun` already treats a failed write that way, and `fires.json` — the state correctness
+    // depends on — is read separately and still fatal.
+    log.warn(`[schedule] could not read the run audit — skipping the interrupted-fire check: ${String(e)}`);
+    return;
+  }
+  for (const s of schedules) {
+    const claimed = fires[s.name];
+    // `firedAt` is taken after the claim is written, so any record at or after it accounts for that claim — including
+    // the one appended below, which makes this idempotent across boots.
+    if (!claimed || (reported.get(s.name) ?? "") >= claimed) continue;
+    log.warn(
+      `[schedule] ${s.name}: the fire claimed at ${claimed} never finished — the process stopped mid-turn and that ` +
+        `slot stays skipped (see \`fastagent schedule history ${s.name}\`)`,
+    );
+    appendRun(stateRoot, {
+      name: s.name,
+      session: scheduleSession(s.name),
+      firedAt: claimed,
+      ms: 0,
+      outcome: "interrupted",
+      error: "the process stopped before the turn finished",
+    });
+  }
+}
+
 export interface Scheduler {
-  /** Arm schedules and catch up overdue work once. */
+  /** Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. */
   start(): void;
   /** Cancel pending waits. */
   stop(): void;
@@ -268,6 +314,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         stopped = false;
         // A boot-time read fault stays synchronous, before any timers or turns are started.
         const fires = externalClock ? {} : loadFires(stateRoot);
+        if (!externalClock) recordInterruptedFires(stateRoot, schedules, fires);
         const current = now();
         for (const s of externalClock ? [] : schedules) {
           if (stopped) break;
