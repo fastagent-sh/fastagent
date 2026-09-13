@@ -251,6 +251,8 @@ export interface MountableAgent {
   sessionControl?: SessionControl;
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
+  /** Give up write ownership of the state root, if the opener took it (`src/state-lock.ts`). */
+  releaseState?: () => Promise<void>;
 }
 
 /**
@@ -312,7 +314,13 @@ export async function mountAgentService(
       };
 
       return yield* Effect.gen(function* () {
-        // Registered first, so subscriptions and schedule timers stop before waiting for transports.
+        // Finalizers run in reverse: this one is registered first so write ownership is the LAST thing given up —
+        // after the channels and the scheduler have stopped writing.
+        if (opened.releaseState) {
+          const releaseState = opened.releaseState;
+          yield* Effect.addFinalizer(() => Effect.promise(releaseState));
+        }
+        // Registered before the transports, so subscriptions and schedule timers stop before waiting for them.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.tryPromise({

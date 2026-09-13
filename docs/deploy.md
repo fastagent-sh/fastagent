@@ -250,7 +250,7 @@ The generated `Dockerfile` runs the directory on any container platform; `fastag
 
 ## Single-machine tier
 
-Resident recipes require **one active replica** with durable storage. Multiple replicas need shared storage and coordination for sessions, channel state, and scheduled work; separate volumes split those records. The `PiSessionRecordStore` / `Lease` seams cover engine sessions (see [Embedding](embedding.md)), not every channel's state.
+Resident recipes require **one active replica** with durable storage. Multiple replicas need shared storage and coordination for sessions, channel state, and scheduled work; separate volumes split those records. Two processes over one state directory are refused at startup (locally too: `dev` serving while `fire`/`invoke` runs the same directory), naming what holds it. The `PiSessionRecordStore` / `Lease` seams cover engine sessions (see [Embedding](embedding.md)), not every channel's state.
 
 AgentCore uses one SessionStorage workspace and one fixed runtime session for every entry point; separate conversations still use separate envelope session ids. That storage does not survive a deploy.
 

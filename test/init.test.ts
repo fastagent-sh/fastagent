@@ -306,7 +306,7 @@ describe("init: scaffoldAgent", () => {
     expect(a.toolNames).toContain("foo"); // discovered from the agent dir, not the workspace
 
     // Pointing AT the agent makes it work on ITSELF — the workspace is what you aim at, deliberately.
-    const b = await createPiAgentFromDir(root);
+    const b = await createPiAgentFromDir(root, { exclusive: false }); // the same state root as `a` above, on purpose
     expect([b.agentDir, b.workspace]).toEqual([root, root]);
     // What that costs is the WORKSPACE (the agent's cwd, its coding tools' root, deploy's build
     // context) — not ② context, which the ancestor walk still reaches from inside the agent dir.

@@ -69,6 +69,7 @@ src/
 ├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load
 │                           # failures reported before it throws, and the shape of that throw
 ├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
+├── state-lock.ts           # THE refusal: one writer per file-backed state, over the RESOLVED write paths
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/

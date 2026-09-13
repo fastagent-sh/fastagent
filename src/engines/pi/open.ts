@@ -19,6 +19,7 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
+import { lockAgentState } from "../../state-lock.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
@@ -40,6 +41,11 @@ export interface CreatePiAgentFromDirOptions {
   serving?: boolean;
   /** Assemble the session control plane over this agent's session store and return it as {@link sessionControl}. */
   sessionControl?: boolean;
+  /**
+   * `false` opts out of the single-writer refusal (`src/state-lock.ts`) for a caller that owns the coordination
+   * itself — a shared injected lease, or a test opening one directory twice on purpose.
+   */
+  exclusive?: boolean;
   /** Additional raw tap with the FULL vocabulary. */
   observer?: SessionObserver;
 }
@@ -156,6 +162,8 @@ export async function createPiAgentFromDir(
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
+  /** Give up write ownership of this agent's state (unset when `exclusive: false` declined to take it). */
+  releaseState?: () => Promise<void>;
   /**
    * Whether the agent schedules its own follow-up turns — read from the config, so a caller assembling a service does
    * not have to reach back into it (MountableAgent).
@@ -189,6 +197,10 @@ export async function createPiAgentFromDir(
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
+  // Single-writer, enforced where the writable store is opened rather than remembered by each command. Both paths,
+  // because they come apart: `--sessions-dir` moves the journals out of the state root, and a second run pointed at
+  // the same journals through a different state root must still contend.
+  const releaseState = options.exclusive === false ? undefined : await lockAgentState([stateRoot, sessionsDir]);
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
   const { assembly, definition } = await assemblePiFromDefinition(agentDir, {
     model: modelSpec,
@@ -250,6 +262,7 @@ export async function createPiAgentFromDir(
     sessions,
     sessionControl: hub?.control,
     selfSchedule: config.selfSchedule ?? false,
+    ...(releaseState ? { releaseState } : {}),
     agentDir,
     workspace,
     config,

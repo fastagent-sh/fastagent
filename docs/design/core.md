@@ -584,9 +584,12 @@ Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DI
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
 volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
 
-The shipped file-backed implementations are single-process. Multiple instances require shared session,
-lease, credential, and channel-state backends; sharing one local state directory between processes is
-unsupported.
+The shipped file-backed implementations are single-process, and that is now refused rather than implied:
+opening a directory takes an exclusive claim on every resolved write path (the state root and the
+sessions directory, which `--sessions-dir` can move apart) — `src/state-lock.ts`. A second opener is
+told what holds it and the ways out; `AgentService.close()` gives the claim back, and a killed process's
+claim expires on its own. `exclusive: false` is for a caller that coordinates writers itself. Multiple
+instances still require shared session, lease, credential, and channel-state backends.
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
 persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned
