@@ -405,7 +405,7 @@ export async function assertChannelReady(dir: string): Promise<void> {
       // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it.
       throw new Error(
         `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
-          `Add a package.json declaring @fastagent-sh/fastagent there (a --minimal init writes none), ` +
+          `Add a package.json declaring @fastagent-sh/fastagent there (\`init\` scaffolds one), ` +
           `or run \`fastagent init\` in the workspace for a fresh agent`,
       );
     }

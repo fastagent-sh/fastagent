@@ -15,8 +15,6 @@ interface ArgSpec {
 export interface FlagSpec {
   flags: string;
   description: string;
-  /** Mutually exclusive with these {@link optionKey} values — validated at build time. */
-  conflicts?: string[];
 }
 
 interface ExampleSpec {
@@ -61,21 +59,6 @@ export interface ProgramOptions {
   exit?: (code: number) => never;
 }
 
-/**
- * The option key a flag string yields on the parsed-flags record — the naming rule specs rely on: camelCase of the
- * long name (`--sessions-dir` → `sessionsDir`); a `--no-x` flag negates and stores under `x` (absent ⇒ `x !== false`).
- */
-export function optionKey(flags: string): string {
-  const long = flags
-    .split(/[\s,|]+/)
-    .filter((part) => part.startsWith("--"))
-    .at(-1);
-  if (!long) throw new Error(`flag "${flags}" has no long form (clig: have full-length flags)`);
-  let name = long.replace(/^--/, "").replace(/[=<[].*$/, "");
-  if (name.startsWith("no-")) name = name.slice(3);
-  return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-}
-
 // Help styling (clig: formatting with intention): section headings are BOLD, nothing in help is colored — the only
 // color in the whole CLI is the red error prefix.
 const title = (s: string): string => `\x1b[1m${s}\x1b[0m`; // bold — section headings
@@ -118,15 +101,6 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
 }
 
 function register(parent: Command, spec: CommandSpec): void {
-  // Validate the spec's option references BEFORE handing anything to commander.
-  const keys = new Set((spec.flags ?? []).map((f) => optionKey(f.flags)));
-  for (const f of spec.flags ?? []) {
-    for (const target of f.conflicts ?? []) {
-      if (!keys.has(target)) {
-        throw new Error(`command "${spec.name}": "${f.flags}" conflicts with unknown option key "${target}"`);
-      }
-    }
-  }
   const cmd = parent.command(spec.name);
   specOf.set(cmd, spec);
   cmd.summary(spec.summary);
@@ -144,11 +118,7 @@ function register(parent: Command, spec: CommandSpec): void {
     }
     cmd.addArgument(arg);
   }
-  for (const f of spec.flags ?? []) {
-    const opt = new Option(f.flags, f.description);
-    if (f.conflicts) opt.conflicts(f.conflicts);
-    cmd.addOption(opt);
-  }
+  for (const f of spec.flags ?? []) cmd.addOption(new Option(f.flags, f.description));
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
   const run = spec.run;
   if (run) {

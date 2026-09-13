@@ -42,16 +42,16 @@ Most commands take an optional workspace directory (the agent is there, or in it
 ## `fastagent init`
 
 ```bash
-fastagent init [dir] [--minimal] [--no-install] [--agent-dir <name>|--flat]
+fastagent init [dir] [--no-install] [--agent-dir <name>]
 ```
 
 Creates a self-iterating agent — it can edit its own definition (persona.md and skills are re-read every turn). A fresh agent has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.secrets/.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore hygiene is two scaffolded files: the agent `.gitignore` (`node_modules/`, `.state/`, a stray `.env`) and `.secrets/.gitignore` (everything but `.env.example`). fastagent writes both once, at `init` — no later command reads, rewrites or verifies them, so they are yours. They are separate on purpose: the root one is the file you will edit, and a nested `.gitignore` outranks it, so the credentials stay protected either way.
 
-**Where the files land** — no detection and no prompt. By default the WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it gets zero writes and becomes the agent's WORKSPACE when you point fastagent there. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when the target already holds a `fastagent.config.ts` (already an agent) or any other content.
+**Where the files land** — no detection, no prompt, no choice. The WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it gets zero writes and becomes the agent's WORKSPACE when you point fastagent there. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when the target already holds a `fastagent.config.ts` (already an agent) or any other content.
 
 `--agent-dir <name>` names that directory anything you like: **the name never decides what IS an agent** — a `fastagent.config.ts` does, so `./bot/` and `./fastagent/` are equally agents. The name carries weight in exactly one place, and only among agents already identified: when a workspace holds several and nothing selects, the one named `fastagent` answers (see `FASTAGENT_AGENT` below). It must be a single directory name (a path would put the agent where fastagent's one-level lookup could not find it). To deploy it, keep the name to letters, digits, `-` and `_`: the release manifest carries it into the container, and `deploy` refuses anything else by name.
 
-`--agent-dir .` (spelled `--flat`) puts the identical shape in the directory itself — for a standalone agent repo or a monorepo package, where the agent's tools operate on its own definition. Adopting a directory is the point, so **every file that already exists is kept** (reported, never overwritten); only a `fastagent.config.ts` refuses, because that means it is already an agent. `deploy` does not accept this layout — it needs a workspace containing the agent, because a release replaces the agent directory and nothing else.
+**A standalone agent repository is still a supported shape** — that repository is the WORKSPACE, and the definition lives in `./fastagent/` inside it. `init` will not write a definition INTO a directory that already holds other files, which is why `--agent-dir .` is refused: the agent would inherit that directory's `package.json`, and a `fastagent.config.ts` under a CommonJS manifest does not load at all. A scaffolded subdirectory carries its own `type: module`. (Placement still *resolves* an agent sitting at a directory — a deployed container is shipped the agent directory alone — so an existing layout of that shape keeps serving.)
 
 What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup could never SELECT — an agent already resolving AT `dir`, which wins over anything inside it and would hide the new one. A second agent BESIDE an existing one is fine and supported: several agents can share one workspace (an engineer's, a PM's, a content owner's, all driving the same repository), and `FASTAGENT_AGENT=<name>` picks between them — the one named `fastagent` answers by default. `init` prints the note when a workspace crosses into that shape. The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
 
@@ -59,10 +59,8 @@ Options:
 
 | Option | Meaning |
 |---|---|
-| `--minimal` | persona.md + the example skill + config only — no code tool, package.json, or install. |
 | `--no-install` | Scaffold everything but skip `npm install`. |
-| `--agent-dir <name>` | Name the agent directory (default `fastagent`; `.` = `dir` itself). |
-| `--flat` | Alias for `--agent-dir .` — the directory IS the agent; existing files are kept. Not deployable (see above). |
+| `--agent-dir <name>` | Name the agent directory (default `fastagent`). One directory name — not a path, and not `.`. |
 
 ## `fastagent info`
 

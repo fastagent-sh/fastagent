@@ -43,11 +43,7 @@ my-agent/                              # the workspace — the agent's cwd, unto
     └── .gitignore
 ```
 
-`persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. For a agent with no code tool or dependencies (persona.md + the skill + config only):
-
-```bash
-fastagent init my-agent --minimal
-```
+`persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. Don't want the code tool? Delete `tools/fetch-url.ts` — the scaffold is one shape, and everything in it is yours after `init`.
 
 ## 2. Inspect it
 
@@ -59,7 +55,7 @@ fastagent info
 
 **Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. A `fastagent.config.ts` file identifies the agent; `fastagent/` is only the default directory name.
 
-**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) `fastagent init . --flat` puts the same shape at the root instead. Existing files are kept untouched, and the agent's workspace is its own directory, so its tools operate on its own definition. Note that `fastagent deploy` needs a workspace that CONTAINS the agent, so a flat agent has to move into one before it can be deployed. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.ts` inside is what makes a directory an agent, never its name.
+**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) Run `fastagent init` in it: that repository becomes the WORKSPACE and the definition lands in `./fastagent/`, which is also the shape `fastagent deploy` needs. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.ts` inside is what makes a directory an agent, never its name.
 
 A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
