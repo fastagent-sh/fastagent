@@ -18,11 +18,22 @@ export interface TurnRecordBase {
   id: string;
   session: string;
   attempts: number;
+  /**
+   * The completed reply, recorded BEFORE it is delivered. Its presence is the difference between the two things a
+   * pending record can mean: absent = the turn still has to run, present = the model already ran and only delivery
+   * is owed. A restart therefore re-delivers an answer instead of paying for it again.
+   */
+  answer?: string;
 }
 
 export interface TurnStore<T extends TurnRecordBase> {
   /** Persist an accepted turn before the ACK. */
   add(rec: T): void;
+  /**
+   * Record the completed reply so a restart can deliver it without running the turn again. `false` = there was no
+   * record to write it to (an untracked run), so this answer has no recovery copy.
+   */
+  answered(id: string, answer: string): boolean;
   remove(id: string): void;
   /**
    * Every persisted turn a crash left behind, in ARRIVAL order (the channel's `order`), to re-enqueue on the next
@@ -48,14 +59,21 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
   order: (a: T, b: T) => number;
 }
 
-/** End an ANSWERED turn: drop its durable intent, then commit the discussion it folded in. */
+/**
+ * An ANSWERED turn: record the reply for delivery, then commit the discussion it folded in. The intent is NOT
+ * dropped here — generating an answer is not the same event as that answer reaching the chat, and the runner drops
+ * the record only once delivery has settled.
+ *
+ * Returns whether the answer became recoverable, so a caller does not claim a recovery that has nothing on disk.
+ */
 export function commitAnsweredTurn<T extends TurnRecordBase, E>(
   store: TurnStore<T>,
   buffer: ContextBuffer<E>,
-  turn: { id: string; bufferKey: string; consumed: E[] },
-): void {
-  store.remove(turn.id);
+  turn: { id: string; bufferKey: string; consumed: E[]; answer: string },
+): boolean {
+  const recorded = store.answered(turn.id, turn.answer);
   buffer.commit(turn.bufferKey, turn.consumed);
+  return recorded;
 }
 
 export function createTurnStore<T extends TurnRecordBase>(path: string, opts: TurnStoreOptions<T>): TurnStore<T> {
@@ -63,7 +81,10 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
   const load = (): Map<string, T> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
-    if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(isRecord)) {
+    // `answer` belongs to the generic record, so its shape is checked here rather than in each channel's validator.
+    const valid = (t: unknown): boolean =>
+      isRecord(t) && ((t as TurnRecordBase).answer === undefined || typeof (t as TurnRecordBase).answer === "string");
+    if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(valid)) {
       return new Map(Object.entries(raw as Record<string, T>));
     }
     log.warn(`${label} unexpected shape in ${path} — starting with no pending turns`);
@@ -71,12 +92,15 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
   };
   const turns = load();
   const persist = (): void => saveStateFile(path, Object.fromEntries(turns));
-  // Post-ACK writes (remove, startAttempt) must not abort a turn: log a failed write, never throw.
-  const persistBestEffort = (what: string): void => {
+  // Post-ACK writes (remove, startAttempt) must not abort a turn: log a failed write, never throw. The result is
+  // returned because whether the write landed is what a caller may be reporting to the operator.
+  const persistBestEffort = (what: string): boolean => {
     try {
       persist();
+      return true;
     } catch (e) {
       log.error(`${label} turn-store ${what} write failed post-ACK: ${String(e)}`);
+      return false;
     }
   };
 
@@ -95,8 +119,21 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         throw e;
       }
     },
+    answered(id, answer) {
+      const rec = turns.get(id);
+      if (!rec) {
+        // An untracked run (see startAttempt): there is no record to write the answer to, so a delivery that fails
+        // from here loses it. Said out loud, because the alternative is a silent gap under a "kept for retry" log.
+        log.warn(`${label} turn ${id} answered with no record on disk (untracked run) — its answer is not recoverable`);
+        return false;
+      }
+      turns.set(id, { ...rec, answer });
+      // Post-ACK, so it cannot throw: a failed write costs the recovery copy, not the delivery about to happen. It
+      // does decide the answer of this function — an answer only in memory survives nothing.
+      return persistBestEffort("answer (a crash before delivery would lose the answer)");
+    },
     remove(id) {
-      if (turns.delete(id)) persistBestEffort("remove (a restart may replay an answered turn)");
+      if (turns.delete(id)) persistBestEffort("remove (a restart may re-deliver an answered turn)");
     },
     recover() {
       // The channel's arrival order, applied explicitly rather than leaning on JS object-key enumeration happening to
@@ -112,7 +149,8 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         // poisoned the process or a deploy/OOM took it down each time.
         log.error(
           `${label} dropping turn ${id} after starting ${rec.attempts} time(s) without finishing ` +
-            `(session=${rec.session}) — it may be crashing the process, or was killed mid-run each time; notifying the asker`,
+            `(session=${rec.session}) — it may be crashing the process, or was killed mid-run each time; it will not ` +
+            `be run again`,
         );
         turns.delete(id);
         persistBestEffort("drop");

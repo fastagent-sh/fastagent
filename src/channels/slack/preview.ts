@@ -124,6 +124,22 @@ async function settleClassic(
   await api.sendMarkdown(target, markdown);
 }
 
+/**
+ * Deliver a reply this process did not generate: a recovered answer. The stream it was written for is gone with its
+ * process, so there is none to resume — but a compatibility queue message THIS process posted while the record
+ * waited its turn is taken over rather than left above the answer.
+ */
+export async function deliverSlackAnswer(
+  api: SlackApi,
+  target: SlackTarget,
+  markdown: string,
+  previewTs?: string,
+): Promise<void> {
+  await settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), (ts, value) =>
+    api.updateMarkdown(target.channelId, ts, value),
+  );
+}
+
 /** Settle a queue/drop/defer notice. These are authored plain strings, so the basic text API is enough. */
 export async function settleSlackPreview(
   api: SlackApi,
@@ -146,6 +162,7 @@ function streamClassicSlackReply(
   initialPreviewTs: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
+  onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -205,6 +222,7 @@ function streamClassicSlackReply(
       finish,
       formatError,
       answer: () => withDisclaimer(turn.answer, disclaimer),
+      ...(onAnswered ? { onAnswered } : {}),
       settle: (markdown) =>
         Effect.gen(function* () {
           if (previewTs && markdown.trim()) yield* waitForMutationSlot;
@@ -235,6 +253,7 @@ function streamNativeSlackReply(
   threadTitle: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
+  onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -377,7 +396,13 @@ function streamNativeSlackReply(
             throw renderError;
           }
           if (!streamTs) streamTs = await api.startStream(target, safeTerminal);
-          await stop(streamTs);
+          // What this settle had to say is on screen now — appended, or carried by the startStream above. `stop`
+          // only closes the stream, so failing it must not report the turn as undelivered: that would re-send the
+          // whole answer on the next start. The open stream is the visible cost, and the log is where it is
+          // diagnosed. (Shared by all three endings, so the wording claims a terminal write, not an answer.)
+          await stop(streamTs).catch((error) =>
+            log.warn(`${label} could not close the Slack stream after its terminal write: ${String(error)}`),
+          );
         });
       });
     yield* Effect.addFinalizer(() =>
@@ -451,6 +476,9 @@ function streamNativeSlackReply(
           const finalAnswer = withDisclaimer(fullAnswer, disclaimer);
           const footer = finalAnswer.slice(fullAnswer.trim().length);
           if (footer) pendingText += footer;
+          // Before the terminal write, as in `renderReply`: what the stream has already appended is not delivery —
+          // a stream left open by a dead process shows an unfinished answer.
+          yield* Effect.try({ try: () => onAnswered?.(finalAnswer), catch: (cause) => new PortFailure(cause) });
           yield* settleNative(finalAnswer);
           return false;
         } else if (event.type === "failed") {
@@ -499,16 +527,27 @@ export function slackReply(
     threadTitle?: string;
     disclaimer?: string | false;
     label?: string;
+    onAnswered?: (answer: string) => void;
   } = {},
 ) {
   return Effect.suspend(() => {
-    const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]" } = options;
+    const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]", onAnswered } = options;
     if (rendering === "native" && target.threadTs) {
-      return streamNativeSlackReply(events, api, target, formatError, initialPreviewTs, threadTitle, disclaimer, label);
+      return streamNativeSlackReply(
+        events,
+        api,
+        target,
+        formatError,
+        initialPreviewTs,
+        threadTitle,
+        disclaimer,
+        label,
+        onAnswered,
+      );
     }
     if (rendering === "native") {
       log.info(`${label} native streaming needs a thread target — using the classic renderer for this turn`);
     }
-    return streamClassicSlackReply(events, api, target, formatError, initialPreviewTs, disclaimer, label);
+    return streamClassicSlackReply(events, api, target, formatError, initialPreviewTs, disclaimer, label, onAnswered);
   });
 }

@@ -174,7 +174,10 @@ export async function mountFeishuPreview(
   }
 }
 
-/** Settle an already-mounted queue preview without starting an Agent stream (the poison/defer paths). */
+/**
+ * Settle a preview without starting an Agent stream: a queue/poison/defer notice, or a recovered answer whose own
+ * preview died with the run that produced it (`undefined` — then it is one fresh message).
+ */
 export async function settleFeishuPreview(
   api: FeishuApi,
   target: FeishuTarget,
@@ -195,6 +198,7 @@ export function feishuReply(
   formatError: (failed: FeishuFailure) => string | undefined,
   initialPreview?: MountedFeishuPreview,
   label = "[feishu]",
+  onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -276,6 +280,7 @@ export function feishuReply(
         if (applyTurnEvent(turn, event, now())) touch();
       },
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
+      ...(onAnswered ? { onAnswered } : {}),
       settle: (text) => portJoin(() => finalize(api, target, preview, text, nextSeq)),
     });
   });

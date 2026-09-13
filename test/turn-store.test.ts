@@ -90,6 +90,19 @@ describe("turn-store", () => {
     expect(createTurnStore(freshPath()).startAttempt("gone")).toBe("run");
   });
 
+  it("answered() on an untracked run records nothing, says so, and reports that it did not", () => {
+    // The caller uses the answer to decide whether to keep the turn for re-delivery — a silent no-op here would
+    // make it claim a recovery copy that does not exist.
+    const path = freshPath();
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(createTurnStore(path).answered("gone", "the answer")).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("untracked run"));
+    const store = createTurnStore(path);
+    store.add(turn("t1"));
+    expect(store.answered("t1", "the answer")).toBe(true);
+    expect(createTurnStore(path).recover()).toMatchObject([{ id: "t1", answer: "the answer" }]);
+  });
+
   it("drops a turn on its N+1th start (over the ceiling) and persists the drop", () => {
     const path = freshPath();
     const store = createTurnStore(path);
@@ -161,6 +174,23 @@ describe("turn-store", () => {
     expect(err).toHaveBeenCalledWith(expect.stringContaining("post-ACK"));
   });
 
+  it("answered() reports FALSE when the answer could not be written — memory alone survives nothing", () => {
+    const d = mkdtempSync(join(tmpdir(), "turn-store-"));
+    dirs.push(d);
+    const sub = join(d, "sub");
+    mkdirSync(sub);
+    const path = join(sub, "turns.json");
+    const store = createTurnStore(path);
+    store.add(turn("t1")); // persisted OK while `sub` is a dir
+    rmSync(sub, { recursive: true });
+    writeFileSync(sub, "x"); // now the parent is a FILE — the next write fails
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Post-ACK, so the delivery about to happen is not aborted — but the caller must not go on to claim the answer
+    // is kept for the next start, because the record on disk has no answer in it.
+    expect(store.answered("t1", "the answer")).toBe(false);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("post-ACK"));
+  });
+
   it("startAttempt DEFERS when the bump can't persist — skip now, replay next start (not a drop)", () => {
     const d = mkdtempSync(join(tmpdir(), "turn-store-"));
     dirs.push(d);
@@ -192,22 +222,22 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     const order: string[] = [];
     return {
       order,
-      store: { remove: (id: string) => void order.push(`remove:${id}`) } as unknown as Parameters<
-        typeof commitAnsweredTurn
-      >[0],
+      store: {
+        answered: (id: string, answer: string) => void order.push(`answered:${id}:${answer}`),
+      } as unknown as Parameters<typeof commitAnsweredTurn>[0],
       buffer: { commit: (key: string) => void order.push(`commit:${key}`) } as unknown as Parameters<
         typeof commitAnsweredTurn
       >[1],
     };
   };
 
-  it("drops the intent BEFORE committing the context", () => {
-    // Reversed, a crash between the writes leaves intent on disk with its context already consumed:
-    // the replay then runs the same turn with its folded discussion stripped. This order's failure is
-    // the harmless one — re-folding context that was already answered.
+  it("records the answer BEFORE committing the context", () => {
+    // Reversed, a crash between the writes consumes the context of a turn whose answer is not recoverable:
+    // the replay then re-runs it with its folded discussion stripped. This order's failure is the harmless
+    // one — an answer kept for re-delivery whose discussion is re-folded if it is run again after all.
     const { order, store, buffer } = recorder();
-    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [] });
-    expect(order).toEqual(["remove:t1", "commit:chat:1"]);
+    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [], answer: "hi" });
+    expect(order).toEqual(["answered:t1:hi", "commit:chat:1"]);
   });
 
   it("forwards the consumed entries by reference", () => {
@@ -219,7 +249,7 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<
       typeof commitAnsweredTurn
     >[1];
-    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed });
+    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed, answer: "hi" });
     expect(seen[0]).toBe(consumed);
   });
 });

@@ -42,8 +42,18 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   execute(
     rec: R,
     discussion: { text: string; consumed: E[] },
-    onCompleted: () => void,
+    /** Called with the finished reply just before it is delivered — the point the answer becomes recoverable. */
+    onAnswered: (answer: string) => void,
   ): Effect.Effect<void, PortFailure, Scope.Scope>;
+  /**
+   * Deliver an answer a previous run generated but never confirmed delivering: no model, no tools, and no live
+   * preview — the one the answer was written for died with its process.
+   *
+   * A notice THIS process put up is a different thing and must still be settled: a record recovered behind another
+   * turn in the same session goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
+   * or status that only this call can take over or clear.
+   */
+  deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
 }
 
 export interface TurnRunner<R, S> {
@@ -67,39 +77,96 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     if (beforeRun && !(yield* portJoin(() => beforeRun(rec)))) return;
     const decision = store.startAttempt(rec.id);
     if (decision === "exceeded") {
-      options.notifyDropped(rec);
-      return;
+      const stranded = rec.answer;
+      if (stranded === undefined) {
+        options.notifyDropped(rec);
+        return;
+      }
+      // The ceiling is about EXECUTION — a turn that may be crashing the process must stop being run. Delivering a
+      // recorded answer costs one message and no model call, so the record the store just dropped gets one last
+      // send instead of "please ask again" over an answer that exists.
+      return yield* Effect.scoped(options.deliverAnswer(rec, stranded)).pipe(
+        Effect.matchEffect({
+          // The store has already said, at error level, that this turn will not be run again. Silence after that
+          // reads as "nothing happened"; this line is what distinguishes it from a delivered answer.
+          onSuccess: () =>
+            Effect.sync(() =>
+              log.info(
+                `${label} turn ${rec.id} hit the execution ceiling, but the answer it had already recorded was ` +
+                  `delivered (session=${rec.session})`,
+              ),
+            ),
+          onFailure: (error) =>
+            Effect.sync(() => {
+              log.error(
+                `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
+                  `either (session=${rec.session}) — the answer is gone: ${String(error.cause)}`,
+              );
+              // The record is off disk, so nothing will retry this. The asker is owed an ending — without one, a
+              // queue notice this turn put up stays in the chat forever reading "Queued".
+              options.notifyDropped(rec);
+            }),
+        }),
+      );
     }
     if (decision === "defer") {
       options.onDeferred(rec);
       return;
     }
     const startedAt = Date.now();
-    log.info(`${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}`);
-    const bufferKey = options.bufferKey(rec);
-    const discussion = buffer.peek(bufferKey);
-    yield* Effect.scoped(
-      Effect.suspend(() =>
-        options.execute(rec, discussion, () =>
-          commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey, consumed: discussion.consumed }),
-        ),
-      ),
-    ).pipe(
+    // A recovered answer skips the buffer entirely: its discussion was committed when the answer was recorded, and
+    // peeking again would consume entries this turn never folded in.
+    const recovered = rec.answer;
+    let answered = recovered !== undefined;
+    // One stable prefix, so every `turn done:`/`turn failed:` has a `turn start:` to grep back to; what kind of work
+    // it is rides along as a field.
+    log.info(
+      `${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}` +
+        `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
+    );
+    const work =
+      recovered !== undefined
+        ? Effect.suspend(() => options.deliverAnswer(rec, recovered))
+        : Effect.suspend(() => {
+            const bufferKey = options.bufferKey(rec);
+            const discussion = buffer.peek(bufferKey);
+            return options.execute(rec, discussion, (answer) => {
+              // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
+              answered = commitAnsweredTurn(store, buffer, {
+                id: rec.id,
+                bufferKey,
+                consumed: discussion.consumed,
+                answer,
+              });
+            });
+          });
+    const delivered = yield* Effect.scoped(work).pipe(
       Effect.matchEffect({
         onSuccess: () =>
-          Effect.sync(() =>
-            log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`),
-          ),
+          Effect.sync(() => {
+            log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
+            return true;
+          }),
         onFailure: (error) =>
-          Effect.sync(() =>
+          Effect.sync(() => {
             log.error(
               `${label} turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
-            ),
-          ),
+            );
+            return false;
+          }),
       }),
     );
-    // Caught execution/delivery failures are not replay-safe. Interruption never reaches this removal.
-    store.remove(rec.id);
+    // An answer that exists but did not reach the chat is the one failure worth another start: re-delivering it costs
+    // one message and no model call, and `startAttempt` bounds how often that is tried. Everything else — delivered,
+    // or failed before there was an answer — is done here. Interruption never reaches this removal.
+    if (delivered || !answered) {
+      store.remove(rec.id);
+      return;
+    }
+    log.warn(
+      `${label} turn ${rec.id} produced an answer that was not delivered (session=${rec.session}) — ` +
+        `keeping it to re-deliver on the next start`,
+    );
   });
 }
 

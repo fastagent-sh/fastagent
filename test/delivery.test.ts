@@ -217,6 +217,31 @@ it("preserves a source OR completed failure without duplicate terminal delivery"
   }
 });
 
+it("a failed answer hand-over stops the turn before it delivers anything", async () => {
+  // The hand-over is where the answer becomes recoverable. If it throws, delivering anyway would put an answer in
+  // the chat that no record accounts for — and the turn would look successful.
+  const failure = new Error("could not record the answer");
+  const settle = vi.fn(() => Effect.void);
+  await expect(
+    run(
+      Effect.scoped(
+        renderReply(Stream.succeed({ type: "completed" } as const), {
+          label: "[test]",
+          finish: Effect.void,
+          onEvent: () => {},
+          answer: () => "answer",
+          formatError: () => "notice",
+          settle,
+          onAnswered: () => {
+            throw failure;
+          },
+        }),
+      ),
+    ),
+  ).rejects.toBe(failure);
+  expect(settle).not.toHaveBeenCalled();
+});
+
 it("source failure remains primary when writer cleanup also fails", async () => {
   const primary = new Error("source failed");
   const exit = await Effect.runPromiseExit(

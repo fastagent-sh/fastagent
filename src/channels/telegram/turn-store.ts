@@ -4,16 +4,14 @@
  * semantics live there: pre-ACK persist, replay on the next start, the poison-turn execution ceiling, the fail-closed
  * attempt bump).
  */
-import { type TurnStore, createTurnStore as createGenericTurnStore } from "../kit/turn-store.ts";
+import { type TurnRecordBase, type TurnStore, createTurnStore as createGenericTurnStore } from "../kit/turn-store.ts";
 
 /**
  * An accepted turn's persisted intent — the SOURCE for the fields a runner needs to re-execute it (telegram.ts's
  * PendingTurn derives from this, so a new execution field added here propagates and cannot silently drop from the
  * persisted record).
  */
-export interface StoredTurn {
-  id: string;
-  session: string;
+export interface StoredTurn extends TurnRecordBase {
   placeKey: string;
   baseText: string;
   chatId: number | string;
@@ -21,7 +19,6 @@ export interface StoredTurn {
   replyTo?: number;
   imageFileIds: string[];
   fileIds: string[];
-  attempts: number;
 }
 
 /**

@@ -92,8 +92,6 @@ describe("Slack turn attachment resolution", () => {
     const api = fakeApi({
       fileInfo: async (id) => ({ id, name: `${id}.dat`, mimetype: id === "IMG" ? "image/png" : "text/plain" }),
     });
-    const completed = vi.fn();
-
     const events = await run(
       Stream.runCollect(
         slackTurnStream(
@@ -102,7 +100,6 @@ describe("Slack turn attachment resolution", () => {
           "read these",
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["IMG", "DOC"], buffered: { files: [], skipped: 0 } },
-          completed,
         ),
       ),
     );
@@ -110,7 +107,6 @@ describe("Slack turn attachment resolution", () => {
     expect(events.at(-1)).toEqual({ type: "completed" });
     expect(prompt?.images).toEqual([{ mimeType: "image/png", data: "aW1n" }]);
     expect(prompt?.text).toContain("/state/DOC.txt");
-    expect(completed).toHaveBeenCalledOnce();
   });
 
   it("turns a primary file failure into failed without invoking the Agent", async () => {

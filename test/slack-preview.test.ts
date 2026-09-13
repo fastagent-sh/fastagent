@@ -98,14 +98,16 @@ describe("Slack reply rendering", () => {
     warning.mockRestore();
   });
 
-  it("does not retry an ambiguously failed native stop during scope cleanup", async () => {
+  it("reports a delivered answer whose stop failed, once, without retrying it during scope cleanup", async () => {
+    // The answer is already on screen (appended, or carried by startStream); `stop` only closes the stream. Failing
+    // the turn here would make the runner keep its record and re-send the whole answer on the next start.
     const api = fakeApi();
-    const error = new Error("stop response was lost");
-    vi.mocked(api.stopStream).mockRejectedValue(error);
-    await expect(
-      run(slackReply(stream(quickClassicTurn()), api, { channelId: "D1", threadTs: "1.0" }, () => "failed")),
-    ).rejects.toBe(error);
+    const warning = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(api.stopStream).mockRejectedValue(new Error("stop response was lost"));
+    await run(slackReply(stream(quickClassicTurn()), api, { channelId: "D1", threadTs: "1.0" }, () => "failed"));
     expect(api.stopStream).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("could not close the Slack stream"));
+    warning.mockRestore();
   });
   it("falls back visibly to one compatibility reply when a native stream cannot start", async () => {
     const api = fakeApi();

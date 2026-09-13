@@ -398,6 +398,17 @@ Telegram is the stateful channel reference:
 Turn replay is at-least-once: a crash can re-run side-effecting tools, and a narrow pre-ACK window can
 run a delivery twice. Exactly-once execution needs a different backend/resume model.
 
+A record's `answer` separates the two events the intent used to conflate. It is written where the reply
+text is known and about to be sent (the renderer's `onAnswered`, before the terminal write), and the
+intent is dropped only once that write settles. So a record recovered on the next start is one of two
+things: without `answer`, a turn to run; with it, an answer to deliver — no model, no tools, and no
+preview of its own to resume (a queue notice THIS process put up is still taken over, as any turn
+would). A caught delivery failure keeps the record for the same reason. The
+policy where the platform cannot prove whether a send landed is **a duplicate over a loss**.
+`MAX_TURN_ATTEMPTS` bounds it, but it is a ceiling on EXECUTION: the attempt that hits it sends a
+recorded answer one last time instead of running the turn, since a send costs no model call and cannot
+be what was crashing the process. A turn with nothing to deliver — or whose last send also failed, since nothing will retry it — is dropped with a notice instead.
+
 ### Slack
 
 Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral

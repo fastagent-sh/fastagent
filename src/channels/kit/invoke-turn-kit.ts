@@ -4,8 +4,7 @@
  *
  *   - {@link turnStream}: resolve inputs → ask the agent, with a load failure arriving as a `failed`
  *     EVENT rather than a thrown iteration (SPEC MUST 2);
- *   - {@link busyRetryStream}: the busy-retry loop around `agent.invoke`, with the
- *     `onCompleted` durable-commit point;
+ *   - {@link busyRetryStream}: the busy-retry loop around `agent.invoke`;
  *   - the prompt-suffix wording: {@link attachedFilesManifest}, {@link backgroundImagesManifest},
  *     {@link missingAttachmentsNote}, {@link attributedFileName}.
  *
@@ -22,7 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
 import { eventStream } from "./event-stream.ts";
-import { PortFailure, portJoin } from "../../effect-port.ts";
+import { type PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 
 /**
@@ -46,7 +45,6 @@ export function turnStream<R>(opts: {
    *  platform question — Slack reads its API error's status, and a transport that cannot tell says
    *  yes, since a retried download is cheap next to an unanswered ask. */
   retryableLoadFailure: (cause: unknown) => boolean;
-  onCompleted?: () => void;
   busyRetry?: BusyRetry;
 }): Stream.Stream<AgentEvent, PortFailure> {
   return Stream.unwrap(
@@ -55,7 +53,6 @@ export function turnStream<R>(opts: {
         const { scope, prompt } = opts.turn(resolved);
         return busyRetryStream(opts.agent, scope, prompt, {
           label: opts.label,
-          ...(opts.onCompleted ? { onCompleted: opts.onCompleted } : {}),
           ...(opts.busyRetry ? { busyRetry: opts.busyRetry } : {}),
         });
       }),
@@ -88,11 +85,10 @@ export interface BusyRetry {
 export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
 
 /**
- * Stream one Agent turn with the shared busy-wait. `onCompleted` (if given) fires on the turn's
- * `completed` event — the durable-commit point: the turn now lives in the session. The callback
- * removes its intent before committing the consumed context snapshot. Other endings retain context;
- * the runner separately decides whether an intent is removed (caught execution failure) or retained
- * (interruption). Source pulls remain demand-driven, including while final platform delivery runs.
+ * Stream one Agent turn with the shared busy-wait. The durable-commit point is NOT here: an answer becomes durable
+ * where its text is known and about to be written to the chat (the renderer's `onAnswered`), because "the model
+ * finished" and "the user has it" are different events. Source pulls remain demand-driven, including while final
+ * platform delivery runs.
  *
  * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn holds this session's
  * lease and OUR turn never started — replay-safe. Retry (bounded) instead of yielding it: the user
@@ -105,11 +101,7 @@ export function busyRetryStream(
   agent: Agent,
   scope: Scope,
   prompt: Prompt,
-  {
-    label,
-    onCompleted,
-    busyRetry = DEFAULT_BUSY_RETRY,
-  }: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
+  { label, busyRetry = DEFAULT_BUSY_RETRY }: { label: string; busyRetry?: BusyRetry },
 ): Stream.Stream<AgentEvent, PortFailure> {
   return Stream.unwrap(
     Effect.map(Clock.currentTimeMillis, (started) => {
@@ -132,14 +124,6 @@ export function busyRetryStream(
                 }
                 first = false;
                 return true;
-              }),
-            ),
-            Stream.tap((event) =>
-              Effect.try({
-                try: () => {
-                  if (event.type === "completed") onCompleted?.();
-                },
-                catch: (cause) => new PortFailure(cause),
               }),
             ),
             Stream.scoped,

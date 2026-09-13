@@ -82,6 +82,21 @@ function slackBodies(fetchMock: ReturnType<typeof okFetch>, method: string): Rec
     .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
 }
 
+const reactionCalls = (
+  fetchMock: ReturnType<typeof okFetch>,
+): { method: string | undefined; name: unknown; channel: unknown; timestamp: unknown }[] =>
+  fetchMock.mock.calls
+    .filter(([url]) => /\/reactions\.(add|remove)$/.test(String(url)))
+    .map(([url, init]) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return {
+        method: String(url).split("/").pop(),
+        name: body.name,
+        channel: body.channel,
+        timestamp: body.timestamp,
+      };
+    });
+
 function writeTurns(stateRoot: string, turns: Record<string, unknown>): void {
   const home = join(stateRoot, "channels", "slack");
   mkdirSync(home, { recursive: true });
@@ -131,21 +146,6 @@ afterEach(async () => {
 });
 
 describe("Slack reaction ack", () => {
-  const reactionCalls = (
-    fetchMock: ReturnType<typeof okFetch>,
-  ): { method: string | undefined; name: unknown; channel: unknown; timestamp: unknown }[] =>
-    fetchMock.mock.calls
-      .filter(([url]) => /\/reactions\.(add|remove)$/.test(String(url)))
-      .map(([url, init]) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        return {
-          method: String(url).split("/").pop(),
-          name: body.name,
-          channel: body.channel,
-          timestamp: body.timestamp,
-        };
-      });
-
   it("adds the processing reaction on the triggering message and swaps it for completed on success", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -751,6 +751,62 @@ describe("Slack sessions, context, and thread participation", () => {
         ),
       ).toBe(true);
     });
+    expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
+  });
+
+  it("re-delivers a recovered ANSWER without the agent, clearing the queued Agent status it waited under", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const stateRoot = root();
+    // Same session, DM thread (where the queue notice is an Agent status rather than a message): `first` runs and
+    // is gated, so `second` — which only owes a delivery — waits behind it and is given that status.
+    writeTurns(stateRoot, {
+      // `first` has no thread, so it renders classically and never touches the Agent status — every status call
+      // below therefore belongs to `second`.
+      first: storedTurn("first", 1, { baseText: "run me", channelId: "D1", bufferKey: "T1:D1", threadTs: undefined }),
+      // A real logical id, so the ack on the asker's message (👀, added by the run that produced the answer) is
+      // reachable from this record.
+      "T1:D1:2.0": storedTurn("T1:D1:2.0", 2, {
+        baseText: "answered already",
+        channelId: "D1",
+        bufferKey: "T1:D1",
+        answer: "the answer nobody received",
+      }),
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls: Prompt[] = [];
+    const agent: Agent = {
+      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
+        calls.push(prompt);
+        await gate;
+        yield { type: "completed" };
+      },
+    };
+    const { turnsIdle } = mount(agent, { aiDisclaimer: false }, stateRoot);
+
+    await vi.waitFor(() =>
+      expect(
+        slackBodies(fetchMock, "assistant.threads.setStatus").some((body) =>
+          String(body.status).includes("queued behind an earlier request"),
+        ),
+      ).toBe(true),
+    );
+    release();
+    await turnsIdle();
+
+    expect(calls).toHaveLength(1); // only `first` asked the agent
+    const delivered = [...slackBodies(fetchMock, "chat.postMessage"), ...slackBodies(fetchMock, "chat.update")].map(
+      (body) => String(body.markdown_text ?? body.text),
+    );
+    expect(delivered).toContain("the answer nobody received");
+    // The status it waited under is this process's, so this process clears it.
+    expect(slackBodies(fetchMock, "assistant.threads.setStatus").map((body) => String(body.status))).toContain("");
+    // And the ack the dead run left on the asker's message becomes ✅ instead of staying 👀 forever.
+    expect(reactionCalls(fetchMock)).toEqual([
+      { method: "reactions.remove", name: "eyes", channel: "D1", timestamp: "2.0" },
+      { method: "reactions.add", name: "white_check_mark", channel: "D1", timestamp: "2.0" },
+    ]);
     expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
   });
 

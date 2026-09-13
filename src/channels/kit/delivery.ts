@@ -21,6 +21,8 @@ export function renderReply(
     answer: () => string;
     settle: (text: string) => Effect.Effect<void, PortFailure>;
     formatError: (failure: ChannelFailure) => string | undefined;
+    /** The finished reply, handed over before it is delivered — where a channel records it for recovery. */
+    onAnswered?: (answer: string) => void;
   },
 ): Effect.Effect<void, PortFailure, Scope.Scope> {
   return Effect.gen(function* () {
@@ -53,7 +55,12 @@ export function renderReply(
         yield* opts.finish;
         finalized = true;
         if (event.type === "completed") {
-          yield* opts.settle(opts.answer());
+          const answer = opts.answer();
+          yield* Effect.try({
+            try: () => opts.onAnswered?.(answer),
+            catch: (cause) => new PortFailure(cause),
+          });
+          yield* opts.settle(answer);
         } else {
           yield* notify(
             {

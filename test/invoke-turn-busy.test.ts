@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { type Agent, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
 import { type BusyRetry, busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
-import type { PortFailure } from "../src/effect-port.ts";
+import { PortFailure } from "../src/effect-port.ts";
 import { run as runEffect } from "./channel-effects.ts";
 import { log } from "../src/log.ts";
 
@@ -45,7 +45,7 @@ async function run(agent: Agent, retry: BusyRetry = FAST): Promise<AgentEvent[]>
     chatId: 1,
     filesDir: await mkdtemp(join(tmpdir(), "fa-")),
   };
-  return read(telegramTurnStream(agent, "s", "hi", transport, noAttachments, undefined, retry));
+  return read(telegramTurnStream(agent, "s", "hi", transport, noAttachments, retry));
 }
 
 const read = (events: Stream.Stream<AgentEvent, PortFailure>) => runEffect(Stream.runCollect(events));
@@ -55,8 +55,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const relay = (agent: Agent, onCompleted?: () => void, busyRetry = FAST) =>
-  busyRetryStream(agent, { session: "s" }, { text: "hi" }, { label: "[test]", onCompleted, busyRetry });
+const relay = (agent: Agent, busyRetry = FAST) =>
+  busyRetryStream(agent, { session: "s" }, { text: "hi" }, { label: "[test]", busyRetry });
+
+/** A consumer that fails on the turn's `completed` event — the shape of a channel whose durable write or delivery
+ *  throws where the answer is handed over. */
+const failOnCompleted = (events: Stream.Stream<AgentEvent, PortFailure>, error: Error) =>
+  events.pipe(
+    Stream.tap((event) =>
+      Effect.try({
+        try: () => {
+          if (event.type === "completed") throw error;
+        },
+        catch: (cause) => new PortFailure(cause),
+      }),
+    ),
+  );
 
 it("uses a virtual clock and closes the rejected attempt before its retry delay", async () => {
   const order: string[] = [];
@@ -98,10 +112,9 @@ it("cancels an active backoff without another invoke or a leaked timer", async (
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const { agent, invokes } = scriptedAgent([[busyEvent]]);
   const abort = new AbortController();
-  const done = Effect.runPromiseExit(
-    Stream.runDrain(relay(agent, undefined, { delayMs: 60_000, maxWaitMs: 180_000 })),
-    { signal: abort.signal },
-  );
+  const done = Effect.runPromiseExit(Stream.runDrain(relay(agent, { delayMs: 60_000, maxWaitMs: 180_000 })), {
+    signal: abort.signal,
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(vi.getTimerCount()).toBe(1);
   abort.abort();
@@ -112,8 +125,7 @@ it("cancels an active backoff without another invoke or a leaked timer", async (
   expect(invokes()).toBe(1);
 });
 
-it("keeps source pulls and completion commits behind consumer demand", async () => {
-  const onCompleted = vi.fn();
+it("keeps source pulls behind consumer demand", async () => {
   const close = vi.fn(async () => ({ done: true as const, value: undefined }));
   const next = vi
     .fn()
@@ -123,13 +135,11 @@ it("keeps source pulls and completion commits behind consumer demand", async () 
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const pull = yield* Stream.toPull(relay(agent, onCompleted));
+        const pull = yield* Stream.toPull(relay(agent));
         expect(next).not.toHaveBeenCalled();
         expect(yield* pull).toEqual([ok[0]]);
         expect(next).toHaveBeenCalledTimes(1);
-        expect(onCompleted).not.toHaveBeenCalled();
         expect(yield* pull).toEqual([ok[1]]);
-        expect(onCompleted).toHaveBeenCalledTimes(1);
         expect(close).not.toHaveBeenCalled();
       }),
     ),
@@ -151,22 +161,16 @@ it("preserves natural exhaustion without calling return on an already-closed sou
   expect(close).not.toHaveBeenCalled();
 });
 
-it("commit failures keep their identity, close the source, and never trigger retry", async () => {
-  const error = new Error("commit failed");
+it("a consumer failure on completion keeps its identity, closes the source, and never triggers retry", async () => {
+  const error = new Error("handing the answer over failed");
   const { agent, invokes } = scriptedAgent([ok]);
-  await expect(
-    read(
-      relay(agent, () => {
-        throw error;
-      }),
-    ),
-  ).rejects.toBe(error);
+  await expect(read(failOnCompleted(relay(agent), error))).rejects.toBe(error);
   expect(invokes()).toBe(1);
 });
 
-it("logs cleanup failure without replacing a commit error or exposing its payload", async () => {
+it("logs cleanup failure without replacing the consumer's error or exposing its payload", async () => {
   const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-  const primary = new Error("commit broke");
+  const primary = new Error("handing the answer over broke");
   const cleanup = new Error("source close broke", { cause: { payload: "private-provider-data" } });
   const agent: Agent = {
     async *invoke() {
@@ -178,13 +182,7 @@ it("logs cleanup failure without replacing a commit error or exposing its payloa
       }
     },
   };
-  await expect(
-    read(
-      relay(agent, () => {
-        throw primary;
-      }),
-    ),
-  ).rejects.toBe(primary);
+  await expect(read(failOnCompleted(relay(agent), primary))).rejects.toBe(primary);
   expect(warn.mock.calls.flat().join(" ")).toContain("source close broke");
   expect(warn.mock.calls.flat().join(" ")).not.toContain("private-provider-data");
 });

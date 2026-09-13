@@ -92,14 +92,12 @@ export function slackTurnStream(
   text: string,
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
-  onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): Stream.Stream<AgentEvent, PortFailure> {
   return turnStream({
     agent,
     label: transport.label,
     busyRetry,
-    ...(onCompleted ? { onCompleted } : {}),
     resolve: () => resolveInputs(transport, attachments),
     turn: (resolved) => ({
       scope: { session },

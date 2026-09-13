@@ -92,8 +92,8 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
 }
 
 /**
- * Run one turn: resolve its attachments, then ask the agent (invoke-turn-kit — `onCompleted` is the
- * durable-commit point; a primary-attachment failure surfaces as a `failed` event, never a silent drop).
+ * Run one turn: resolve its attachments, then ask the agent (invoke-turn-kit — a primary-attachment
+ * failure surfaces as a `failed` event, never a silent drop).
  */
 export function telegramTurnStream(
   agent: Agent,
@@ -101,14 +101,12 @@ export function telegramTurnStream(
   text: string,
   transport: TurnTransport,
   attachments: TurnAttachments,
-  onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): Stream.Stream<AgentEvent, PortFailure> {
   return turnStream({
     agent,
     label: "[telegram]",
     busyRetry,
-    ...(onCompleted ? { onCompleted } : {}),
     resolve: () => resolveTurnAttachments(transport, attachments),
     turn: (resolved) => ({
       scope: { session },

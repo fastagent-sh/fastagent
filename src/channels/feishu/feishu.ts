@@ -14,7 +14,8 @@ import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
-import { createTurnStore } from "../kit/turn-store.ts";
+import { portJoin } from "../../effect-port.ts";
+import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
@@ -81,10 +82,9 @@ const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task fi
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
 
 /** The persisted turn intent (what the runner needs to re-execute it). */
-interface StoredFeishuTurn {
-  id: string; // message_id (the platform delivery identity; seq below carries arrival order)
+interface StoredFeishuTurn extends TurnRecordBase {
+  // `id` is the message_id (the platform delivery identity); `seq` carries arrival order.
   seq: number;
-  session: string;
   baseText: string;
   /** Context-buffer bucket to fold at dequeue (main chat, or this message's thread root). */
   bufferKey: string;
@@ -100,7 +100,6 @@ interface StoredFeishuTurn {
   roomBufferKey?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
-  attempts: number;
 }
 
 /** State files are an IO boundary: valid JSON of the WRONG SHAPE must degrade like a corrupt file. */
@@ -386,7 +385,9 @@ function createFeishuRuntimeFactory(
         }
       },
       notifyDropped,
-      execute: (rec, discussion, onCompleted) => {
+      // `rec.preview`: the queue card THIS process mounted if the record waited behind another turn.
+      deliverAnswer: (rec, answer) => portJoin(() => settleFeishuPreview(api, targetOf(rec), rec.preview, answer)),
+      execute: (rec, discussion, onAnswered) => {
         // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
         // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold the room's
         // snapshot before either commits it. That fan-out loses nothing; claiming by buffer key would instead couple
@@ -419,13 +420,13 @@ function createFeishuRuntimeFactory(
               ...(parentSession !== undefined ? { parentSession } : {}),
             },
             { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
-            onCompleted,
           ),
           api,
           targetOf(rec),
           formatError,
           rec.preview,
           label,
+          onAnswered,
         );
       },
     });
