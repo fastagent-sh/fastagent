@@ -341,7 +341,7 @@ at-least-once: side-effecting Agent tools must be idempotent or tolerate duplica
 was already generated is not re-run — the answer is recorded before it is sent, so an interrupted or
 failed delivery is re-sent on the next start (a duplicate is preferred to a lost
 answer). The execution ceiling drops a turn that repeatedly starts without finishing and notifies the
-thread instead of crash-looping forever. File-backed channel state supports one process/replica only.
+thread instead of crash-looping forever — unless its answer was already recorded, which is sent instead. File-backed channel state supports one process/replica only.
 
 ## Production
 

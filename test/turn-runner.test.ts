@@ -32,6 +32,7 @@ function fakeStore(decisions: Record<string, "run" | "exceeded" | "defer"> = {})
     },
     answered: (id, answer) => {
       calls.push(`answered ${id} ${answer}`);
+      return true;
     },
     remove: (id) => {
       calls.push(`remove ${id}`);
@@ -374,6 +375,16 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     r.submit({ id: "d", session: "s2", text: "" }, false);
     await r.idle();
     expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["dropped x", "deferred d"]);
+  });
+
+  it("a turn at the ceiling that already has its answer is delivered, not dropped with an apology", async () => {
+    // The ceiling stops EXECUTION — the risk it guards against is a turn that keeps killing the process. Sending a
+    // recorded answer runs no model, so an answer that exists must not be replaced by "please ask again".
+    const { store, calls } = fakeStore({ x: "exceeded" });
+    const r = runner(store, calls);
+    r.submit({ id: "x", session: "s1", text: "", answer: "the answer nobody received" }, false);
+    await r.idle();
+    expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["deliver x answer=the answer nobody received"]);
   });
 
   it("beforeRun false leaves the intent untouched — nothing counted, nothing run, nothing removed", async () => {

@@ -396,11 +396,12 @@ function streamNativeSlackReply(
             throw renderError;
           }
           if (!streamTs) streamTs = await api.startStream(target, safeTerminal);
-          // The answer is on screen now — appended, or carried by the startStream above. `stop` only closes the
-          // stream, so failing it must not report the turn as undelivered: that would re-send the whole answer on
-          // the next start. The open stream is the visible cost, and the log is where it is diagnosed.
+          // What this settle had to say is on screen now — appended, or carried by the startStream above. `stop`
+          // only closes the stream, so failing it must not report the turn as undelivered: that would re-send the
+          // whole answer on the next start. The open stream is the visible cost, and the log is where it is
+          // diagnosed. (Shared by all three endings, so the wording claims a terminal write, not an answer.)
           await stop(streamTs).catch((error) =>
-            log.warn(`${label} delivered the answer but could not close the Slack stream: ${String(error)}`),
+            log.warn(`${label} could not close the Slack stream after its terminal write: ${String(error)}`),
           );
         });
       });

@@ -77,8 +77,24 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     if (beforeRun && !(yield* portJoin(() => beforeRun(rec)))) return;
     const decision = store.startAttempt(rec.id);
     if (decision === "exceeded") {
-      options.notifyDropped(rec);
-      return;
+      const stranded = rec.answer;
+      if (stranded === undefined) {
+        options.notifyDropped(rec);
+        return;
+      }
+      // The ceiling is about EXECUTION — a turn that may be crashing the process must stop being run. Delivering a
+      // recorded answer costs one message and no model call, so the record the store just dropped gets one last
+      // send instead of "please ask again" over an answer that exists.
+      return yield* Effect.scoped(options.deliverAnswer(rec, stranded)).pipe(
+        Effect.catchTag("PortFailure", (error) =>
+          Effect.sync(() =>
+            log.error(
+              `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
+                `either (session=${rec.session}) — the answer is gone: ${String(error.cause)}`,
+            ),
+          ),
+        ),
+      );
     }
     if (decision === "defer") {
       options.onDeferred(rec);
@@ -100,8 +116,13 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
             const bufferKey = options.bufferKey(rec);
             const discussion = buffer.peek(bufferKey);
             return options.execute(rec, discussion, (answer) => {
-              answered = true;
-              commitAnsweredTurn(store, buffer, { id: rec.id, bufferKey, consumed: discussion.consumed, answer });
+              // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
+              answered = commitAnsweredTurn(store, buffer, {
+                id: rec.id,
+                bufferKey,
+                consumed: discussion.consumed,
+                answer,
+              });
             });
           });
     const delivered = yield* Effect.scoped(work).pipe(

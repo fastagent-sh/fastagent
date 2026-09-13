@@ -266,7 +266,7 @@ it.each([
                 label: "[test]",
                 store: {
                   add: () => {},
-                  answered: () => {},
+                  answered: () => true,
                   remove: removed,
                   recover: () => [],
                   startAttempt: () => "run",

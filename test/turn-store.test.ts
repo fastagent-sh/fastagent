@@ -90,6 +90,19 @@ describe("turn-store", () => {
     expect(createTurnStore(freshPath()).startAttempt("gone")).toBe("run");
   });
 
+  it("answered() on an untracked run records nothing, says so, and reports that it did not", () => {
+    // The caller uses the answer to decide whether to keep the turn for re-delivery — a silent no-op here would
+    // make it claim a recovery copy that does not exist.
+    const path = freshPath();
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(createTurnStore(path).answered("gone", "the answer")).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("untracked run"));
+    const store = createTurnStore(path);
+    store.add(turn("t1"));
+    expect(store.answered("t1", "the answer")).toBe(true);
+    expect(createTurnStore(path).recover()).toMatchObject([{ id: "t1", answer: "the answer" }]);
+  });
+
   it("drops a turn on its N+1th start (over the ceiling) and persists the drop", () => {
     const path = freshPath();
     const store = createTurnStore(path);

@@ -404,8 +404,10 @@ intent is dropped only once that write settles. So a record recovered on the nex
 things: without `answer`, a turn to run; with it, an answer to deliver — no model, no tools, and no
 preview of its own to resume (a queue notice THIS process put up is still taken over, as any turn
 would). A caught delivery failure keeps the record for the same reason. The
-policy where the platform cannot prove whether a send landed is **a duplicate over a loss**: the same
-`MAX_TURN_ATTEMPTS` ceiling bounds how often re-delivery is tried.
+policy where the platform cannot prove whether a send landed is **a duplicate over a loss**.
+`MAX_TURN_ATTEMPTS` bounds it, but it is a ceiling on EXECUTION: the attempt that hits it sends a
+recorded answer one last time instead of running the turn, since a send costs no model call and cannot
+be what was crashing the process. Only a turn with nothing to deliver is dropped with a notice.
 
 ### Slack
 

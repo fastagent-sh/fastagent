@@ -29,8 +29,11 @@ export interface TurnRecordBase {
 export interface TurnStore<T extends TurnRecordBase> {
   /** Persist an accepted turn before the ACK. */
   add(rec: T): void;
-  /** Record the completed reply so a restart can deliver it without running the turn again. */
-  answered(id: string, answer: string): void;
+  /**
+   * Record the completed reply so a restart can deliver it without running the turn again. `false` = there was no
+   * record to write it to (an untracked run), so this answer has no recovery copy.
+   */
+  answered(id: string, answer: string): boolean;
   remove(id: string): void;
   /**
    * Every persisted turn a crash left behind, in ARRIVAL order (the channel's `order`), to re-enqueue on the next
@@ -60,14 +63,17 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
  * An ANSWERED turn: record the reply for delivery, then commit the discussion it folded in. The intent is NOT
  * dropped here — generating an answer is not the same event as that answer reaching the chat, and the runner drops
  * the record only once delivery has settled.
+ *
+ * Returns whether the answer became recoverable, so a caller does not claim a recovery that has nothing on disk.
  */
 export function commitAnsweredTurn<T extends TurnRecordBase, E>(
   store: TurnStore<T>,
   buffer: ContextBuffer<E>,
   turn: { id: string; bufferKey: string; consumed: E[]; answer: string },
-): void {
-  store.answered(turn.id, turn.answer);
+): boolean {
+  const recorded = store.answered(turn.id, turn.answer);
   buffer.commit(turn.bufferKey, turn.consumed);
+  return recorded;
 }
 
 export function createTurnStore<T extends TurnRecordBase>(path: string, opts: TurnStoreOptions<T>): TurnStore<T> {
@@ -112,10 +118,16 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
     },
     answered(id, answer) {
       const rec = turns.get(id);
-      if (!rec) return; // no record — an untracked run (see startAttempt); there is nothing to recover to
+      if (!rec) {
+        // An untracked run (see startAttempt): there is no record to write the answer to, so a delivery that fails
+        // from here loses it. Said out loud, because the alternative is a silent gap under a "kept for retry" log.
+        log.warn(`${label} turn ${id} answered with no record on disk (untracked run) — its answer is not recoverable`);
+        return false;
+      }
       turns.set(id, { ...rec, answer });
       // Post-ACK, so it cannot throw: a failed write costs the recovery copy, not the delivery about to happen.
       persistBestEffort("answer (a crash before delivery would lose the answer)");
+      return true;
     },
     remove(id) {
       if (turns.delete(id)) persistBestEffort("remove (a restart may re-deliver an answered turn)");
