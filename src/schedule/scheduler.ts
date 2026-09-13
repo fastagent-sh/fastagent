@@ -7,7 +7,7 @@ import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
-import { appendRun, readRuns } from "./audit.ts";
+import { appendRun, latestFiredAt } from "./audit.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
 import { loadFires, saveFires } from "./state.ts";
@@ -24,15 +24,16 @@ export function scheduleSession(name: string): string {
  * with nothing in `runs.jsonl` — the exact silence that audit exists to prevent. Recorded once, at the next boot.
  *
  * NOT re-fired: a turn that kills its own process would then replay on every boot. Resident path only — a host
- * without a persistent volume loses `runs.jsonl` between runs, where every claim would look interrupted.
+ * without a persistent volume loses `runs.jsonl` between runs, where every claim would look interrupted. Cron only:
+ * a killed wake-up leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
  */
 function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], fires: Record<string, string>): void {
-  const runs = readRuns(stateRoot);
+  const reported = latestFiredAt(stateRoot);
   for (const s of schedules) {
     const claimed = fires[s.name];
     // `firedAt` is taken after the claim is written, so any record at or after it accounts for that claim — including
     // the one appended below, which makes this idempotent across boots.
-    if (!claimed || runs.some((r) => r.name === s.name && r.firedAt >= claimed)) continue;
+    if (!claimed || (reported.get(s.name) ?? "") >= claimed) continue;
     log.warn(
       `[schedule] ${s.name}: the fire claimed at ${claimed} never finished — the process stopped mid-turn and that ` +
         `slot stays skipped (see \`fastagent schedule history ${s.name}\`)`,

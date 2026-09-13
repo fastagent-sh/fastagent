@@ -114,7 +114,10 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       s.start();
       await tick();
       expect(calls).toEqual(kind === "cron" ? [] : ["next"]);
-      // The claim the killed process left is not replayed, and this boot puts it on the record.
+      // The claim the killed process left is not replayed, and this boot puts it on the record. A wake-up has no
+      // such claim to reconcile — it leaves the store before its turn starts, so the killed occurrence is simply
+      // gone (`next` above is the SECOND wake-up, not a replay of the killed one).
+      expect(readRuns(stateRoot).filter((r) => r.outcome === "interrupted")).toHaveLength(kind === "cron" ? 1 : 0);
       if (kind === "cron") {
         expect(readRuns(stateRoot).at(-1)).toMatchObject({ outcome: "interrupted", firedAt: NOW.toISOString() });
       }

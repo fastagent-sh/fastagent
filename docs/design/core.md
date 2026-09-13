@@ -541,7 +541,12 @@ claim IO failures are typed: the resident loop logs and audits a skipped fire, w
 delivery receives the original error.
 
 `stop()` interrupts pending waits synchronously without draining or canceling a claimed occurrence.
-That occurrence finishes execution and settlement before its loop exits; no next wake is claimed.
+That occurrence finishes execution and settlement before its loop exits; no next wake is claimed. The
+process itself is not waited for, so a restart can still land between a cron claim and its audit line:
+the next `start()` reconciles the claims it is about to arm against the audit and records an unreported
+one as `interrupted`, with a warning. It is not re-fired — a turn that kills its own process would then
+replay on every boot — and external slot delivery skips the check, having no durable audit to read. A
+killed wake-up leaves nothing to reconcile: its claim removes it from the store before the turn starts.
 Waiting loops do not count as business work. Wake execution keeps its busy ownership through one-shot
 deferral and audit, so the idle notification observes settled state.
 

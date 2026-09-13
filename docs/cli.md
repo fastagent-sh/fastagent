@@ -228,6 +228,8 @@ Prints the run audit for one schedule — or `wake` for the agent's self-schedul
 fired, its outcome (`completed` / `failed` / `deferred` / `interrupted`), duration, and a preview of the reply
 or error. `interrupted` means the process stopped between claiming that slot and finishing its turn — a restart
 or rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start records it.
+That reconciliation covers `schedules/` cron fires only: a wake-up is taken out of the store before its turn
+starts, so one whose process was killed leaves no claim behind and no `interrupted` line under `wake`.
 The answer to "did last night's run silently fail?". Read-only (reads `<state root>/schedule/runs.jsonl`,
 written by the serving scheduler); `--json` prints the full records, including the complete reply text.
 

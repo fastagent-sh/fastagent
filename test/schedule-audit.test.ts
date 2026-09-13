@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendRun, readRuns } from "../src/schedule/audit.ts";
+import { appendRun, latestFiredAt, readRuns } from "../src/schedule/audit.ts";
 
 const root = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-audit-"));
 const rec = (name: string, outcome: "completed" | "failed" | "deferred" = "completed") => ({
@@ -34,6 +34,23 @@ describe("schedule/audit (runs.jsonl)", () => {
     expect(readRuns(r, "a")).toHaveLength(1);
     expect(readRuns(r)).toHaveLength(2);
     expect(readRuns(await root())).toEqual([]); // fresh root, no file
+  });
+
+  it("latestFiredAt: newest per name, unfooled by a reply quoting the field, no record parsed", async () => {
+    const r = await root();
+    appendRun(r, { ...rec("daily"), firedAt: "2026-07-07T09:00:00.000Z" });
+    // A reply can contain anything, but JSON escapes its quotes — so `"firedAt":"` inside it is not that sequence.
+    appendRun(r, {
+      ...rec("daily"),
+      firedAt: "2026-07-07T10:00:00.000Z",
+      reply: 'the cron said {"name":"other","firedAt":"1999-01-01T00:00:00.000Z"}',
+    });
+    appendRun(r, { ...rec("weekly"), firedAt: "2026-07-06T09:00:00.000Z" });
+    expect([...latestFiredAt(r)]).toEqual([
+      ["daily", "2026-07-07T10:00:00.000Z"],
+      ["weekly", "2026-07-06T09:00:00.000Z"],
+    ]);
+    expect(latestFiredAt(await root())).toEqual(new Map()); // fresh root, no file
   });
 
   it("skips a malformed line with a warn — one bad line can't poison the history", async () => {
