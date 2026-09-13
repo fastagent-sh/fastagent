@@ -457,6 +457,49 @@ describe("durable turn intent (crash recovery)", () => {
     expect(Object.keys(onDisk).sort()).toEqual(["8", "9"]); // retained intact for the next start
   });
 
+  it("a recovered ANSWER queued behind a sibling takes over its ⏳ notice too", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    // Same session: 8 runs, so 9 — which only owes a delivery — waits behind it and is given a ⏳ notice by THIS
+    // process. Its own preview died with the run that produced the answer; this one did not.
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "8": {
+          id: "8",
+          session: "s",
+          placeKey: "s",
+          baseText: "run me",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 0,
+        },
+        "9": {
+          id: "9",
+          session: "s",
+          placeKey: "s",
+          baseText: "answered already",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 0,
+          answer: "the answer nobody received",
+        },
+      }),
+    );
+    const { agent, calls } = replyingAgent("done");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    await flush();
+    expect(calls).toHaveLength(1); // only 8 asked the agent; 9 owed a delivery, not a turn
+    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c));
+    expect(edits.some((b) => String(b.text) === "the answer nobody received")).toBe(true); // took over ⏳
+    // 8's preview placeholder and 9's ⏳ — no third message left the recovered answer beside an orphan notice.
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(2);
+    expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({});
+  });
+
   it("a poison turn queued behind a sibling takes over its ⏳ notice (no orphan, no double-post)", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);

@@ -125,13 +125,19 @@ async function settleClassic(
 }
 
 /**
- * Deliver a reply this process did not generate: a recovered answer, whose preview/stream belongs to a run that is
- * gone. One fresh Markdown message (chunked), no stream to resume.
+ * Deliver a reply this process did not generate: a recovered answer. The stream it was written for is gone with its
+ * process, so there is none to resume — but a compatibility queue message THIS process posted while the record
+ * waited its turn is taken over rather than left above the answer.
  */
-export async function deliverSlackAnswer(api: SlackApi, target: SlackTarget, markdown: string): Promise<void> {
-  await settleClassic(api, target, undefined, sanitizeSlackMarkdown(markdown), async () => {
-    throw new Error("unreachable: settleClassic only updates a preview it was given");
-  });
+export async function deliverSlackAnswer(
+  api: SlackApi,
+  target: SlackTarget,
+  markdown: string,
+  previewTs?: string,
+): Promise<void> {
+  await settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), (ts, value) =>
+    api.updateMarkdown(target.channelId, ts, value),
+  );
 }
 
 /** Settle a queue/drop/defer notice. These are authored plain strings, so the basic text API is enough. */
@@ -390,7 +396,12 @@ function streamNativeSlackReply(
             throw renderError;
           }
           if (!streamTs) streamTs = await api.startStream(target, safeTerminal);
-          await stop(streamTs);
+          // The answer is on screen now — appended, or carried by the startStream above. `stop` only closes the
+          // stream, so failing it must not report the turn as undelivered: that would re-send the whole answer on
+          // the next start. The open stream is the visible cost, and the log is where it is diagnosed.
+          await stop(streamTs).catch((error) =>
+            log.warn(`${label} delivered the answer but could not close the Slack stream: ${String(error)}`),
+          );
         });
       });
     yield* Effect.addFinalizer(() =>

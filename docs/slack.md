@@ -339,7 +339,7 @@ safe; each thread then costs one mention to re-enter.
 An accepted turn is persisted before the 200 ACK and replayed after an interrupted process. Replay is
 at-least-once: side-effecting Agent tools must be idempotent or tolerate duplication. A turn whose reply
 was already generated is not re-run — the answer is recorded before it is sent, so an interrupted or
-failed delivery is re-sent as one fresh message on the next start (a duplicate is preferred to a lost
+failed delivery is re-sent on the next start (a duplicate is preferred to a lost
 answer). The execution ceiling drops a turn that repeatedly starts without finishing and notifies the
 thread instead of crash-looping forever. File-backed channel state supports one process/replica only.
 

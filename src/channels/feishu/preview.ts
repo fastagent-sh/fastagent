@@ -174,10 +174,9 @@ export async function mountFeishuPreview(
   }
 }
 
-/** Settle an already-mounted queue preview without starting an Agent stream (the poison/defer paths). */
 /**
- * Settle a preview, or — with none — deliver a reply this process did not generate: a recovered answer, whose
- * preview belongs to a run that is gone.
+ * Settle a preview without starting an Agent stream: a queue/poison/defer notice, or a recovered answer whose own
+ * preview died with the run that produced it (`undefined` — then it is one fresh message).
  */
 export async function settleFeishuPreview(
   api: FeishuApi,

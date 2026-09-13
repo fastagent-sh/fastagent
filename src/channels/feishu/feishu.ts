@@ -385,7 +385,8 @@ function createFeishuRuntimeFactory(
         }
       },
       notifyDropped,
-      deliverAnswer: (rec, answer) => portJoin(() => settleFeishuPreview(api, targetOf(rec), undefined, answer)),
+      // `rec.preview`: the queue card THIS process mounted if the record waited behind another turn.
+      deliverAnswer: (rec, answer) => portJoin(() => settleFeishuPreview(api, targetOf(rec), rec.preview, answer)),
       execute: (rec, discussion, onAnswered) => {
         // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
         // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold the room's

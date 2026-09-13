@@ -176,8 +176,9 @@ export function telegramChannel({
         }
       },
       notifyDropped,
+      // `rec.previewId`: the ⏳ notice THIS process put up if the record waited behind another turn.
       deliverAnswer: (rec, answer) =>
-        portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer)),
+        portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer, rec.previewId)),
       execute: (rec, discussion, onAnswered) =>
         telegramReply(
           telegramTurnStream(

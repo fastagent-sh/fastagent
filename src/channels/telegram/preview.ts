@@ -83,11 +83,18 @@ async function finalize(
 }
 
 /**
- * Deliver a reply this process did not generate: a recovered answer, whose preview message belongs to a run that is
- * gone. One fresh message, the same terminal-write policy.
+ * Deliver a reply this process did not generate: a recovered answer. The run that produced it is gone with its
+ * preview, but a "⏳ Queued" notice THIS process put up while the record waited its turn is still there — so the
+ * same terminal-write policy applies, taking that message over rather than leaving it pinned above the answer.
  */
-export function deliverTelegramAnswer(api: string, botToken: string, target: Target, text: string): Promise<void> {
-  return finalize(api, botToken, target, undefined, text);
+export function deliverTelegramAnswer(
+  api: string,
+  botToken: string,
+  target: Target,
+  text: string,
+  previewId?: number,
+): Promise<void> {
+  return finalize(api, botToken, target, previewId, text);
 }
 
 /**

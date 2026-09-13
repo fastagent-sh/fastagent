@@ -46,8 +46,12 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
     onAnswered: (answer: string) => void,
   ): Effect.Effect<void, PortFailure, Scope.Scope>;
   /**
-   * Deliver an answer a previous run generated but never confirmed delivering. No model, no tools, no live preview
-   * (its message is gone with the process): one fresh message carrying the recorded reply.
+   * Deliver an answer a previous run generated but never confirmed delivering: no model, no tools, and no live
+   * preview — the one the answer was written for died with its process.
+   *
+   * A notice THIS process put up is a different thing and must still be settled: a record recovered behind another
+   * turn in the same session goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
+   * or status that only this call can take over or clear.
    */
   deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
 }

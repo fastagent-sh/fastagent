@@ -67,6 +67,7 @@ const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task fi
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
 const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question or describe a task and I'll get to work.";
 
+/** `id`/`session`/`attempts`/`answer` come from the generic record, which is also where `answer` is validated. */
 interface StoredSlackTurn extends TurnRecordBase {
   seq: number;
   baseText: string;
@@ -96,7 +97,6 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
     turn.fileIds.every((id) => typeof id === "string") &&
     typeof turn.attempts === "number"
   );
-  // `answer` is the generic record's field; the shared store validates it.
 }
 
 interface PendingSlackTurn extends Omit<StoredSlackTurn, "attempts"> {
@@ -338,7 +338,17 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         }
       },
       notifyDropped,
-      deliverAnswer: (turn, answer) => portJoin(() => deliverSlackAnswer(api, targetOf(turn), answer)),
+      deliverAnswer: (turn, answer) =>
+        portJoin(async () => {
+          // A queue notice THIS process put up outlives the run the answer came from, so it is settled here as it
+          // would be by a turn that ran: the status line cleared, the compatibility message taken over.
+          if (turn.nativeQueueStatus) {
+            await api
+              .setThreadStatus(targetOf(turn), "")
+              .catch((error) => log.warn(`${label} could not clear a queued Agent status: ${String(error)}`));
+          }
+          await deliverSlackAnswer(api, targetOf(turn), answer, turn.previewTs);
+        }),
       execute: (turn, discussion, onAnswered) => {
         const messageRef = messageRefOf(turn.id);
         return Effect.acquireUseRelease(
