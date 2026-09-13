@@ -18,7 +18,7 @@ Applied to the four things a `fastagent.json` at the workspace root would plausi
 
 | Candidate fact | Derivable? |
 |---|---|
-| "this directory is a workspace" | **Yes.** A workspace is not a property, it is a *role*: the directory you pointed fastagent at this time. The same directory is a workspace in one invocation and an agent directory in another (a deployed container is shipped the agent alone), and no file can be right in both |
+| "this directory is a workspace" | **Yes.** A workspace is not a property, it is a *role*: the directory you pointed fastagent at this time. Point at a parent to use it as the workspace for a nested agent; point at that agent directly and it is both agent and workspace. A marker cannot decide which invocation the author intended |
 | "these are the agents here" | **Yes.** `agentsAt()` scans one level; `fastagent.config.ts` is the marker. A second list is a second truth, and it drifts |
 | "this one answers by default" | **Already conventional.** The agent named `fastagent` wins; `FASTAGENT_AGENT` overrides |
 | **"this skill/agent came from X at commit Y"** | **No.** `vendorSkill` writes the files and keeps nothing about where they came from |
@@ -27,10 +27,12 @@ Only the last row is real, and it is not about the workspace.
 
 ## 2. Provenance belongs to the definition, not the workspace
 
-A vendored skill lands in `<agent>/skills/<name>/`. It is part of **that agent's definition**, and the
-definition is what ships: `deploy` carries the agent directory into the image and leaves the workspace
-behind. A provenance record kept at the workspace root would not travel with the thing it describes, and the
-definition would stop being self-contained — which is the property the whole deployment model rests on.
+A vendored skill lands in `<agent>/skills/<name>/`. It is part of **that agent's definition**. The initial
+deploy does carry the whole source workspace: generated Dockerfiles use `COPY . .`, and the first publish
+seeds persistent storage from that workspace. Later publishes replace only the selected agent directory.
+Agents can also be selected, run, and moved independently of the workspace where they were created. A
+provenance record at the workspace root would therefore stop following the skill after an agent-only update
+or move.
 
 The rule generalizes, and it is the same one the secrets-file work arrived at the expensive way: **a record
 lives beside what it describes, not in a larger container that happens to hold it.** So a future
@@ -39,11 +41,12 @@ it.
 
 ## 3. Three shapes in the wild, and which one we are
 
-**Workspace manifests** (`pnpm-workspace.yaml`, npm's `workspaces` field, Cargo workspaces) exist for two
-reasons we do not share. Members cannot be found by scanning — `packages/*` is a glob whose matches are not
-all members, so the set must be declared. And packages are **derived artifacts**: `node_modules` is deletable
-and rebuildable, so a manifest is the only way back. Our agents declare themselves with a config file, and
-they are *source*, not a rebuildable artifact.
+**Workspace manifests** (`pnpm-workspace.yaml`, npm's `workspaces` field, Cargo workspaces) declare which
+source packages participate so their package manager can resolve local dependencies and run cross-package
+install, build, test, or publish operations. Package members are source code; `node_modules` contains the
+rebuildable installed dependencies. FastAgent has no cross-agent dependency graph or workspace-wide package
+operation today. It only needs to find selectable agents, which declare themselves with
+`fastagent.config.ts` and are discovered by a one-level scan.
 
 **Agent-asset package managers** — Microsoft's [APM](https://microsoft.github.io/apm/reference/lockfile-spec/)
 (`apm.yml` + `apm.lock.yaml`), agentpack (`agentpack.toml` + lock), harness-ai-kit, AgentNode — converged on

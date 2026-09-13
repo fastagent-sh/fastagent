@@ -65,11 +65,10 @@ repo/                       # `fastagent dev` here  → agent = repo/agent, work
 ```
 
 Point at the project and its agent serves with the project as its workspace (what `init` sets up).
-Point at the agent directory — all a deployed box may have been shipped — and it works on itself; a
-rule insisting the workspace is always the parent would hand that container `/`. That shape still
-RESOLVES (the two directories are simply equal), but `init` no longer creates it: a definition written
-into a directory that already holds other files inherits that directory's `package.json`, and a
-`fastagent.config.ts` under a CommonJS manifest does not load.
+Point at the agent directory and it works on itself. That shape still RESOLVES (the two directories are
+simply equal), but `init` no longer creates it: a definition written into a directory that already holds
+other files inherits that directory's `package.json`, and a `fastagent.config.ts` under a CommonJS
+manifest does not load.
 
 | `dir` | Result |
 |---|---|
@@ -97,8 +96,10 @@ into a directory that already holds other files inherits that directory's `packa
 
 `init` either creates or refuses with the reason. Its one placement duty follows from the lookup:
 **the target must be an agent the lookup would return**, so it refuses when `dir` already resolves over
-something else. A subdirectory target must be empty; `--agent-dir .` adopts a directory, so existing
-files are kept — reported, never overwritten.
+something else. It always creates the definition in an otherwise empty subdirectory (`./fastagent/` by
+default, or the name passed to `--agent-dir`) and refuses `--agent-dir .`. Existing flat agent directories
+remain valid inputs: the resolver still returns `{ agentDir: dir, workspace: dir }` when `dir` already
+holds `fastagent.config.ts`.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a

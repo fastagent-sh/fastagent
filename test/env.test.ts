@@ -112,8 +112,8 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
       expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets FASTAGENT_MODEL/);
       expect(process.env.FASTAGENT_MODEL).toBeUndefined(); // announced, never loaded behind the user's back
 
-      // An agent directory can be the author's repository too (`--agent-dir .` exists for that shape),
-      // where a root `.env` is their APPLICATION's and "move the values there" would break it. Nothing
+      // An existing flat agent directory can also be the author's repository, where a root `.env` is their
+      // APPLICATION's and "move the values there" would break it. Nothing
       // here can tell those apart, so the warning is scoped to keys fastagent itself reads — and stays
       // silent about everything else, however long the agent runs without a `.secrets/.env`.
       await writeFile(join(agent, ".env"), "DATABASE_URL=postgres://real\n");

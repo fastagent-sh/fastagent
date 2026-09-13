@@ -32,8 +32,7 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
   });
 
   it("pointing AT the agent makes it work on ITSELF — the divergence is the honest answer", async () => {
-    // The same tree answers two ways, and neither is wrong: a deployed box may hold nothing but the
-    // agent, and a rule insisting its workspace is the parent would hand it the container root.
+    // The same tree answers two ways: targeting the agent directly deliberately narrows its workspace.
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-aim-"));
     const agent = join(dir, "fastagent");
     await config(agent);
