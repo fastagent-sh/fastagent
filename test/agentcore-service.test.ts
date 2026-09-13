@@ -167,7 +167,7 @@ describe("mountAgentcoreService", () => {
     try {
       // Channels are constructed only after trusted ingress arrives.
       expect(service.channels).toEqual({ routes: [], longConnections: [], builtinInvoke: false });
-      expect(service.ready).resolves.toBeUndefined();
+      await expect(service.ready).resolves.toBeUndefined();
     } finally {
       await service.close();
     }
