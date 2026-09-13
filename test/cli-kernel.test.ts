@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type CommandSpec, optionKey } from "../src/cli/kernel.ts";
+import type { CommandSpec } from "../src/cli/kernel.ts";
 import { buildCliProgram, specs } from "../src/cli/program.ts";
 
 /**
@@ -172,16 +172,7 @@ describe("cli kernel: help styling — bold headings, NO colors; errors carry th
   });
 });
 
-describe("cli kernel: the option-key naming rule", () => {
-  it("optionKey: camelCase of the long name; --no-x negates and stores under x", () => {
-    expect(optionKey("--json")).toBe("json");
-    expect(optionKey("--sessions-dir <dir>")).toBe("sessionsDir");
-    expect(optionKey("--no-input")).toBe("input");
-    expect(optionKey("--no-scale-to-zero")).toBe("scaleToZero");
-    expect(optionKey("-h, --help")).toBe("help");
-    expect(() => optionKey("-x")).toThrow(/no long form/);
-  });
-
+describe("cli kernel: help", () => {
   it("per-command help shows usage, arguments, and the Examples section (exit 0)", async () => {
     const r = await parse(["models", "--help"]);
     expect(r.code).toBe(0);

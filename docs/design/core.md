@@ -94,12 +94,9 @@ manifest does not load.
   adds a `hint:` line. A hint may use that heuristic precisely because a rule may not.
 - **Known boundary:** the workspace is `agentDir` itself or its immediate parent, never further.
 
-`init` either creates or refuses with the reason. Its one placement duty follows from the lookup:
-**the target must be an agent the lookup would return**, so it refuses when `dir` already resolves over
-something else. It always creates the definition in an otherwise empty subdirectory (`./fastagent/` by
-default, or the name passed to `--agent-dir`) and refuses `--agent-dir .`. Existing flat agent directories
-remain valid inputs: the resolver still returns `{ agentDir: dir, workspace: dir }` when `dir` already
-holds `fastagent.config.ts`.
+`init` either creates or refuses with the reason. It always writes the complete scaffold into an empty
+direct subdirectory of `dir`; an agent already at `dir` is refused because it would hide that child.
+Existing flat layouts remain supported only by runtime resolution: `init` never creates or adopts one.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a

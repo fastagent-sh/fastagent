@@ -59,21 +59,6 @@ export interface ProgramOptions {
   exit?: (code: number) => never;
 }
 
-/**
- * The option key a flag string yields on the parsed-flags record — the naming rule specs rely on: camelCase of the
- * long name (`--sessions-dir` → `sessionsDir`); a `--no-x` flag negates and stores under `x` (absent ⇒ `x !== false`).
- */
-export function optionKey(flags: string): string {
-  const long = flags
-    .split(/[\s,|]+/)
-    .filter((part) => part.startsWith("--"))
-    .at(-1);
-  if (!long) throw new Error(`flag "${flags}" has no long form (clig: have full-length flags)`);
-  let name = long.replace(/^--/, "").replace(/[=<[].*$/, "");
-  if (name.startsWith("no-")) name = name.slice(3);
-  return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-}
-
 // Help styling (clig: formatting with intention): section headings are BOLD, nothing in help is colored — the only
 // color in the whole CLI is the red error prefix.
 const title = (s: string): string => `\x1b[1m${s}\x1b[0m`; // bold — section headings
