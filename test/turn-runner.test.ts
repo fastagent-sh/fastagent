@@ -387,6 +387,23 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["deliver x answer=the answer nobody received"]);
   });
 
+  it("a ceiling delivery that fails still ends the ask — nothing retries it and a queue notice would stay", async () => {
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    const { store, calls } = fakeStore({ x: "exceeded" });
+    const r = runner(store, calls, {
+      deliverAnswer: (rec) =>
+        portJoin(async () => {
+          calls.push(`deliver ${rec.id}`);
+          throw new Error("chat not found");
+        }),
+    });
+    r.submit({ id: "x", session: "s1", text: "", answer: "the answer nobody received" }, false);
+    await r.idle();
+    // The record is already off disk, so this is the last chance to say anything to the asker.
+    expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["deliver x", "dropped x"]);
+    expect(errors.mock.calls.flat().join(" ")).toContain("the answer is gone");
+  });
+
   it("beforeRun false leaves the intent untouched — nothing counted, nothing run, nothing removed", async () => {
     const { store, calls } = fakeStore();
     const r = runner(store, calls, { beforeRun: async () => false });

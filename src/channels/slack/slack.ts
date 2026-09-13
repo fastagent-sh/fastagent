@@ -50,7 +50,7 @@ import {
   settleSlackPreview,
   slackReply,
 } from "./preview.ts";
-import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
+import { completeSlackReaction, resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
 import { registerSlackApi } from "./shared-api.ts";
 import { type SlackTarget, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
@@ -348,6 +348,18 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               .catch((error) => log.warn(`${label} could not clear a queued Agent status: ${String(error)}`));
           }
           await deliverSlackAnswer(api, targetOf(turn), answer, turn.previewTs);
+          // The 👀 on the asker's message was added by the run that produced this answer, and `execute`'s
+          // acquire/release — the only thing that turns it into ✅ — is not on this path.
+          const messageRef = messageRefOf(turn.id);
+          if (reactionEmojis && messageRef) {
+            await completeSlackReaction({
+              api,
+              channelId: messageRef.channelId,
+              ts: messageRef.ts,
+              emojis: reactionEmojis,
+              label,
+            });
+          }
         }),
       execute: (turn, discussion, onAnswered) => {
         const messageRef = messageRefOf(turn.id);

@@ -39,19 +39,43 @@ export interface SlackReactionSession {
   remove(): Promise<void>;
 }
 
+/** What identifies the acked message: the asker's own message, and how to reach it. */
+export interface SlackReactionTarget {
+  api: Pick<SlackApi, "addReaction" | "removeReaction">;
+  channelId: string;
+  ts: string;
+  emojis: SlackReactionEmojis;
+  label: string;
+}
+
+// Every step is best effort: an ack is decoration, and must never fail the turn carrying it.
+const dropProcessing = ({ api, channelId, ts, emojis, label }: SlackReactionTarget): Promise<void> =>
+  api
+    .removeReaction(channelId, ts, emojis.processing)
+    .catch((error) => log.warn(`${label} could not remove the processing reaction: ${String(error)}`));
+
+const addCompleted = ({ api, channelId, ts, emojis, label }: SlackReactionTarget): Promise<void> =>
+  api
+    .addReaction(channelId, ts, emojis.completed)
+    .catch((error) => log.warn(`${label} could not add the completed reaction: ${String(error)}`));
+
+/**
+ * Finish an ack this process did not start: 👀 on the asker's message was added by the run that produced the answer,
+ * and a re-delivery is the only thing left that can turn it into ✅. Without it the ack says "still working" under a
+ * delivered answer, forever.
+ */
+export async function completeSlackReaction(target: SlackReactionTarget): Promise<void> {
+  await dropProcessing(target);
+  await addCompleted(target);
+}
+
 const NO_REACTION: SlackReactionSession = {
   complete: async () => undefined,
   remove: async () => undefined,
 };
 
 /** Add the processing emoji now; return a session to swap it for the completed emoji or remove it. */
-export async function startSlackReaction(args: {
-  api: Pick<SlackApi, "addReaction" | "removeReaction">;
-  channelId: string;
-  ts: string;
-  emojis: SlackReactionEmojis;
-  label: string;
-}): Promise<SlackReactionSession> {
+export async function startSlackReaction(args: SlackReactionTarget): Promise<SlackReactionSession> {
   const { api, channelId, ts, emojis, label } = args;
   try {
     await api.addReaction(channelId, ts, emojis.processing);
@@ -63,16 +87,12 @@ export async function startSlackReaction(args: {
   const removeProcessing = async (): Promise<void> => {
     if (!active) return;
     active = false;
-    await api
-      .removeReaction(channelId, ts, emojis.processing)
-      .catch((error) => log.warn(`${label} could not remove the processing reaction: ${String(error)}`));
+    await dropProcessing(args);
   };
   return {
     complete: async () => {
       await removeProcessing();
-      await api
-        .addReaction(channelId, ts, emojis.completed)
-        .catch((error) => log.warn(`${label} could not add the completed reaction: ${String(error)}`));
+      await addCompleted(args);
     },
     remove: removeProcessing,
   };

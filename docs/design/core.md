@@ -407,7 +407,7 @@ would). A caught delivery failure keeps the record for the same reason. The
 policy where the platform cannot prove whether a send landed is **a duplicate over a loss**.
 `MAX_TURN_ATTEMPTS` bounds it, but it is a ceiling on EXECUTION: the attempt that hits it sends a
 recorded answer one last time instead of running the turn, since a send costs no model call and cannot
-be what was crashing the process. Only a turn with nothing to deliver is dropped with a notice.
+be what was crashing the process. A turn with nothing to deliver — or whose last send also failed, since nothing will retry it — is dropped with a notice instead.
 
 ### Slack
 

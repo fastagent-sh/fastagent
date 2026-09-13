@@ -86,14 +86,27 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       // recorded answer costs one message and no model call, so the record the store just dropped gets one last
       // send instead of "please ask again" over an answer that exists.
       return yield* Effect.scoped(options.deliverAnswer(rec, stranded)).pipe(
-        Effect.catchTag("PortFailure", (error) =>
-          Effect.sync(() =>
-            log.error(
-              `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
-                `either (session=${rec.session}) — the answer is gone: ${String(error.cause)}`,
+        Effect.matchEffect({
+          // The store has already said, at error level, that this turn will not be run again. Silence after that
+          // reads as "nothing happened"; this line is what distinguishes it from a delivered answer.
+          onSuccess: () =>
+            Effect.sync(() =>
+              log.info(
+                `${label} turn ${rec.id} hit the execution ceiling, but the answer it had already recorded was ` +
+                  `delivered (session=${rec.session})`,
+              ),
             ),
-          ),
-        ),
+          onFailure: (error) =>
+            Effect.sync(() => {
+              log.error(
+                `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
+                  `either (session=${rec.session}) — the answer is gone: ${String(error.cause)}`,
+              );
+              // The record is off disk, so nothing will retry this. The asker is owed an ending — without one, a
+              // queue notice this turn put up stays in the chat forever reading "Queued".
+              options.notifyDropped(rec);
+            }),
+        }),
       );
     }
     if (decision === "defer") {
