@@ -30,6 +30,9 @@ function fakeStore(decisions: Record<string, "run" | "exceeded" | "defer"> = {})
     add: (rec) => {
       calls.push(`add ${rec.id}`);
     },
+    answered: (id, answer) => {
+      calls.push(`answered ${id} ${answer}`);
+    },
     remove: (id) => {
       calls.push(`remove ${id}`);
     },
@@ -71,10 +74,14 @@ function runnerOptions(
     where: (rec) => `session=${rec.session}`,
     onDeferred: (rec) => calls.push(`deferred ${rec.id}`),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
-    execute: (rec, discussion, onCompleted) =>
+    deliverAnswer: (rec, answer) =>
+      portJoin(async () => {
+        calls.push(`deliver ${rec.id} answer=${answer}`);
+      }),
+    execute: (rec, discussion, onAnswered) =>
       portJoin(async () => {
         calls.push(`execute ${rec.id} notice=${rec.notice ?? "-"} text=${discussion.text}`);
-        onCompleted();
+        onAnswered("the answer");
       }),
     ...overrides,
   };
@@ -111,7 +118,7 @@ function durable() {
 }
 
 describe("turn runner: the lifecycle order every chat channel shares", () => {
-  it("SIGTERM preserves the durable state, running or committed", async () => {
+  it("SIGTERM preserves the durable state, running or answered", async () => {
     for (const phase of ["running", "committed"]) {
       const { dir, openStore, openBuffer } = durable();
       const source = new URL("../src/channels/kit/", import.meta.url).href;
@@ -132,11 +139,12 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         const runner = createTurnRunner({
           label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
           bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
-          execute: (_rec, _discussion, onCompleted) => portJoin(async () => {
+          deliverAnswer: () => portJoin(async () => {}),
+          execute: (_rec, _discussion, onAnswered) => portJoin(async () => {
             process.on('message', () => {
-              onCompleted();
+              onAnswered('the answer');
               buffer.push('place:s', 'later');
-              process.send('committed');
+              process.send('answered');
             });
             process.send('running');
             await new Promise(() => {});
@@ -162,17 +170,18 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       try {
         expect(await message(), phase).toBe("running");
         if (phase === "committed") {
-          const committed = message();
+          const answered = message();
           child.send("complete");
-          expect(await committed, phase).toBe("committed");
+          expect(await answered, phase).toBe("answered");
         }
       } finally {
         child.kill("SIGTERM");
         await exited;
       }
-      expect(openStore().recover(), phase).toEqual(
-        phase === "running" ? [{ id: "a", session: "s", text: "", attempts: 1 }] : [],
-      );
+      // Killed mid-delivery, the answer is on disk to re-deliver; killed mid-run, only the intent is.
+      expect(openStore().recover(), phase).toEqual([
+        { id: "a", session: "s", text: "", attempts: 1, ...(phase === "committed" ? { answer: "the answer" } : {}) },
+      ]);
       expect(openBuffer().peek("place:s").consumed, phase).toEqual(phase === "running" ? ["earlier"] : ["later"]);
     }
   });
@@ -237,7 +246,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(activeWork()).toBe(base);
   });
 
-  it("interruption joins work and preserves the actual commit decision, committed or not", async () => {
+  it("interruption joins work and preserves the actual commit decision, answered or not", async () => {
     for (const completed of [false, true]) {
       const { store, buffer, openStore, openBuffer } = durable();
       buffer.push("place:s", "earlier");
@@ -247,10 +256,10 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       let running!: Fiber.Fiber<unknown, unknown>;
       const opts = runnerOptions(store, [], {
         buffer,
-        execute: (_rec, discussion, onCompleted) =>
+        execute: (_rec, discussion, onAnswered) =>
           portJoin(async () => {
             expect(discussion.consumed).toEqual(["earlier"]);
-            if (completed) onCompleted();
+            if (completed) onAnswered("the answer");
             entered.resolve();
             await finish.promise;
           }),
@@ -278,15 +287,23 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         await queue.idle();
       }
       expect(activeWork(), label).toBe(base);
-      expect(openStore().recover(), label).toEqual(completed ? [] : [{ id: "a", session: "s", text: "", attempts: 1 }]);
+      // Either way the record survives interruption — but it means different work on the next start: an answer to
+      // deliver, or a turn to run.
+      expect(openStore().recover(), label).toEqual([
+        { id: "a", session: "s", text: "", attempts: 1, ...(completed ? { answer: "the answer" } : {}) },
+      ]);
       expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : ["earlier", "later"]);
-      if (!completed) {
-        const replay = runner(openStore(), [], { buffer: openBuffer() });
-        expect(replay.recover()).toHaveLength(1);
-        await replay.idle();
-        expect(openStore().recover()).toEqual([]);
-        expect(openBuffer().peek("place:s").consumed).toEqual([]);
-      }
+      const calls: string[] = [];
+      const replay = runner(openStore(), calls, { buffer: openBuffer() });
+      expect(replay.recover(), label).toHaveLength(1);
+      await replay.idle();
+      expect(
+        calls.filter((c) => c.startsWith("deliver") || c.startsWith("execute")).map((c) => c.split("\n")[0]),
+        label,
+      ).toEqual(completed ? ["deliver a answer=the answer"] : ["execute a notice=- text=earlier"]);
+      expect(openStore().recover(), label).toEqual([]);
+      // A re-delivery folds nothing: the discussion that arrived after the answer stays buffered for the next turn.
+      expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : []);
     }
   });
 
@@ -316,7 +333,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(activeWork()).toBe(base);
   });
 
-  it("accepts, settles the queue notice, counts the attempt, folds, executes, commits, and drops the intent", async () => {
+  it("accepts, settles the queue notice, counts the attempt, folds, executes, records the answer, delivers, drops", async () => {
     const { store, calls } = fakeStore();
     const r = runner(store, calls, {
       onQueuedBehind: (rec) => ({
@@ -338,13 +355,13 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       "attempt a",
       "peek place:s",
       "execute a notice=- text=earlier",
-      "remove a",
+      "answered a the answer", // the answer is durable BEFORE delivery; the intent outlives it
       "commit place:s e1",
-      "remove a",
+      "remove a", // only now — delivery settled
       "attempt b",
       "peek place:s",
       "execute b notice=n1 text=earlier",
-      "remove b",
+      "answered b the answer",
       "commit place:s e1",
       "remove b",
     ]);
@@ -378,7 +395,6 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       expect(calls.filter((c) => c.endsWith(" b") || c.startsWith("execute b"))).toEqual([
         "attempt b",
         "execute b notice=- text=earlier",
-        "remove b",
         "remove b",
       ]);
       // Swallowing it is the point, so the swallow owes a signal: without this the catch could go

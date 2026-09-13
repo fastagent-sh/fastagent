@@ -192,22 +192,22 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     const order: string[] = [];
     return {
       order,
-      store: { remove: (id: string) => void order.push(`remove:${id}`) } as unknown as Parameters<
-        typeof commitAnsweredTurn
-      >[0],
+      store: {
+        answered: (id: string, answer: string) => void order.push(`answered:${id}:${answer}`),
+      } as unknown as Parameters<typeof commitAnsweredTurn>[0],
       buffer: { commit: (key: string) => void order.push(`commit:${key}`) } as unknown as Parameters<
         typeof commitAnsweredTurn
       >[1],
     };
   };
 
-  it("drops the intent BEFORE committing the context", () => {
-    // Reversed, a crash between the writes leaves intent on disk with its context already consumed:
-    // the replay then runs the same turn with its folded discussion stripped. This order's failure is
-    // the harmless one — re-folding context that was already answered.
+  it("records the answer BEFORE committing the context", () => {
+    // Reversed, a crash between the writes consumes the context of a turn whose answer is not recoverable:
+    // the replay then re-runs it with its folded discussion stripped. This order's failure is the harmless
+    // one — an answer kept for re-delivery whose discussion is re-folded if it is run again after all.
     const { order, store, buffer } = recorder();
-    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [] });
-    expect(order).toEqual(["remove:t1", "commit:chat:1"]);
+    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [], answer: "hi" });
+    expect(order).toEqual(["answered:t1:hi", "commit:chat:1"]);
   });
 
   it("forwards the consumed entries by reference", () => {
@@ -219,7 +219,7 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<
       typeof commitAnsweredTurn
     >[1];
-    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed });
+    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed, answer: "hi" });
     expect(seen[0]).toBe(consumed);
   });
 });

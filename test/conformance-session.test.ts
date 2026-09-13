@@ -264,7 +264,13 @@ it.each([
           ? runQueuedTurn<TurnRecordBase, TurnRecordBase, never>(
               {
                 label: "[test]",
-                store: { add: () => {}, remove: removed, recover: () => [], startAttempt: () => "run" },
+                store: {
+                  add: () => {},
+                  answered: () => {},
+                  remove: removed,
+                  recover: () => [],
+                  startAttempt: () => "run",
+                },
                 buffer: { push: () => {}, peek: () => ({ text: "", consumed: [] }), commit: () => {} },
                 toStored: (rec) => ({ ...rec, attempts: 0 }),
                 fromStored: (rec) => rec,
@@ -272,6 +278,7 @@ it.each([
                 where: () => "test",
                 onDeferred: () => {},
                 notifyDropped: () => {},
+                deliverAnswer: () => Effect.void,
                 execute: () =>
                   telegramReply(
                     telegramTurnStream(

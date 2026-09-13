@@ -326,6 +326,62 @@ describe("durable turn intent (crash recovery)", () => {
     expect(Object.keys(after)).toHaveLength(0); // removed on completion
   });
 
+  it("re-delivers a recovered ANSWER as a fresh message, without asking the agent again", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    // The shape a crash between "the model finished" and "the message landed" leaves behind.
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "9": {
+          id: "9",
+          session: "42",
+          placeKey: "42",
+          baseText: "what did you say?",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 0,
+          answer: "the answer nobody received",
+        },
+      }),
+    );
+    const { agent, calls } = replyingAgent("a second answer");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    await flush();
+    expect(calls).toHaveLength(0); // no model, no tools — only the delivery is owed
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toBe("the answer nobody received");
+    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toHaveLength(0); // delivered → removed
+  });
+
+  it("keeps an undelivered answer when the final send fails, and re-delivers it on the next start", async () => {
+    const state = freshStateDir();
+    const { agent } = replyingAgent("the answer");
+    // Every send fails: the turn produces an answer that never reaches the chat.
+    const failing = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/getMe"))
+        return new Response(JSON.stringify({ ok: true, result: { username: "mybot" } }), { status: 200 });
+      return new Response(JSON.stringify({ ok: false, description: "chat not found" }), { status: 400 });
+    });
+    vi.stubGlobal("fetch", failing);
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    const kept = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, { answer?: string }>;
+    expect(kept["5"]?.answer).toBe("the answer"); // not lost with the failed send
+
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent: second, calls } = replyingAgent("a second answer");
+    telegramChannel(second, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toBe("the answer");
+    expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({});
+  });
+
   it("drops a recovered turn over the execution ceiling — notifies the asker instead of running it", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);

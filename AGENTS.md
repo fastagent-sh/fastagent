@@ -104,7 +104,7 @@ src/
 │   │   ├── transport.ts    # whether a write is worth waiting out a rate limit for (DROPPABLE_FRAME)
 │   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + buffer
 │   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
-│   │   ├── turn-store.ts   # generic durable turn intent (record shape/validator/order injected)
+│   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── state.ts, seen.ts # atomic channel state + bounded durable delivery dedup

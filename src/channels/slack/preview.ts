@@ -124,6 +124,16 @@ async function settleClassic(
   await api.sendMarkdown(target, markdown);
 }
 
+/**
+ * Deliver a reply this process did not generate: a recovered answer, whose preview/stream belongs to a run that is
+ * gone. One fresh Markdown message (chunked), no stream to resume.
+ */
+export async function deliverSlackAnswer(api: SlackApi, target: SlackTarget, markdown: string): Promise<void> {
+  await settleClassic(api, target, undefined, sanitizeSlackMarkdown(markdown), async () => {
+    throw new Error("unreachable: settleClassic only updates a preview it was given");
+  });
+}
+
 /** Settle a queue/drop/defer notice. These are authored plain strings, so the basic text API is enough. */
 export async function settleSlackPreview(
   api: SlackApi,
@@ -146,6 +156,7 @@ function streamClassicSlackReply(
   initialPreviewTs: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
+  onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -205,6 +216,7 @@ function streamClassicSlackReply(
       finish,
       formatError,
       answer: () => withDisclaimer(turn.answer, disclaimer),
+      ...(onAnswered ? { onAnswered } : {}),
       settle: (markdown) =>
         Effect.gen(function* () {
           if (previewTs && markdown.trim()) yield* waitForMutationSlot;
@@ -235,6 +247,7 @@ function streamNativeSlackReply(
   threadTitle: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
+  onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -451,6 +464,9 @@ function streamNativeSlackReply(
           const finalAnswer = withDisclaimer(fullAnswer, disclaimer);
           const footer = finalAnswer.slice(fullAnswer.trim().length);
           if (footer) pendingText += footer;
+          // Before the terminal write, as in `renderReply`: what the stream has already appended is not delivery —
+          // a stream left open by a dead process shows an unfinished answer.
+          yield* Effect.try({ try: () => onAnswered?.(finalAnswer), catch: (cause) => new PortFailure(cause) });
           yield* settleNative(finalAnswer);
           return false;
         } else if (event.type === "failed") {
@@ -499,16 +515,27 @@ export function slackReply(
     threadTitle?: string;
     disclaimer?: string | false;
     label?: string;
+    onAnswered?: (answer: string) => void;
   } = {},
 ) {
   return Effect.suspend(() => {
-    const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]" } = options;
+    const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]", onAnswered } = options;
     if (rendering === "native" && target.threadTs) {
-      return streamNativeSlackReply(events, api, target, formatError, initialPreviewTs, threadTitle, disclaimer, label);
+      return streamNativeSlackReply(
+        events,
+        api,
+        target,
+        formatError,
+        initialPreviewTs,
+        threadTitle,
+        disclaimer,
+        label,
+        onAnswered,
+      );
     }
     if (rendering === "native") {
       log.info(`${label} native streaming needs a thread target — using the classic renderer for this turn`);
     }
-    return streamClassicSlackReply(events, api, target, formatError, initialPreviewTs, disclaimer, label);
+    return streamClassicSlackReply(events, api, target, formatError, initialPreviewTs, disclaimer, label, onAnswered);
   });
 }

@@ -20,7 +20,12 @@ type Platform = (typeof platforms)[number];
 
 afterEach(() => vi.restoreAllMocks());
 
-function renderer(platform: Platform, open: () => Promise<void>, settle: () => Promise<void>) {
+function renderer(
+  platform: Platform,
+  open: () => Promise<void>,
+  settle: () => Promise<void>,
+  onAnswered?: (answer: string) => void,
+) {
   const neutral = () => "neutral notice";
   if (platform === "telegram") {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -30,7 +35,7 @@ function renderer(platform: Platform, open: () => Promise<void>, settle: () => P
       return Response.json({ ok: true, result: { message_id: 17 } });
     });
     return (events: Stream.Stream<AgentEvent, PortFailure>) =>
-      telegramReply(events, "https://api.telegram.org", "token", { chatId: 1 }, neutral);
+      telegramReply(events, "https://api.telegram.org", "token", { chatId: 1 }, neutral, undefined, onAnswered);
   }
   if (platform === "feishu") {
     const api = {
@@ -44,7 +49,8 @@ function renderer(platform: Platform, open: () => Promise<void>, settle: () => P
       },
       updateCardElement: async () => {},
     } as unknown as FeishuApi;
-    return (events: Stream.Stream<AgentEvent, PortFailure>) => feishuReply(events, api, { chatId: "chat-1" }, neutral);
+    return (events: Stream.Stream<AgentEvent, PortFailure>) =>
+      feishuReply(events, api, { chatId: "chat-1" }, neutral, undefined, undefined, onAnswered);
   }
   const api = {
     postMarkdown: async () => {
@@ -71,6 +77,7 @@ function renderer(platform: Platform, open: () => Promise<void>, settle: () => P
     slackReply(events, api, { channelId: "C1", threadTs: "1.0" }, neutral, {
       rendering: platform === "slack-classic" ? "classic" : "native",
       disclaimer: false,
+      ...(onAnswered ? { onAnswered } : {}),
     });
 }
 
@@ -129,7 +136,7 @@ it.each(platforms)(
 );
 
 it.each(platforms)(
-  "%s commits completion before delivery and keeps source cleanup behind the final write",
+  "%s hands over the answer before delivering it, and keeps source cleanup behind the final write",
   async (platform) => {
     const settling = Promise.withResolvers<void>();
     const releaseFinal = Promise.withResolvers<void>();
@@ -150,19 +157,17 @@ it.each(platforms)(
       async () => {},
       async () => {
         settling.resolve();
-        expect(committed).toHaveBeenCalledOnce();
+        // The recovery copy exists before the write that may not land — the whole point of the hook.
+        expect(committed).toHaveBeenCalledExactlyOnceWith("answer");
         expect(sourceClosed).toBe(false);
         await releaseFinal.promise;
       },
+      committed,
     );
     await Effect.runPromise(
       Effect.gen(function* () {
         const turn = yield* Effect.forkChild(
-          Effect.scoped(
-            render(
-              busyRetryStream(agent, { session: "s" }, { text: "go" }, { label: "[test]", onCompleted: committed }),
-            ),
-          ),
+          Effect.scoped(render(busyRetryStream(agent, { session: "s" }, { text: "go" }, { label: "[test]" }))),
         );
         yield* Effect.promise(() => settling.promise);
         releaseFinal.resolve();

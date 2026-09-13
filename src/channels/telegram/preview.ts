@@ -83,6 +83,14 @@ async function finalize(
 }
 
 /**
+ * Deliver a reply this process did not generate: a recovered answer, whose preview message belongs to a run that is
+ * gone. One fresh message, the same terminal-write policy.
+ */
+export function deliverTelegramAnswer(api: string, botToken: string, target: Target, text: string): Promise<void> {
+  return finalize(api, botToken, target, undefined, text);
+}
+
+/**
  * Consume one turn's event stream into a Telegram chat, live (see the module header for the preview
  * model). Preview edits are best-effort (logged once if they fail); the final write is authoritative
  * and surfaces a real failure (bad token, etc.).
@@ -94,6 +102,7 @@ export function telegramReply(
   target: Target,
   formatError: (failed: TelegramFailure) => string | undefined,
   previewId?: number,
+  onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -157,6 +166,7 @@ export function telegramReply(
         if (applyTurnEvent(turn, event, now())) touch();
       },
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
+      ...(onAnswered ? { onAnswered } : {}),
       settle: (text) => portJoin(() => finalize(api, botToken, target, messageId, text)),
     });
   });

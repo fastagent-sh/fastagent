@@ -18,11 +18,19 @@ export interface TurnRecordBase {
   id: string;
   session: string;
   attempts: number;
+  /**
+   * The completed reply, recorded BEFORE it is delivered. Its presence is the difference between the two things a
+   * pending record can mean: absent = the turn still has to run, present = the model already ran and only delivery
+   * is owed. A restart therefore re-delivers an answer instead of paying for it again.
+   */
+  answer?: string;
 }
 
 export interface TurnStore<T extends TurnRecordBase> {
   /** Persist an accepted turn before the ACK. */
   add(rec: T): void;
+  /** Record the completed reply so a restart can deliver it without running the turn again. */
+  answered(id: string, answer: string): void;
   remove(id: string): void;
   /**
    * Every persisted turn a crash left behind, in ARRIVAL order (the channel's `order`), to re-enqueue on the next
@@ -48,13 +56,17 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
   order: (a: T, b: T) => number;
 }
 
-/** End an ANSWERED turn: drop its durable intent, then commit the discussion it folded in. */
+/**
+ * An ANSWERED turn: record the reply for delivery, then commit the discussion it folded in. The intent is NOT
+ * dropped here — generating an answer is not the same event as that answer reaching the chat, and the runner drops
+ * the record only once delivery has settled.
+ */
 export function commitAnsweredTurn<T extends TurnRecordBase, E>(
   store: TurnStore<T>,
   buffer: ContextBuffer<E>,
-  turn: { id: string; bufferKey: string; consumed: E[] },
+  turn: { id: string; bufferKey: string; consumed: E[]; answer: string },
 ): void {
-  store.remove(turn.id);
+  store.answered(turn.id, turn.answer);
   buffer.commit(turn.bufferKey, turn.consumed);
 }
 
@@ -63,7 +75,10 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
   const load = (): Map<string, T> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
-    if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(isRecord)) {
+    // `answer` belongs to the generic record, so its shape is checked here rather than in each channel's validator.
+    const valid = (t: unknown): boolean =>
+      isRecord(t) && ((t as TurnRecordBase).answer === undefined || typeof (t as TurnRecordBase).answer === "string");
+    if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(valid)) {
       return new Map(Object.entries(raw as Record<string, T>));
     }
     log.warn(`${label} unexpected shape in ${path} — starting with no pending turns`);
@@ -95,8 +110,15 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         throw e;
       }
     },
+    answered(id, answer) {
+      const rec = turns.get(id);
+      if (!rec) return; // no record — an untracked run (see startAttempt); there is nothing to recover to
+      turns.set(id, { ...rec, answer });
+      // Post-ACK, so it cannot throw: a failed write costs the recovery copy, not the delivery about to happen.
+      persistBestEffort("answer (a crash before delivery would lose the answer)");
+    },
     remove(id) {
-      if (turns.delete(id)) persistBestEffort("remove (a restart may replay an answered turn)");
+      if (turns.delete(id)) persistBestEffort("remove (a restart may re-deliver an answered turn)");
     },
     recover() {
       // The channel's arrival order, applied explicitly rather than leaning on JS object-key enumeration happening to

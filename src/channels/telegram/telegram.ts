@@ -26,12 +26,13 @@ import {
   telegramEnvelope,
   telegramStop,
 } from "./parse.ts";
-import { type TelegramFailure, defaultErrorMessage, telegramReply } from "./preview.ts";
+import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
+import { portJoin } from "../../effect-port.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
 // Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.
@@ -175,7 +176,9 @@ export function telegramChannel({
         }
       },
       notifyDropped,
-      execute: (rec, discussion, onCompleted) =>
+      deliverAnswer: (rec, answer) =>
+        portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer)),
+      execute: (rec, discussion, onAnswered) =>
         telegramReply(
           telegramTurnStream(
             agent,
@@ -189,13 +192,13 @@ export function telegramChannel({
                 images: new Set(rec.imageFileIds),
               }),
             },
-            onCompleted,
           ),
           apiBaseUrl,
           botToken,
           targetOf(rec),
           formatError,
           rec.previewId,
+          onAnswered,
         ),
     });
     runner.recover();

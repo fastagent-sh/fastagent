@@ -332,8 +332,8 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
 }
 
 /**
- * Run one turn: resolve its inputs, then ask the agent (invoke-turn-kit — `onCompleted` is the
- * durable-commit point; a primary-input failure surfaces as a `failed` event, never a silent drop).
+ * Run one turn: resolve its inputs, then ask the agent (invoke-turn-kit — a primary-input failure
+ * surfaces as a `failed` event, never a silent drop).
  */
 export function feishuTurnStream(
   agent: Agent,
@@ -341,14 +341,12 @@ export function feishuTurnStream(
   text: string,
   transport: FeishuTurnTransport,
   attachments: FeishuTurnAttachments,
-  onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): Stream.Stream<AgentEvent, PortFailure> {
   return turnStream({
     agent,
     label: transport.label,
     busyRetry,
-    ...(onCompleted ? { onCompleted } : {}),
     resolve: () => resolveTurnInputs(transport, attachments),
     turn: (resolved) => ({
       // Lineage is resolved per turn; the engine reads it only when creating a new session.

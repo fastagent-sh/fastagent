@@ -17,7 +17,7 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
-import { createTurnStore } from "../kit/turn-store.ts";
+import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { type SlackBufferEntry, collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { slackTurnStream } from "./invoke-turn.ts";
@@ -46,6 +46,7 @@ import {
   type SlackFailure,
   type SlackRendering,
   defaultErrorMessage,
+  deliverSlackAnswer,
   settleSlackPreview,
   slackReply,
 } from "./preview.ts";
@@ -66,10 +67,8 @@ const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task fi
 const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
 const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question or describe a task and I'll get to work.";
 
-interface StoredSlackTurn {
-  id: string;
+interface StoredSlackTurn extends TurnRecordBase {
   seq: number;
-  session: string;
   baseText: string;
   bufferKey: string;
   teamId: string;
@@ -78,7 +77,6 @@ interface StoredSlackTurn {
   requesterUserId?: string;
   threadTitle?: string;
   fileIds: string[];
-  attempts: number;
 }
 
 function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
@@ -98,6 +96,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
     turn.fileIds.every((id) => typeof id === "string") &&
     typeof turn.attempts === "number"
   );
+  // `answer` is the generic record's field; the shared store validates it.
 }
 
 interface PendingSlackTurn extends Omit<StoredSlackTurn, "attempts"> {
@@ -339,7 +338,8 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         }
       },
       notifyDropped,
-      execute: (turn, discussion, onCompleted) => {
+      deliverAnswer: (turn, answer) => portJoin(() => deliverSlackAnswer(api, targetOf(turn), answer)),
+      execute: (turn, discussion, onAnswered) => {
         const messageRef = messageRefOf(turn.id);
         return Effect.acquireUseRelease(
           portJoin(async () =>
@@ -365,7 +365,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                     primaryFileIds: turn.fileIds,
                     buffered: collectSlackBufferedFiles(discussion.consumed, new Set(turn.fileIds)),
                   },
-                  onCompleted,
                 ),
                 api,
                 targetOf(turn),
@@ -376,6 +375,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                   threadTitle: turn.threadTitle,
                   disclaimer: aiDisclaimer,
                   label,
+                  onAnswered,
                 },
               ),
             ),
