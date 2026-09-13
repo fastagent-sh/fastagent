@@ -95,10 +95,9 @@ into a directory that already holds other files inherits that directory's `packa
   adds a `hint:` line. A hint may use that heuristic precisely because a rule may not.
 - **Known boundary:** the workspace is `agentDir` itself or its immediate parent, never further.
 
-`init` either creates or refuses with the reason. Its one placement duty follows from the lookup:
-**the target must be an agent the lookup would return**, so it refuses when `dir` already resolves over
-something else. A subdirectory target must be empty; `--agent-dir .` adopts a directory, so existing
-files are kept — reported, never overwritten.
+`init` either creates or refuses with the reason. It always writes the complete scaffold into an empty
+direct subdirectory of `dir`; an agent already at `dir` is refused because it would hide that child.
+Existing flat layouts remain supported only by runtime resolution: `init` never creates or adopts one.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
