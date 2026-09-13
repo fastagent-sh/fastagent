@@ -92,12 +92,15 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
   };
   const turns = load();
   const persist = (): void => saveStateFile(path, Object.fromEntries(turns));
-  // Post-ACK writes (remove, startAttempt) must not abort a turn: log a failed write, never throw.
-  const persistBestEffort = (what: string): void => {
+  // Post-ACK writes (remove, startAttempt) must not abort a turn: log a failed write, never throw. The result is
+  // returned because whether the write landed is what a caller may be reporting to the operator.
+  const persistBestEffort = (what: string): boolean => {
     try {
       persist();
+      return true;
     } catch (e) {
       log.error(`${label} turn-store ${what} write failed post-ACK: ${String(e)}`);
+      return false;
     }
   };
 
@@ -125,9 +128,9 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         return false;
       }
       turns.set(id, { ...rec, answer });
-      // Post-ACK, so it cannot throw: a failed write costs the recovery copy, not the delivery about to happen.
-      persistBestEffort("answer (a crash before delivery would lose the answer)");
-      return true;
+      // Post-ACK, so it cannot throw: a failed write costs the recovery copy, not the delivery about to happen. It
+      // does decide the answer of this function — an answer only in memory survives nothing.
+      return persistBestEffort("answer (a crash before delivery would lose the answer)");
     },
     remove(id) {
       if (turns.delete(id)) persistBestEffort("remove (a restart may re-deliver an answered turn)");
@@ -146,7 +149,8 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         // poisoned the process or a deploy/OOM took it down each time.
         log.error(
           `${label} dropping turn ${id} after starting ${rec.attempts} time(s) without finishing ` +
-            `(session=${rec.session}) — it may be crashing the process, or was killed mid-run each time; notifying the asker`,
+            `(session=${rec.session}) — it may be crashing the process, or was killed mid-run each time; it will not ` +
+            `be run again`,
         );
         turns.delete(id);
         persistBestEffort("drop");

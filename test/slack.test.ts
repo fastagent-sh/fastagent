@@ -754,6 +754,55 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
   });
 
+  it("re-delivers a recovered ANSWER without the agent, clearing the queued Agent status it waited under", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const stateRoot = root();
+    // Same session, DM thread (where the queue notice is an Agent status rather than a message): `first` runs and
+    // is gated, so `second` — which only owes a delivery — waits behind it and is given that status.
+    writeTurns(stateRoot, {
+      // `first` has no thread, so it renders classically and never touches the Agent status — every status call
+      // below therefore belongs to `second`.
+      first: storedTurn("first", 1, { baseText: "run me", channelId: "D1", bufferKey: "T1:D1", threadTs: undefined }),
+      second: storedTurn("second", 2, {
+        baseText: "answered already",
+        channelId: "D1",
+        bufferKey: "T1:D1",
+        answer: "the answer nobody received",
+      }),
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls: Prompt[] = [];
+    const agent: Agent = {
+      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
+        calls.push(prompt);
+        await gate;
+        yield { type: "completed" };
+      },
+    };
+    const { turnsIdle } = mount(agent, { aiDisclaimer: false }, stateRoot);
+
+    await vi.waitFor(() =>
+      expect(
+        slackBodies(fetchMock, "assistant.threads.setStatus").some((body) =>
+          String(body.status).includes("queued behind an earlier request"),
+        ),
+      ).toBe(true),
+    );
+    release();
+    await turnsIdle();
+
+    expect(calls).toHaveLength(1); // only `first` asked the agent
+    const delivered = [...slackBodies(fetchMock, "chat.postMessage"), ...slackBodies(fetchMock, "chat.update")].map(
+      (body) => String(body.markdown_text ?? body.text),
+    );
+    expect(delivered).toContain("the answer nobody received");
+    // The status it waited under is this process's, so this process clears it.
+    expect(slackBodies(fetchMock, "assistant.threads.setStatus").map((body) => String(body.status))).toContain("");
+    expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
+  });
+
   it("defers recovered turns when the attempt bump cannot persist and settles an existing queue preview", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);

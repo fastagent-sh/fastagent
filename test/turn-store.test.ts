@@ -174,6 +174,23 @@ describe("turn-store", () => {
     expect(err).toHaveBeenCalledWith(expect.stringContaining("post-ACK"));
   });
 
+  it("answered() reports FALSE when the answer could not be written — memory alone survives nothing", () => {
+    const d = mkdtempSync(join(tmpdir(), "turn-store-"));
+    dirs.push(d);
+    const sub = join(d, "sub");
+    mkdirSync(sub);
+    const path = join(sub, "turns.json");
+    const store = createTurnStore(path);
+    store.add(turn("t1")); // persisted OK while `sub` is a dir
+    rmSync(sub, { recursive: true });
+    writeFileSync(sub, "x"); // now the parent is a FILE — the next write fails
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Post-ACK, so the delivery about to happen is not aborted — but the caller must not go on to claim the answer
+    // is kept for the next start, because the record on disk has no answer in it.
+    expect(store.answered("t1", "the answer")).toBe(false);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("post-ACK"));
+  });
+
   it("startAttempt DEFERS when the bump can't persist — skip now, replay next start (not a drop)", () => {
     const d = mkdtempSync(join(tmpdir(), "turn-store-"));
     dirs.push(d);

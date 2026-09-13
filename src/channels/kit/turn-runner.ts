@@ -105,9 +105,11 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     // peeking again would consume entries this turn never folded in.
     const recovered = rec.answer;
     let answered = recovered !== undefined;
+    // One stable prefix, so every `turn done:`/`turn failed:` has a `turn start:` to grep back to; what kind of work
+    // it is rides along as a field.
     log.info(
-      `${label} turn ${recovered === undefined ? "start" : "re-delivery (answer recovered from a prior run)"}: ` +
-        `turn=${rec.id} session=${rec.session} ${options.where(rec)}`,
+      `${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}` +
+        `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
     );
     const work =
       recovered !== undefined
