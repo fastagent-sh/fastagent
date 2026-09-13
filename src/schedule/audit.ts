@@ -12,8 +12,12 @@ export interface RunRecord {
   session: string;
   firedAt: string; // ISO
   ms: number;
-  /** `deferred` = a wake into a busy session, re-scheduled (not a final outcome for that wake-up). */
-  outcome: "completed" | "failed" | "deferred";
+  /**
+   * `deferred` = a wake into a busy session, re-scheduled (not a final outcome for that wake-up).
+   * `interrupted` = the process stopped between the claim and the turn's end; written by the NEXT boot, because the
+   * run that owned it never got to write anything.
+   */
+  outcome: "completed" | "failed" | "deferred" | "interrupted";
   /** The turn's full reply text (completed). */
   reply?: string;
   /** The failure details (failed). */

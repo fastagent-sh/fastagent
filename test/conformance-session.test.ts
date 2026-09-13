@@ -373,10 +373,12 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and au
       expect(s.stop(), kind).toBeUndefined();
       expect(abort, kind).not.toHaveBeenCalled();
       expect(lease.tryAcquire(sessionId), kind).toBeNull();
-      expect(readRuns(stateRoot), kind).toEqual([]);
+      // The seeded claim has no audit record, so start() books it as interrupted — not this test's subject.
+      const audited = () => readRuns(stateRoot).filter((r) => r.outcome !== "interrupted");
+      expect(audited(), kind).toEqual([]);
       finish.resolve();
-      await vi.waitFor(() => expect(readRuns(stateRoot), kind).toHaveLength(1));
-      expect(readRuns(stateRoot)[0], kind).toMatchObject({ outcome: "completed", reply: "done" });
+      await vi.waitFor(() => expect(audited(), kind).toHaveLength(1));
+      expect(audited()[0], kind).toMatchObject({ outcome: "completed", reply: "done" });
       expect(abort, kind).not.toHaveBeenCalled();
       expect(bound, kind).toHaveBeenCalledOnce();
       if (kind === "wake") expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);

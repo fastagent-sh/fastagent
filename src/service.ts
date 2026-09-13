@@ -215,7 +215,14 @@ export interface AgentService {
    * The control plane's bearer token and prefix, when `sessionControl` is on — how a caller hands access to a client.
    */
   control?: { token: string; prefix: string };
-  /** Stop long connections and schedules. */
+  /**
+   * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
+   * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
+   * that safe is replay, not waiting — a chat turn's intent is durable before it is accepted and its channel
+   * replays it on the next boot (`channels/kit/turn-store.ts`), and an in-flight HTTP/SSE caller sees the stream
+   * drop and retries. The one path with neither is a schedule fire, whose claim is written before the turn: it
+   * stays skipped, and the next boot records it as `interrupted` rather than losing it silently.
+   */
   close(): Promise<void>;
 }
 

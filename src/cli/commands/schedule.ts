@@ -35,7 +35,7 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   for (const r of shown) {
     const detail = r.error ?? r.reply ?? "";
     const preview = detail.replace(/\s+/g, " ").slice(0, 100);
-    console.log(`${r.firedAt}  ${r.outcome.padEnd(9)} ${String(r.ms).padStart(6)}ms  ${preview}`);
+    console.log(`${r.firedAt}  ${r.outcome.padEnd(11)} ${String(r.ms).padStart(6)}ms  ${preview}`);
   }
 }
 

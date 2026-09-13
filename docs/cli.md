@@ -225,7 +225,9 @@ fastagent schedule history <name> [dir] [--json]
 ```
 
 Prints the run audit for one schedule — or `wake` for the agent's self-scheduled wake-ups: when each run
-fired, its outcome (`completed` / `failed` / `deferred`), duration, and a preview of the reply or error.
+fired, its outcome (`completed` / `failed` / `deferred` / `interrupted`), duration, and a preview of the reply
+or error. `interrupted` means the process stopped between claiming that slot and finishing its turn — a restart
+or rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start records it.
 The answer to "did last night's run silently fail?". Read-only (reads `<state root>/schedule/runs.jsonl`,
 written by the serving scheduler); `--json` prints the full records, including the complete reply text.
 

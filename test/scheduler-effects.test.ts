@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import { activeWork } from "../src/channels/busy.ts";
-import { readRuns } from "../src/schedule/audit.ts";
+import { appendRun, readRuns } from "../src/schedule/audit.ts";
 import type { PortFailure } from "../src/effect-port.ts";
 import {
   createScheduler,
@@ -27,6 +27,13 @@ const NOW = new Date("2026-07-07T10:30:00Z");
 const hourly = (name = "job") => ({ name, cron: "0 * * * *", tz: "UTC", prompt: "go" });
 const freshRoot = () => mkdtemp(join(tmpdir(), "fa-scheduler-effects-"));
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+/** A claim AND the audit record a healthy fire leaves — without the record, start() reports it as interrupted. */
+function seedFiredSlots(stateRoot: string, names: string[], firedAt: string): void {
+  saveFires(stateRoot, Object.fromEntries(names.map((name) => [name, firedAt])));
+  for (const name of names) {
+    appendRun(stateRoot, { name, session: `schedule:${name}`, firedAt, ms: 1, outcome: "completed" });
+  }
+}
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["cron", "one-shot", "recurring"] as const)(
@@ -34,7 +41,7 @@ it.each(["cron", "one-shot", "recurring"] as const)(
   async (kind) => {
     const stateRoot = await freshRoot();
     const schedules = kind === "cron" ? [hourly()] : [];
-    if (kind === "cron") saveFires(stateRoot, { job: "2026-07-07T08:00:00Z" });
+    if (kind === "cron") seedFiredSlots(stateRoot, ["job"], "2026-07-07T08:00:00Z");
     else
       writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
         {
@@ -82,7 +89,8 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       child.kill("SIGTERM");
       await exited;
     }
-    expect(readRuns(stateRoot)).toEqual([]);
+    // The killed turn wrote nothing itself; only the seeded prior fire is on record.
+    expect(readRuns(stateRoot).map((r) => r.outcome)).toEqual(kind === "cron" ? ["completed"] : []);
     if (kind === "cron") expect(loadFires(stateRoot).job).toBe(NOW.toISOString());
     else {
       expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(kind === "recurring" ? ["first", "next"] : ["next"]);
@@ -106,6 +114,10 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       s.start();
       await tick();
       expect(calls).toEqual(kind === "cron" ? [] : ["next"]);
+      // The claim the killed process left is not replayed, and this boot puts it on the record.
+      if (kind === "cron") {
+        expect(readRuns(stateRoot).at(-1)).toMatchObject({ outcome: "interrupted", firedAt: NOW.toISOString() });
+      }
     } finally {
       s.stop();
     }
@@ -214,7 +226,7 @@ it("rechecks capped waits against wall-clock jumps and never fires early", async
 
 it("publishes the running loop before an invoke callback re-enters stop", async () => {
   const stateRoot = await freshRoot();
-  saveFires(stateRoot, { a: "2026-07-07T08:00:00Z", b: "2026-07-07T08:00:00Z" });
+  seedFiredSlots(stateRoot, ["a", "b"], "2026-07-07T08:00:00Z");
   let s: Scheduler;
   const invoke = vi.fn(() => {
     s.stop();
@@ -231,7 +243,7 @@ it("publishes the running loop before an invoke callback re-enters stop", async 
         yield* Effect.promise(tick);
         yield* TestClock.adjust(2 * 60 * 60_000);
         expect(invoke).toHaveBeenCalledOnce();
-        expect(readRuns(stateRoot, "a")).toHaveLength(1);
+        expect(readRuns(stateRoot, "a")).toHaveLength(2); // the seeded prior fire, then this one
         expect(loadFires(stateRoot).b).toBe("2026-07-07T08:00:00Z");
       } finally {
         s.stop();
