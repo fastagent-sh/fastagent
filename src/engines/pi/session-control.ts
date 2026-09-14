@@ -44,6 +44,7 @@ import {
   type SessionEntries,
   type SessionEntry,
   type SessionEvent,
+  type SessionEventStream,
   type SessionResult,
   type Session,
   type SessionAction,
@@ -403,7 +404,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       return { entries, ...(leafEntryId ? { leafEntryId } : {}) };
     },
 
-    events(session: string): AsyncIterable<SessionEvent> {
+    events(session: string): SessionEventStream {
       // EVERY ITERATION IS A FRESH SUBSCRIPTION — the per-subscription state lives inside
       // asyncIterator(), matching the remote client (one connection per iteration): two concurrent
       // iterations each get the full stream, and one iteration's end does not poison the next.
@@ -412,7 +413,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // buffer. Teardown goes through Subscriber.close() so a `return()` on a QUIET stream
       // resolves promptly instead of queueing behind a never-settling pull — without it every
       // attach/detach against an idle session would leak a permanently registered subscriber.
+      // `ready` is resolved by the registration below — the moment after which nothing emitted for this session can
+      // be missed. It is what a reconnecting client awaits before reading history (session.ts, SessionEventStream).
+      let registered: () => void;
+      const ready = new Promise<void>((resolve) => {
+        registered = resolve;
+      });
       return {
+        ready,
         [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
           let sub: Subscriber | undefined;
           // `finished` is its own state: `sub === undefined` alone would conflate "not yet
@@ -442,6 +450,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                   subscribers.set(session, set);
                 }
                 set.add(sub);
+                registered();
               }
               const result = await sub.next();
               if (result.done) cleanup();

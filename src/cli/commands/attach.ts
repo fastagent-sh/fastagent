@@ -460,19 +460,21 @@ export async function answerSlashInput(
 }
 
 /**
- * ONE attach round: subscribe → backfill (render the durable record since `cursor`) → drain live until the stream
- * drops.
+ * ONE attach round: subscribe → wait for the subscription to exist → backfill (render the durable record since
+ * `cursor`) → drain live until the stream drops.
+ *
+ * The wait is the whole ordering guarantee: an event emitted between the backfill read and a subscription that has
+ * not landed yet is live-only, so no cursor recovers it and a healthy connection would never reconnect to notice.
  */
 export async function attachRound(
   control: SessionControl,
   session: string,
   cursor: string | undefined,
   io: AttachIo,
-  /** The subscribe→sync settle heuristic (see the round comment). */
-  settleMs = 300,
 ): Promise<{ cursor: string | undefined; sawProgress: boolean }> {
   // The round HOLDS its subscription's iterator: one round = one stream, on every path.
-  const iterator = control.sessions.get(session).events()[Symbol.asyncIterator]();
+  const stream = control.sessions.get(session).events();
+  const iterator = stream[Symbol.asyncIterator]();
   // Live output is BUFFERED while the replay block prints, then flushed.
   let hold = true;
   const pending: (() => void)[] = [];
@@ -505,12 +507,13 @@ export async function attachRound(
       streamError = error;
       liveIo.warn(`[fastagent] event stream error: ${String(error)}`);
     });
-  await new Promise((r) => setTimeout(r, settleMs)); // let the subscription land before syncing
-  // The WHOLE post-subscribe sync (backfill + state re-check) shares one failure discipline: close this round's
-  // stream and drain before propagating.
+  // The WHOLE post-subscribe sync (the readiness wait, backfill + state re-check) shares one failure discipline:
+  // close this round's stream and drain before propagating. A subscription that cannot be established rejects here
+  // rather than stalling the round — and the drain's 401 still outranks it below.
   let next = cursor;
   let sawBackfill = false;
   try {
+    await stream.ready;
     const backfill = await control.sessions.get(session).entries(cursor !== undefined ? { since: cursor } : undefined);
     sawBackfill = backfill.entries.length > 0;
     // Advance by APPEND ORDER (the last returned record), never by leafEntryId.

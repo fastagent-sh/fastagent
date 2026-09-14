@@ -112,7 +112,7 @@ interface Session {
   readonly id: string;
   state(): Promise<SessionState>;
   entries(options?: { since?: string }): Promise<SessionEntries>;
-  events(): AsyncIterable<SessionEvent>;
+  events(): SessionEventStream;                           // AsyncIterable<SessionEvent> + `ready`
   update(patch: SessionUpdate): Promise<SessionResult>;   // name / model / thinkingLevel / leafEntryId
   steer(prompt: Prompt): Promise<SessionResult>;
   followUp(prompt: Prompt): Promise<SessionResult>;
@@ -331,9 +331,20 @@ cursor is an APPEND-ORDER position, not a descendant filter: in a branched sessi
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. Engine-specific kinds may appear beyond the guaranteed minimum and MUST be skippable.
 
-Reconnect is four steps: `entries({ since: cursor })` to backfill → `state()` to learn whether work is
-active → resubscribe `events()` → continue. Live events are not the durable history API; a product
-that needs replayable run timelines persists normalized events above FastAgent.
+Reconnect is four steps, and the ORDER is the contract: subscribe `events()` → `await stream.ready` →
+`entries({ since: cursor })` to backfill → `state()` to learn whether work is active. Reading first
+loses anything emitted between the read and the subscription, and the events most worth having there
+(`state_changed`, `run_settled`) are live-only — no cursor brings them back, and a healthy connection
+never reconnects to discover the gap. Subscribing first is not enough on its own: the call returning
+is not the subscription existing (in process it registers on the first pull; over HTTP the server
+registers before it writes the response headers), which is what `ready` makes waitable. Waiting for a
+first EVENT instead cannot work — an idle session may stay quiet indefinitely — and a fixed delay only
+moves the race.
+
+Live events during the backfill are buffered by the client, so the overlap is display-level: durable
+records may appear both in the replay and in the live stream, and live-only events have no entry id to
+deduplicate against. Live events are not the durable history API; a product that needs replayable run
+timelines persists normalized events above FastAgent.
 
 The neutral state never exposes session file paths, working directories, provider base URLs,
 credential sources, or engine model descriptors.

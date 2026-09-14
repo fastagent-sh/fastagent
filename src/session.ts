@@ -44,7 +44,7 @@ export interface Session {
    * branch structure.
    */
   entries(options?: { since?: string }): Promise<SessionEntries>;
-  events(): AsyncIterable<SessionEvent>;
+  events(): SessionEventStream;
   /** Set durable session properties. */
   update(patch: SessionUpdate): Promise<SessionResult>;
   /** Join the active run: delivered after the current turn's tool calls, before the next model call. */
@@ -230,6 +230,23 @@ export interface SessionEntry {
 }
 
 // ── Live events (observation plane) ──────────────────────────────────────────
+
+/**
+ * A live event subscription, plus the ONE thing a reconnecting client cannot infer: when it started.
+ *
+ * Reconnect has to subscribe BEFORE it reads history, or an event landing between the read and the subscription is
+ * lost — it is live-only (`state_changed`, `run_settled`), so no cursor brings it back. Subscribing first is not
+ * enough on its own, because "the call returned" is not "the subscription exists": in process the registration
+ * happens on the first pull, and over HTTP it happens on the server before the response headers. `ready` is that
+ * boundary made waitable, so the recipe is subscribe → await ready → backfill, with no timing guess in it.
+ *
+ * It settles for the FIRST iteration this stream starts (each iteration is its own subscription), and REJECTS when
+ * that subscription cannot be established at all — an unreachable endpoint or a refused token. A stream nobody
+ * iterates never settles, matching the rule that an iterator obtained but never driven is not subscribed.
+ */
+export interface SessionEventStream extends AsyncIterable<SessionEvent> {
+  ready: Promise<void>;
+}
 
 /**
  * Semantic-only: no sequence, no epoch, no session id — in-process the stream is lossless and ordered, and those

@@ -882,6 +882,30 @@ describe("session control: run modulation", () => {
     }
   });
 
+  it("ready settles exactly at registration — not at events(), not at the first event", async () => {
+    // The reconnect ordering rests on this: after `ready`, nothing emitted for the session can be missed. Before it,
+    // the stream is not subscribed at all — which is why an iterable nobody drives must not report readiness (it
+    // would promise delivery to a subscription that does not exist).
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const stream = control.sessions.get("sReady").events();
+    let settled = false;
+    void stream.ready.then(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false); // obtained, never driven: not subscribed
+
+    const iterator = stream[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    await stream.ready; // the pull registered it — and this resolves on an IDLE session, with no event to wait for
+    // Emitted strictly after readiness, which is the guarantee a reconnecting client buys with it.
+    observer("sReady", { type: "run_started", timestamp: 0, runId: "rR", data: {} });
+    expect(((await pull) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_started");
+    await iterator.return?.(undefined);
+  }, 5_000);
+
   it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
     const { control, observer } = createPiSessionControl({
       sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),

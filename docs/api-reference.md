@@ -601,12 +601,17 @@ const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer 
 
 // Live events are NOT durable history: a subscription sees only what happens while it iterates,
 // so start watching BEFORE (or while) the run is driven — never after it drained.
+const stream = control.sessions.get("s1").events();
 const watching = (async () => {
-  for await (const ev of control.sessions.get("s1").events()) {
+  for await (const ev of stream) {
     console.log(ev.type); // run_started, message_delta, tool_started, …
     if (ev.type === "run_settled") break; // events() has no natural end — the consumer decides
   }
 })();
+// `ready` settles when the subscription EXISTS (it registers on the first pull, and remotely on the
+// server before the response headers), so nothing after it can be missed. Reconnecting clients await
+// it before reading history — see the reconnect recipe in docs/design/session-control.md §7.
+await stream.ready;
 for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
 await watching;
 

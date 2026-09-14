@@ -10,6 +10,7 @@ import {
   type SessionCapabilities,
   type SessionEntries,
   type SessionEvent,
+  type SessionEventStream,
   type SessionControl,
   type SessionResult,
   type SessionState,
@@ -113,7 +114,19 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
   };
 
   const capabilities = await get<SessionCapabilities>("/control/capabilities");
-  const eventsOf = (session: string): AsyncIterable<SessionEvent> => {
+  const eventsOf = (session: string): SessionEventStream => {
+    // The server subscribes BEFORE it writes the response headers (channels/sse.ts pulls the source once first), so
+    // "headers arrived, 2xx" IS "this session's subscription exists" — the boundary a reconnecting client awaits
+    // before reading history (session.ts, SessionEventStream).
+    let subscribed!: () => void;
+    let unreachable!: (error: unknown) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      subscribed = resolve;
+      unreachable = reject;
+    });
+    // A consumer that never awaits `ready` (it can iterate and let the stream report the same failure) would
+    // otherwise take an unhandled rejection for a connection that legitimately failed. Awaiters still get it.
+    ready.catch(() => {});
     // Each ITERATION opens its own connection (gen/abort created inside asyncIterator), matching the local hub's
     // "every iteration is a fresh subscription".
     const openStream = (abort: AbortController) =>
@@ -123,18 +136,28 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         const watchdog = idleWatchdog(abort);
         watchdog.arm(); // the connect await is a pending read
         try {
-          const res = await fetchFn(`${base}/control/sessions/${encodeURIComponent(session)}/events`, {
-            headers,
-            signal: abort.signal,
-          });
-          watchdog.disarm(); // headers arrived
-          if (!res.ok) {
-            // The error body is a pending read too — a half-dead tunnel serving 4xx headers then black-holing the
-            // body must not hang the round outside every budget.
-            watchdog.arm();
-            throw new ControlRequestError(res.status, await res.text());
+          let res: Response;
+          try {
+            res = await fetchFn(`${base}/control/sessions/${encodeURIComponent(session)}/events`, {
+              headers,
+              signal: abort.signal,
+            });
+            watchdog.disarm(); // headers arrived
+            if (!res.ok) {
+              // The error body is a pending read too — a half-dead tunnel serving 4xx headers then black-holing the
+              // body must not hang the round outside every budget.
+              watchdog.arm();
+              throw new ControlRequestError(res.status, await res.text());
+            }
+            if (!res.body) throw new Error("control events: response has no body");
+          } catch (error) {
+            // Everything here means the subscription was never established: the endpoint is unreachable, the token
+            // was refused, the consumer aborted before connecting. A waiter on `ready` must learn that instead of
+            // waiting out a stream that will never carry anything; the iteration fails on the same error below.
+            unreachable(error);
+            throw error;
           }
-          if (!res.body) throw new Error("control events: response has no body");
+          subscribed();
           let nextSeq = 0;
           for await (const data of sseData(res.body, watchdog)) {
             // Parse discipline, same as the other two wire planes (dispatch parses, invoke classifies drift): a
@@ -184,6 +207,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         }
       })();
     return {
+      ready,
       [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
         const abort = new AbortController();
         // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a generator suspended

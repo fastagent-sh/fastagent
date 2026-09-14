@@ -444,14 +444,17 @@ describe("session control over HTTP", () => {
     try {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
       const seen: SessionEvent[] = [];
+      const stream = remote.sessions.get("sE").events();
       const watching = (async () => {
-        for await (const ev of remote.sessions.get("sE").events()) {
+        for await (const ev of stream) {
           seen.push(ev);
           if (ev.type === "run_settled") break;
         }
       })();
-      // Subscription races the run start: give the SSE connection a beat to establish.
-      await new Promise((r) => setTimeout(r, 100));
+      // The subscription race, ANSWERED rather than slept on: the server subscribes before it writes the response
+      // headers, so `ready` settling means every event from here on is ours — on an idle session that emits nothing
+      // to wait for, which is the case a "wait for the first event" rule cannot serve.
+      await stream.ready;
       await drain(served.agent.invoke({ session: "sE" }, { text: "hi" }));
       await watching;
 
@@ -1026,6 +1029,84 @@ describe("session control over HTTP", () => {
     });
   });
 
+  it("a slow subscription is WAITED for, not slept past: the event during the join lands in this round", async () => {
+    // The defect: a fixed settle delay meant a connection slower than the guess started its backfill before the
+    // subscription existed, and `state_changed` / `run_settled` in that window are live-only — no cursor recovers
+    // them, and a healthy connection never reconnects to notice. Readiness makes the window impossible instead of
+    // unlikely.
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const lines: string[] = [];
+    const io = { println: (l: string) => lines.push(l), write: () => {}, warn: (l: string) => lines.push(`W:${l}`) };
+    let subscribed!: () => void;
+    const ready = new Promise<void>((r) => {
+      subscribed = r;
+    });
+    const emitted: SessionEvent[] = [];
+    let backfilled = false;
+    const stream = {
+      ready,
+      [Symbol.asyncIterator]: async function* (): AsyncGenerator<SessionEvent> {
+        // Far past the 300ms the old code waited — a tunnel, a cold container, a loaded box.
+        await new Promise((r) => setTimeout(r, 400));
+        subscribed();
+        // The run finishes DURING the join/backfill window: live-only, and the only way to see it is to have been
+        // subscribed before the history read.
+        const settled: SessionEvent = { type: "run_settled", timestamp: 1, runId: "rJ", data: { status: "ok" } };
+        emitted.push(settled);
+        yield settled;
+      },
+    };
+    const fake = handleControl({
+      state: async () => {
+        expect(backfilled).toBe(true);
+        return { status: "idle", pending: { steering: 0, followUp: 0 } } as never;
+      },
+      entries: async () => {
+        // Proof of ORDER: the history read cannot begin before the subscription exists.
+        await ready;
+        backfilled = true;
+        return { entries: [] } as never;
+      },
+      events: () => stream,
+    });
+    const round = await attachRound(fake as never, "s", undefined, io);
+    expect(emitted).toHaveLength(1);
+    expect(round.sawProgress).toBe(true); // delivered in THIS round — no second disconnect needed
+    expect(lines.join("\n")).toMatch(/run settled: ok/);
+  });
+
+  it("a subscription that cannot be established fails the round instead of stalling it", async () => {
+    // `ready` rejects when the endpoint is unreachable or the token is refused. Without that, awaiting readiness
+    // would replace a bad guess with a hang — and an idle session emits nothing to time out on.
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const { ControlRequestError } = await import("../src/session-remote.ts");
+    const io = { println: () => {}, write: () => {}, warn: () => {} };
+    const gone = new Error("connect ECONNREFUSED");
+    const dead = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async () => {
+        throw new Error("the backfill must not be attempted");
+      },
+      events: () => ({
+        ready: Promise.reject(gone),
+        [Symbol.asyncIterator]: () => ({ next: (): Promise<IteratorResult<never>> => Promise.reject(gone) }),
+      }),
+    });
+    await expect(attachRound(dead as never, "s", undefined, io)).rejects.toThrow(/ECONNREFUSED/);
+
+    // An auth rejection is still the round's 401, not the generic failure: the caller stops instead of retrying.
+    const auth = new ControlRequestError(401, "unauthorized");
+    const refused = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async () => ({ entries: [] }) as never,
+      events: () => ({
+        ready: Promise.reject(auth),
+        [Symbol.asyncIterator]: () => ({ next: (): Promise<IteratorResult<never>> => Promise.reject(auth) }),
+      }),
+    });
+    await expect(attachRound(refused as never, "s", undefined, io)).rejects.toBe(auth);
+  });
+
   it("attachRound buffers live output during the replay block and flushes it after, failure path included", async () => {
     const { attachRound } = await import("../src/cli/commands/attach.ts");
     const lines: string[] = [];
@@ -1049,7 +1130,7 @@ describe("session control over HTTP", () => {
         }) as never,
       events: eagerEvents,
     });
-    const buffered = await attachRound(fake as never, "s", undefined, io, 25);
+    const buffered = await attachRound(fake as never, "s", undefined, io);
     expect(buffered.sawProgress).toBe(true); // a live event arrived
     // Contiguity: the whole replay block (and the state line) precede the buffered live output.
     expect(lines).toEqual([
@@ -1071,7 +1152,7 @@ describe("session control over HTTP", () => {
         throw new Error("backfill 500");
       },
     });
-    await expect(attachRound(failing as never, "s", undefined, io2, 1)).rejects.toThrow(/backfill 500/);
+    await expect(attachRound(failing as never, "s", undefined, io2)).rejects.toThrow(/backfill 500/);
     expect(lines2).toContain("── run rL started ──");
   });
 
@@ -1102,7 +1183,7 @@ describe("session control over HTTP", () => {
       },
       events: quietEvents,
     });
-    const round = await attachRound(fake as never, "s", "e1", io, 1);
+    const round = await attachRound(fake as never, "s", "e1", io);
     expect(round.cursor).toBe("e3"); // advanced by append order
     expect(round.sawProgress).toBe(true); // the backfill delivered records
     expect(lines).toEqual([
@@ -1124,7 +1205,7 @@ describe("session control over HTTP", () => {
         }),
       }),
     });
-    await expect(attachRound(failing as never, "s", undefined, io, 1)).rejects.toBe(auth);
+    await expect(attachRound(failing as never, "s", undefined, io)).rejects.toBe(auth);
 
     // A backfill failure closes the round's OWN subscription before propagating — a retrying
     // caller must never stack a second concurrent stream.
@@ -1152,7 +1233,7 @@ describe("session control over HTTP", () => {
         };
       },
     });
-    await expect(attachRound(leaky as never, "s", undefined, io, 1)).rejects.toThrow(/transient 500/);
+    await expect(attachRound(leaky as never, "s", undefined, io)).rejects.toThrow(/transient 500/);
     expect(returned).toBe(true);
 
     // The SAME discipline for a state() re-check failure — the round's stream must close too.
@@ -1179,7 +1260,7 @@ describe("session control over HTTP", () => {
         };
       },
     });
-    await expect(attachRound(stateFails as never, "s", undefined, io, 1)).rejects.toThrow(/state 500/);
+    await expect(attachRound(stateFails as never, "s", undefined, io)).rejects.toThrow(/state 500/);
     expect(returned2).toBe(true);
   });
 
