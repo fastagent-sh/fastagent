@@ -248,8 +248,9 @@ fastagent info --json
 ```
 
 The tool prints `{"batches":3}`. Inspection should show the persona, `review-batches` skill, and
-`plan-batches` tool, with no load failures. Check diagnostics as well as the exit code: a broken tool
-can be reported and skipped. `info` inventories channels; only serving verifies that they actually load.
+`plan-batches` tool, with no load failures. Check diagnostics as well as the exit code: `info` loads what it can and
+reports the rest, so a broken file shows up there rather than as a non-zero exit — `dev` / `start` is
+what refuses to run on one.
 
 To confirm static checking is active, temporarily change `batchCount(5, 2)` in the test to
 `batchCount("5", 2)`. `npm --prefix fastagent run typecheck` must fail; restore the valid call afterward.

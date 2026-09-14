@@ -99,9 +99,11 @@ export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[])
 export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[]): void {
   if (failures.length === 0) return;
   reportModuleLoadFailures(failures);
+  // The reasons are repeated from the warnings above because this message is all an embedder catching the rejection
+  // has, and all a deployment running at FASTAGENT_LOG_LEVEL=error sees.
   throw new Error(
-    `${failures.map((f) => f.label).join(", ")} failed to load — fix it, or rename an intentionally ` +
-      `disabled file to *.disabled`,
+    `failed to load: ${failures.map((f) => `${f.label} (${f.message})`).join("; ")} — fix it, or rename an ` +
+      `intentionally disabled file to *.disabled`,
   );
 }
 

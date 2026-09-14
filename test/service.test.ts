@@ -575,7 +575,7 @@ describe("createAgentService", () => {
 
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
-    await expect(createAgentService(dir)).rejects.toThrow(/channels\/bad\.mjs failed to load/);
+    await expect(createAgentService(dir)).rejects.toThrow(/failed to load: channels\/bad\.mjs \(boom at import/);
   });
 
   it("an enabled tool or schedule that cannot load refuses the service, like a channel does", async () => {
@@ -584,7 +584,9 @@ describe("createAgentService", () => {
     // firing and the model never seeing the tool. Absent directories stay valid; `*.disabled` is the opt-out.
     for (const file of ["tools/broken.mjs", "schedules/digest.mjs"]) {
       const dir = await agentDir({ [file]: `throw new Error("missing target");` });
-      await expect(createAgentService(dir)).rejects.toThrow(new RegExp(`${file.replace(".", "\\.")} failed to load`));
+      await expect(createAgentService(dir)).rejects.toThrow(
+        new RegExp(`failed to load: ${file.replace(".", "\\.")} \\(missing target`),
+      );
       // Renaming it to the disabled form is how an author says they meant it.
       await rename(join(dir, file), join(dir, `${file}.disabled`));
       const service = await createAgentService(dir);

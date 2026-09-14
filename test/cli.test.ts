@@ -272,7 +272,8 @@ describe("cli papercuts", () => {
 
     const { code, stderr } = await run(["start", dir, "--port", "0"]);
     expect(code).toBe(1);
-    expect(stderr).toMatch(/telegram\.mjs failed to load/);
+    expect(stderr).toMatch(/telegram\.mjs failed to load/); // the warning names the file…
+    expect(stderr).toMatch(/failed to load: channels\/telegram\.mjs \(TELEGRAM_SECRET_TOKEN required\)/); // …and so does the refusal
     expect(stderr).toMatch(/\*\.disabled/);
     expect(stderr).not.toMatch(/routes:.*\/invoke/);
   });

@@ -243,8 +243,8 @@ the source.
 
 Workspace tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
-`tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and broken discovered tools are
-reported and skipped. The coding set is fixed for directory agents: isolation belongs around the whole
+`tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
+refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `schedules/`. The coding set is fixed for directory agents: isolation belongs around the whole
 agent process, where it also covers authored tools and channel code. Conditional built-ins
 (`search_tools` for deferred tools, `wake` for self-scheduling) keep their own policies. Reusable
 integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting.

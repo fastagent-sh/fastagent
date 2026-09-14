@@ -18,7 +18,6 @@ import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime } from "./models.ts";
-import { reportModuleLoadFailures } from "../../loader.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
@@ -41,10 +40,9 @@ export async function buildAgentSessionRuntime(
   async function resolveAssembly(cwd: string) {
     // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving opener uses
     // (open.ts).
-    const { config, modelSpec, agentDir, authPath, fallbackAuthPath, stateRoot, tools, toolCollisions, toolFailures } =
+    const { config, modelSpec, agentDir, authPath, fallbackAuthPath, stateRoot, tools, toolCollisions } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
-    reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth.
     // The fallback layer travels too: `chat` resolving credentials differently from dev/start/invoke is exactly the
     // divergence the layer exists to remove.
