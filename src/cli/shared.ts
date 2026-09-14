@@ -30,7 +30,6 @@ import {
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
-import { type ModuleLoadFailure, reportModuleLoadFailures } from "../loader.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
 import { type ResolvedPlacement, workspaceHint } from "../paths.ts";
@@ -73,7 +72,6 @@ export interface ReportableAssembly {
   toolNames: string[];
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
-  toolFailures: ModuleLoadFailure[];
 }
 
 /** What `dev` and `start` say about the directory they just opened, in the order they say it. */
@@ -101,7 +99,6 @@ export async function reportAssembly(
     reportLine("deferred", `${a.deferredToolNames.join(", ")} (activated via search_tools)`);
   }
   reportToolCollisions(a.toolCollisions);
-  reportModuleLoadFailures(a.toolFailures);
   for (const [label, value] of extras.afterTools ?? []) reportLine(label, value);
   reportFindingsIfChanged(a.definition.dir, a.definition);
 }

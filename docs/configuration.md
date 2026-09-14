@@ -450,8 +450,8 @@ built for serving, and it is concurrency-safe.
 
 Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,
 never the workspace's names. `fastagent.config.ts` identifies the agent directory; `fastagent/` is its
-default name. Within the agent, a broken tool is reported and skipped, while
-a broken declared channel fails serving — an inbound endpoint must not silently disappear. If you want
+default name. Within the agent, an enabled file under `tools/`, `channels/` or `schedules/` that cannot
+load fails the run — a declared capability must not silently disappear. If you want
 programmatic tools outside the agent, declare them with `config.tools`.
 
 ### More than one agent

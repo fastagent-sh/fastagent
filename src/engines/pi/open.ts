@@ -19,7 +19,7 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import type { ModuleLoadFailure } from "../../loader.ts";
+import { refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
@@ -69,7 +69,6 @@ export interface AgentAssembly {
   toolNames: string[];
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
-  toolFailures: ModuleLoadFailure[];
   /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
   toolSecrets: Map<string, DeclaredSecret[]>;
 }
@@ -92,16 +91,19 @@ export async function resolveAgentAssembly(
     agentDir,
     workspace,
   );
-  // THE serving-path gate for tool declarations. Here rather than inside resolveAgentTools, which
-  // `info` and `fastagent tool` call to REPORT on a definition and must survive an unset value; every
-  // path through this function is about to run ALL of the tools, so no `owner`. `toolFailures` goes
-  // to the gate because the refusal throws out of here while the caller prints them only after it
-  // gets an assembly back (secrets-gate.ts, decision 2).
+  // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
+  // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
+  // report an incomplete set, and fixing the file could then reveal more missing values. Refuse the broken file
+  // first and one pass reports every secret the definition actually wants.
+  refuseBrokenDeclarations(toolFailures);
+  // Both gates live here rather than inside resolveAgentTools, which `info` and `fastagent tool` call to REPORT on a
+  // definition and must survive both faults; every path through this function is about to run ALL of the tools, so
+  // no `owner`.
   //
   // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
   // means "may run in this process" — letting it start would put the empty-credential failure back
   // inside a turn. An author who does not want that opts out per tool by not declaring.
-  gateSecrets({ declared: toolSecrets, failures: toolFailures });
+  gateSecrets({ declared: toolSecrets, failures: [] });
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
@@ -121,7 +123,6 @@ export async function resolveAgentAssembly(
     toolNames,
     deferredToolNames,
     toolCollisions,
-    toolFailures,
     toolSecrets,
   };
 }
@@ -166,8 +167,6 @@ export async function createPiAgentFromDir(
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
-  /** `tools/` files that failed to import — skipped, reported by the caller, never fatal. */
-  toolFailures: ModuleLoadFailure[];
 }> {
   const {
     config,
@@ -182,7 +181,6 @@ export async function createPiAgentFromDir(
     toolNames,
     deferredToolNames,
     toolCollisions,
-    toolFailures,
   } = await resolveAgentAssembly(dir, options);
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
   // opted into self-scheduling (config.selfSchedule).
@@ -262,6 +260,5 @@ export async function createPiAgentFromDir(
     toolNames,
     deferredToolNames,
     toolCollisions,
-    toolFailures,
   };
 }

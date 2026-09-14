@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allSecrets, describeSecrets, missingSecrets } from "../src/declared-secrets.ts";
@@ -283,24 +283,22 @@ describe("declared secrets: only what actually runs", () => {
 });
 
 describe("declared secrets: the serving guarantee", () => {
-  it("a missing tool credential does not swallow the broken tool file beside it", async () => {
-    // The assertion throws out of the opener, while the CLI prints `toolFailures` only after it gets
-    // an assembly back — so without reporting first, a broken tools/*.ts would stay invisible until
-    // the author fixed the environment and ran again. Same order `loadChannels` establishes.
+  it("a broken tool file is refused before the missing credential beside it — one pass, not three", async () => {
+    // A file that failed to import declared nothing, so its `secrets:` are absent from the set the gate checks.
+    // Reporting an incomplete set first costs the author a round trip: fix the value, then learn about the file,
+    // then fix it and meet the values IT declares. Refusing the file first makes the next pass the complete one.
     const dir = await agent({
       "tools/broken.mjs": `throw new Error("boom at import");\n`,
       "tools/needy.mjs": `export default { name: "needy", description: "n", parameters: {},
          secrets: ["FA_TEST_NEEDY_KEY"], execute: async () => ({ content: [] }) };\n`,
     });
     delete process.env.FA_TEST_NEEDY_KEY;
-    const said: string[] = [];
-    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
-    try {
-      await expect(resolveAgentAssembly(dir)).rejects.toThrow(/FA_TEST_NEEDY_KEY \(tools\/needy\.mjs\)/);
-      expect(said.join("\n")).toMatch(/tools\/broken\.mjs failed to load/);
-    } finally {
-      warn.mockRestore();
-    }
+    await expect(resolveAgentAssembly(dir)).rejects.toThrow(/failed to load: tools\/broken\.mjs \(boom at import/);
+
+    // With the file gone, the next run reports the value that was wanted all along. (Removed rather than rewritten:
+    // a dynamic import is cached by path, so fixed content would not be re-read in this process.)
+    await rm(join(dir, "tools", "broken.mjs"));
+    await expect(resolveAgentAssembly(dir)).rejects.toThrow(/FA_TEST_NEEDY_KEY \(tools\/needy\.mjs\)/);
   });
 
   it("the agent opener refuses to assemble while a declared value is unset, naming the file", async () => {

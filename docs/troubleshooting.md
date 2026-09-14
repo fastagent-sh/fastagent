@@ -137,18 +137,22 @@ Fixes depend on the channel:
 - retry later for chat-style follow-ups,
 - design tools to be idempotent if events can overlap.
 
-## Channel failed to load
+## Tool, channel or schedule failed to load
 
-A file under `channels/` is an enabled channel declaration. If it cannot import, validate its required
-environment, or return valid routes, `dev` / `start` fails instead of silently dropping that endpoint or
-falling back to `/invoke`.
+An enabled file under `tools/`, `channels/` or `schedules/` is a declaration of what this agent has. If
+it cannot import, validate its required environment, or return a valid export, `dev` / `start` fails
+naming every file that failed, instead of running an agent short a tool, dropping an endpoint back to
+`/invoke`, or reporting itself ready with a cron that will never fire.
 
-Fix the reported file and environment. To intentionally disable a channel without deleting it, rename it
-so it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
+Fix the reported files and environment. To intentionally disable one without deleting it, rename it so
+it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
 
 ```bash
 mv channels/telegram.ts channels/telegram.ts.disabled
 ```
+
+`fastagent info` is the exception: it loads what it can and reports the rest, so it still works on a
+definition that cannot start.
 
 ## Webhook not receiving events locally
 

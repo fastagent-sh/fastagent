@@ -133,11 +133,10 @@ export default defineTool({
     });
     await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
 
-    const { agent, toolNames, toolFailures } = await createPiAgentFromDir(dir);
     // THREE outcomes, not two. A tool that failed to load and a model that declined to call one are
-    // different defects, and the marker file alone cannot tell them apart — the product reports the
-    // load itself, so the probe gates on that before it can blame the model for anything.
-    expect(toolFailures, `the fixture tool did not load: ${JSON.stringify(toolFailures)}`).toHaveLength(0);
+    // different defects, and the marker file alone cannot tell them apart — opening the directory refuses on the
+    // first, so reaching this line already rules it out and only the model can be blamed below.
+    const { agent, toolNames } = await createPiAgentFromDir(dir);
     expect(toolNames, "get_probe_code is not on the mounted tool surface").toContain("get_probe_code");
 
     const { text } = await collect(
@@ -182,8 +181,7 @@ export default defineTool({
     });
     await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
 
-    const { agent, toolNames, deferredToolNames, toolFailures } = await createPiAgentFromDir(dir);
-    expect(toolFailures, `the fixture tool did not load: ${JSON.stringify(toolFailures)}`).toHaveLength(0);
+    const { agent, toolNames, deferredToolNames } = await createPiAgentFromDir(dir); // refuses if the fixture broke
     // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in deferredToolNames
     // and deliberately NOT in toolNames, the author's active-by-default surface. Asserting the wrong
     // slot would pass on a tool that had quietly stopped being deferred — which is the whole premise.

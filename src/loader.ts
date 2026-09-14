@@ -86,6 +86,27 @@ export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[])
   for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
 }
 
+/**
+ * THE REFUSAL every path that is about to RUN the agent shares: an enabled file under `tools/`, `channels/` or
+ * `schedules/` is a declaration, so one that cannot load means the agent is missing something its author said it
+ * has. Starting anyway announces a ready service over an absent capability — a schedule that never fires, a tool the
+ * model simply never gets — with nothing but one warning to find it by. Every failure is reported before this
+ * throws, so a boot fixes all of them at once rather than one per restart.
+ *
+ * Inspecting a definition (`info`, `fastagent tool`) is NOT this path: it must survive a broken file in order to
+ * report it.
+ */
+export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[]): void {
+  if (failures.length === 0) return;
+  reportModuleLoadFailures(failures);
+  // The reasons are repeated from the warnings above because this message is all an embedder catching the rejection
+  // has, and all a deployment running at FASTAGENT_LOG_LEVEL=error sees.
+  throw new Error(
+    `failed to load: ${failures.map((f) => `${f.label} (${f.message})`).join("; ")} — fix it, or rename an ` +
+      `intentionally disabled file to *.disabled`,
+  );
+}
+
 /** Import every module the directory declares ({@link moduleInventory}). */
 export async function loadModuleDir(
   subDir: string,
