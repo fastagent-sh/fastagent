@@ -200,6 +200,10 @@ Runs one turn through the same agent assembly and exits:
 
 Use this for smoke tests and scripts.
 
+It opens the directory's state as its **writer**, so it is refused while `dev`/`start` serves the same
+directory — file-backed state has one writer. Ask the running service instead (its `POST /invoke`, or
+`/control/*` with `sessionControl: true`), or give this run its own state (`FASTAGENT_STATE_DIR=…`).
+
 ## `fastagent fire`
 
 ```bash
@@ -212,7 +216,8 @@ session, so you see exactly what the served scheduler would do:
 
 - answer text streams to stdout, tool/diagnostic lines to stderr, a `failed` turn exits non-zero (like `invoke`),
 - no name → usage on stderr, exit 2; an unknown schedule name → exit 1 with the available names,
-- it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
+- it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run,
+- like `invoke`, it is the directory's writer while it runs, so stop `dev`/`start` first (or point this run at its own `FASTAGENT_STATE_DIR`).
 
 A `schedules/<name>.ts` file default-exports `defineSchedule({ cron, tz?, prompt })`; the scheduler
 fires the agent on that cron when you `dev`/`start`. Output is the agent's tools' job — the scheduler

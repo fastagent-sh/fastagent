@@ -48,6 +48,20 @@ describe("createAgentService", () => {
     }
   });
 
+  it("a failed mount gives the write claim back, so the retry sees the real error again", async () => {
+    // The claim is taken by the opener, but composition (channel import, control-plane collision) fails BEFORE the
+    // scope whose finalizer releases it. Leaked, the retry would be refused by its own abandoned claim and the
+    // channel error would never be seen again.
+    const dir = await agentDir({ "channels/broken.mjs": `throw new Error("channel import blew up");` });
+    const vi1 = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid/);
+      await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid/);
+    } finally {
+      vi1.mockRestore();
+    }
+  });
+
   it("falls back to POST /invoke when the directory declares no channel", async () => {
     const dir = await agentDir();
     const service = await createAgentService(dir);

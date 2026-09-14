@@ -585,10 +585,12 @@ the deploy lifecycle differs: secrets ride the host's secret store or the auth s
 volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
 
 The shipped file-backed implementations are single-process, and that is now refused rather than implied:
-opening a directory takes an exclusive claim on every resolved write path (the state root and the
-sessions directory, which `--sessions-dir` can move apart) — `src/state-lock.ts`. A second opener is
-told what holds it and the ways out; `AgentService.close()` gives the claim back, and a killed process's
-claim expires on its own. `exclusive: false` is for a caller that coordinates writers itself. Multiple
+opening a directory through `createPiAgentFromDir` takes an exclusive claim on every resolved write path
+(the state root and the sessions directory, which `--sessions-dir` can move apart) — `src/state-lock.ts`.
+A second opener is told the holder's pid and the ways out; `AgentService.close()` gives the claim back,
+a normal exit releases it (`proper-lockfile`'s own exit hook, which covers signals too), and a killed
+holder's claim expires after the stale window. `chat` is outside the guard: pi's TUI owns its own
+session storage, and what it shares with the state root is a settings file. `exclusive: false` is for a caller that coordinates writers itself. Multiple
 instances still require shared session, lease, credential, and channel-state backends.
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,

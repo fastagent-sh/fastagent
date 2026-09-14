@@ -238,7 +238,7 @@ function createPiAgentFromDir(
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory.
 
-Opening takes **exclusive write ownership** of the resolved write paths (the state root and the sessions directory): file-backed state has one writer, and a second one interleaves session journals and drops channel state. A conflicting open rejects, naming what holds it. `createAgentService`'s `close()` releases it; a direct caller uses the returned `releaseState`, and a process that dies loses the claim automatically. Pass `exclusive: false` only when you coordinate writers yourself (a shared injected lease, or a test opening one directory twice on purpose). Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
+Opening takes **exclusive write ownership** of the resolved write paths (the state root and the sessions directory): file-backed state has one writer, and a second one interleaves session journals and drops channel state. A conflicting open rejects, naming the holder's pid. `createAgentService`'s `close()` releases it (and so does a failed mount, so a retry sees the real error); a direct caller uses the returned `releaseState`, and a process that exits or dies loses the claim automatically. Pass `exclusive: false` only when you coordinate writers yourself (a shared injected lease, or a test opening one directory twice on purpose). Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
 ```ts
 interface FastagentConfig {

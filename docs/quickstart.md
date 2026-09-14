@@ -210,6 +210,9 @@ the cron, and without touching the real fire state):
 fastagent fire daily-digest
 ```
 
+`fire` writes the same state a serving process does, so stop `dev`/`start` while you run it (one writer
+per directory; the refusal says so).
+
 On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.
 [AgentCore ingress](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
 `fastagent schedule history <name>` answers "did last night's run silently fail?", and

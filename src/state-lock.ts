@@ -10,10 +10,13 @@
  * This is that guard, at the one place a writable store is opened. It covers the RESOLVED write paths rather than
  * the nominal state root: a run pointed at another sessions directory must contend on THAT directory.
  *
+ * Releasing is `proper-lockfile`'s own: it deletes every lock it holds on process exit, including on the signals a
+ * `process.on("exit")` hook never sees. A caller that outlives its agent takes the returned release.
+ *
  * The deployed path has its own, coarser lease (`leaseDeployment` — one process per mounted volume, `flock`, held
  * for the process lifetime). Both can hold at once; they answer different questions.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { log } from "./log.ts";
@@ -23,7 +26,7 @@ const LOCK_FILE = "writer.lock";
 
 /**
  * How long a holder that died without releasing keeps the directory. `proper-lockfile` touches the lock while the
- * process lives, so this bounds only a crash — a normal exit releases below.
+ * process lives, so this bounds only a kill that ran no exit handler.
  */
 const STALE_MS = 15_000;
 
@@ -34,30 +37,22 @@ const STALE_MS = 15_000;
  */
 const RETRIES = { retries: 3, factor: 3, minTimeout: 100, maxTimeout: 600, randomize: true };
 
-/** Held by THIS process, so the exit handler is registered once rather than per acquisition. */
-const held = new Set<string>();
-let exitHandlerInstalled = false;
-
-function releaseOnExit(): void {
-  if (exitHandlerInstalled) return;
-  exitHandlerInstalled = true;
-  // Sync, because `exit` is the only hook a process.exit() path still runs. Without it the next start would have to
-  // wait out STALE_MS — which is exactly what `dev`'s restart-on-edit loop would do, on every edit.
-  process.once("exit", () => {
-    for (const target of held) {
-      try {
-        lockfile.unlockSync(target, { realpath: false });
-      } catch {
-        // The lock goes stale on its own; an exit handler has nowhere left to report to.
-      }
-    }
-  });
+/** The holder writes its pid into the lock target, so the refusal can name a process rather than a path. */
+function holderOf(target: string): string {
+  try {
+    const pid = readFileSync(target, "utf8").trim();
+    return /^\d+$/.test(pid) ? ` (pid ${pid})` : "";
+  } catch {
+    // The holder released between the failed acquire and this read, or the file is unreadable — either way the
+    // refusal below still names the path, which is the part that always exists.
+    return "";
+  }
 }
 
 /**
- * Take write ownership of every given directory, or refuse with what holds it and the ways out.
+ * Take write ownership of every given directory, or refuse with who holds it and the ways out.
  *
- * The returned release is for a caller that outlives its agent (tests, an embedder unmounting a service); a CLI
+ * The returned release is for a caller that outlives its agent (an embedder unmounting a service, a test); a CLI
  * command just exits.
  */
 export async function lockAgentState(dirs: readonly string[]): Promise<() => Promise<void>> {
@@ -65,7 +60,6 @@ export async function lockAgentState(dirs: readonly string[]): Promise<() => Pro
   const taken: string[] = [];
   const release = async (): Promise<void> => {
     for (const target of taken.splice(0)) {
-      held.delete(target);
       await lockfile
         .unlock(target, { realpath: false })
         .catch((error: unknown) =>
@@ -91,15 +85,15 @@ export async function lockAgentState(dirs: readonly string[]): Promise<() => Pro
       await release();
       if ((error as { code?: string }).code !== "ELOCKED") throw error;
       throw new Error(
-        `another process is already writing this agent's state (${target}) — file-backed state has one writer, ` +
-          `and a second one interleaves session journals and drops channel state. Ask the running service instead ` +
-          `(fastagent attach, or its /control/invoke), give this run its own state (FASTAGENT_STATE_DIR=… or ` +
-          `--sessions-dir), or stop the other process.`,
+        `another process is already writing this agent's state${holderOf(target)} — file-backed state has one ` +
+          `writer, and a second one interleaves session journals and drops channel state (${target}). Stop that ` +
+          `process, give this run its own state (FASTAGENT_STATE_DIR=… or --sessions-dir), or ask the running ` +
+          `service instead — its POST /invoke on the port it printed, or /control/* with sessionControl: true.`,
       );
     }
+    // Written after the lock is ours, so the pid a refusal reads is the holder's and not a loser's.
+    writeFileSync(target, `${process.pid}\n`);
     taken.push(target);
-    held.add(target);
   }
-  releaseOnExit();
   return release;
 }

@@ -16,5 +16,13 @@ export async function createAgentService(dir: string, options: CreateAgentServic
     ...(options.sessionsDir !== undefined ? { sessionsDir: options.sessionsDir } : {}),
     serving: true, // a mounted service is long-running: the scheduler poller runs
   });
-  return mountAgentService(opened, options);
+  try {
+    return await mountAgentService(opened, options);
+  } catch (error) {
+    // Composition failures (a channel module that will not import, a route colliding with the control plane) happen
+    // BEFORE the scope whose finalizer releases the write claim. Without this, the caller's retry of the same
+    // directory is refused by ITS OWN abandoned claim, and the real error never appears again.
+    await opened.releaseState?.();
+    throw error;
+  }
 }

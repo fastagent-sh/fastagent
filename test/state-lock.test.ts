@@ -20,8 +20,12 @@ afterEach(() => {
 it("refuses a second writer over one directory, names it, and gives ownership back on release", async () => {
   const state = fresh();
   const release = await lockAgentState([state]);
+  // Names the holder (a pid, not just a path) and leads with remedies that exist in a default project.
   await expect(lockAgentState([state])).rejects.toThrow(
-    /another process is already writing this agent's state .*fastagent attach.*FASTAGENT_STATE_DIR/s,
+    new RegExp(
+      `already writing this agent's state \\(pid ${process.pid}\\).*Stop that process.*FASTAGENT_STATE_DIR`,
+      "s",
+    ),
   );
   await release();
   await (await lockAgentState([state]))(); // free again — a normal close is not a permanent claim
@@ -43,7 +47,7 @@ it("leaves independent directories alone", async () => {
   await second();
 });
 
-it("a SECOND PROCESS is refused; a SIGKILLed holder's claim expires instead of needing a human", async () => {
+it("a SECOND PROCESS is refused, and a SIGKILLed holder's claim is still there (it can only expire)", async () => {
   const state = fresh();
   const source = new URL("../src/state-lock.ts", import.meta.url).href;
   const hold = spawn(
@@ -69,7 +73,8 @@ it("a SECOND PROCESS is refused; a SIGKILLed holder's claim expires instead of n
     hold.kill("SIGKILL"); // no exit handler runs: the claim can only expire
     await exited;
   }
-  // SIGKILL runs no exit handler, so the claim is still there — and expires on its own within the stale window.
+  // SIGKILL runs no exit handler, so the claim outlives its holder. What clears it is `proper-lockfile`'s staleness
+  // (STALE_MS), which is its behaviour and its tests — waiting it out here would buy a 15s test.
   await expect(lockAgentState([state])).rejects.toThrow(/already writing/);
 });
 

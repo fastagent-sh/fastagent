@@ -164,6 +164,8 @@ export async function mountAgentcoreService(
     ...(withControl.control ? { control: withControl.control } : {}),
     async close() {
       scheduled.stop();
+      // The same lifetime contract the neutral mount keeps: write ownership goes back when the service stops.
+      await opened.releaseState?.();
     },
   };
 }
