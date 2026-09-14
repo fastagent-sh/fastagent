@@ -202,10 +202,14 @@ describe("createAgentService", () => {
     }
   });
 
-  it("does not mount a control plane the config did not ask for", async () => {
+  it("does not mount a control plane the config did not ask for — the hub is still there for /stop", async () => {
+    // The two halves of what `sessionControl` used to mean: a serve always has the in-process hub (a chat channel's
+    // stop command reaches the live run through it), and publishing `/control/*` stays the explicit, bearer-guarded
+    // decision. Nothing is minted for a plane that is not served.
     const service = await createAgentService(await agentDir());
     try {
       expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(404);
+      expect(service.control).toBeUndefined();
     } finally {
       await service.close();
     }

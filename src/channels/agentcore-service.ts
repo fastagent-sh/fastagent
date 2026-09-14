@@ -119,7 +119,7 @@ export async function mountAgentcoreService(
 
   // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the collision rule
   // runs again then (below) against what they actually brought.
-  const withControl = mountSessionControl({}, sessionControl, { agent });
+  const withControl = mountSessionControl({}, opened.publishControl ? sessionControl : undefined, { agent });
 
   // Started here, not deferred to an envelope.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {

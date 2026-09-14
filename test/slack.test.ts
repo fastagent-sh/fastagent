@@ -898,6 +898,6 @@ describe("Slack stop command", () => {
     expect(invoked).toEqual([]);
     const texts = slackBodies(fetchMock, "chat.postMessage").map((b) => String(b.text));
     expect(texts[0]).toBe("Nothing is running.");
-    expect(texts[1]).toContain("Stop isn't enabled");
+    expect(texts[1]).toContain("Stop isn't available");
   });
 });

@@ -12,8 +12,9 @@ export function isStopText(text: string): boolean {
 
 const STOPPED_NOTICE = "⏹ Stopped.";
 const NOTHING_RUNNING_NOTICE = "Nothing is running.";
-const STOP_UNAVAILABLE_NOTICE =
-  "⚠️ Stop isn't enabled on this deployment (set sessionControl: true in fastagent.config).";
+// A serve always builds the hub, so this is only reachable when an embedder mounted a service without one — never by
+// a configuration an author can change, which is why it no longer names a setting to turn on.
+const STOP_UNAVAILABLE_NOTICE = "⚠️ Stop isn't available on this deployment.";
 
 /** Dispatch `abort` for the session and map the outcome to the customer-facing line. */
 export async function dispatchStop(

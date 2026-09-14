@@ -23,6 +23,7 @@ import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.t
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { dispatchStop } from "../src/channels/kit/stop-command.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
   NOTHING_TO_COMPACT_CODE,
@@ -364,9 +365,25 @@ describe("session control: observation plane", () => {
       });
       expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
       expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
-      // Not requested → not built.
+      // Not requested, not serving → not built.
       const plain = await createPiAgentFromDir(dir, {});
       expect(plain.sessionControl).toBeUndefined();
+      expect(plain.publishControl).toBe(false);
+
+      // A SERVE gets the hub whether or not `/control/*` is published: `/stop` in a chat reaches the running turn
+      // through it, and telling an author to open a remote management surface to stop a turn is the trade this
+      // split removes. Its boundary stays unwired, so a write is refused the same way it would be over HTTP.
+      const serving = await createPiAgentFromDir(dir, { serving: true });
+      const hub = serving.sessionControl as NonNullable<typeof serving.sessionControl>;
+      expect(hub).toBeDefined();
+      expect(serving.publishControl).toBe(false);
+      expect((await hub.capabilities()).updatable).toEqual([]);
+      expect(await hub.sessions.get("ghost").update({ model: "openai-codex/gpt-5.5" })).toMatchObject({
+        ok: false,
+        error: { code: "unsupported_capability" },
+      });
+      // …and the one action a stop command needs answers in its own vocabulary, not "not supported".
+      expect(await hub.sessions.get("ghost").abort()).toMatchObject({ ok: false, error: { code: "no_active_run" } });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -944,6 +961,38 @@ describe("session control: run modulation", () => {
       expect(result.error.code).toBe(RUN_COMMAND_FAILED_CODE);
       expect(result.error.retryable).toBe(false); // as-is retry fails again — consult state() first
     }
+  });
+
+  it("the shared stop command aborts a run with NO boundary wiring — what a deployment without /control/* has", async () => {
+    // The point of the split: a hub whose write side is entirely absent still answers the one action a chat `/stop`
+    // needs, because abort reaches the live run through the controls `run_started` carried, not through the
+    // boundary. Without this, stopping a turn cost an author the public management surface.
+    const gate = makeGate();
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))],
+      {
+        tools: [gate.tool],
+        boundary: false,
+      },
+    );
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.sessions.get("sNoBoundary").events()) {
+        seen.push(ev);
+        if (ev.type === "run_settled") break;
+      }
+    })();
+    const invoked = drive(agent, "sNoBoundary");
+    await waitForRunning(control, "sNoBoundary");
+    while (!seen.some((e) => e.type === "tool_started")) await new Promise((r) => setTimeout(r, 5));
+
+    expect(await dispatchStop(control, "sNoBoundary", "test")).toBe("⏹ Stopped."); // the gate is never released
+    await watching;
+    expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+    // Idle afterwards, and the next stop says so rather than pretending it stopped something.
+    expect(await dispatchStop(control, "sNoBoundary", "test")).toBe("Nothing is running.");
+    // Another session is untouched by either call.
+    expect((await control.sessions.get("sOther").state()).status).toBe("idle");
   });
 
   it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {

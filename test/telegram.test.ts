@@ -1912,7 +1912,7 @@ describe("telegram /stop command", () => {
       ([, init]) => JSON.parse(String(init.body)) as { text?: string },
     );
     expect(sent.some((b) => b.text === "Nothing is running.")).toBe(true);
-    expect(sent.some((b) => String(b.text).includes("Stop isn't enabled"))).toBe(true);
+    expect(sent.some((b) => String(b.text).includes("Stop isn't available"))).toBe(true);
   });
 
   // A `/stop` ADDRESSED to this bot is the command; an unaddressed one in a group is not (see

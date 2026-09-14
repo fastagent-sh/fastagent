@@ -244,8 +244,11 @@ export interface MountableAgent {
   workspace: string;
   /** Where durable state lives (channel state, sessions, schedule fires). */
   stateRoot: string;
-  /** Present iff this agent published a control plane. */
+  /** The session-control hub, when the opener built one. A serve has it whether or not `/control/*` is published:
+   *  a chat channel's stop command reaches the running turn through it. */
   sessionControl?: SessionControl;
+  /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Absent = in-process only. */
+  publishControl?: boolean;
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
 }
@@ -265,7 +268,9 @@ export async function mountAgentService(
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
-  const withControl = mountSessionControl(routed.routes, sessionControl, { agent });
+  const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined, {
+    agent,
+  });
   // Composed BEFORE anything starts.
   const handler = router(withControl.routes, withControl.mounts);
   return Effect.runPromise(
