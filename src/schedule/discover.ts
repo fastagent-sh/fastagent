@@ -45,9 +45,7 @@ export async function loadSchedules(dir: string): Promise<{
       // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`), so anything that could
       // leave that directory is refused here — where the author sees which file is wrong — rather than deeper.
       if (!isSafeScheduleName(name)) {
-        throw new Error(
-          `${label}: a schedule name may only contain letters, digits, ".", "_" and "-", and cannot be "." or ".."`,
-        );
+        throw new Error(`${label}: a schedule name cannot be ".", ".." or contain a path separator`);
       }
       if (byName.has(name)) throw new Error(`${label}: duplicate schedule name "${name}" — kept the first`);
       byName.set(name, { name, cron: s.cron, tz: s.tz, prompt: s.prompt });

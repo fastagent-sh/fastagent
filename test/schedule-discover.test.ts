@@ -38,13 +38,18 @@ describe("schedule/discover", () => {
     expect(failures[0]?.message).toMatch(/must default-export defineSchedule/);
   });
 
-  it("refuses a name that would leave the claims directory it becomes a path segment of", async () => {
-    // `schedules/...ts` names the schedule ".." — which, unescaped, points the fired-slot claims at the state root
-    // itself, where the pruner would then be deleting. Refused where the author can see which file is wrong.
-    const dir = await ws({ "...ts": def("0 * * * *"), "ok.ts": def("0 * * * *") });
+  it("refuses only names that could leave the claims directory — a legal filename is a legal schedule", async () => {
+    // The name becomes a path segment under `claims/`, so that is the whole rule. Narrowing it further would make an
+    // ordinary filename load into nothing but one warning, and its schedule would silently stop firing.
+    const dir = await ws({
+      "...ts": def("0 * * * *"),
+      "每日简报.ts": def("0 * * * *"),
+      "my report.ts": def("0 * * * *"),
+    });
     const { schedules, failures } = await loadSchedules(dir);
-    expect(schedules.map((s) => s.name)).toEqual(["ok"]);
-    expect(failures[0]?.message).toMatch(/may only contain letters, digits.*cannot be "\.".*"\.\."/);
+    expect(schedules.map((s) => s.name).sort()).toEqual(["my report", "每日简报"]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.message).toMatch(/cannot be "\.", "\.\." or contain a path separator/);
   });
 
   it("a missing schedules/ dir yields empty (no schedules is normal)", async () => {

@@ -445,9 +445,9 @@ function defineSchedule<const S extends readonly string[]>(schedule: {
 ```
 
 An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
-the filename becomes the schedule name — letters, digits, `.`, `_` and `-` only (it becomes a directory name under
-`<stateRoot>/schedule/claims/`), and not `.` or `..`. Each file default-exports
-`defineSchedule({ cron, tz?, prompt })`.
+the filename becomes the schedule name (it also becomes a directory name under `<stateRoot>/schedule/claims/`, so
+`.`, `..` and path separators are refused — everything else a filename may contain is fine). Each file
+default-exports `defineSchedule({ cron, tz?, prompt })`.
 
 ```ts
 // schedules/daily-digest.ts        → schedule "daily-digest"

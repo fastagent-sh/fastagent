@@ -125,10 +125,9 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(lastFire(root, "other")).toBe("2026-07-07T11:00:00.000Z");
   });
 
-  it("a claim taken but never recorded in fires.json is still reconciled (the crash window between the two)", async () => {
-    // `claimSlot` and the `fires.json` stamp are two writes now. A process killed between them leaves a claim and
-    // stale bookkeeping; reading the bookkeeping here would decide nothing happened, and the slot would be skipped
-    // forever with neither a `completed` nor an `interrupted` line — the silence this outcome exists to remove.
+  it("a claim newer than the last audited run is reported, even with older fires on record", async () => {
+    // The reconciler compares the newest claim against the newest audit record for that schedule, so a completed
+    // history does not hide the fire that came after it and never reported.
     const root = await freshRoot();
     vi.spyOn(console, "error").mockImplementation(() => {});
     seedClaim(root, "job", "2026-07-07T08:00:00Z"); // bookkeeping from the PREVIOUS, completed fire
@@ -162,6 +161,38 @@ describe("schedule/scheduler: fire algorithm", () => {
     });
     expect(stale).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is stale") });
     expect(calls).toHaveLength(0);
+  });
+
+  it("an unreadable run audit costs the check, not the schedule", async () => {
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    seedClaim(root, "job", "2026-07-07T08:00:00.000Z");
+    mkdirSync(join(root, "schedule", "runs.jsonl")); // a directory where the audit should be: EISDIR on read
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    });
+    expect(() => s.start()).not.toThrow();
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the overdue slot still fires
+    expect(warns.some((w) => /could not read the run audit/.test(w))).toBe(true);
+    s.stop();
+  });
+
+  it("a wake-up-only scheduler does not read the audit at all", async () => {
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    mkdirSync(join(root, "schedule", "runs.jsonl"), { recursive: true }); // any read of it would fail loudly
+    const { agent } = recordingAgent();
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:30:00Z") });
+    s.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(warns).toEqual([]);
+    s.stop();
   });
 
   it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {

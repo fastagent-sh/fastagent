@@ -43,13 +43,16 @@ const KEEP_CLAIMS = 32;
 const claimName = (slot: Date): string => slot.toISOString().replace(/[:.]/g, "-");
 
 /**
- * A schedule name becomes a path segment (its claims live in `claims/<name>/`), so the set of legal names is this
- * one rule — `discover.ts` refuses an illegal one where the author can see which file is wrong, and `claimDir`
- * asserts it again for a programmatic caller. `.` and `..` are spelled out because they pass the character test and
- * still name a directory that is not ours.
+ * A schedule name becomes a path segment (its claims live in `claims/<name>/`), so the rule is exactly the safety
+ * boundary and nothing more: a name may not leave that directory. The name comes from a filename under `schedules/`,
+ * which already cannot contain a separator — so what a stricter rule would actually reject is legal filenames
+ * (`每日简报`, `my schedule`), whose only symptom would be a schedule that silently never fires again.
+ *
+ * One definition, two enforcers: `discover.ts` refuses an illegal one where the author can see which file is wrong,
+ * and `claimDir` asserts it again for a programmatic caller.
  */
 export function isSafeScheduleName(name: string): boolean {
-  return /^[A-Za-z0-9._-]+$/.test(name) && name !== "." && name !== "..";
+  return name !== "" && !/[/\\]/.test(name) && !name.includes("\u0000") && name !== "." && name !== "..";
 }
 
 /** This function builds a path from it, so a name that can leave `claims/<name>/` is a bug, not an input. */
@@ -65,7 +68,12 @@ function claimDir(stateRoot: string, name: string): string {
  * is running it now); `stale` means the schedule has moved past this instant and the slot will never run — a turn
  * missing from the bill, which reads differently in a log.
  */
-export type SlotClaimOutcome = { taken: true } | { taken: false; why: "duplicate" | "stale"; newest: string };
+export type SlotClaimOutcome =
+  | { taken: true }
+  /** The same delivery arrived twice, or another scheduler took this slot and may be running it now. */
+  | { taken: false; why: "duplicate" }
+  /** The schedule has moved past this instant: `newest` holds it, and this slot will never run. */
+  | { taken: false; why: "stale"; newest: string };
 
 /**
  * Take a cron slot, or report that it is not ours to take.
@@ -93,14 +101,20 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
   try {
     fd = openSync(join(dir, wanted), "wx");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") return { taken: false, why: "duplicate", newest: wanted };
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") return { taken: false, why: "duplicate" };
     throw e; // a real IO fault: the caller reports it and leaves the schedule armed
   }
   try {
     writeFileSync(fd, firedAt.toISOString());
-  } finally {
+  } catch (e) {
+    // The claim exists from `openSync` on, so a failed stamp (ENOSPC, EIO) would leave a slot that can only ever be
+    // read as `duplicate` — taken, never run, never audited. Remove it so the failure this rethrows costs a retry
+    // instead of the slot itself.
     closeSync(fd);
+    unlinkSync(join(dir, wanted));
+    throw e;
   }
+  closeSync(fd);
   pruneClaims(dir, taken);
   return { taken: true };
 }
