@@ -46,13 +46,15 @@ export function ingressAddresses(stdout: string): { v4: boolean; v6: boolean } {
   return { v4: has(INGRESS_TYPES.v4), v6: has(INGRESS_TYPES.v6) };
 }
 
-/** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both). */
+/**
+ * Whether `fly apps list --json` lists an app called `name`. flyctl capitalizes the field; the live probe
+ * (test/live/fly.live.test.ts) is what pins that against real output, since an offline fixture can only repeat what
+ * we already believe.
+ */
 export function listHasName(stdout: string, name: string): boolean {
   const entries: unknown = JSON.parse(stdout);
   if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
-  return entries.some(
-    (o) => (o as { Name?: string; name?: string }).Name === name || (o as { name?: string }).name === name,
-  );
+  return entries.some((o) => (o as { Name?: string }).Name === name);
 }
 
 /**
