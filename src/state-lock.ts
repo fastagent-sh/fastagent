@@ -25,8 +25,17 @@
  * enforces (docs/deploy.md, "Single-machine tier"); one process per mounted volume is a different question, already
  * answered by `leaseDeployment`, and several replicas need shared session/lease/channel-state backends rather than
  * any file lock.
+ *
+ * Two known limits, stated rather than papered over:
+ *
+ *   - A claim can only be TAKEN OVER when the kernel says nobody is listening. Anything else — a holder too busy to
+ *     answer, a foreign socket, a path this user may not read — refuses. Refusing a run is recoverable; deciding a
+ *     live writer is dead is not.
+ *   - `dev --tunnel`'s supervisor writes channel onboarding state (`src/tunnel.ts` → `writeSlackOnboardingState`)
+ *     while its worker holds the claim, so that one file has two writers by design. It is written once per
+ *     registration, not per turn.
  */
-import { existsSync, unlinkSync } from "node:fs";
+import { closeSync, openSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { type Server, connect, createServer } from "node:net";
 import { resolve } from "node:path";
@@ -34,8 +43,8 @@ import { resolve } from "node:path";
 /**
  * Short, machine-global, collision-free: the guarded directory is the identity, its hash is the name. `/tmp` rather
  * than `os.tmpdir()` because macOS makes the latter per-user, and two users writing one directory must still
- * contend (the loser gets a refusal, never a silent share: a sticky `/tmp` refuses to let it delete a stale socket
- * that is not its own, and that error surfaces). The deployed image already writes there (`npm_config_cache`).
+ * contend — one of them wins the name and the other is refused, never a silent share. The deployed image already
+ * writes there (`npm_config_cache`).
  */
 function socketFor(dir: string): string {
   const digest = createHash("sha256").update(dir).digest("hex").slice(0, 16);
@@ -49,37 +58,49 @@ const PROBE_TIMEOUT_MS = 2_000;
 interface Holder {
   pid: number;
   command: string;
-  /** Distinguishes OUR server from one that replaced it while two processes raced to take over a dead claim. */
-  nonce: string;
 }
 
 function describe(holder: Holder): string {
   return `pid ${holder.pid}${holder.command ? ` (${holder.command})` : ""}`;
 }
 
-/** Ask who is listening. `undefined` = nobody: either no socket at all, or one its process did not outlive. */
-function probe(path: string): Promise<Holder | undefined> {
+/**
+ * What the path answers. `absent` is the ONLY state that permits a takeover: it is the kernel saying nothing is
+ * listening. `unknown` covers a holder that did not answer in time, an answer that is not ours, and a path this
+ * process may not read — none of which prove the writer is gone.
+ */
+type Probe = { state: "held"; holder: Holder } | { state: "absent" } | { state: "unknown"; why: string };
+
+function probe(path: string): Promise<Probe> {
   return new Promise((resolve_) => {
     const socket = connect(path);
     let answer = "";
-    const done = (holder: Holder | undefined): void => {
+    const done = (result: Probe): void => {
       socket.destroy();
-      resolve_(holder);
+      resolve_(result);
     };
-    socket.setTimeout(PROBE_TIMEOUT_MS, () => done(undefined));
+    socket.setTimeout(PROBE_TIMEOUT_MS, () =>
+      done({ state: "unknown", why: `it did not answer within ${PROBE_TIMEOUT_MS}ms` }),
+    );
     socket.on("data", (chunk) => {
       answer += chunk;
     });
     socket.on("end", () => {
       try {
-        done(JSON.parse(answer) as Holder);
+        done({ state: "held", holder: JSON.parse(answer) as Holder });
       } catch {
-        // Something else owns this path (a stray socket): not a claim of ours, and not ours to delete.
-        done(undefined);
+        done({ state: "unknown", why: "something that is not a fastagent agent is listening there" });
       }
     });
-    // ECONNREFUSED/ENOENT: the file outlived its process, or was never there.
-    socket.on("error", () => done(undefined));
+    socket.on("error", (error) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Only these two are the kernel saying "no listener": the file outlived its process, or was never there.
+      done(
+        code === "ECONNREFUSED" || code === "ENOENT"
+          ? { state: "absent" }
+          : { state: "unknown", why: `connecting to it failed with ${code ?? String(error)}` },
+      );
+    });
   });
 }
 
@@ -95,6 +116,15 @@ function listenOn(path: string, answer: string): Promise<Server> {
   });
 }
 
+/** The path is taken but its holder cannot be identified — refuse, because the alternative is deciding it is dead. */
+function refuseUnknown(dir: string, path: string, why: string): Error {
+  return new Error(
+    `this agent's state (${dir}) is claimed at ${path}, but ${why} — refusing rather than assuming the writer is ` +
+      `gone. Stop whatever holds it, give this run its own state (FASTAGENT_STATE_DIR=… or --sessions-dir), or ` +
+      `delete ${path} if you know nothing is writing there.`,
+  );
+}
+
 function refuse(dir: string, holder: Holder): Error {
   return new Error(
     holder.pid === process.pid
@@ -108,32 +138,64 @@ function refuse(dir: string, holder: Holder): Error {
   );
 }
 
+/**
+ * Serializes the one step that is not atomic: removing a dead holder's name. `link`/`bind` refuse an existing name
+ * on their own, but "unlink then bind" has a gap in which a second taker can delete the name the first just bound.
+ * A stale sentinel (a crash inside that microsecond) costs a refusal that names the file to remove — the fail-safe
+ * direction, unlike two writers who each believe they are alone.
+ */
+function withTakeoverSentinel<T>(dir: string, path: string, work: () => T): T {
+  const sentinel = `${path}.takeover`;
+  let fd: number;
+  try {
+    fd = openSync(sentinel, "wx");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw refuseUnknown(
+      dir,
+      path,
+      code === "EEXIST"
+        ? `another process is taking it over (${sentinel})`
+        : `its takeover marker could not be created (${code ?? String(error)})`,
+    );
+  }
+  try {
+    return work();
+  } finally {
+    closeSync(fd);
+    unlinkSync(sentinel);
+  }
+}
+
 /** One directory. Returns the server holding it, or throws the refusal naming who does. */
 async function take(dir: string): Promise<Server> {
   const path = socketFor(dir);
-  const nonce = crypto.randomUUID();
-  const answer = `${JSON.stringify({ pid: process.pid, command: process.argv.slice(1).join(" ").slice(0, 120), nonce } satisfies Holder)}\n`;
+  const answer = `${JSON.stringify({ pid: process.pid, command: process.argv.slice(1).join(" ").slice(0, 120) } satisfies Holder)}\n`;
   for (let attempt = 0; attempt < 2; attempt++) {
-    let server: Server;
     try {
-      server = await listenOn(path, answer);
+      return await listenOn(path, answer);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
-      const holder = await probe(path);
-      if (holder) throw refuse(dir, holder);
-      // Nobody is listening: the file outlived its process. Removing it is the takeover, and the verification
-      // below is what makes losing the race to another taker visible instead of silent.
-      if (existsSync(path)) unlinkSync(path);
-      continue;
     }
-    const owner = await probe(path);
-    if (owner?.nonce === nonce) return server;
-    server.close();
-    // Another process unlinked our socket and listened on the path between the two calls above. Ours is now bound
-    // to an inode nothing can reach, so it is not a claim.
-    if (owner) throw refuse(dir, owner);
+    const found = await probe(path);
+    if (found.state === "held") throw refuse(dir, found.holder);
+    if (found.state === "unknown") throw refuseUnknown(dir, path, found.why);
+    // Nobody is listening: the name outlived its process. Removing it is the takeover, and only one process may be
+    // inside that step — after it, the bind below is the kernel's own exclusion again.
+    withTakeoverSentinel(dir, path, () => {
+      try {
+        unlinkSync(path);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return; // another taker got there first; the retry below sorts it out
+        throw refuseUnknown(dir, path, `its dead claim could not be removed (${code ?? String(error)})`);
+      }
+    });
   }
-  throw new Error(`could not take the write claim for ${dir} — it kept changing hands`);
+  // The second attempt found the name taken again: someone bound it between our unlink and our bind. They are the
+  // holder now, so say so rather than looping.
+  const found = await probe(path);
+  throw found.state === "held" ? refuse(dir, found.holder) : refuseUnknown(dir, path, "it kept changing hands");
 }
 
 /**

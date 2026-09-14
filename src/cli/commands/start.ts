@@ -175,8 +175,9 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
     serving: true,
   });
-  // The claim `createPiAgentFromDir` took is disposed by whichever mount below takes it, on failure as on close.
-  // Between here and there nothing else owns it, so a throw in the report/alarm steps gives it back explicitly.
+  // Both mounts below own the claim once they are entered (failure included), but the report/alarm steps between
+  // here and there are nobody's — so this covers exactly that gap. `dispose` is idempotent, so a mount that already
+  // released it is not released twice.
   try {
     const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
     await reportAssembly(opened, {

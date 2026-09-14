@@ -114,6 +114,15 @@ export async function mountAgentcoreService(
   opened: MountableAgent,
   options: MountAgentcoreServiceOptions = {},
 ): Promise<AgentService> {
+  // Mounting takes ownership of `opened` (MountableAgent.dispose), including when it fails: a bad `schedules/`
+  // directory or a control-plane collision must not leave the write claim held by a process that never served.
+  return build(opened, options).catch(async (error: unknown) => {
+    await opened.dispose?.();
+    throw error;
+  });
+}
+
+async function build(opened: MountableAgent, options: MountAgentcoreServiceOptions): Promise<AgentService> {
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 

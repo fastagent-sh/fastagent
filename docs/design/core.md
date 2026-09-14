@@ -592,8 +592,11 @@ instead of guesses: a holder that dies stops answering immediately (no stale win
 asking the OS about a pid — which in a container, where the agent is pid 1, answers wrongly about
 itself), and a refusal names the holder's own pid and command because the holder answers for itself.
 Ownership is a single chain: the opener holds it, mounting transfers it, `AgentService.close()` and any
-failure on either side release it. `chat` is outside the guard: pi's TUI owns its own session storage,
-and what it shares with the state root is a settings file. Opening the same directory twice in one
+failure on either side release it. Two exceptions are stated rather than hidden: `chat` is outside the
+guard (pi's TUI owns its own session storage, and what it shares with the state root is a settings
+file), and `dev --tunnel`'s supervisor writes channel onboarding state while its worker holds the claim
+— once per registration, not per turn. A claim is taken over only when the kernel says nobody is
+listening; a holder too busy to answer, a foreign socket, or an unreadable path all refuse instead. Opening the same directory twice in one
 process is the same refusal with its own wording: dispose the first. Multiple
 instances still require shared session, lease, credential, and channel-state backends.
 

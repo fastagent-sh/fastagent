@@ -146,6 +146,19 @@ afterEach(() => {
 });
 
 describe("mountAgentcoreService", () => {
+  it("a failed mount releases the write claim it was given, like the neutral one", async () => {
+    // MountableAgent.dispose says mounting takes ownership, failures included. Here the failure does not end the
+    // process — it becomes a 503 — so a claim left behind would lock this storage against every later container.
+    // A schedule whose declared value is unset: the serving-path gate refuses, which is a mount failure.
+    const dir = await agentDir({
+      "schedules/digest.mjs": `export default { cron: "0 * * * *", prompt: "go", secrets: ["FA_MISSING_VALUE"] };\n`,
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const opened = await open(dir);
+    await expect(mountAgentcoreService(opened)).rejects.toThrow(/FA_MISSING_VALUE/);
+    await (await lockAgentState([join(dir, ".state")]))(); // the claim came back
+  });
+
   it("serves the adapter surface, not the channel routes", async () => {
     // The channel exists, but on this host it is reachable only THROUGH an envelope — the platform
     // invokes POST /invocations and nothing else.
