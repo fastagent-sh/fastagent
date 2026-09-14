@@ -17,13 +17,15 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-it("refuses a second writer over one directory, names it, and gives ownership back on release", async () => {
+it("refuses a second opener IN THIS PROCESS with the remedy that applies to it, and frees on release", async () => {
+  // The embedder's shape of the conflict: two opens of one directory in one process. "Stop that process" would name
+  // the caller itself, so this case gets its own wording.
   const state = fresh();
   const release = await lockAgentState([state]);
-  // Names the holder (a pid, not just a path) and leads with remedies that exist in a default project.
   await expect(lockAgentState([state])).rejects.toThrow(
     new RegExp(
-      `already writing this agent's state \\(pid ${process.pid}\\).*Stop that process.*FASTAGENT_STATE_DIR`,
+      `this process already opened this agent's state \\(pid ${process.pid}, this process\\).*` +
+        `Close the first agent`,
       "s",
     ),
   );
@@ -31,12 +33,23 @@ it("refuses a second writer over one directory, names it, and gives ownership ba
   await (await lockAgentState([state]))(); // free again — a normal close is not a permanent claim
 });
 
+it("a failure part-way through a multi-directory claim gives back what it already took", async () => {
+  // The sessions dir can be unusable while the state root is fine (a read-only mount, a file where a directory
+  // belongs). Without the rollback the caller gets an exception and no release handle, and the first lock is held
+  // until the process exits.
+  const state = fresh();
+  const blocked = join(fresh("fa-lock-blocked-"), "sessions");
+  writeFileSync(blocked, ""); // a FILE where the sessions directory should be: mkdir/write below fails
+  await expect(lockAgentState([state, blocked])).rejects.toThrow(/EEXIST|ENOTDIR/);
+  await (await lockAgentState([state]))(); // the state root came back
+});
+
 it("guards each resolved write path, so a shared sessions dir collides under different state roots", async () => {
   // The override is the case a nominal state-root guard misses: two runs whose state roots differ but whose journals
   // are the same directory.
   const sessions = fresh("fa-lock-sessions-");
   const release = await lockAgentState([fresh(), sessions]);
-  await expect(lockAgentState([fresh(), sessions])).rejects.toThrow(/already writing/);
+  await expect(lockAgentState([fresh(), sessions])).rejects.toThrow(/already opened this agent's state/);
   await release();
 });
 
@@ -112,19 +125,17 @@ it("a resident boot waits out an expiring claim; a one-shot command refuses inst
   const booting = lockAgentState([state], { resident: true });
   // Longer than the one-shot budget (~1s), far shorter than the stale window a container would otherwise wait out.
   await new Promise((resolve) => setTimeout(resolve, 1_500));
-  await expect(lockAgentState([state])).rejects.toThrow(/already writing/); // the one-shot posture, unchanged
+  await expect(lockAgentState([state])).rejects.toThrow(/already opened/); // the one-shot posture, unchanged
   await release();
   await (await booting)();
 });
 
-it("the opener takes ownership, and `exclusive: false` is how a caller declines it", async () => {
+it("the opener takes ownership, and releasing it is how the same directory is opened again", async () => {
   const dir = fresh("fa-lock-agent-");
   mkdirSync(join(dir, "fastagent"));
   writeFileSync(join(dir, "fastagent", "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
   const opened = await createPiAgentFromDir(dir);
-  await expect(createPiAgentFromDir(dir)).rejects.toThrow(/already writing/);
-  // The opt-out is for a caller that owns the coordination itself.
-  expect((await createPiAgentFromDir(dir, { exclusive: false })).releaseState).toBeUndefined();
-  await opened.releaseState?.();
-  await (await createPiAgentFromDir(dir)).releaseState?.();
+  await expect(createPiAgentFromDir(dir)).rejects.toThrow(/already opened this agent's state/);
+  await opened.releaseState();
+  await (await createPiAgentFromDir(dir)).releaseState();
 });

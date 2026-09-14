@@ -41,11 +41,6 @@ export interface CreatePiAgentFromDirOptions {
   serving?: boolean;
   /** Assemble the session control plane over this agent's session store and return it as {@link sessionControl}. */
   sessionControl?: boolean;
-  /**
-   * `false` opts out of the single-writer refusal (`src/state-lock.ts`) for a caller that owns the coordination
-   * itself — a shared injected lease, or a test opening one directory twice on purpose.
-   */
-  exclusive?: boolean;
   /** Additional raw tap with the FULL vocabulary. */
   observer?: SessionObserver;
 }
@@ -162,8 +157,8 @@ export async function createPiAgentFromDir(
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
-  /** Give up write ownership of this agent's state (unset when `exclusive: false` declined to take it). */
-  releaseState?: () => Promise<void>;
+  /** Give up write ownership of this agent's state — what `AgentService.close()` calls. */
+  releaseState: () => Promise<void>;
   /**
    * Whether the agent schedules its own follow-up turns — read from the config, so a caller assembling a service does
    * not have to reach back into it (MountableAgent).
@@ -200,11 +195,8 @@ export async function createPiAgentFromDir(
   // Single-writer, enforced where the writable store is opened rather than remembered by each command. Both paths,
   // because they come apart: `--sessions-dir` moves the journals out of the state root, and a second run pointed at
   // the same journals through a different state root must still contend.
-  const releaseState =
-    options.exclusive === false
-      ? undefined
-      : // `serving` is what tells a booting server from a one-shot command, which is exactly the two waits.
-        await lockAgentState([stateRoot, sessionsDir], { resident: options.serving === true });
+  // `serving` is what tells a booting server from a one-shot command, which is exactly the two waits.
+  const releaseState = await lockAgentState([stateRoot, sessionsDir], { resident: options.serving === true });
   // Everything below can throw (a definition that will not load, an unknown model, a credential the registry
   // rejects) — and the claim above is already taken. Without this the caller's retry is refused by its OWN
   // abandoned claim, and the error that actually stopped it never appears again.
@@ -270,7 +262,7 @@ export async function createPiAgentFromDir(
       sessions,
       sessionControl: hub?.control,
       selfSchedule: config.selfSchedule ?? false,
-      ...(releaseState ? { releaseState } : {}),
+      releaseState,
       agentDir,
       workspace,
       config,

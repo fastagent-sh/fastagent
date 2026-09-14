@@ -353,7 +353,8 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     expect(ws.definition.dir).toBe(agent);
     expect(ws.workspace).toBe(host);
 
-    const overridden = await createPiAgentFromDir(host, { model: "openai-codex/gpt-5.4", exclusive: false });
+    await ws.releaseState(); // one writer per directory: hand it back before opening the same dir again
+    const overridden = await createPiAgentFromDir(host, { model: "openai-codex/gpt-5.4" });
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag wins
   });
 
@@ -377,7 +378,8 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const overridden = await createPiAgentFromDir(host, { sessionsDir: ext });
     expect(overridden.sessionsDir).toBe(ext);
-    const defaulted = await createPiAgentFromDir(host, { exclusive: false }); // deliberately a SECOND opener over one dir
+    await overridden.releaseState();
+    const defaulted = await createPiAgentFromDir(host);
     expect(defaulted.sessionsDir).toBe(join(agent, ".state", "sessions"));
   });
 
@@ -390,7 +392,8 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const defaulted = await createPiAgentFromDir(host);
     expect(defaulted.authPath).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");
-    const overridden = await createPiAgentFromDir(host, { authPath: shared, exclusive: false });
+    await defaulted.releaseState();
+    const overridden = await createPiAgentFromDir(host, { authPath: shared });
     expect(overridden.authPath).toBe(shared);
   });
 

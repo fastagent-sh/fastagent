@@ -216,8 +216,7 @@ The assembly `dev`/`start` perform, without the process: no port bound, no signa
 ```ts
 function createPiAgentFromDir(
   dir: string,
-  options?: { model?: string; sessionsDir?: string; authPath?: string; serving?: boolean;
-              exclusive?: boolean },
+  options?: { model?: string; sessionsDir?: string; authPath?: string; serving?: boolean },
 ): Promise<{
   agent: Agent;
   definition: LoadedDefinition;
@@ -232,13 +231,13 @@ function createPiAgentFromDir(
   toolNames: string[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
-  releaseState?: () => Promise<void>;    // give up write ownership (see `exclusive` below)
+  releaseState: () => Promise<void>;     // give up write ownership (see below)
 }>;
 ```
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory.
 
-Opening takes **exclusive write ownership** of the resolved write paths (the state root and the sessions directory): file-backed state has one writer, and a second one interleaves session journals and drops channel state. A conflicting open rejects, naming the holder's pid. `createAgentService`'s `close()` releases it (and so does a failed mount, so a retry sees the real error); a direct caller uses the returned `releaseState`, and so does an opener that throws after taking it. A process that exits releases immediately; one that is killed outright leaves the claim until it goes stale (~15s), and the refusal says so rather than naming a dead pid. Pass `exclusive: false` only when you coordinate writers yourself (a shared injected lease, or a test opening one directory twice on purpose). Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
+Opening takes **exclusive write ownership** of the resolved write paths (the state root and the sessions directory): file-backed state has one writer, and a second one interleaves session journals and drops channel state. A conflicting open rejects, naming the holder's pid. `createAgentService`'s `close()` releases it (and so does a failed mount, so a retry sees the real error); a direct caller uses the returned `releaseState`, and so does an opener that throws after taking it. A process that exits releases immediately; one that is killed outright leaves the claim until it goes stale (~15s), and the refusal says so rather than naming a dead pid. To open the same directory again in one process — a second mount, a test — release the first with `releaseState()` (or `close()`) first; there is no flag that turns the guard off, because a second writer is the thing it exists to prevent. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
 ```ts
 interface FastagentConfig {

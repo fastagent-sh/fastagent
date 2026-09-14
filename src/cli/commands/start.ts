@@ -175,39 +175,41 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
     serving: true,
   });
-  const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
-  await reportAssembly(opened, {
-    afterTools: [
-      ["state", stateRoot],
-      ["sessions", sessionsDir],
-    ],
-  });
-  if (isUnderDir(stateRoot, agentDir)) {
-    log.info(
-      "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",
-    );
-  }
-  if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
-    log.info(
-      "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
-    );
-  }
-  const traced = logAgentLoop(agent);
-  const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
-  // The same release `createAgentService` owes: composition (channel imports, a control-plane route collision) runs
-  // before the scope whose finalizer gives the write claim back. On AgentCore this is not academic — the failure is
-  // caught into a 503 instead of exiting, so a leaked claim would lock the storage against every later container.
-  const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
-    : mountAgentService(
-        opened,
-        cliMountOptions(() => traced),
-      )
-  ).catch(async (error: unknown) => {
+  // Everything from here to the mounted service runs with the write claim already taken (createPiAgentFromDir), and
+  // the finalizer that gives it back only exists once the mount has built its scope. On AgentCore a failure in
+  // between does not exit the process — it becomes a 503 — so a leaked claim would lock the storage against every
+  // later container on the same volume.
+  try {
+    const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
+    await reportAssembly(opened, {
+      afterTools: [
+        ["state", stateRoot],
+        ["sessions", sessionsDir],
+      ],
+    });
+    if (isUnderDir(stateRoot, agentDir)) {
+      log.info(
+        "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",
+      );
+    }
+    if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
+      log.info(
+        "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
+      );
+    }
+    const traced = logAgentLoop(agent);
+    const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+    const service = await (isAgentcoreRuntime()
+      ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
+      : mountAgentService(
+          opened,
+          cliMountOptions(() => traced),
+        ));
+    return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
+  } catch (error) {
     await opened.releaseState?.();
     throw error;
-  });
-  return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
+  }
 }
 
 async function maybeSeedAuth(authPath: string): Promise<void> {

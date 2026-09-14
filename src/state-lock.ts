@@ -53,12 +53,17 @@ const mine = new Set<string>();
  * refusal can name a process; `kill(pid, 0)` then separates the two cases that need different advice — a live
  * second writer (stop it) from a claim a killed holder left behind (wait out {@link STALE_MS}).
  *
- * The pid alone is not enough IN A CONTAINER: the image runs the agent as pid 1, so a restarted container reads its
- * predecessor's `1` and asks itself whether pid 1 is alive — it is, and it is this very process. A pid equal to
- * ours that we did not take is therefore leftover, not a rival. A recycled pid from another process still reads as
- * alive, which is the current wording rather than a worse one.
+ * Three answers, because they need three different remedies: THIS process already opened the directory (close the
+ * first agent), another process is writing (stop it), or a claim is leftover (wait out {@link STALE_MS}).
+ *
+ * The pid alone cannot tell the first from the third IN A CONTAINER: the image runs the agent as pid 1, so a
+ * restarted container reads its predecessor's `1` and asks whether pid 1 is alive — it is, and it is this very
+ * process. What separates them is {@link mine}: a claim we took is ours, and a pid equal to ours that we did not
+ * take is leftover. A recycled pid from another process still reads as alive, which is the current wording rather
+ * than a worse one.
  */
-function holderOf(target: string): { label: string; alive: boolean } {
+function holderOf(target: string): { label: string; kind: "self" | "alive" | "gone" } {
+  if (mine.has(target)) return { label: ` (pid ${process.pid}, this process)`, kind: "self" };
   let pid = 0;
   try {
     const raw = readFileSync(target, "utf8").trim();
@@ -67,15 +72,15 @@ function holderOf(target: string): { label: string; alive: boolean } {
     // The holder released between the failed acquire and this read, or the file is unreadable — the refusal still
     // names the path, which is the part that always exists.
   }
-  if (pid === 0) return { label: "", alive: true };
-  if (pid === process.pid) return { label: ` (pid ${pid})`, alive: mine.has(target) };
+  if (pid === 0) return { label: "", kind: "alive" };
+  // Our own pid that we did NOT take: the container case above.
+  if (pid === process.pid) return { label: ` (pid ${pid})`, kind: "gone" };
   try {
     process.kill(pid, 0); // signal 0: ask whether the process exists, send nothing
-    return { label: ` (pid ${pid})`, alive: true };
+    return { label: ` (pid ${pid})`, kind: "alive" };
   } catch (error) {
     // EPERM = alive but owned by another user. Only ESRCH proves it is gone.
-    const gone = (error as NodeJS.ErrnoException).code === "ESRCH";
-    return { label: ` (pid ${pid})`, alive: !gone };
+    return { label: ` (pid ${pid})`, kind: (error as NodeJS.ErrnoException).code === "ESRCH" ? "gone" : "alive" };
   }
 }
 
@@ -106,42 +111,57 @@ export async function lockAgentState(
       });
     }
   };
-  for (const target of targets) {
-    mkdirSync(resolve(target, ".."), { recursive: true });
-    writeFileSync(target, "", { flag: "a" }); // proper-lockfile locks an EXISTING path
-    try {
-      await lockfile.lock(target, {
-        realpath: false,
-        stale: STALE_MS,
-        retries: options.resident ? RESIDENT_RETRIES : RETRIES,
-        // The lock directory vanished under us (someone cleared the state root). Default behaviour rethrows from a
-        // timer, which takes the process down over a guard; the ownership is genuinely lost either way, so say so
-        // and keep serving — the work in flight is what the guard exists to protect. ERROR level, because the
-        // invariant this module exists for is gone from here on.
-        onCompromised: (error) =>
-          log.error(
-            `[fastagent] the state lock ${target} was lost — another process could now write: ${String(error)}`,
-          ),
-      });
-    } catch (error) {
-      await release();
-      if ((error as { code?: string }).code !== "ELOCKED") throw error;
-      const holder = holderOf(target);
-      throw new Error(
-        holder.alive
-          ? `another process is already writing this agent's state${holder.label} — file-backed state has one ` +
-              `writer, and a second one interleaves session journals and drops channel state (${target}). Stop that ` +
-              `process, give this run its own state (FASTAGENT_STATE_DIR=… or --sessions-dir), or ask the running ` +
-              `service instead — its POST /invoke on the port it printed, or /control/* with sessionControl: true.`
-          : `this agent's state is claimed by a process that is gone${holder.label} — it was killed without ` +
-              `releasing (${target}). The claim clears itself within ${STALE_MS / 1000}s: retry then, or delete ` +
-              `${target}.lock if you know nothing else is writing here.`,
-      );
-    }
-    // Written after the lock is ours, so the pid a refusal reads is the holder's and not a loser's.
-    writeFileSync(target, `${process.pid}\n`);
-    taken.push(target);
-    mine.add(target);
+  try {
+    for (const target of targets) await take(target, options.resident === true, taken);
+  } catch (error) {
+    // Everything in `take` is a side effect on the way to ownership: a second directory that cannot be prepared, a
+    // pid that cannot be written. Whatever was already locked goes back — otherwise the caller gets an exception
+    // and no release handle, and the claim waits for process exit.
+    await release();
+    throw error;
   }
   return release;
+}
+
+/** One directory: prepare the target, take the lock, then record ownership and stamp the pid. */
+async function take(target: string, resident: boolean, taken: string[]): Promise<void> {
+  mkdirSync(resolve(target, ".."), { recursive: true });
+  writeFileSync(target, "", { flag: "a" }); // proper-lockfile locks an EXISTING path
+  try {
+    await lockfile.lock(target, {
+      realpath: false,
+      stale: STALE_MS,
+      retries: resident ? RESIDENT_RETRIES : RETRIES,
+      // The lock directory vanished under us (someone cleared the state root). Default behaviour rethrows from a
+      // timer, which takes the process down over a guard; the ownership is genuinely lost either way, so say so
+      // and keep serving — the work in flight is what the guard exists to protect. ERROR level, because the
+      // invariant this module exists for is gone from here on.
+      onCompromised: (error) =>
+        log.error(`[fastagent] the state lock ${target} was lost — another process could now write: ${String(error)}`),
+    });
+  } catch (error) {
+    // Only the wording is this catch's business; the caller's `release()` covers what was already taken.
+    if ((error as { code?: string }).code !== "ELOCKED") throw error;
+    const holder = holderOf(target);
+    throw new Error(
+      holder.kind === "self"
+        ? `this process already opened this agent's state${holder.label} — one writer per directory, in this ` +
+            `process too (${target}). Close the first agent (AgentService.close(), or the opener's releaseState()) ` +
+            `before opening it again, or give the second one its own state (FASTAGENT_STATE_DIR / sessionsDir).`
+        : holder.kind === "alive"
+          ? `another process is already writing this agent's state${holder.label} — file-backed state has one ` +
+            `writer, and a second one interleaves session journals and drops channel state (${target}). Stop that ` +
+            `process, give this run its own state (FASTAGENT_STATE_DIR=… or --sessions-dir), or ask the running ` +
+            `service instead — its POST /invoke on the port it printed, or /control/* with sessionControl: true.`
+          : `this agent's state is claimed by a process that is gone${holder.label} — it was killed without ` +
+            `releasing (${target}). The claim clears itself within ${STALE_MS / 1000}s: retry then, or delete ` +
+            `${target}.lock if you know nothing else is writing here.`,
+    );
+  }
+  // Recorded BEFORE the pid stamp: from here the lock is held, so a failure to write the stamp must still be a
+  // release this function's caller can perform.
+  taken.push(target);
+  mine.add(target);
+  // Written after the lock is ours, so the pid a refusal reads is the holder's and not a loser's.
+  writeFileSync(target, `${process.pid}\n`);
 }
