@@ -6,7 +6,6 @@ import { missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
   appName: string;
-  region: string;
   /** `KEY=value` secrets to set on Fly: model key (env auth) or `FASTAGENT_AUTH_SEED` (file auth) + channel secrets. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
@@ -47,13 +46,15 @@ export function ingressAddresses(stdout: string): { v4: boolean; v6: boolean } {
   return { v4: has(INGRESS_TYPES.v4), v6: has(INGRESS_TYPES.v6) };
 }
 
-/** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both). */
+/**
+ * Whether `fly apps list --json` lists an app called `name`. flyctl capitalizes the field; the live probe
+ * (test/live/fly.live.test.ts) is what pins that against real output, since an offline fixture can only repeat what
+ * we already believe.
+ */
 export function listHasName(stdout: string, name: string): boolean {
   const entries: unknown = JSON.parse(stdout);
   if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
-  return entries.some(
-    (o) => (o as { Name?: string; name?: string }).Name === name || (o as { name?: string }).name === name,
-  );
+  return entries.some((o) => (o as { Name?: string }).Name === name);
 }
 
 /**
@@ -114,22 +115,9 @@ export async function deployFlyRun(
     }
   }
 
-  // 4.
-  const volumeExists = await readList(fly, ["volumes", "list", "-a", plan.appName, "--json"], (out) =>
-    listHasName(out, "data"),
-  );
-  if ("gate" in volumeExists) return gate(volumeExists.gate);
-  if (volumeExists.value) {
-    log(`volume data exists — skipping create`);
-  } else {
-    log(`creating volume data in ${plan.region}…`);
-    if (
-      (await fly(["volumes", "create", "data", "-a", plan.appName, "--region", plan.region, "--size", "1", "--yes"]))
-        .code !== 0
-    ) {
-      return gate("`fly volumes create` failed — see the flyctl output above");
-    }
-  }
+  // 4. NO volume step: `fly deploy` creates it from [mounts] on a first deploy, and only it can tell the scheduler
+  // which machine (guest size + image) must fit on the host the volume is pinned to. Pre-creating one here placed it
+  // blind, and a host with disk but no compute failed the deploy with `insufficient resources … with existing volume`.
 
   // 5.
   const addresses = await readList(fly, ["ips", "list", "-a", plan.appName, "--json"], ingressAddresses);

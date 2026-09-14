@@ -1,12 +1,10 @@
 /** `deploy fly`: fly.toml + a state volume. */
-import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
   isGeneratedFlyToml,
   parseFlyAppName,
   parseFlyMinMachines,
-  parseFlyRegion,
   planFlyDeploy,
   toFlyAppName,
 } from "../../../deploy/fly/plan.ts";
@@ -98,7 +96,6 @@ export const flyHost: HostDeploy = {
         modelKeyInDefinition,
         authPath,
         channels,
-        flyTomlPath,
         extraSecrets,
         values,
         valueFile,
@@ -118,27 +115,24 @@ async function runDeployFly(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    flyTomlPath: string;
     extraSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
     valueFile: string;
   },
 ): Promise<void> {
-  const { agentDir, workspace, agentPrefix, appName, channels, flyTomlPath } = params;
+  const { agentDir, workspace, agentPrefix, appName, channels } = params;
   const fly = spawnRunner("fly", workspace);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
     failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
   }
 
-  const region = parseFlyRegion(await readFile(flyTomlPath, "utf8")) ?? "iad";
   const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
   gateOnModelCredential(needsModelCredential);
 
   const outcome = await deployFlyRun(
     {
       appName,
-      region,
       secrets,
       missingSecrets,
       valueFile: params.valueFile,

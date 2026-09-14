@@ -151,10 +151,13 @@ describe("deploy/fly: planFlyDeploy", () => {
     }
   });
 
-  it("keeps the region single-sourced in fly.toml — the volume command references it, never a 2nd literal", () => {
+  it("leaves the volume to `fly deploy`: fly.toml sizes it, the runbook never pre-creates it", () => {
+    // A pre-created volume is pinned to a host chosen WITHOUT the machine's guest/image, which is how a deploy
+    // ends at "insufficient resources to create new machine with existing volume".
     const p = planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] });
     expect(flyToml(p)).toContain("primary_region");
-    expect(runbook(p)).toContain("--region <region>"); // placeholder, not a hardcoded 2nd region that could drift
+    expect(flyToml(p)).toContain("initial_size");
+    expect(runbook(p)).not.toContain("fly volumes create");
   });
 
   it("the markdown path pins the global install and ALWAYS uses node:22-slim, whatever the runtime says", () => {

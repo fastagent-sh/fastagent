@@ -7,8 +7,7 @@
  * field or stops emitting JSON, every one of those tests stays green while `deploy fly --run` starts
  * misreading its own tooling.
  *
- * READ-ONLY, on purpose. The driver's write steps (`apps create`, `volumes create`, `secrets import`,
- * `deploy`) are what cost money and leave resources behind; its read steps are where the parsing
+ * READ-ONLY, on purpose. The driver's write steps (`apps create`, `secrets import`, `deploy`) are what cost money and leave resources behind; its read steps are where the parsing
  * assumptions live, and they are free. What a real deploy would add on top of this — that pushing an
  * image succeeds — is largely covered by docker.live.test.ts, which builds and boots the SAME
  * generated Dockerfile through the SAME serving path.
@@ -39,8 +38,8 @@ async function flyctl(args: string[]): Promise<string> {
  *  these assertions would then pass while checking nothing, which is exactly what test/live/env.ts
  *  refuses. The deploy probe destroys the app it creates, so a dedicated org needs one app of its
  *  own kept around — any app will do; nothing here writes to it. */
-function requireApp(apps: { Name?: string; name?: string }[]): string {
-  const app = apps[0]?.Name ?? apps[0]?.name;
+function requireApp(apps: { Name?: string }[]): string {
+  const app = apps[0]?.Name;
   expect(app, "this Fly org holds no app to read against — create one (any app) so these assertions run").toBeTruthy();
   return app as string;
 }
@@ -55,27 +54,26 @@ describe("flyctl output still matches what the Fly driver reads", () => {
 
   it("`apps list --json` parses, and listHasName agrees with it in both directions", async () => {
     const stdout = await flyctl(["apps", "list", "--json"]);
-    const apps = JSON.parse(stdout) as { Name?: string; name?: string }[];
+    const apps = JSON.parse(stdout) as { Name?: string }[];
     expect(Array.isArray(apps), "apps list --json is no longer a JSON array").toBe(true);
 
     // The negative direction holds on any account, empty or not.
     expect(listHasName(stdout, `fastagent-live-absent-${randomUUID()}`)).toBe(false);
 
-    // The positive direction is what pins the FIELD NAME — the driver accepts `Name` or `name`, and a
-    // rename to anything else would silently make every app look absent, sending the driver into
-    // `apps create` for an app that already exists.
+    // The positive direction is what pins the FIELD NAME — the driver reads `Name`, and a rename (even to
+    // lowercase `name`) would silently make every app look absent, sending the driver into `apps create` for
+    // an app that already exists.
     const first = apps[0];
     if (first) {
-      const name = first.Name ?? first.name;
-      expect(name, "an app entry carries neither Name nor name").toBeTruthy();
-      expect(listHasName(stdout, name as string), "listHasName cannot find an app that is listed").toBe(true);
+      expect(first.Name, "an app entry no longer carries Name").toBeTruthy();
+      expect(listHasName(stdout, first.Name as string), "listHasName cannot find an app that is listed").toBe(true);
     }
   });
 
   it("`ips list --json` still carries Address AND Type, which decide whether the deploy allocates", async () => {
     // The newest parsing assumption here (#425): reading this wrong in the "has an address" direction
     // ships an app nobody can reach, and in the other direction allocates a second address every run.
-    const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string; name?: string }[];
+    const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string }[];
     const app = requireApp(apps);
 
     const stdout = await flyctl(["ips", "list", "-a", app, "--json"]);
@@ -100,16 +98,5 @@ describe("flyctl output still matches what the Fly driver reads", () => {
       v4: false,
       v6: false,
     });
-  });
-
-  it("`volumes list --json` parses through the same reader", async () => {
-    // listHasName serves BOTH lists, so a divergence between the two shapes would break volume
-    // detection while apps still worked — the driver would try to create an existing volume.
-    const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string; name?: string }[];
-    const app = requireApp(apps);
-
-    const stdout = await flyctl(["volumes", "list", "-a", app, "--json"]);
-    expect(Array.isArray(JSON.parse(stdout)), "volumes list --json is no longer a JSON array").toBe(true);
-    expect(listHasName(stdout, `absent-${randomUUID()}`)).toBe(false);
   });
 });
