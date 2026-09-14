@@ -215,7 +215,8 @@ session, so you see exactly what the served scheduler would do:
 - it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
 
 A `schedules/<name>.ts` file default-exports `defineSchedule({ cron, tz?, prompt })`; the scheduler
-fires the agent on that cron when you `dev`/`start`. Output is the agent's tools' job — the scheduler
+fires the agent on that cron when you `dev`/`start`. The filename may use letters, digits, `.`, `_` and `-`
+(it becomes a directory name in the state root), and cannot be `.` or `..`. Output is the agent's tools' job — the scheduler
 only fires and logs. See the [API reference](./api-reference.md#schedule-authoring).
 
 ## `fastagent schedule history`

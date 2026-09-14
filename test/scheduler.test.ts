@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, readdirSync, rmdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
@@ -12,6 +12,7 @@ const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.run
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { appendRun, readRuns } from "../src/schedule/audit.ts";
+import { latestFire } from "../src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -34,21 +35,18 @@ const hourly = (over: Partial<LoadedSchedule> = {}): LoadedSchedule => ({
 });
 
 const freshRoot = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-sched-"));
-function seedFires(root: string, fires: Record<string, string>): void {
-  mkdirSync(join(root, "schedule"), { recursive: true });
-  writeFileSync(join(root, "schedule", "fires.json"), JSON.stringify(fires));
-}
+
 /** The audit record a healthy prior fire left behind — without it a seeded claim reads as interrupted. */
 function seedRun(root: string, name: string, firedAt: string): void {
   appendRun(root, { name, session: scheduleSession(name), firedAt, ms: 1, outcome: "completed" });
 }
-/** The slots this state root has claimed, oldest first (the decision's own record). */
-/** Write the claim a killed process would have left: the slot's file, stamped with when it was taken. */
+/** Write the claim a fire leaves: the slot's file, stamped with when it was taken. */
 const seedClaim = (root: string, name: string, firedAt: string, slot = firedAt): void => {
   const dir = join(root, "schedule", "claims", name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, slot.replace(/[:.]/g, "-")), firedAt);
 };
+/** The slots this state root has claimed, oldest first (the decision's own record). */
 const claimed = (root: string, name: string): string[] => {
   try {
     return readdirSync(join(root, "schedule", "claims", name)).sort();
@@ -56,8 +54,8 @@ const claimed = (root: string, name: string): string[] => {
     return [];
   }
 };
-const readFires = async (root: string): Promise<Record<string, string>> =>
-  JSON.parse(await readFile(join(root, "schedule", "fires.json"), "utf8"));
+/** When this state root says the schedule last fired — read the way the scheduler reads it. */
+const lastFire = (root: string, name: string): string | undefined => latestFire(root, name);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -65,7 +63,7 @@ afterEach(() => {
 });
 
 describe("schedule/scheduler: fire algorithm", () => {
-  it("a brand-new schedule does NOT back-fire on first start (no fires.json)", async () => {
+  it("a brand-new schedule does NOT back-fire on first start (no claim yet)", async () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
     // Next hourly instant (11:00) is in the future → arm, don't fire.
@@ -113,13 +111,27 @@ describe("schedule/scheduler: fire algorithm", () => {
     again.stop();
   });
 
+  it("an unusable claim stamp falls back to the slot instant — catch-up may repeat, never skip", async () => {
+    // The claim's content is now what catch-up resumes from, so a truncated or corrupt stamp must degrade in the
+    // safe direction: the slot in the file name is the earliest the fire can have happened.
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    seedClaim(root, "job", "not a timestamp", "2026-07-07T10:00:00.000Z");
+    expect(lastFire(root, "job")).toBe("2026-07-07T10:00:00.000Z");
+    expect(warns.some((w) => /unreadable stamp/.test(w))).toBe(true);
+    // An empty file (killed between the create and the write) takes the same path, without the warning.
+    seedClaim(root, "other", "", "2026-07-07T11:00:00.000Z");
+    expect(lastFire(root, "other")).toBe("2026-07-07T11:00:00.000Z");
+  });
+
   it("a claim taken but never recorded in fires.json is still reconciled (the crash window between the two)", async () => {
     // `claimSlot` and the `fires.json` stamp are two writes now. A process killed between them leaves a claim and
     // stale bookkeeping; reading the bookkeeping here would decide nothing happened, and the slot would be skipped
     // forever with neither a `completed` nor an `interrupted` line — the silence this outcome exists to remove.
     const root = await freshRoot();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    seedFires(root, { job: "2026-07-07T08:00:00Z" }); // bookkeeping from the PREVIOUS, completed fire
+    seedClaim(root, "job", "2026-07-07T08:00:00Z"); // bookkeeping from the PREVIOUS, completed fire
     seedRun(root, "job", "2026-07-07T08:00:01Z");
     seedClaim(root, "job", "2026-07-07T10:00:00.000Z"); // the fire that was killed
     const { agent } = recordingAgent();
@@ -148,13 +160,13 @@ describe("schedule/scheduler: fire algorithm", () => {
       slot: new Date("2026-07-07T09:00:00Z"), // its own claim was pruned long ago
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
-    expect(stale).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is not ours to fire") });
+    expect(stale).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is stale") });
     expect(calls).toHaveLength(0);
   });
 
   it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
     const root = await freshRoot();
-    seedFires(root, { job: "2026-07-07T08:00:00Z" }); // last fired 08:00; now is past several hourly slots
+    seedClaim(root, "job", "2026-07-07T08:00:00Z"); // last fired 08:00; now is past several hourly slots
     seedRun(root, "job", "2026-07-07T08:00:01Z");
     const { agent, calls } = recordingAgent();
     const s = createScheduler({
@@ -166,7 +178,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1)); // exactly ONE catch-up, not one per missed slot
     expect(calls[0]).toEqual({ session: scheduleSession("job"), text: "go" });
-    expect((await readFires(root)).job).toBe("2026-07-07T12:30:00.000Z"); // claimed = now
+    expect(lastFire(root, "job")).toBe("2026-07-07T12:30:00.000Z"); // the claim records when it fired
     // The run audit recorded the fire: name, outcome, and the reply's audit copy.
     await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(2)); // the seeded prior run, then this one
     expect(readRuns(root, "job").at(-1)).toMatchObject({ outcome: "completed", session: scheduleSession("job") });
@@ -196,17 +208,19 @@ describe("schedule/scheduler: fire algorithm", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const s = createScheduler({ agent, stateRoot: root, schedules: [hourly()] });
     s.start();
-    // Sabotage the fire state AFTER arming: a directory at fires.json makes loadFires throw (EISDIR — the
-    // unreadable-state class state.ts throws on by design). fireThenReArm is void-scheduled from a timer,
-    // so without its totality boundary this would be an unhandled rejection = the whole service down.
-    mkdirSync(join(root, "schedule", "fires.json"), { recursive: true });
+    // Sabotage the claim state AFTER arming: a FILE where `claims/job/` belongs makes `claimSlot` throw (ENOTDIR —
+    // the unreadable-state class state.ts throws on by design), and it throws BEFORE the slot is claimed, so the
+    // slot is not burned. fireThenReArm is void-scheduled from a timer, so without its totality boundary this would
+    // be an unhandled rejection = the whole service down.
+    mkdirSync(join(root, "schedule", "claims"), { recursive: true });
+    writeFileSync(join(root, "schedule", "claims", "job"), "");
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1000); // → 11:00: the fire attempt hits the fault
     expect(calls).toHaveLength(0); // skipped (no claim persistable), not half-fired
     expect(errors.mock.calls.some((c) => String(c[0]).includes("fire failed"))).toBe(true);
-    // The skip is AUDITED (runs.jsonl is a different file than the broken fires.json) — `schedule history`
+    // The skip is AUDITED (runs.jsonl is a different file than the broken claim state) — `schedule history`
     // must see it, not only stderr.
     expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "failed", error: expect.stringMatching(/skipped/) });
-    rmdirSync(join(root, "schedule", "fires.json")); // the operator fixes the state…
+    rmSync(join(root, "schedule", "claims", "job")); // the operator fixes the state…
     await vi.advanceTimersByTimeAsync(60 * 60_000); // → 12:00
     expect(calls).toHaveLength(1); // …and the schedule is STILL armed — the fault cost one run, not the service
     s.stop();
@@ -281,7 +295,7 @@ describe("schedule/scheduler: fire algorithm", () => {
 
   it("a failed turn still runs and claims the slot (catch-up, not retried)", async () => {
     const root = await freshRoot();
-    seedFires(root, { job: "2026-07-07T08:00:00Z" });
+    seedClaim(root, "job", "2026-07-07T08:00:00Z");
     seedRun(root, "job", "2026-07-07T08:00:01Z");
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { agent, calls } = recordingAgent([{ type: "failed", retryable: true, details: "boom" }]);
@@ -293,7 +307,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
-    expect((await readFires(root)).job).toBe("2026-07-07T12:30:00.000Z"); // claimed even on failure
+    expect(lastFire(root, "job")).toBe("2026-07-07T12:30:00.000Z"); // claimed even on failure
     // The audit's FAIL path — the branch the audit exists to answer: outcome failed, the error captured.
     await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(2)); // the seeded prior run, then this one
     expect(readRuns(root, "job").at(-1)).toMatchObject({ outcome: "failed", error: "boom" });
@@ -397,8 +411,8 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBeUndefined();
     expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
-    // fires.json is WHEN it fired (where catch-up resumes), not which slot — the slot lives in the claim.
-    expect(await readFires(root)).toEqual({ job: "2026-07-07T10:00:03.000Z" });
+    // The claim carries WHEN it fired (where catch-up resumes); its NAME is the slot.
+    expect(lastFire(root, "job")).toBe("2026-07-07T10:00:03.000Z");
     expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
     expect(readRuns(root, "job")).toHaveLength(1);
   });
@@ -410,7 +424,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
     const dup = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
     expect(dup.fired).toBe(false);
-    expect(dup.skippedReason).toMatch(/is not ours to fire/);
+    expect(dup.skippedReason).toMatch(/is already claimed/);
     expect(calls).toHaveLength(1);
   });
 
@@ -453,7 +467,7 @@ describe("schedule/scheduler: externalClock mode", () => {
   it("arms NO cron timers and does NO boot catch-up — but still pumps wake-ups", async () => {
     const root = await freshRoot();
     // An overdue slot the resident scheduler WOULD catch up: lastFired 09:00, now 10:30 (10:00 missed).
-    seedFires(root, { job: "2026-07-07T09:00:00Z" });
+    seedClaim(root, "job", "2026-07-07T09:00:00Z");
     mkdirSync(join(root, "schedule"), { recursive: true });
     writeFileSync(
       join(root, "schedule", "wakeups.json"),
@@ -473,7 +487,7 @@ describe("schedule/scheduler: externalClock mode", () => {
     expect(calls[0]!.text).toContain("wake!");
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toHaveLength(1);
-    expect((await readFires(root)).job).toBe("2026-07-07T09:00:00Z"); // untouched — no resident claim
+    expect(lastFire(root, "job")).toBe("2026-07-07T09:00:00Z"); // untouched — no resident claim
     s.stop();
   });
 });

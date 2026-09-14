@@ -42,20 +42,30 @@ const KEEP_CLAIMS = 32;
 /** A slot instant as a filename (ISO minus the characters a path cannot carry); sorts in slot order. */
 const claimName = (slot: Date): string => slot.toISOString().replace(/[:.]/g, "-");
 
+/**
+ * A schedule name becomes a path segment (its claims live in `claims/<name>/`), so the set of legal names is this
+ * one rule — `discover.ts` refuses an illegal one where the author can see which file is wrong, and `claimDir`
+ * asserts it again for a programmatic caller. `.` and `..` are spelled out because they pass the character test and
+ * still name a directory that is not ours.
+ */
+export function isSafeScheduleName(name: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(name) && name !== "." && name !== "..";
+}
+
 /** This function builds a path from it, so a name that can leave `claims/<name>/` is a bug, not an input. */
 function claimDir(stateRoot: string, name: string): string {
-  if (!/^[A-Za-z0-9._-]+$/.test(name) || name === "." || name === "..") {
+  if (!isSafeScheduleName(name)) {
     throw new Error(`refusing to build a claim path for the unsafe schedule name ${JSON.stringify(name)}`);
   }
   return join(stateRoot, "schedule", "claims", name);
 }
 
-export interface SlotClaim {
-  /** The slot this claim is for, as its file name. */
-  slot: string;
-  /** Wall-clock time the claim was taken — what a run record must be at or after to account for it. */
-  firedAt: string;
-}
+/**
+ * Why a slot is not ours. `duplicate` is ordinary (the same delivery arrived twice, or another scheduler took it and
+ * is running it now); `stale` means the schedule has moved past this instant and the slot will never run — a turn
+ * missing from the bill, which reads differently in a log.
+ */
+export type SlotClaimOutcome = { taken: true } | { taken: false; why: "duplicate" | "stale"; newest: string };
 
 /**
  * Take a cron slot, or report that it is not ours to take.
@@ -72,18 +82,18 @@ export interface SlotClaim {
  * The claim carries the wall-clock instant it was taken, so the next boot can tell a fire that never reported from
  * one that did (`recordInterruptedFires`) without depending on a second file being written after it.
  */
-export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: Date): boolean {
+export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: Date): SlotClaimOutcome {
   const dir = claimDir(stateRoot, name);
   mkdirSync(dir, { recursive: true });
   const taken = readdirSync(dir).sort();
   const wanted = claimName(slot);
   const newest = taken.at(-1);
-  if (newest !== undefined && wanted < newest) return false;
+  if (newest !== undefined && wanted < newest) return { taken: false, why: "stale", newest };
   let fd: number;
   try {
     fd = openSync(join(dir, wanted), "wx");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") return { taken: false, why: "duplicate", newest: wanted };
     throw e; // a real IO fault: the caller reports it and leaves the schedule armed
   }
   try {
@@ -92,11 +102,20 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
     closeSync(fd);
   }
   pruneClaims(dir, taken);
-  return true;
+  return { taken: true };
 }
 
-/** The newest claim (by slot) and when it was taken, or `undefined` when this schedule has never fired here. */
-export function latestClaim(stateRoot: string, name: string): SlotClaim | undefined {
+/**
+ * When this schedule last fired here, from its newest claim — the ONE durable fact both planes read: the boot-time
+ * reconciler (was that fire ever reported?) and catch-up (where does the next run resume from?).
+ *
+ * Pruning only ever removes the oldest names, so the newest claim is never the one that goes.
+ *
+ * An unusable stamp — empty because the process died between the create and the write, or not a date at all — falls
+ * back to the slot instant in the file name. That is the earliest moment the fire can have happened, so the only
+ * degradation is catching up one run that already ran: too many rather than too few.
+ */
+export function latestFire(stateRoot: string, name: string): string | undefined {
   let slot: string | undefined;
   try {
     slot = readdirSync(claimDir(stateRoot, name)).sort().at(-1);
@@ -105,10 +124,10 @@ export function latestClaim(stateRoot: string, name: string): SlotClaim | undefi
     throw e;
   }
   if (slot === undefined) return undefined;
-  // An empty file is a claim whose process died between the create and the stamp: the slot itself is the earliest
-  // instant the fire can have happened, which is the conservative stand-in.
   const stamped = readFileSync(join(claimDir(stateRoot, name), slot), "utf8").trim();
-  return { slot, firedAt: stamped || slot.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ":$1:$2.$3Z") };
+  if (stamped && !Number.isNaN(Date.parse(stamped))) return stamped;
+  if (stamped) log.warn(`[schedule] ${name}: claim ${slot} carries an unreadable stamp — using the slot instant`);
+  return slot.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ":$1:$2.$3Z");
 }
 
 function pruneClaims(dir: string, taken: readonly string[]): void {
@@ -118,18 +137,4 @@ function pruneClaims(dir: string, taken: readonly string[]): void {
     // Pruning is housekeeping: a failure leaves files behind, never an unclaimed slot.
     log.warn(`[schedule] could not prune fired-slot claims in ${dir}: ${String(e)}`);
   }
-}
-
-// ── fires.json: schedule name → last-fired ISO (where catch-up resumes after downtime) ──
-
-/** name → last-fired ISO timestamp. */
-export type Fires = Record<string, string>;
-
-export function loadFires(stateRoot: string): Fires {
-  const v = readScheduleFile(scheduleFile(stateRoot, "fires"));
-  return v && typeof v === "object" && !Array.isArray(v) ? (v as Fires) : {};
-}
-
-export function saveFires(stateRoot: string, fires: Fires): void {
-  writeScheduleFile(scheduleFile(stateRoot, "fires"), fires);
 }

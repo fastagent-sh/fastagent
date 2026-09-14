@@ -44,7 +44,7 @@ describe("schedule/discover", () => {
     const dir = await ws({ "...ts": def("0 * * * *"), "ok.ts": def("0 * * * *") });
     const { schedules, failures } = await loadSchedules(dir);
     expect(schedules.map((s) => s.name)).toEqual(["ok"]);
-    expect(failures[0]?.message).toMatch(/schedule names may only contain/);
+    expect(failures[0]?.message).toMatch(/may only contain letters, digits.*cannot be "\.".*"\.\."/);
   });
 
   it("a missing schedules/ dir yields empty (no schedules is normal)", async () => {

@@ -4,6 +4,7 @@
  * (portability) included: every turn builds a fresh `AgentSession` over the same jsonl on disk, with
  * nothing shared in-process but the directory.
  */
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,7 @@ import type { TurnRecordBase } from "../src/channels/kit/turn-store.ts";
 import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
 import { telegramReply } from "../src/channels/telegram/preview.ts";
 import { createScheduler } from "../src/schedule/scheduler.ts";
-import { saveFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { readRuns } from "../src/schedule/audit.ts";
 
@@ -360,8 +361,12 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and au
     );
     const bound = vi.fn(factory);
     const agent = createPiAgentFromSession({ lease, sessionFactory: bound });
-    if (kind === "cron") saveFires(stateRoot, { job: "2026-07-07T08:00:00Z" });
-    else
+    if (kind === "cron") {
+      // The claim a previous, completed fire left: where catch-up resumes from.
+      const claims = join(stateRoot, "schedule", "claims", "job");
+      mkdirSync(claims, { recursive: true });
+      writeFileSync(join(claims, "2026-07-07T08-00-00-000Z"), "2026-07-07T08:00:00.000Z");
+    } else
       writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
         { id: "first", session: sessionId, prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
         { id: "next", session: "other", prompt: "later", fireAt: "2026-07-07T09:00:00Z" },

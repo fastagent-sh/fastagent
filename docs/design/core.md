@@ -599,11 +599,14 @@ rather than general — measured, not assumed:
   file with `O_EXCL`, and creating it IS the decision (`src/schedule/state.ts`). A slot is also refused
   when a LATER one has already been claimed: claims are pruned by count, and a platform that retries an
   event for up to 24h (EventBridge) would otherwise get a stale slot fired once its own claim aged out.
-  The claim carries the wall-clock instant it was taken, so the next boot can tell a fire that never
-  reported from one that did — reconciling against `fires.json` instead would miss a process killed
-  between the two writes. `fires.json` keeps only what no decision depends on: when the schedule last
-  fired, which is where catch-up resumes. A claim outliving its process is correct — the slot was
-  taken, and a fire interrupted mid-turn is recorded as `interrupted` by the next start.
+  The claim is the ONLY state this path writes, and it carries the wall-clock instant it was taken, so
+  one file answers both planes — was that fire ever reported (the boot-time `interrupted` check), and
+  where does catch-up resume. A second file would reintroduce a window in which a killed process leaves
+  a claimed slot nothing accounts for. A claim outliving its process is correct: the slot was taken, and
+  a fire interrupted mid-turn is recorded as `interrupted` by the next start. That check has one known
+  false positive — a second scheduler booting while the first is mid-turn reports a claim the audit does
+  not account for YET, so the history carries both lines for that instant; telling them apart would need
+  the claimer's liveness, which is a lease rather than a claim.
 - **Recovered turns can run twice** if two resident processes share a directory, which is the
   already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
   a killed process block its own replay, which is worse than the duplicate.

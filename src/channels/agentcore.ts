@@ -203,8 +203,9 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
           return json(outcome, 200);
         } catch (e) {
           if (e instanceof UnknownScheduleError) return text(`${e.message}\n`, 404);
-          // A claim-state fault (unreadable/unwritable fires.json) — surface it as the request's failure so the
-          // external clock's logs carry it (fail visibly, never a silent absorb).
+          // A claim-state fault (the slot claim could not be read or created) — surface it as the request's
+          // failure so the external clock's logs carry it, and so its retry runs the slot that was never claimed
+          // (fail visibly, never a silent absorb).
           log.error(`[agentcore] schedule-fire ${name} failed: ${String(e)}`);
           return text(`schedule-fire failed: ${String(e)}\n`, 500);
         } finally {
