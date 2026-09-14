@@ -402,7 +402,7 @@ it("keeps claim IO failures typed and never invokes before a successful durable 
   const stateRoot = await freshRoot();
   await mkdir(join(stateRoot, "schedule", "fires.json.tmp"), { recursive: true });
   const invoke = vi.fn();
-  const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly() });
+  const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW });
   expectTypeOf(work).toEqualTypeOf<Effect.Effect<ScheduleFireOutcome, PortFailure>>();
   // @ts-expect-error -- a failed durable claim still needs a failure policy
   const infallible: Effect.Effect<ScheduleFireOutcome> = work;
@@ -465,7 +465,7 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
       true,
     );
     const second = await Effect.runPromise(fireScheduleOnce(options));
-    expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("already claimed") });
+    expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is not ours to fire") });
     expect(invoke).toHaveBeenCalledOnce();
   } finally {
     finish.resolve();

@@ -10,7 +10,7 @@ import { log } from "../log.ts";
 import { appendRun, latestFiredAt } from "./audit.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
-import { claimSlot, loadFires, saveFires } from "./state.ts";
+import { claimSlot, latestClaim, loadFires, saveFires } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /** A schedule shares one continuing conversation without depending on engine session storage. */
@@ -20,14 +20,17 @@ export function scheduleSession(name: string): string {
 
 /**
  * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
- * for that turn (see `AgentService.close`), so a redeploy landing mid-fire leaves a claim that the next boot skips
+ * for that turn (see `AgentService.close`), so a restart landing mid-fire leaves a claim that the next boot skips
  * with nothing in `runs.jsonl` — the exact silence that audit exists to prevent. Recorded once, at the next boot.
+ *
+ * Read from the CLAIM, which is what the decision writes: `fires.json` is written after it, so a process killed
+ * between the two would look like nothing ever happened.
  *
  * NOT re-fired: a turn that kills its own process would then replay on every boot. Resident path only — a host
  * without a persistent volume loses `runs.jsonl` between runs, where every claim would look interrupted. Cron only:
  * a killed wake-up leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
  */
-function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], fires: Record<string, string>): void {
+function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[]): void {
   // A wake-up-only agent still starts a scheduler, and its audit is the fastest-growing kind (one line per wake,
   // reply text included) — with no cron schedule there is nothing to reconcile, so do not read the file at all.
   if (schedules.length === 0) return;
@@ -39,16 +42,20 @@ function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], 
     );
   } catch (e) {
     // An unreadable audit (EACCES, EIO, a directory where the file should be) is a lost diagnostic, not a lost
-    // schedule: `appendRun` already treats a failed write that way, and `fires.json` — the state correctness
-    // depends on — is read separately and still fatal.
+    // schedule: `appendRun` already treats a failed write that way, and the claim — what correctness depends on —
+    // is read separately and still fatal.
     log.warn(`[schedule] could not read the run audit — skipping the interrupted-fire check: ${String(e)}`);
     return;
   }
   for (const s of schedules) {
-    const claimed = fires[s.name];
-    // `firedAt` is taken after the claim is written, so any record at or after it accounts for that claim — including
+    // The CLAIM is what the decision wrote, so it is what a fire is reconciled against: reading `fires.json` here
+    // would miss a process killed between the two writes — the slot would be silently skipped forever with no
+    // `completed` and no `interrupted` line, which is the exact silence this outcome exists to remove.
+    const claim = latestClaim(stateRoot, s.name);
+    // The claim's stamp is taken before the turn, so any record at or after it accounts for that claim — including
     // the one appended below, which makes this idempotent across boots.
-    if (!claimed || (reported.get(s.name) ?? "") >= claimed) continue;
+    if (!claim || (reported.get(s.name) ?? "") >= claim.firedAt) continue;
+    const claimed = claim.firedAt;
     log.warn(
       `[schedule] ${s.name}: the fire claimed at ${claimed} never finished — the process stopped mid-turn and that ` +
         `slot stays skipped (see \`fastagent schedule history ${s.name}\`)`,
@@ -126,7 +133,7 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
 
 export interface ScheduleFireOutcome {
   fired: boolean;
-  /** A slot-keyed delivery whose slot (or a later one) was already claimed. */
+  /** A delivery whose slot was already claimed, or which is older than the newest claim (a stale replay). */
   skippedReason?: string;
   failed?: string;
   ms: number;
@@ -137,38 +144,39 @@ export function fireScheduleOnce(opts: {
   agent: Agent;
   stateRoot: string;
   schedule: LoadedSchedule;
-  slot?: Date;
+  /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
+  slot: Date;
   now?: () => Date;
 }): Effect.Effect<ScheduleFireOutcome, PortFailure> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const { agent, stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
+    const firedAt = now();
     const skippedReason = yield* Effect.try({
       try: () => {
         // The DECISION to fire is the claim, and it is atomic (`claimSlot`): several schedulers over one state root —
         // two `start`s, a restart overlapping its predecessor, an external clock racing the resident one — take the
         // same slot, and exactly one of them runs it.
-        const instant = slot ?? now();
-        if (!claimSlot(stateRoot, s.name, instant)) {
-          const reason = `slot ${instant.toISOString()} was already claimed by another scheduler`;
+        if (!claimSlot(stateRoot, s.name, slot, firedAt)) {
+          const reason = `slot ${slot.toISOString()} is not ours to fire (claimed, or older than the newest claim)`;
           log.info(`[schedule] ${s.name}: skipping — ${reason}`);
           return reason;
         }
-        // Bookkeeping, not a decision: WHEN this schedule last actually fired, which is where catch-up resumes
-        // after downtime. It stays wall-clock (not the slot) so catching up a missed slot does not leave the next
-        // start looking at an instant it has already passed.
-        saveFires(stateRoot, { ...loadFires(stateRoot), [s.name]: now().toISOString() });
+        // Bookkeeping, not a decision: WHEN this schedule last actually fired, which is where catch-up resumes after
+        // downtime. It stays wall-clock (not the slot) so catching up a missed slot does not leave the next start
+        // looking at an instant it has already passed. Nothing reads it to decide anything, so a crash before this
+        // write costs a catch-up window, never a duplicate fire and never a missing audit line.
+        saveFires(stateRoot, { ...loadFires(stateRoot), [s.name]: firedAt.toISOString() });
         return undefined;
       },
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const firedAt = now().toISOString();
     const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
     appendRun(stateRoot, {
       name: s.name,
       session: scheduleSession(s.name),
-      firedAt,
+      firedAt: firedAt.toISOString(),
       ms: r.ms,
       outcome: r.failed ? "failed" : "completed",
       reply: r.failed ? undefined : r.reply,
@@ -320,7 +328,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         stopped = false;
         // A boot-time read fault stays synchronous, before any timers or turns are started.
         const fires = externalClock ? {} : loadFires(stateRoot);
-        if (!externalClock) recordInterruptedFires(stateRoot, schedules, fires);
+        if (!externalClock) recordInterruptedFires(stateRoot, schedules);
         const current = now();
         for (const s of externalClock ? [] : schedules) {
           if (stopped) break;

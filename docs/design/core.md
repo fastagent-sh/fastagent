@@ -596,10 +596,14 @@ rather than general — measured, not assumed:
   which no local guard can see: the same bot token in two different directories does it too.
 - **The clock is the one true singleton.** Two schedulers over one state root would fire a cron slot
   twice — a real billed turn. That decision is therefore atomic: `claimSlot` creates the slot's claim
-  file with `O_EXCL`, and creating it IS the decision (`src/schedule/state.ts`). `fires.json` keeps
-  only the bookkeeping the decision no longer depends on: when the schedule last fired, which is where
-  catch-up resumes. A claim outliving its process is correct — the slot was taken, and a fire
-  interrupted mid-turn is recorded as `interrupted` by the next start.
+  file with `O_EXCL`, and creating it IS the decision (`src/schedule/state.ts`). A slot is also refused
+  when a LATER one has already been claimed: claims are pruned by count, and a platform that retries an
+  event for up to 24h (EventBridge) would otherwise get a stale slot fired once its own claim aged out.
+  The claim carries the wall-clock instant it was taken, so the next boot can tell a fire that never
+  reported from one that did — reconciling against `fires.json` instead would miss a process killed
+  between the two writes. `fires.json` keeps only what no decision depends on: when the schedule last
+  fired, which is where catch-up resumes. A claim outliving its process is correct — the slot was
+  taken, and a fire interrupted mid-turn is recorded as `interrupted` by the next start.
 - **Recovered turns can run twice** if two resident processes share a directory, which is the
   already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
   a killed process block its own replay, which is worse than the duplicate.

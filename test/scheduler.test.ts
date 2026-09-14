@@ -43,6 +43,12 @@ function seedRun(root: string, name: string, firedAt: string): void {
   appendRun(root, { name, session: scheduleSession(name), firedAt, ms: 1, outcome: "completed" });
 }
 /** The slots this state root has claimed, oldest first (the decision's own record). */
+/** Write the claim a killed process would have left: the slot's file, stamped with when it was taken. */
+const seedClaim = (root: string, name: string, firedAt: string, slot = firedAt): void => {
+  const dir = join(root, "schedule", "claims", name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, slot.replace(/[:.]/g, "-")), firedAt);
+};
 const claimed = (root: string, name: string): string[] => {
   try {
     return readdirSync(join(root, "schedule", "claims", name)).sort();
@@ -75,69 +81,75 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  // The second name is a legal POSIX filename, so it is a legal schedule name — and one JSON has to escape, which is
-  // where a claim can stop matching its own audit records and be re-reported on every boot.
-  it.each(["job", 'a"b\\c'])(
-    "records a claim whose turn never reported as interrupted, once, and never re-fires it (%j)",
-    async (name) => {
-      const root = await freshRoot();
-      const warns: string[] = [];
-      vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
-      // The shape a killed process leaves: the slot is claimed, the audit says nothing about it.
-      seedFires(root, { [name]: "2026-07-07T10:00:00Z" });
-      const { agent, calls } = recordingAgent();
-      const options = {
-        agent,
-        stateRoot: root,
-        schedules: [hourly({ name })],
-        now: () => new Date("2026-07-07T10:30:00Z"), // 11:00 is still ahead → no catch-up to confuse this
-      };
-      const s = createScheduler(options);
-      s.start();
-      expect(readRuns(root, name)).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00Z", ms: 0 }]);
-      expect(warns.some((w) => /never finished/.test(w))).toBe(true);
-      await new Promise((r) => setTimeout(r, 30));
-      expect(calls).toHaveLength(0); // accounted for, not replayed
-      s.stop();
-
-      // The record it wrote accounts for the same claim, so a later boot stays quiet.
-      const again = createScheduler(options);
-      again.start();
-      expect(readRuns(root, name)).toHaveLength(1);
-      again.stop();
-    },
-  );
-
-  it("an unreadable run audit costs the check, not the schedule", async () => {
+  it("records a claim whose turn never reported as interrupted, once, and never re-fires it", async () => {
     const root = await freshRoot();
     const warns: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
-    seedFires(root, { job: "2026-07-07T08:00:00Z" });
-    mkdirSync(join(root, "schedule", "runs.jsonl")); // a directory where the audit should be: EISDIR on read
+    // The shape a killed process leaves: the SLOT IS CLAIMED — with the stamp the claim carries — and the audit says
+    // nothing about it. `fires.json` is deliberately absent: a process killed between the two writes must still be
+    // reconciled, which is why the reconciler reads the claim and not the bookkeeping.
+    seedClaim(root, "job", "2026-07-07T10:00:00.000Z");
     const { agent, calls } = recordingAgent();
+    const options = {
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T10:30:00Z"), // 11:00 is still ahead → no catch-up to confuse this
+    };
+    const s = createScheduler(options);
+    s.start();
+    expect(readRuns(root, "job")).toMatchObject([
+      { outcome: "interrupted", firedAt: "2026-07-07T10:00:00.000Z", ms: 0 },
+    ]);
+    expect(warns.some((w) => /never finished/.test(w))).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toHaveLength(0); // accounted for, not replayed
+    s.stop();
+
+    // The record it wrote accounts for the same claim, so a later boot stays quiet.
+    const again = createScheduler(options);
+    again.start();
+    expect(readRuns(root, "job")).toHaveLength(1);
+    again.stop();
+  });
+
+  it("a claim taken but never recorded in fires.json is still reconciled (the crash window between the two)", async () => {
+    // `claimSlot` and the `fires.json` stamp are two writes now. A process killed between them leaves a claim and
+    // stale bookkeeping; reading the bookkeeping here would decide nothing happened, and the slot would be skipped
+    // forever with neither a `completed` nor an `interrupted` line — the silence this outcome exists to remove.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    seedFires(root, { job: "2026-07-07T08:00:00Z" }); // bookkeeping from the PREVIOUS, completed fire
+    seedRun(root, "job", "2026-07-07T08:00:01Z");
+    seedClaim(root, "job", "2026-07-07T10:00:00.000Z"); // the fire that was killed
+    const { agent } = recordingAgent();
     const s = createScheduler({
       agent,
       stateRoot: root,
       schedules: [hourly()],
-      now: () => new Date("2026-07-07T12:30:00Z"),
+      now: () => new Date("2026-07-07T10:30:00Z"),
     });
-    expect(() => s.start()).not.toThrow();
-    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the overdue slot still fires
-    expect(warns.some((w) => /could not read the run audit/.test(w))).toBe(true);
+    s.start();
+    expect(readRuns(root, "job").at(-1)).toMatchObject({ outcome: "interrupted", firedAt: "2026-07-07T10:00:00.000Z" });
     s.stop();
   });
 
-  it("a wake-up-only scheduler does not read the audit at all", async () => {
+  it("refuses a slot older than the newest claim, past the pruning window (a stale platform retry)", async () => {
+    // AWS keeps retrying a schedule event for up to 24h, and claims are pruned by count — so "the slot's own claim
+    // still exists" cannot be the only gate, or a late retry of an old slot would bill a turn for an instant the
+    // schedule has long passed.
     const root = await freshRoot();
-    const warns: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
-    mkdirSync(join(root, "schedule", "runs.jsonl"), { recursive: true }); // any read of it would fail loudly
-    const { agent } = recordingAgent();
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:30:00Z") });
-    s.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(warns).toEqual([]);
-    s.stop();
+    const { agent, calls } = recordingAgent();
+    seedClaim(root, "job", "2026-07-07T12:00:03.000Z", "2026-07-07T12:00:00.000Z");
+    const stale = await fireScheduleOnce({
+      agent,
+      stateRoot: root,
+      schedule: hourly(),
+      slot: new Date("2026-07-07T09:00:00Z"), // its own claim was pruned long ago
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    });
+    expect(stale).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is not ours to fire") });
+    expect(calls).toHaveLength(0);
   });
 
   it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
@@ -398,7 +410,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
     const dup = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
     expect(dup.fired).toBe(false);
-    expect(dup.skippedReason).toMatch(/already claimed/);
+    expect(dup.skippedReason).toMatch(/is not ours to fire/);
     expect(calls).toHaveLength(1);
   });
 
@@ -424,20 +436,6 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(calls).toHaveLength(2);
     // Two distinct slots, two claims — the later delivery is not shadowed by the earlier one's wall-clock stamp.
     expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z", "2026-07-07T11-00-00-000Z"]);
-  });
-
-  it("without a slot the claim is unconditional (the resident scheduler's behavior)", async () => {
-    const root = await freshRoot();
-    const { agent, calls } = recordingAgent();
-    seedFires(root, { job: "2026-07-07T09:00:00Z" });
-    const outcome = await fireScheduleOnce({
-      agent,
-      stateRoot: root,
-      schedule: hourly(),
-      now: () => new Date("2026-07-07T10:00:03Z"),
-    });
-    expect(outcome.fired).toBe(true);
-    expect(calls).toHaveLength(1);
   });
 
   it("surfaces a failed turn in the outcome and the audit", async () => {

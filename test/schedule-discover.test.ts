@@ -38,6 +38,15 @@ describe("schedule/discover", () => {
     expect(failures[0]?.message).toMatch(/must default-export defineSchedule/);
   });
 
+  it("refuses a name that would leave the claims directory it becomes a path segment of", async () => {
+    // `schedules/...ts` names the schedule ".." — which, unescaped, points the fired-slot claims at the state root
+    // itself, where the pruner would then be deleting. Refused where the author can see which file is wrong.
+    const dir = await ws({ "...ts": def("0 * * * *"), "ok.ts": def("0 * * * *") });
+    const { schedules, failures } = await loadSchedules(dir);
+    expect(schedules.map((s) => s.name)).toEqual(["ok"]);
+    expect(failures[0]?.message).toMatch(/schedule names may only contain/);
+  });
+
   it("a missing schedules/ dir yields empty (no schedules is normal)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sd-empty-"));
     expect((await loadSchedules(dir)).schedules).toEqual([]);

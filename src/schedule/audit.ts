@@ -14,9 +14,9 @@ export interface RunRecord {
   ms: number;
   /**
    * `deferred` = a wake into a busy session, re-scheduled (not a final outcome for that wake-up).
-   * `interrupted` = a CRON fire the process stopped in the middle of, written by the NEXT boot from the claim it
-   * left in `fires.json` (the run that owned it never got to write anything). A killed WAKE-UP produces nothing:
-   * `takeFirstDueWakeup` removes it from the store before the turn starts, so no claim survives to reconcile.
+   * `interrupted` = a CRON fire the process stopped in the middle of, written by the NEXT boot from the slot claim it
+   * left in `schedule/claims/` (the run that owned it never got to write anything). A killed WAKE-UP produces
+   * nothing: `takeFirstDueWakeup` removes it from the store before the turn starts, so no claim survives.
    */
   outcome: "completed" | "failed" | "deferred" | "interrupted";
   /** The turn's full reply text (completed). */
