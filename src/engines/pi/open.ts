@@ -157,8 +157,11 @@ export async function createPiAgentFromDir(
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
-  /** Give up write ownership of this agent's state — what `AgentService.close()` calls. */
-  releaseState: () => Promise<void>;
+  /**
+   * Give up this agent's write ownership. Whoever opens owns it until a mount takes it (`mountAgentService` /
+   * `mountAgentcoreService` dispose on failure and on `close()`); nothing else has to remember.
+   */
+  dispose: () => Promise<void>;
   /**
    * Whether the agent schedules its own follow-up turns — read from the config, so a caller assembling a service does
    * not have to reach back into it (MountableAgent).
@@ -195,8 +198,7 @@ export async function createPiAgentFromDir(
   // Single-writer, enforced where the writable store is opened rather than remembered by each command. Both paths,
   // because they come apart: `--sessions-dir` moves the journals out of the state root, and a second run pointed at
   // the same journals through a different state root must still contend.
-  // `serving` is what tells a booting server from a one-shot command, which is exactly the two waits.
-  const releaseState = await lockAgentState([stateRoot, sessionsDir], { resident: options.serving === true });
+  const dispose = await lockAgentState([stateRoot, sessionsDir]);
   // Everything below can throw (a definition that will not load, an unknown model, a credential the registry
   // rejects) — and the claim above is already taken. Without this the caller's retry is refused by its OWN
   // abandoned claim, and the error that actually stopped it never appears again.
@@ -262,7 +264,7 @@ export async function createPiAgentFromDir(
       sessions,
       sessionControl: hub?.control,
       selfSchedule: config.selfSchedule ?? false,
-      releaseState,
+      dispose,
       agentDir,
       workspace,
       config,
@@ -278,7 +280,7 @@ export async function createPiAgentFromDir(
       toolFailures,
     };
   } catch (error) {
-    await releaseState?.();
+    await dispose();
     throw error;
   }
 }

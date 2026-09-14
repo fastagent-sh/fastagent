@@ -175,10 +175,8 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     sessionsDir: resolveSessionsDirOverride(opts.sessionsDir),
     serving: true,
   });
-  // Everything from here to the mounted service runs with the write claim already taken (createPiAgentFromDir), and
-  // the finalizer that gives it back only exists once the mount has built its scope. On AgentCore a failure in
-  // between does not exit the process — it becomes a 503 — so a leaked claim would lock the storage against every
-  // later container on the same volume.
+  // The claim `createPiAgentFromDir` took is disposed by whichever mount below takes it, on failure as on close.
+  // Between here and there nothing else owns it, so a throw in the report/alarm steps gives it back explicitly.
   try {
     const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
     await reportAssembly(opened, {
@@ -207,7 +205,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
         ));
     return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
   } catch (error) {
-    await opened.releaseState?.();
+    await opened.dispose();
     throw error;
   }
 }

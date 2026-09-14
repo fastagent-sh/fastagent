@@ -365,7 +365,7 @@ describe("session control: observation plane", () => {
       expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
       expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
       // Not requested → not built.
-      await opened.releaseState();
+      await opened.dispose();
       const plain = await createPiAgentFromDir(dir, {});
       expect(plain.sessionControl).toBeUndefined();
     } finally {

@@ -106,9 +106,9 @@ await service.close();    // stops long connections and schedules, and gives bac
 **One service per agent directory.** Opening it takes exclusive write ownership of the directory's
 state (its state root and sessions directory): file-backed state has one writer, and a second one
 interleaves session journals and drops channel state. A second `createAgentService` on the same
-directory — in this process or another — rejects, and says which case it is. `close()` gives the
-claim back (so a restart in the same process is fine), a failed open or mount gives it back too, and
-process exit releases it. To mount the same directory twice, release the first
+directory — in this process or another — rejects, naming the holder. `close()` gives the claim back (so
+a restart in the same process is fine), a failed open or mount gives it back too, and a process that
+exits or dies drops it with its socket. To mount the same directory twice, release the first
 (`close()`) before opening the second — there is no flag that disables the guard.
 
 `createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is

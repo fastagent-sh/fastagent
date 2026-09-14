@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -17,31 +17,70 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-it("refuses a second opener IN THIS PROCESS with the remedy that applies to it, and frees on release", async () => {
+/** A holder in its own process, which is the only way to test a claim this one does not own. */
+function holder(dir: string): { pid: number; kill: (signal: NodeJS.Signals) => Promise<void> } {
+  const source = new URL("../src/state-lock.ts", import.meta.url).href;
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+      const { lockAgentState } = await import(${JSON.stringify(source)});
+      process.on("message", () => {}); // the claim is unref'd, so the IPC channel is what keeps this alive
+      await lockAgentState([${JSON.stringify(dir)}]);
+      process.send("held");
+      `,
+    ],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  );
+  const exited = once(child, "exit");
+  return {
+    pid: child.pid ?? 0,
+    kill: async (signal) => {
+      child.kill(signal);
+      await exited;
+    },
+    async started() {
+      const first = await Promise.race([once(child, "message").then(([value]) => value), exited]);
+      if (first !== "held") throw new Error(`holder exited before taking the claim: ${String(first)}`);
+    },
+  } as ReturnType<typeof holder> & { started(): Promise<void> };
+}
+
+it("refuses a second opener in THIS process with the remedy that applies to it, and frees on release", async () => {
   // The embedder's shape of the conflict: two opens of one directory in one process. "Stop that process" would name
-  // the caller itself, so this case gets its own wording.
+  // the caller itself, so this case has its own wording — and the holder it names is this process, as a fact.
   const state = fresh();
   const release = await lockAgentState([state]);
   await expect(lockAgentState([state])).rejects.toThrow(
-    new RegExp(
-      `this process already opened this agent's state \\(pid ${process.pid}, this process\\).*` +
-        `Close the first agent`,
-      "s",
-    ),
+    /this process already opened this agent's state.*Close the first agent/s,
   );
   await release();
   await (await lockAgentState([state]))(); // free again — a normal close is not a permanent claim
 });
 
-it("a failure part-way through a multi-directory claim gives back what it already took", async () => {
-  // The sessions dir can be unusable while the state root is fine (a read-only mount, a file where a directory
-  // belongs). Without the rollback the caller gets an exception and no release handle, and the first lock is held
-  // until the process exits.
+it("names the holder from the holder: its pid and command, not a guess about a file", async () => {
   const state = fresh();
-  const blocked = join(fresh("fa-lock-blocked-"), "sessions");
-  writeFileSync(blocked, ""); // a FILE where the sessions directory should be: mkdir/write below fails
-  await expect(lockAgentState([state, blocked])).rejects.toThrow(/EEXIST|ENOTDIR/);
-  await (await lockAgentState([state]))(); // the state root came back
+  const held = holder(state) as ReturnType<typeof holder> & { started(): Promise<void> };
+  await held.started();
+  try {
+    await expect(lockAgentState([state])).rejects.toThrow(
+      new RegExp(`another process is already writing this agent's state — pid ${held.pid}.*Stop that process`, "s"),
+    );
+  } finally {
+    await held.kill("SIGKILL");
+  }
+});
+
+it("a killed holder's claim is gone the moment it is: the next taker just takes it", async () => {
+  // This is why the claim is a socket. A lock FILE outlives its process, which is where a stale window, a heartbeat,
+  // and asking the OS about a pid (pid 1 in a container — itself) all came from.
+  const state = fresh();
+  const held = holder(state) as ReturnType<typeof holder> & { started(): Promise<void> };
+  await held.started();
+  await held.kill("SIGKILL"); // no exit handler runs; the socket file stays on disk
+  await (await lockAgentState([state]))();
 });
 
 it("guards each resolved write path, so a shared sessions dir collides under different state roots", async () => {
@@ -53,45 +92,35 @@ it("guards each resolved write path, so a shared sessions dir collides under dif
   await release();
 });
 
-it("leaves independent directories alone", async () => {
+it("leaves independent directories alone, and gives back a partial claim that cannot be completed", async () => {
   const first = await lockAgentState([fresh()]);
   const second = await lockAgentState([fresh()]);
   await first();
   await second();
+
+  // A run's two paths are claimed in order, and the second can be held by someone else (a sessions directory shared
+  // with a serving process). Without the rollback the caller gets an exception and no release handle, so nothing
+  // could give the first one back before this process exits.
+  const state = fresh();
+  const sessions = fresh("fa-lock-sessions-");
+  const held = holder(sessions) as ReturnType<typeof holder> & { started(): Promise<void> };
+  await held.started();
+  try {
+    await expect(lockAgentState([state, sessions])).rejects.toThrow(/another process is already writing/);
+    await (await lockAgentState([state]))(); // the first path came back
+  } finally {
+    await held.kill("SIGKILL");
+  }
 });
 
-it("a SECOND PROCESS is refused; a killed holder's leftover claim says so instead of naming a dead pid", async () => {
-  const state = fresh();
-  const source = new URL("../src/state-lock.ts", import.meta.url).href;
-  const hold = spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `
-      const { lockAgentState } = await import(${JSON.stringify(source)});
-      // Holding a lock does not keep a process alive (the refresh timer is unref'd) — the IPC channel does.
-      process.on("message", () => {});
-      await lockAgentState([${JSON.stringify(state)}]);
-      process.send("held");
-      `,
-    ],
-    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
-  );
-  const exited = once(hold, "exit");
-  try {
-    expect(await Promise.race([once(hold, "message").then(([value]) => value), exited])).toBe("held");
-    await expect(lockAgentState([state])).rejects.toThrow(/already writing/);
-  } finally {
-    hold.kill("SIGKILL"); // no exit handler runs: the claim can only expire
-    await exited;
-  }
-  // SIGKILL runs no exit handler, so the claim outlives its holder — and a container restarting into this must not
-  // be told to "stop that process". What clears the claim is `proper-lockfile`'s staleness (STALE_MS), its own
-  // behaviour: waiting it out here would buy a 15s test.
-  await expect(lockAgentState([state])).rejects.toThrow(
-    /claimed by a process that is gone \(pid \d+\).*clears itself within 15s/s,
-  );
+it("the opener takes ownership, and disposing is how the same directory is opened again", async () => {
+  const dir = fresh("fa-lock-agent-");
+  mkdirSync(join(dir, "fastagent"));
+  writeFileSync(join(dir, "fastagent", "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+  const opened = await createPiAgentFromDir(dir);
+  await expect(createPiAgentFromDir(dir)).rejects.toThrow(/already opened this agent's state/);
+  await opened.dispose();
+  await (await createPiAgentFromDir(dir)).dispose();
 });
 
 it("an opener that fails after taking the claim gives it back, so the retry sees the real error", async () => {
@@ -100,7 +129,8 @@ it("an opener that fails after taking the claim gives it back, so the retry sees
   const dir = fresh("fa-lock-fail-");
   mkdirSync(join(dir, "fastagent"));
   writeFileSync(
-    join(dir, "fastagent", "fastagent.config.ts"), // `sessionControl` makes the opener resolve the model registry — the step that rejects an unknown spec.
+    join(dir, "fastagent", "fastagent.config.ts"),
+    // `sessionControl` makes the opener resolve the model registry — the step that rejects an unknown spec.
     `export default { model: "nope/nope", sessionControl: true };\n`,
   );
   for (const attempt of ["first", "second"]) {
@@ -108,34 +138,4 @@ it("an opener that fails after taking the claim gives it back, so the retry sees
       /unknown model "nope\/nope"/,
     );
   }
-});
-
-it("a leftover claim carrying OUR OWN pid reads as gone — the container case, where the agent is pid 1", async () => {
-  // A restarted container inherits its predecessor's pid, so asking the OS "is pid 1 alive?" answers yes about
-  // itself. Simulated the way the platform leaves it: the lock directory and a pid file this process did not write.
-  const state = fresh();
-  writeFileSync(join(state, "writer.lock"), `${process.pid}\n`);
-  mkdirSync(join(state, "writer.lock.lock"));
-  await expect(lockAgentState([state])).rejects.toThrow(/claimed by a process that is gone/);
-});
-
-it("a resident boot waits out an expiring claim; a one-shot command refuses instead of hanging", async () => {
-  const state = fresh();
-  const release = await lockAgentState([state]);
-  const booting = lockAgentState([state], { resident: true });
-  // Longer than the one-shot budget (~1s), far shorter than the stale window a container would otherwise wait out.
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
-  await expect(lockAgentState([state])).rejects.toThrow(/already opened/); // the one-shot posture, unchanged
-  await release();
-  await (await booting)();
-});
-
-it("the opener takes ownership, and releasing it is how the same directory is opened again", async () => {
-  const dir = fresh("fa-lock-agent-");
-  mkdirSync(join(dir, "fastagent"));
-  writeFileSync(join(dir, "fastagent", "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
-  const opened = await createPiAgentFromDir(dir);
-  await expect(createPiAgentFromDir(dir)).rejects.toThrow(/already opened this agent's state/);
-  await opened.releaseState();
-  await (await createPiAgentFromDir(dir)).releaseState();
 });

@@ -251,8 +251,12 @@ export interface MountableAgent {
   sessionControl?: SessionControl;
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
-  /** Give up write ownership of the state root, if the opener took it (`src/state-lock.ts`). */
-  releaseState?: () => Promise<void>;
+  /**
+   * Release what the opener took for this agent (its write claim — `src/state-lock.ts`). Mounting TRANSFERS that
+   * ownership: this function is called when the mount fails and when the mounted service closes, so an opened agent
+   * has exactly one owner at every moment and no caller has to remember.
+   */
+  dispose?: () => Promise<void>;
 }
 
 /**
@@ -269,10 +273,19 @@ export async function mountAgentService(
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
-  const withControl = mountSessionControl(routed.routes, sessionControl, { agent });
-  // Composed BEFORE anything starts.
-  const handler = router(withControl.routes, withControl.mounts);
+  // Composition (channel imports, a control-plane route collision) runs before the scope below exists, so its
+  // failures cannot be a finalizer: they are the mount refusing the ownership it was offered.
+  const composed = await Promise.resolve()
+    .then(async () => {
+      const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
+      const withControl = mountSessionControl(routed.routes, sessionControl, { agent });
+      return { routed, withControl, handler: router(withControl.routes, withControl.mounts) };
+    })
+    .catch(async (error: unknown) => {
+      await opened.dispose?.();
+      throw error;
+    });
+  const { routed, withControl, handler } = composed;
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();
@@ -316,9 +329,9 @@ export async function mountAgentService(
       return yield* Effect.gen(function* () {
         // Finalizers run in reverse: this one is registered first so write ownership is the LAST thing given up —
         // after the channels and the scheduler have stopped writing.
-        if (opened.releaseState) {
-          const releaseState = opened.releaseState;
-          yield* Effect.addFinalizer(() => Effect.promise(releaseState));
+        if (opened.dispose) {
+          const dispose = opened.dispose;
+          yield* Effect.addFinalizer(() => Effect.promise(dispose));
         }
         // Registered before the transports, so subscriptions and schedule timers stop before waiting for them.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));

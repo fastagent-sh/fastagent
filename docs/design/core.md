@@ -587,12 +587,14 @@ volume. A deployed box points both knobs at its volume so a rotated OAuth creden
 The shipped file-backed implementations are single-process, and that is now refused rather than implied:
 opening a directory through `createPiAgentFromDir` takes an exclusive claim on every resolved write path
 (the state root and the sessions directory, which `--sessions-dir` can move apart) — `src/state-lock.ts`.
-A second opener is told the holder's pid and the ways out; `AgentService.close()` gives the claim back,
-a normal exit releases it (`proper-lockfile`'s own exit hook, which covers signals too), and a killed
-holder's claim expires after the stale window — which a booting server waits out, because on a host that
-turns a boot failure into a cached 503 (AgentCore) refusing for those seconds costs more than waiting. `chat` is outside the guard: pi's TUI owns its own
-session storage, and what it shares with the state root is a settings file. Opening the same directory twice in one process is the same refusal, with its own
-wording: release the first. Multiple
+The claim is a LISTENING SOCKET rather than a lock file, which is what makes its two hard questions facts
+instead of guesses: a holder that dies stops answering immediately (no stale window, no heartbeat, no
+asking the OS about a pid — which in a container, where the agent is pid 1, answers wrongly about
+itself), and a refusal names the holder's own pid and command because the holder answers for itself.
+Ownership is a single chain: the opener holds it, mounting transfers it, `AgentService.close()` and any
+failure on either side release it. `chat` is outside the guard: pi's TUI owns its own session storage,
+and what it shares with the state root is a settings file. Opening the same directory twice in one
+process is the same refusal with its own wording: dispose the first. Multiple
 instances still require shared session, lease, credential, and channel-state backends.
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
