@@ -163,7 +163,9 @@ it("a stray file where a claim should be is refused, not deleted", async () => {
   const path = socketFor(state);
   writeFileSync(path, "not a socket");
   try {
-    await expect(lockAgentState([state])).rejects.toThrow(/ENOTSOCK.*refusing rather than assuming/s);
+    // The errno is platform-dependent here (ECONNREFUSED on Linux, ENOTSOCK on macOS), so the decision is the file
+    // type, not the connect failure.
+    await expect(lockAgentState([state])).rejects.toThrow(/something that is not a socket occupies that path/);
     expect(existsSync(path)).toBe(true);
   } finally {
     rmSync(path, { force: true });

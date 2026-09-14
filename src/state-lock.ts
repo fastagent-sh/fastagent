@@ -35,7 +35,7 @@
  *     while its worker holds the claim, so that one file has two writers by design. It is written once per
  *     registration, not per turn.
  */
-import { closeSync, openSync, unlinkSync } from "node:fs";
+import { closeSync, lstatSync, openSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { type Server, connect, createServer } from "node:net";
 import { resolve } from "node:path";
@@ -177,6 +177,17 @@ async function take(dir: string): Promise<Server> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
     }
+    // WHAT is in the way is decided by the file type, not by the connect error: connecting to a regular file
+    // answers ECONNREFUSED on Linux and ENOTSOCK on macOS, and only one of those looks like a dead claim.
+    let occupant: ReturnType<typeof lstatSync>;
+    try {
+      occupant = lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; // it went away; bind again
+      throw refuseUnknown(dir, path, `it could not be inspected (${(error as NodeJS.ErrnoException).code})`);
+    }
+    if (!occupant.isSocket()) throw refuseUnknown(dir, path, "something that is not a socket occupies that path");
+
     const found = await probe(path);
     if (found.state === "held") throw refuse(dir, found.holder);
     if (found.state === "unknown") throw refuseUnknown(dir, path, found.why);
@@ -192,6 +203,7 @@ async function take(dir: string): Promise<Server> {
       }
     });
   }
+
   // The second attempt found the name taken again: someone bound it between our unlink and our bind. They are the
   // holder now, so say so rather than looping.
   const found = await probe(path);
