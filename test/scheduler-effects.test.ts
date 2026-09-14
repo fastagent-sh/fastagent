@@ -3,7 +3,8 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -19,7 +20,7 @@ import {
   type ScheduleFireOutcome,
   type Scheduler,
 } from "../src/schedule/scheduler.ts";
-import { loadFires, saveFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import { latestFire, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { log } from "../src/log.ts";
 
@@ -27,14 +28,67 @@ const NOW = new Date("2026-07-07T10:30:00Z");
 const hourly = (name = "job") => ({ name, cron: "0 * * * *", tz: "UTC", prompt: "go" });
 const freshRoot = () => mkdtemp(join(tmpdir(), "fa-scheduler-effects-"));
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
-/** A claim AND the audit record a healthy fire leaves — without the record, start() reports it as interrupted. */
-function seedFiredSlots(stateRoot: string, names: string[], firedAt: string): void {
-  saveFires(stateRoot, Object.fromEntries(names.map((name) => [name, firedAt])));
+/**
+ * Seed a HEALTHY prior fire: the slot's claim (stamped with when it was taken) and the run record that accounts for
+ * it. Without the record the boot reconciler would report the claim as `interrupted`, which is a different test.
+ */
+function seedFiredSlots(stateRoot: string, names: string[], firedAt: string, slot = firedAt): void {
   for (const name of names) {
-    appendRun(stateRoot, { name, session: `schedule:${name}`, firedAt, ms: 1, outcome: "completed" });
+    const dir = join(stateRoot, "schedule", "claims", name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, slot.replace(/[:.]/g, "-")), firedAt);
+    appendRun(stateRoot, {
+      name,
+      session: `schedule:${name}`,
+      firedAt: new Date(Date.parse(firedAt) + 1).toISOString(),
+      ms: 1,
+      outcome: "completed",
+    });
   }
 }
+/** When a state root says this schedule last fired — the claim, read the way the scheduler reads it. */
+const lastFire = (stateRoot: string, name: string): string | undefined => latestFire(stateRoot, name);
+
 afterEach(() => vi.restoreAllMocks());
+
+it("two SCHEDULERS over one state root fire a cron slot exactly once", async () => {
+  // The reason this claim is atomic: `fires.json` was a read-modify-write, which two processes both won. Two
+  // schedulers exist whenever a restart overlaps its predecessor, someone runs a second `start` on one directory, or
+  // an external clock delivers while the resident one is armed — and a double fire is a real turn, billed twice.
+  const stateRoot = await freshRoot();
+  const source = new URL("../src/schedule/scheduler.ts", import.meta.url).href;
+  const slot = "2026-07-07T10:00:00.000Z";
+  const fire = (): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+          import * as Effect from "effect/Effect";
+          const { fireScheduleOnce } = await import(${JSON.stringify(source)});
+          const agent = { async *invoke() { await new Promise((r) => setTimeout(r, 150)); yield { type: "completed" }; } };
+          const outcome = await Effect.runPromise(fireScheduleOnce({
+            agent,
+            stateRoot: ${JSON.stringify(stateRoot)},
+            schedule: { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" },
+            slot: new Date(${JSON.stringify(slot)}),
+          }));
+          process.send(outcome.fired ? "fired" : "skipped");
+          `,
+        ],
+        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+      );
+      child.on("message", (value) => resolve(String(value)));
+      child.on("exit", (code) => reject(new Error(`child exited without an outcome (${code})`)));
+    });
+
+  const outcomes = await Promise.all([fire(), fire(), fire()]);
+  expect(outcomes.filter((o) => o === "fired")).toHaveLength(1);
+  expect(outcomes.filter((o) => o === "skipped")).toHaveLength(2);
+  expect(readRuns(stateRoot, "job")).toHaveLength(1); // one audited run, so one billed turn
+});
 
 it.each(["cron", "one-shot", "recurring"] as const)(
   "SIGTERM preserves the claimed %s state without claiming the next wake",
@@ -91,7 +145,7 @@ it.each(["cron", "one-shot", "recurring"] as const)(
     }
     // The killed turn wrote nothing itself; only the seeded prior fire is on record.
     expect(readRuns(stateRoot).map((r) => r.outcome)).toEqual(kind === "cron" ? ["completed"] : []);
-    if (kind === "cron") expect(loadFires(stateRoot).job).toBe(NOW.toISOString());
+    if (kind === "cron") expect(lastFire(stateRoot, "job")).toBe(NOW.toISOString());
     else {
       expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(kind === "recurring" ? ["first", "next"] : ["next"]);
       if (kind === "recurring") expect(listWakeups(stateRoot)[0]?.fireAt).toBe("2026-07-07T11:00:00.000Z");
@@ -219,7 +273,7 @@ it("rechecks capped waits against wall-clock jumps and never fires early", async
         wall = new Date("2026-07-09T10:30:00Z");
         yield* TestClock.adjust(6 * 60 * 60_000);
         expect(invoke).toHaveBeenCalledOnce();
-        expect(loadFires(stateRoot).job).toBe(wall.toISOString());
+        expect(lastFire(stateRoot, "job")).toBe(wall.toISOString());
       } finally {
         s.stop();
       }
@@ -247,7 +301,7 @@ it("publishes the running loop before an invoke callback re-enters stop", async 
         yield* TestClock.adjust(2 * 60 * 60_000);
         expect(invoke).toHaveBeenCalledOnce();
         expect(readRuns(stateRoot, "a")).toHaveLength(2); // the seeded prior fire, then this one
-        expect(loadFires(stateRoot).b).toBe("2026-07-07T08:00:00Z");
+        expect(lastFire(stateRoot, "b")).toBe("2026-07-07T08:00:00Z");
       } finally {
         s.stop();
       }
@@ -358,11 +412,14 @@ it.each([false, true])("reports a wake deferral write failure before restoring s
   );
 });
 
-it("keeps claim IO failures typed and never invokes before a successful durable claim", async () => {
+it("keeps claim IO failures typed and never invokes, and never burns the slot", async () => {
   const stateRoot = await freshRoot();
-  await mkdir(join(stateRoot, "schedule", "fires.json.tmp"), { recursive: true });
+  // A FILE where `claims/job/` belongs: `claimSlot` throws ENOTDIR, and it throws BEFORE creating the claim — so the
+  // slot is still there to run once the fault is fixed, which is the whole reason the claim is the only state write.
+  await mkdir(join(stateRoot, "schedule", "claims"), { recursive: true });
+  await writeFile(join(stateRoot, "schedule", "claims", "job"), "");
   const invoke = vi.fn();
-  const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly() });
+  const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW });
   expectTypeOf(work).toEqualTypeOf<Effect.Effect<ScheduleFireOutcome, PortFailure>>();
   // @ts-expect-error -- a failed durable claim still needs a failure policy
   const infallible: Effect.Effect<ScheduleFireOutcome> = work;
@@ -373,14 +430,31 @@ it("keeps claim IO failures typed and never invokes before a successful durable 
     expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "PortFailure", cause: expect.any(Error) });
   expect(invoke).not.toHaveBeenCalled();
   expect(readRuns(stateRoot)).toEqual([]);
+
+  // The fault is fixed and the SAME slot still fires: a failed state write must not consume it.
+  await rm(join(stateRoot, "schedule", "claims", "job"));
+  const retry = await Effect.runPromise(
+    fireScheduleOnce({
+      agent: {
+        async *invoke() {
+          yield { type: "completed" as const };
+        },
+      },
+      stateRoot,
+      schedule: hourly(),
+      slot: NOW,
+    }),
+  );
+  expect(retry).toMatchObject({ fired: true });
 });
 
 it("a boot-time cron-state fault fails start synchronously before any loop runs", async () => {
   const stateRoot = await freshRoot();
-  await mkdir(scheduleFile(stateRoot, "fires"), { recursive: true });
+  await mkdir(join(stateRoot, "schedule", "claims"), { recursive: true });
+  await writeFile(join(stateRoot, "schedule", "claims", "job"), "");
   const invoke = vi.fn();
   const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [hourly()] }));
-  expect(() => s.start()).toThrow("unreadable");
+  expect(() => s.start()).toThrow(/ENOTDIR|not a directory/);
   s.stop();
   await tick();
   expect(invoke).not.toHaveBeenCalled();
@@ -411,6 +485,7 @@ it("an interrupted external fire joins its claimed turn and audit", async () => 
 });
 
 it("claims an external slot synchronously before a concurrent duplicate can invoke", async () => {
+  // The claim is what makes a duplicate delivery a no-op, and it must land BEFORE the model call, not after it.
   const stateRoot = await freshRoot();
   const finish = Promise.withResolvers<void>();
   const invoke = vi.fn(async function* (): AsyncIterable<AgentEvent> {
@@ -420,9 +495,11 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
   const options = { agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW };
   const first = Effect.runPromise(fireScheduleOnce(options));
   try {
-    expect(loadFires(stateRoot).job).toBe(NOW.toISOString());
+    expect(existsSync(join(stateRoot, "schedule", "claims", "job", NOW.toISOString().replace(/[:.]/g, "-")))).toBe(
+      true,
+    );
     const second = await Effect.runPromise(fireScheduleOnce(options));
-    expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("already fired") });
+    expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is already claimed") });
     expect(invoke).toHaveBeenCalledOnce();
   } finally {
     finish.resolve();

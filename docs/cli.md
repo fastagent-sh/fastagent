@@ -215,7 +215,8 @@ session, so you see exactly what the served scheduler would do:
 - it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
 
 A `schedules/<name>.ts` file default-exports `defineSchedule({ cron, tz?, prompt })`; the scheduler
-fires the agent on that cron when you `dev`/`start`. Output is the agent's tools' job — the scheduler
+fires the agent on that cron when you `dev`/`start`. The filename becomes a directory name in the state
+root, so it cannot be `.`, `..`, or contain a path separator. Output is the agent's tools' job — the scheduler
 only fires and logs. See the [API reference](./api-reference.md#schedule-authoring).
 
 ## `fastagent schedule history`
@@ -225,11 +226,13 @@ fastagent schedule history <name> [dir] [--json]
 ```
 
 Prints the run audit for one schedule — or `wake` for the agent's self-scheduled wake-ups: when each run
-fired, its outcome (`completed` / `failed` / `deferred` / `interrupted`), duration, and a preview of the reply
+fired, its outcome (`completed` / `failed` / `deferred` / `interrupted` / `stale`), duration, and a preview of the reply
 or error. `interrupted` means the process stopped between claiming that slot and finishing its turn — a restart
 or rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start records it.
 That reconciliation covers `schedules/` cron fires only: a wake-up is taken out of the store before its turn
-starts, so one whose process was killed leaves no claim behind and no `interrupted` line under `wake`.
+starts, so one whose process was killed leaves no claim behind and no `interrupted` line under `wake`. `stale` means
+a slot arrived after the schedule had already claimed a later one — that instant will never run, which a clock that
+moved backwards (a VM resume, a host correction) can produce in a row.
 The answer to "did last night's run silently fail?". Read-only (reads `<state root>/schedule/runs.jsonl`,
 written by the serving scheduler); `--json` prints the full records, including the complete reply text.
 

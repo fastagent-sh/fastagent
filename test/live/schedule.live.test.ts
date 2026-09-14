@@ -18,7 +18,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { readRuns } from "../../src/schedule/audit.ts";
-import { saveFires } from "../../src/schedule/state.ts";
+import { claimSlot } from "../../src/schedule/state.ts";
 import { startSchedules } from "../../src/service.ts";
 import { requireEnv } from "./env.ts";
 
@@ -55,7 +55,8 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
 
     // Two minutes back, seeded before the scheduler starts: the next 1-minute slot after it is already
     // in the past, so start() catches up instead of arming a timer.
-    saveFires(stateRoot, { [SCHEDULE]: new Date(Date.now() - 120_000).toISOString() });
+    // A claim two minutes old: the catch-up start point, without pretending a slot was fired since.
+    claimSlot(stateRoot, SCHEDULE, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.

@@ -332,12 +332,12 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     // A claim-state fault is not drift — it fails visibly, with its own message.
     const broken = adapter({
       fire: async () => {
-        throw new Error("fires.json unreadable");
+        throw new Error("slot claim unreadable");
       },
     });
     const fault = await postEnvelope(broken, fireEnvelope);
     expect(fault.status).toBe(500);
-    expect(await fault.text()).toContain("fires.json unreadable");
+    expect(await fault.text()).toContain("slot claim unreadable");
   });
 
   it("a running schedule turn counts as in-flight work (/ping must hold the session)", async () => {

@@ -584,9 +584,39 @@ Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DI
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
 volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
 
-The shipped file-backed implementations are single-process. Multiple instances require shared session,
-lease, credential, and channel-state backends; sharing one local state directory between processes is
-unsupported.
+The shipped file-backed implementations are single-process, and the cost of ignoring that is specific
+rather than general — measured, not assumed:
+
+- **Two writers do not corrupt a session.** pi appends one whole transaction per line, so the file
+  stays parseable; the conversation *branches* (both writers' entries share a parent) and one branch
+  falls off the path the next turn reads. Within one process this cannot happen — the session lease
+  answers a concurrent turn with `session_busy` — so it is that rule not reaching across processes.
+- **Channel state is keyed by channel kind**, so two processes serving different channels never touch
+  the same files. Two processes serving the SAME channel means one ingress credential in two places,
+  which no local guard can see: the same bot token in two different directories does it too.
+- **The clock is the one true singleton.** Two schedulers over one state root would fire a cron slot
+  twice — a real billed turn. That decision is therefore atomic: `claimSlot` creates the slot's claim
+  file with `O_EXCL`, and creating it IS the decision (`src/schedule/state.ts`). A slot is also refused
+  when a LATER one has already been claimed: claims are pruned by count, and a platform that retries an
+  event for up to 24h (EventBridge) would otherwise get a stale slot fired once its own claim aged out.
+  The claim is the ONLY state this path writes, and it carries the wall-clock instant it was taken, so
+  one file answers both planes — was that fire ever reported (the boot-time `interrupted` check), and
+  where does catch-up resume. A second file would reintroduce a window in which a killed process leaves
+  a claimed slot nothing accounts for. A claim outliving its process is correct: the slot was taken, and
+  a fire interrupted mid-turn is recorded as `interrupted` by the next start. A slot refused as stale is recorded
+  too (`stale`), because that is a planned run that will never happen; a duplicate delivery is not, because it is
+  ordinary and one line per platform retry would drown the history. That check has one known
+  false positive — a second scheduler booting while the first is mid-turn reports a claim the audit does
+  not account for YET, so the history carries both lines for that instant; telling them apart would need
+  the claimer's liveness, which is a lease rather than a claim.
+- **Recovered turns can run twice** if two resident processes share a directory, which is the
+  already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
+  a killed process block its own replay, which is worse than the duplicate.
+
+Multiple instances still require shared session, lease, credential, and channel-state backends. What
+is deliberately absent is a directory-level writer lock: it would forbid harmless topologies (two
+channels in two processes, a one-shot `invoke` beside a serving `dev`, an embedder mounting twice)
+without preventing the dangerous one above.
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
 persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned

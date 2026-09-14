@@ -38,6 +38,20 @@ describe("schedule/discover", () => {
     expect(failures[0]?.message).toMatch(/must default-export defineSchedule/);
   });
 
+  it("refuses only names that could leave the claims directory — a legal filename is a legal schedule", async () => {
+    // The name becomes a path segment under `claims/`, so that is the whole rule. Narrowing it further would make an
+    // ordinary filename load into nothing but one warning, and its schedule would silently stop firing.
+    const dir = await ws({
+      "...ts": def("0 * * * *"),
+      "每日简报.ts": def("0 * * * *"),
+      "my report.ts": def("0 * * * *"),
+    });
+    const { schedules, failures } = await loadSchedules(dir);
+    expect(schedules.map((s) => s.name).sort()).toEqual(["my report", "每日简报"]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.message).toMatch(/cannot be "\.", "\.\." or contain a path separator/);
+  });
+
   it("a missing schedules/ dir yields empty (no schedules is normal)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sd-empty-"));
     expect((await loadSchedules(dir)).schedules).toEqual([]);

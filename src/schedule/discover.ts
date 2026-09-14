@@ -7,6 +7,7 @@ import { type ModuleLoadFailure, loadModuleDir } from "../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../declared-secrets.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { cronError } from "./cron.ts";
+import { isSafeScheduleName } from "./state.ts";
 import type { LoadedSchedule, Schedule } from "./schedule.ts";
 
 /**
@@ -41,6 +42,11 @@ export async function loadSchedules(dir: string): Promise<{
       // would make `schedule history wake` an unreadable mix of two different things.
       if (name === "wake")
         throw new Error(`${label}: "wake" is a reserved schedule name (the self-scheduling audit uses it)`);
+      // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`), so anything that could
+      // leave that directory is refused here — where the author sees which file is wrong — rather than deeper.
+      if (!isSafeScheduleName(name)) {
+        throw new Error(`${label}: a schedule name cannot be ".", ".." or contain a path separator`);
+      }
       if (byName.has(name)) throw new Error(`${label}: duplicate schedule name "${name}" — kept the first`);
       byName.set(name, { name, cron: s.cron, tz: s.tz, prompt: s.prompt });
       secrets.set(name, declaration.secrets);

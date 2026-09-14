@@ -445,7 +445,9 @@ function defineSchedule<const S extends readonly string[]>(schedule: {
 ```
 
 An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
-the filename becomes the schedule name. Each file default-exports `defineSchedule({ cron, tz?, prompt })`.
+the filename becomes the schedule name (it also becomes a directory name under `<stateRoot>/schedule/claims/`, so
+`.`, `..` and path separators are refused — everything else a filename may contain is fine). Each file
+default-exports `defineSchedule({ cron, tz?, prompt })`.
 
 ```ts
 // schedules/daily-digest.ts        → schedule "daily-digest"
@@ -472,11 +474,14 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   schedule's turns share one continuing conversation persisted by the core session store (zero-touch on
   storage, like the telegram channel deriving a session from `chat.id`);
 - **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome;
-- **catches up an overdue run once** — durable `fires.json` under `<stateRoot>/schedule/` records the
-  last fire; a run missed while the process was down fires once on the next start (not per missed slot),
-  claimed before the invoke (at-most-once per slot).
+- **catches up an overdue run once** — each fired slot leaves a claim under `<stateRoot>/schedule/claims/<name>/`,
+  created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
+  several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock
+  racing the resident one). The newest claim also says when the schedule last fired, which is where a run missed
+  while the process was down resumes — once on the next start, not per missed slot. A slot older than the newest
+  claim is refused as a stale replay.
 
-Single-process (like all state today). The scheduler is started by
+The scheduler is started by
 the serve path (`dev`/`start`); `fastagent fire <name>` runs one schedule's turn immediately for authoring.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
