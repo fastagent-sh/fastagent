@@ -3,6 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -35,6 +36,45 @@ function seedFiredSlots(stateRoot: string, names: string[], firedAt: string): vo
   }
 }
 afterEach(() => vi.restoreAllMocks());
+
+it("two SCHEDULERS over one state root fire a cron slot exactly once", async () => {
+  // The reason this claim is atomic: `fires.json` was a read-modify-write, which two processes both won. Two
+  // schedulers exist whenever a restart overlaps its predecessor, someone runs a second `start` on one directory, or
+  // an external clock delivers while the resident one is armed — and a double fire is a real turn, billed twice.
+  const stateRoot = await freshRoot();
+  const source = new URL("../src/schedule/scheduler.ts", import.meta.url).href;
+  const slot = "2026-07-07T10:00:00.000Z";
+  const fire = (): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+          import * as Effect from "effect/Effect";
+          const { fireScheduleOnce } = await import(${JSON.stringify(source)});
+          const agent = { async *invoke() { await new Promise((r) => setTimeout(r, 150)); yield { type: "completed" }; } };
+          const outcome = await Effect.runPromise(fireScheduleOnce({
+            agent,
+            stateRoot: ${JSON.stringify(stateRoot)},
+            schedule: { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" },
+            slot: new Date(${JSON.stringify(slot)}),
+          }));
+          process.send(outcome.fired ? "fired" : "skipped");
+          `,
+        ],
+        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+      );
+      child.on("message", (value) => resolve(String(value)));
+      child.on("exit", (code) => reject(new Error(`child exited without an outcome (${code})`)));
+    });
+
+  const outcomes = await Promise.all([fire(), fire(), fire()]);
+  expect(outcomes.filter((o) => o === "fired")).toHaveLength(1);
+  expect(outcomes.filter((o) => o === "skipped")).toHaveLength(2);
+  expect(readRuns(stateRoot, "job")).toHaveLength(1); // one audited run, so one billed turn
+});
 
 it.each(["cron", "one-shot", "recurring"] as const)(
   "SIGTERM preserves the claimed %s state without claiming the next wake",
@@ -411,6 +451,7 @@ it("an interrupted external fire joins its claimed turn and audit", async () => 
 });
 
 it("claims an external slot synchronously before a concurrent duplicate can invoke", async () => {
+  // The claim is what makes a duplicate delivery a no-op, and it must land BEFORE the model call, not after it.
   const stateRoot = await freshRoot();
   const finish = Promise.withResolvers<void>();
   const invoke = vi.fn(async function* (): AsyncIterable<AgentEvent> {
@@ -420,9 +461,11 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
   const options = { agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW };
   const first = Effect.runPromise(fireScheduleOnce(options));
   try {
-    expect(loadFires(stateRoot).job).toBe(NOW.toISOString());
+    expect(existsSync(join(stateRoot, "schedule", "claims", "job", NOW.toISOString().replace(/[:.]/g, "-")))).toBe(
+      true,
+    );
     const second = await Effect.runPromise(fireScheduleOnce(options));
-    expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("already fired") });
+    expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("already claimed") });
     expect(invoke).toHaveBeenCalledOnce();
   } finally {
     finish.resolve();

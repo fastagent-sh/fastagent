@@ -10,7 +10,7 @@ import { log } from "../log.ts";
 import { appendRun, latestFiredAt } from "./audit.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
-import { loadFires, saveFires } from "./state.ts";
+import { claimSlot, loadFires, saveFires } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /** A schedule shares one continuing conversation without depending on engine session storage. */
@@ -145,15 +145,19 @@ export function fireScheduleOnce(opts: {
     const { agent, stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
     const skippedReason = yield* Effect.try({
       try: () => {
-        const fires = loadFires(stateRoot);
-        const last = fires[s.name];
-        if (slot && last && new Date(last).getTime() >= slot.getTime()) {
-          const reason = `slot ${slot.toISOString()} already fired (lastFired=${last})`;
+        // The DECISION to fire is the claim, and it is atomic (`claimSlot`): several schedulers over one state root —
+        // two `start`s, a restart overlapping its predecessor, an external clock racing the resident one — take the
+        // same slot, and exactly one of them runs it.
+        const instant = slot ?? now();
+        if (!claimSlot(stateRoot, s.name, instant)) {
+          const reason = `slot ${instant.toISOString()} was already claimed by another scheduler`;
           log.info(`[schedule] ${s.name}: skipping — ${reason}`);
           return reason;
         }
-        fires[s.name] = (slot ?? now()).toISOString();
-        saveFires(stateRoot, fires);
+        // Bookkeeping, not a decision: WHEN this schedule last actually fired, which is where catch-up resumes
+        // after downtime. It stays wall-clock (not the slot) so catching up a missed slot does not leave the next
+        // start looking at an instant it has already passed.
+        saveFires(stateRoot, { ...loadFires(stateRoot), [s.name]: now().toISOString() });
         return undefined;
       },
       catch: (cause) => new PortFailure(cause),
@@ -224,7 +228,9 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           while (now().getTime() < due.getTime()) {
             yield* Effect.sleep(Math.min(due.getTime() - now().getTime(), MAX_WAIT_MS));
           }
-          yield* fireScheduleOnce({ agent, stateRoot, schedule: s, now }).pipe(
+          // `slot: due` is what two schedulers have in common: both compute the same cron instant, so both try to
+          // claim the same name and exactly one wins. Claiming `now()` would give them different names.
+          yield* fireScheduleOnce({ agent, stateRoot, schedule: s, slot: due, now }).pipe(
             Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() => {
                 log.error(
