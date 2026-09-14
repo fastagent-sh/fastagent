@@ -4,7 +4,7 @@
  * These are the properties an embedder gets for free by calling one function instead of composing
  * the parts. Each was, at some point, composed wrong — inside this repo's own CLI.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -549,7 +549,7 @@ describe("createAgentService", () => {
         ready: Promise.resolve(), closed: new Promise(() => {}) }; } };`,
     });
     (globalThis as Record<string, unknown>).__faConnected = false;
-    await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|arrives as/);
+    await expect(createAgentService(dir)).rejects.toThrow(/failed to load|arrives as/);
     expect((globalThis as unknown as { __faConnected?: boolean }).__faConnected).toBe(false);
   });
 
@@ -575,7 +575,21 @@ describe("createAgentService", () => {
 
   it("surfaces a broken channel at open, rather than serving without it", async () => {
     const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
-    await expect(createAgentService(dir)).rejects.toThrow(/channel setup is invalid|boom at import/);
+    await expect(createAgentService(dir)).rejects.toThrow(/channels\/bad\.mjs failed to load/);
+  });
+
+  it("an enabled tool or schedule that cannot load refuses the service, like a channel does", async () => {
+    // The same declaration used to get a different guarantee per directory: a broken channel stopped the boot, a
+    // broken tool or schedule became one warning and a service that reported itself ready — with the cron never
+    // firing and the model never seeing the tool. Absent directories stay valid; `*.disabled` is the opt-out.
+    for (const file of ["tools/broken.mjs", "schedules/digest.mjs"]) {
+      const dir = await agentDir({ [file]: `throw new Error("missing target");` });
+      await expect(createAgentService(dir)).rejects.toThrow(new RegExp(`${file.replace(".", "\\.")} failed to load`));
+      // Renaming it to the disabled form is how an author says they meant it.
+      await rename(join(dir, file), join(dir, `${file}.disabled`));
+      const service = await createAgentService(dir);
+      await service.close();
+    }
   });
 });
 

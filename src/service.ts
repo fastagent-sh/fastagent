@@ -15,7 +15,7 @@ import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
-import { reportModuleLoadFailures } from "./loader.ts";
+import { refuseBrokenDeclarations } from "./loader.ts";
 import { gateSecrets } from "./secrets-gate.ts";
 import type { LoadedSchedule } from "./schedule/schedule.ts";
 
@@ -92,12 +92,9 @@ export async function routesFor(
   for (const c of collisions) {
     log.warn(`[fastagent] channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`);
   }
-  reportModuleLoadFailures(failures);
-  if (failures.length > 0 || collisions.length > 0) {
-    throw new Error(
-      `channel setup is invalid (${failures.length} load failure(s), ${collisions.length} route collision(s)) — ` +
-        `fix it, or rename an intentionally disabled file to *.disabled`,
-    );
+  refuseBrokenDeclarations(failures);
+  if (collisions.length > 0) {
+    throw new Error(`${collisions.length} channel route collision(s) — two channels cannot serve one route`);
   }
   const builtinInvoke =
     options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
@@ -180,7 +177,7 @@ export async function startSchedules(
   // channels'): a schedule reads its env at IMPORT time, so an unset declared value has already
   // produced a broken prompt — refusing here is the last point where that is a startup failure.
   gateSecrets({ declared: secrets, failures });
-  reportModuleLoadFailures(failures);
+  refuseBrokenDeclarations(failures);
   if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
   const scheduler = Effect.runSync(
     createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),

@@ -413,8 +413,13 @@ An agent channel default-exports either a route `ChannelModule` or a
 and `larkWebSocketChannel(opts)` return `LongConnectionChannelModule`. In both forms the channel file
 is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
-`.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it. Serving fails if any enabled channel
-cannot load.
+`.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.
+
+Enabled files under `tools/`, `channels/` and `schedules/` are declarations, so a run that cannot load one refuses
+to start and names every file that failed: an agent short a tool or a cron is not the agent its author described,
+and a service that announced itself ready leaves nothing to notice that by. An absent directory is valid, and
+`<name>.ts.disabled` is how a file is turned off on purpose. Inspection (`fastagent info`, `fastagent tool`) is the
+exception: it loads what it can and reports the rest.
 
 Channel adapters can also use:
 

@@ -35,7 +35,7 @@ describe("deferred AgentCore initialization", () => {
       throw new Error("process.exit called");
     }) as never);
     try {
-      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/channel setup is invalid/);
+      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/failed to load/);
       expect(exit).not.toHaveBeenCalled();
     } finally {
       exit.mockRestore();

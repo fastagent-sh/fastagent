@@ -19,7 +19,7 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import type { ModuleLoadFailure } from "../../loader.ts";
+import { type ModuleLoadFailure, refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
@@ -102,6 +102,9 @@ export async function resolveAgentAssembly(
   // means "may run in this process" — letting it start would put the empty-credential failure back
   // inside a turn. An author who does not want that opts out per tool by not declaring.
   gateSecrets({ declared: toolSecrets, failures: toolFailures });
+  // Same gate, the other half: a tool file that could not be imported is a capability the author declared and this
+  // process does not have. The secrets gate above runs first because an unset value is the likelier cause of both.
+  refuseBrokenDeclarations(toolFailures);
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);

@@ -273,7 +273,6 @@ describe("cli papercuts", () => {
     const { code, stderr } = await run(["start", dir, "--port", "0"]);
     expect(code).toBe(1);
     expect(stderr).toMatch(/telegram\.mjs failed to load/);
-    expect(stderr).toMatch(/channel setup is invalid \(1 load failure\(s\), 0 route collision\(s\)\)/);
     expect(stderr).toMatch(/\*\.disabled/);
     expect(stderr).not.toMatch(/routes:.*\/invoke/);
   });
