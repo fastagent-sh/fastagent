@@ -130,7 +130,7 @@ fastagent deploy fly
 Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy runbook:
 
 1. `fly apps create <name>` — one-time (Fly app names are globally unique; if taken, edit `app` in `fly.toml` and re-run `deploy`).
-2. `fly volumes create data --region <region> --size 1` — one-time; the region **must** match `primary_region` in `fly.toml`.
+2. The `data` volume is not a step: `fly deploy` creates it on the first deploy, in `primary_region` and at `[mounts].initial_size`. Creating it up front pins it to a host chosen without the machine, which fails the deploy with `insufficient resources … existing volume`.
 3. `fly ips allocate-v4 --shared` + `fly ips allocate-v6` — one-time, free. `[http_service]` declares a service; it does not allocate an address to reach it on. `fly deploy` does that on a *first* deploy only, and just warns when it fails — leaving a machine that serves and a `https://<name>.fly.dev` with no DNS record. Skip if `fly ips list` already shows one.
 4. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
 5. `fly deploy` builds and ships. For a new definition release, run `fastagent deploy fly` first to refresh the release manifest, then build and ship again.

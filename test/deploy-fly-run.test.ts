@@ -27,7 +27,6 @@ function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } 
 
 const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   appName: "bot",
-  region: "iad",
   secrets: {},
   missingSecrets: [],
   valueFile: "fastagent/.secrets/.env",
@@ -46,11 +45,9 @@ const run = (
 ) => deployFlyRun(p, fly, () => {}, { telegram: tg }, healthy);
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
-  it("happy path: auth → create app+volume+address → set secrets → deploy → telegram webhook", async () => {
-    // Fresh account: apps/volumes/ips lists are empty, everything succeeds.
-    const { fly, cmds } = fakeFly((a) =>
-      a[0] === "apps" || a[0] === "volumes" || a[0] === "ips" ? { stdout: "[]" } : {},
-    );
+  it("happy path: auth → create app+address → set secrets → deploy → telegram webhook", async () => {
+    // Fresh account: apps/ips lists are empty, everything succeeds.
+    const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
@@ -66,8 +63,6 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "auth whoami",
       "apps list --json",
       "apps create bot",
-      "volumes list -a bot --json",
-      "volumes create data -a bot --region iad --size 1 --yes",
       "ips list -a bot --json",
       "ips allocate-v4 --shared -a bot",
       "ips allocate-v6 -a bot",
@@ -85,7 +80,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     ]);
     const { fly, cmds } = fakeFly((a) => {
       if (a[0] === "ips") return { stdout: existing };
-      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+      return a[0] === "apps" ? { stdout: "[]" } : {};
     });
 
     expect(await run(plan(), fly)).toEqual({ ok: true });
@@ -104,7 +99,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     it(`allocates the missing ${missing} for an app that holds only the other family`, async () => {
       const { fly, cmds } = fakeFly((a) => {
         if (a[0] === "ips") return { stdout: JSON.stringify([held]) };
-        return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+        return a[0] === "apps" ? { stdout: "[]" } : {};
       });
 
       expect(await run(plan(), fly)).toEqual({ ok: true });
@@ -123,7 +118,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     ]);
     const { fly, cmds } = fakeFly((a) => {
       if (a[0] === "ips") return { stdout: internal };
-      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+      return a[0] === "apps" ? { stdout: "[]" } : {};
     });
 
     expect(await run(plan(), fly)).toEqual({ ok: true });
@@ -136,7 +131,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     // list we cannot read must not be treated as "probably fine" (#425).
     const { fly } = fakeFly((a) => {
       if (a[0] === "ips") return { code: 1 };
-      return a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {};
+      return a[0] === "apps" ? { stdout: "[]" } : {};
     });
 
     expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining("ips list") });
@@ -144,16 +139,15 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
 
   // Exit 0 with unreadable output is a THIRD answer, and every list gates on it rather than reading it
   // as "absent". flyctl has dropped `--json` before (superfly/flyctl#1967), and each collapse has its
-  // own damage: a second volume, a create misreported as a name clash, an unreachable deploy (#425).
+  // own damage: a create misreported as a name clash, an unreachable deploy (#425).
   for (const [label, args] of [
     ["apps list", ["apps"]],
-    ["volumes list", ["volumes"]],
     ["ips list", ["ips"]],
   ] as const) {
     it(`gate: \`${label}\` exiting 0 with non-JSON is not read as "absent"`, async () => {
       const { fly, cmds } = fakeFly((a) => {
         if (a[0] === args[0]) return { stdout: "NAME\tSTATUS\nbot\tdeployed\n" }; // the pre-#1967 table
-        return a[0] === "apps" || a[0] === "volumes" || a[0] === "ips" ? { stdout: "[]" } : {};
+        return a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {};
       });
 
       expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining(label) });
@@ -165,7 +159,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   // What is fly's here is the URL the shared registrar is handed and the gate becoming this run's
   // outcome; WHICH channels register, and how manual/failed outcomes read, is deploy-channel-ingress.
   it("registers at the fly URL, and a terminal failure becomes the run's gate", async () => {
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const { fly } = fakeFly((a) => (a[0] === "apps" ? { stdout: "[]" } : {}));
     const registerFeishu = vi.fn(
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
     );
@@ -193,7 +187,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("gate: an app that never answers /health stops BEFORE any webhook is registered", async () => {
     // `fly deploy` exits 0 on a machine that then crash-loops, and setWebhook does not verify the URL:
     // registering here would point a live channel at a dead address and report success.
-    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const { fly } = fakeFly((a) => (a[0] === "apps" ? { stdout: "[]" } : {}));
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(plan({ channels: declaredChannels(["telegram"]) }), fly, tg, async () => false);
 
@@ -202,23 +196,23 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   });
 
   it("secret values go over stdin (import), never argv", async () => {
-    const { fly, calls } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const { fly, calls } = fakeFly((a) => (a[0] === "apps" ? { stdout: "[]" } : {}));
     await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", FASTAGENT_AUTH_SEED: "b64" } }), fly);
     const importCall = calls.find((c) => c.args[0] === "secrets")!;
     expect(importCall.args.join(" ")).not.toContain("sk-x"); // not in argv
     expect(importCall.input).toBe("OPENAI_API_KEY=sk-x\nFASTAGENT_AUTH_SEED=b64\n"); // on stdin
   });
 
-  it("idempotent re-run: existing app + volume are skipped, deploy still runs", async () => {
+  it("idempotent re-run: an existing app is skipped, deploy still runs", async () => {
     const { fly, cmds } = fakeFly((a) => {
       if (a[0] === "apps" && a[1] === "list") return { stdout: JSON.stringify([{ Name: "bot" }]) };
-      if (a[0] === "volumes" && a[1] === "list") return { stdout: JSON.stringify([{ name: "data" }]) };
       return {};
     });
     const out = await run(plan(), fly);
     expect(out).toEqual({ ok: true });
     expect(cmds()).not.toContain("apps create bot");
-    expect(cmds()).not.toContain("volumes create data -a bot --region iad --size 1 --yes");
+    // The volume is `fly deploy`'s to create: only it can place one on a host that also fits the machine.
+    expect(cmds().some((c) => c.startsWith("volumes"))).toBe(false);
     expect(cmds()).toContain(
       "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     );

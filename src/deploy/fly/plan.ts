@@ -84,6 +84,8 @@ ${min}
 [mounts]
   source = "data"
   destination = "/data"            # workspace, state and credentials survive stop/suspend/redeploy
+  initial_size = "1gb"             # the volume is created by the FIRST deploy — it is pinned to one host, and only
+                                   # deploy tells the scheduler which machine (size + image) must fit there too
 
 [[vm]]
   size = "shared-cpu-1x"
@@ -133,10 +135,9 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in fly.toml and`,
     `# re-run \`fastagent deploy fly\` — the runbook follows fly.toml's app name.`,
     `fly apps create ${appName}`,
-    `# The volume persists the workspace, state and credentials across stop/suspend/redeploy.`,
-    `# <region> MUST equal primary_region in fly.toml (a volume in another region can't mount) — fly.toml`,
-    `# is the single source for the region; skip this if the volume exists (fly volumes list --app ${appName}):`,
-    `fly volumes create data --app ${appName} --region <region> --size 1`,
+    `# The volume (workspace, state, credentials — kept across stop/suspend/redeploy) is created by the deploy`,
+    `# below, in primary_region and sized by [mounts].initial_size. Creating it yourself first pins it to a host`,
+    `# picked without the machine, which can fail the deploy with "insufficient resources … existing volume".`,
     ``,
     `# An address to be reached ON: [http_service] declares a service, it does not allocate an IP.`,
     `# \`fly deploy\` allocates one on a FIRST deploy only, and merely WARNS when that fails — which`,
@@ -208,11 +209,6 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
 /** The `app` name from an existing fly.toml's `app = "…"` line, or undefined if absent. */
 export function parseFlyAppName(toml: string): string | undefined {
   return toml.match(/^\s*app\s*=\s*["']([^"']+)["']/m)?.[1];
-}
-
-/** The `primary_region` from a fly.toml, or undefined. */
-export function parseFlyRegion(toml: string): string | undefined {
-  return toml.match(/^\s*primary_region\s*=\s*["']([^"']+)["']/m)?.[1];
 }
 
 /** The `min_machines_running` from a fly.toml, or undefined. */
