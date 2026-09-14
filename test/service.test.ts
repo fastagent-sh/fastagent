@@ -48,6 +48,17 @@ describe("createAgentService", () => {
     }
   });
 
+  it("close() gives the write claim back — the lifetime half of the single-writer contract", async () => {
+    // The finalizer that releases it is registered FIRST on purpose, so it runs LAST: after the channels and the
+    // scheduler have stopped writing. Remove it and this directory stays claimed for the rest of the process.
+    const dir = await agentDir({
+      "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("ok") });`,
+    });
+    await (await createAgentService(dir)).close();
+    const again = await createAgentService(dir);
+    await again.close();
+  });
+
   it("a failed mount gives the write claim back, so the retry sees the real error again", async () => {
     // The claim is taken by the opener, but composition (channel import, control-plane collision) fails BEFORE the
     // scope whose finalizer releases it. Leaked, the retry would be refused by its own abandoned claim and the

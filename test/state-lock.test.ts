@@ -47,7 +47,7 @@ it("leaves independent directories alone", async () => {
   await second();
 });
 
-it("a SECOND PROCESS is refused, and a SIGKILLed holder's claim is still there (it can only expire)", async () => {
+it("a SECOND PROCESS is refused; a killed holder's leftover claim says so instead of naming a dead pid", async () => {
   const state = fresh();
   const source = new URL("../src/state-lock.ts", import.meta.url).href;
   const hold = spawn(
@@ -73,9 +73,28 @@ it("a SECOND PROCESS is refused, and a SIGKILLed holder's claim is still there (
     hold.kill("SIGKILL"); // no exit handler runs: the claim can only expire
     await exited;
   }
-  // SIGKILL runs no exit handler, so the claim outlives its holder. What clears it is `proper-lockfile`'s staleness
-  // (STALE_MS), which is its behaviour and its tests — waiting it out here would buy a 15s test.
-  await expect(lockAgentState([state])).rejects.toThrow(/already writing/);
+  // SIGKILL runs no exit handler, so the claim outlives its holder — and a container restarting into this must not
+  // be told to "stop that process". What clears the claim is `proper-lockfile`'s staleness (STALE_MS), its own
+  // behaviour: waiting it out here would buy a 15s test.
+  await expect(lockAgentState([state])).rejects.toThrow(
+    /claimed by a process that is gone \(pid \d+\).*clears itself within 15s/s,
+  );
+});
+
+it("an opener that fails after taking the claim gives it back, so the retry sees the real error", async () => {
+  // Everything between the claim and the return can throw — an unknown model here. Leaked, the retry is refused by
+  // its OWN claim and reports the caller's pid, which is advice nobody can act on.
+  const dir = fresh("fa-lock-fail-");
+  mkdirSync(join(dir, "fastagent"));
+  writeFileSync(
+    join(dir, "fastagent", "fastagent.config.ts"), // `sessionControl` makes the opener resolve the model registry — the step that rejects an unknown spec.
+    `export default { model: "nope/nope", sessionControl: true };\n`,
+  );
+  for (const attempt of ["first", "second"]) {
+    await expect(createPiAgentFromDir(dir, { sessionControl: true }), attempt).rejects.toThrow(
+      /unknown model "nope\/nope"/,
+    );
+  }
 });
 
 it("the opener takes ownership, and `exclusive: false` is how a caller declines it", async () => {

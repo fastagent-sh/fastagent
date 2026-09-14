@@ -37,15 +37,30 @@ const STALE_MS = 15_000;
  */
 const RETRIES = { retries: 3, factor: 3, minTimeout: 100, maxTimeout: 600, randomize: true };
 
-/** The holder writes its pid into the lock target, so the refusal can name a process rather than a path. */
-function holderOf(target: string): string {
+/**
+ * Who holds the lock, and whether they are still running. The holder writes its pid into the lock target, so the
+ * refusal can name a process; `kill(pid, 0)` then separates the two cases that need different advice — a live
+ * second writer (stop it) from a claim a SIGKILLed holder left behind (wait out {@link STALE_MS}).
+ *
+ * A recycled pid reads as alive, which is the current wording rather than a worse one.
+ */
+function holderOf(target: string): { label: string; alive: boolean } {
+  let pid = 0;
   try {
-    const pid = readFileSync(target, "utf8").trim();
-    return /^\d+$/.test(pid) ? ` (pid ${pid})` : "";
+    const raw = readFileSync(target, "utf8").trim();
+    if (/^\d+$/.test(raw)) pid = Number(raw);
   } catch {
-    // The holder released between the failed acquire and this read, or the file is unreadable — either way the
-    // refusal below still names the path, which is the part that always exists.
-    return "";
+    // The holder released between the failed acquire and this read, or the file is unreadable — the refusal still
+    // names the path, which is the part that always exists.
+  }
+  if (pid === 0) return { label: "", alive: true };
+  try {
+    process.kill(pid, 0); // signal 0: ask whether the process exists, send nothing
+    return { label: ` (pid ${pid})`, alive: true };
+  } catch (error) {
+    // EPERM = alive but owned by another user. Only ESRCH proves it is gone.
+    const gone = (error as NodeJS.ErrnoException).code === "ESRCH";
+    return { label: ` (pid ${pid})`, alive: !gone };
   }
 }
 
@@ -60,11 +75,12 @@ export async function lockAgentState(dirs: readonly string[]): Promise<() => Pro
   const taken: string[] = [];
   const release = async (): Promise<void> => {
     for (const target of taken.splice(0)) {
-      await lockfile
-        .unlock(target, { realpath: false })
-        .catch((error: unknown) =>
-          log.warn(`[fastagent] could not release the state lock ${target}: ${String(error)}`),
-        );
+      await lockfile.unlock(target, { realpath: false }).catch((error: unknown) => {
+        // ERELEASED = the lock was already compromised and dropped, which onCompromised reported at the moment it
+        // mattered. Repeating it here would put an unrelated warning on every clean shutdown after one.
+        if ((error as NodeJS.ErrnoException).code === "ERELEASED") return;
+        log.warn(`[fastagent] could not release the state lock ${target}: ${String(error)}`);
+      });
     }
   };
   for (const target of targets) {
@@ -77,18 +93,26 @@ export async function lockAgentState(dirs: readonly string[]): Promise<() => Pro
         retries: RETRIES,
         // The lock directory vanished under us (someone cleared the state root). Default behaviour rethrows from a
         // timer, which takes the process down over a guard; the ownership is genuinely lost either way, so say so
-        // and keep serving — the work in flight is what the guard exists to protect.
+        // and keep serving — the work in flight is what the guard exists to protect. ERROR level, because the
+        // invariant this module exists for is gone from here on.
         onCompromised: (error) =>
-          log.warn(`[fastagent] the state lock ${target} was lost — another process could now write: ${String(error)}`),
+          log.error(
+            `[fastagent] the state lock ${target} was lost — another process could now write: ${String(error)}`,
+          ),
       });
     } catch (error) {
       await release();
       if ((error as { code?: string }).code !== "ELOCKED") throw error;
+      const holder = holderOf(target);
       throw new Error(
-        `another process is already writing this agent's state${holderOf(target)} — file-backed state has one ` +
-          `writer, and a second one interleaves session journals and drops channel state (${target}). Stop that ` +
-          `process, give this run its own state (FASTAGENT_STATE_DIR=… or --sessions-dir), or ask the running ` +
-          `service instead — its POST /invoke on the port it printed, or /control/* with sessionControl: true.`,
+        holder.alive
+          ? `another process is already writing this agent's state${holder.label} — file-backed state has one ` +
+              `writer, and a second one interleaves session journals and drops channel state (${target}). Stop that ` +
+              `process, give this run its own state (FASTAGENT_STATE_DIR=… or --sessions-dir), or ask the running ` +
+              `service instead — its POST /invoke on the port it printed, or /control/* with sessionControl: true.`
+          : `this agent's state is claimed by a process that is gone${holder.label} — it was killed without ` +
+              `releasing (${target}). The claim clears itself within ${STALE_MS / 1000}s: retry then, or delete ` +
+              `${target}.lock if you know nothing else is writing here.`,
       );
     }
     // Written after the lock is ours, so the pid a refusal reads is the holder's and not a loser's.

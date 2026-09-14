@@ -201,80 +201,88 @@ export async function createPiAgentFromDir(
   // because they come apart: `--sessions-dir` moves the journals out of the state root, and a second run pointed at
   // the same journals through a different state root must still contend.
   const releaseState = options.exclusive === false ? undefined : await lockAgentState([stateRoot, sessionsDir]);
-  const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
-  const { assembly, definition } = await assemblePiFromDefinition(agentDir, {
-    model: modelSpec,
-    thinkingLevel: config.thinkingLevel,
-    cwd: workspace,
-    tools: mountedTools,
-    authPath,
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
-    // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
-    sessions,
-  });
-  // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
-  // the store does).
-  const caller = options.observer;
-  const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
-  let hub: ReturnType<typeof createPiSessionControl> | undefined;
-  if (wantControl) {
-    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
-    // credentials and is not.
-    const { modelRuntime, model } = await assembly.engine();
-    hub = createPiSessionControl({
+  // Everything below can throw (a definition that will not load, an unknown model, a credential the registry
+  // rejects) — and the claim above is already taken. Without this the caller's retry is refused by its OWN
+  // abandoned claim, and the error that actually stopped it never appears again.
+  try {
+    const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
+    const { assembly, definition } = await assemblePiFromDefinition(agentDir, {
+      model: modelSpec,
+      thinkingLevel: config.thinkingLevel,
+      cwd: workspace,
+      tools: mountedTools,
+      authPath,
+      ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+      // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
       sessions,
-      boundary: {
-        lease: assembly.lease,
-        models: modelRuntime,
-        sessionFactory: assembly.sessionFactory,
-        defaults: { model, thinkingLevel: assembly.thinkingLevel },
-      },
-      // Skills ARE the names a client offers — the resolved set, after collisions were decided first-wins, which a
-      // client cannot reconstruct from the directory.
-      commands: async () => {
-        const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
-        // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer
-        // with no signal anywhere.
-        reportFindingsIfChanged(loaded.dir, loaded);
-        return loaded.skills.map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          source: "skill",
-        }));
-      },
-      // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
-      // data plane's observer seam.
-      tap: caller ? (session, event) => caller(session, event) : undefined,
     });
+    // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
+    // the store does).
+    const caller = options.observer;
+    const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
+    let hub: ReturnType<typeof createPiSessionControl> | undefined;
+    if (wantControl) {
+      // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
+      // credentials and is not.
+      const { modelRuntime, model } = await assembly.engine();
+      hub = createPiSessionControl({
+        sessions,
+        boundary: {
+          lease: assembly.lease,
+          models: modelRuntime,
+          sessionFactory: assembly.sessionFactory,
+          defaults: { model, thinkingLevel: assembly.thinkingLevel },
+        },
+        // Skills ARE the names a client offers — the resolved set, after collisions were decided first-wins, which a
+        // client cannot reconstruct from the directory.
+        commands: async () => {
+          const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
+          // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer
+          // with no signal anywhere.
+          reportFindingsIfChanged(loaded.dir, loaded);
+          return loaded.skills.map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            source: "skill",
+          }));
+        },
+        // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
+        // data plane's observer seam.
+        tap: caller ? (session, event) => caller(session, event) : undefined,
+      });
+    }
+    const observer: SessionObserver | undefined = hub
+      ? caller
+        ? (session, event, run) => {
+            hub.observer(session, event, run);
+            caller(session, event, run);
+          }
+        : hub.observer
+      : caller;
+    const agent = agentOf(assembly, observer);
+    return {
+      agent,
+      definition,
+      sessions,
+      sessionControl: hub?.control,
+      selfSchedule: config.selfSchedule ?? false,
+      ...(releaseState ? { releaseState } : {}),
+      agentDir,
+      workspace,
+      config,
+      configPath,
+      modelSpec,
+      stateRoot,
+      sessionsDir,
+      authPath,
+      ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+      toolNames,
+      deferredToolNames,
+      toolCollisions,
+      toolFailures,
+    };
+  } catch (error) {
+    await releaseState?.();
+    throw error;
   }
-  const observer: SessionObserver | undefined = hub
-    ? caller
-      ? (session, event, run) => {
-          hub.observer(session, event, run);
-          caller(session, event, run);
-        }
-      : hub.observer
-    : caller;
-  const agent = agentOf(assembly, observer);
-  return {
-    agent,
-    definition,
-    sessions,
-    sessionControl: hub?.control,
-    selfSchedule: config.selfSchedule ?? false,
-    ...(releaseState ? { releaseState } : {}),
-    agentDir,
-    workspace,
-    config,
-    configPath,
-    modelSpec,
-    stateRoot,
-    sessionsDir,
-    authPath,
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
-    toolNames,
-    deferredToolNames,
-    toolCollisions,
-    toolFailures,
-  };
 }
