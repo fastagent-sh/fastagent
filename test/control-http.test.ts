@@ -746,7 +746,8 @@ describe("session control over HTTP", () => {
     }
 
     // A consumer that walks away before connecting ends its ITERATION cleanly (that is not a failure), but `ready`
-    // has a promise it cannot keep — and it must not report that as an unreachable endpoint.
+    // has a promise it cannot keep — and it must say WHY it cannot keep it, not report an unreachable endpoint. The
+    // two readers disagree on purpose, and they read the same stated reason to do it.
     const never = ((_input: string | URL | Request, init?: RequestInit) => {
       if (String(_input).includes("/control/capabilities")) {
         return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
@@ -759,7 +760,7 @@ describe("session control over HTTP", () => {
     }) as typeof fetch;
     const remote = await connectSessionControl({ url: "http://quiet", token: "t", fetchFn: never });
     const stream = remote.sessions.get("s").events();
-    const cancelled = expect(stream.ready).rejects.toThrow(/cancelled before the subscription was established/);
+    const cancelled = expect(stream.ready).rejects.toThrow(/cancelled by the consumer/);
     const iterator = stream[Symbol.asyncIterator]();
     const pull = iterator.next();
     await iterator.return?.(undefined);

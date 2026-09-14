@@ -24,22 +24,49 @@ import {
 const SSE_IDLE_LIMIT_MS = 3 * SSE_HEARTBEAT_MS;
 
 /**
+ * WHY a stream connection ended, carried BY the abort that ended it.
+ *
+ * Three independent deciders abort one connection — the consumer walking away, a phase deadline, the idle watchdog —
+ * and every reader afterwards (the generator's catch, `ready`, the invoke plane's terminal) needs to know which. That
+ * question used to be answered by reconstruction: booleans set beside each aborter and re-read by each catch, where
+ * being wrong is silent. `AbortSignal.reason` already carries it: `fetch` and `reader.read()` reject with the reason
+ * OBJECT itself (verified on Node 22.19 and 26), and a second bare `abort()` does not overwrite it — so the decider
+ * states the reason once and nobody infers it.
+ */
+type StreamEndKind = "cancelled" | "connect-timeout" | "idle";
+class StreamEnded extends Error {
+  readonly kind: StreamEndKind;
+  constructor(kind: StreamEndKind, message: string) {
+    super(message);
+    this.name = "StreamEnded";
+    this.kind = kind;
+  }
+}
+
+/** The reason this connection was ended, when one was given — `undefined` for any other failure. */
+function endedBecause(signal: AbortSignal): StreamEnded | undefined {
+  return signal.reason instanceof StreamEnded ? signal.reason : undefined;
+}
+
+/**
  * The watchdog counts only while ARMED — armed means "a read is actually pending" (the connect awaiting headers, a
  * body read awaiting bytes).
  */
 interface ReadWatch {
   arm(): void;
   disarm(): void;
-  stale(): boolean;
   stop(): void;
 }
-function idleWatchdog(abort: AbortController): ReadWatch {
+function idleWatchdog(abort: AbortController, what: string): ReadWatch {
   let armedAt: number | undefined;
-  let stale = false;
   const timer = setInterval(() => {
     if (armedAt !== undefined && Date.now() - armedAt > SSE_IDLE_LIMIT_MS) {
-      stale = true;
-      abort.abort();
+      abort.abort(
+        new StreamEnded(
+          "idle",
+          `${what}: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
+        ),
+      );
     }
   }, SSE_HEARTBEAT_MS);
   return {
@@ -49,7 +76,6 @@ function idleWatchdog(abort: AbortController): ReadWatch {
     disarm: () => {
       armedAt = undefined;
     },
-    stale: () => stale,
     stop: () => clearInterval(timer),
   };
 }
@@ -136,11 +162,14 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         // as any other request instead — a reconnecting client now waits on this phase (`ready` precedes the
         // backfill), so an endpoint that accepts the socket and then answers slowly, partially, or never would hold a
         // whole attach round silently past every budget the caller counts rounds against.
-        const watchdog = idleWatchdog(abort);
-        let connectTimedOut = false;
+        const watchdog = idleWatchdog(abort, "control events");
         const connectDeadline = setTimeout(() => {
-          connectTimedOut = true;
-          abort.abort();
+          abort.abort(
+            new StreamEnded(
+              "connect-timeout",
+              `control events: no usable response in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never completed one`,
+            ),
+          );
         }, REQUEST_TIMEOUT_MS);
         try {
           let res: Response;
@@ -157,16 +186,11 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           } catch (error) {
             clearTimeout(connectDeadline);
             // The subscription was never established: the endpoint is unreachable or never completed a response, the
-            // token was refused, the consumer cancelled first. A waiter on `ready` must learn that instead of waiting
-            // out a stream that will never carry anything — including the cancellation, which the ITERATION reports
-            // as a clean end (walking away is not an error) while `ready` still has a promise it cannot keep.
-            const failure = connectTimedOut
-              ? new Error(
-                  `control events: no usable response in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never completed one`,
-                )
-              : abort.signal.aborted
-                ? new Error("control events: cancelled before the subscription was established")
-                : error;
+            // token was refused, the consumer cancelled first. Whoever ended it said why, and `fetch` rejected with
+            // that very object. A waiter on `ready` must learn it instead of waiting out a stream that will never
+            // carry anything — including the cancellation, which the ITERATION reports as a clean end (walking away
+            // is not an error) while `ready` still has a promise it cannot keep.
+            const failure = endedBecause(abort.signal) ?? error;
             unreachable(failure);
             throw failure;
           }
@@ -205,16 +229,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             yield wire.event;
           }
         } catch (error) {
-          // A connect timeout aborts this controller itself, so it must not be read as "the consumer walked away".
-          if (abort.signal.aborted && !connectTimedOut) {
-            if (watchdog.stale()) {
-              throw new Error(
-                `control events: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
-              );
-            }
-            return; // the consumer walked away — clean end, not an error
-          }
-          throw error;
+          const ended = endedBecause(abort.signal);
+          if (ended?.kind === "cancelled") return; // the consumer walked away — clean end, not an error
+          throw ended ?? error;
         } finally {
           clearTimeout(connectDeadline);
           watchdog.stop();
@@ -227,7 +244,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         const abort = new AbortController();
         // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a generator suspended
         // on a quiet stream read.
-        return abortFirstIterator(openStream(abort), () => abort.abort());
+        return abortFirstIterator(openStream(abort), () =>
+          abort.abort(new StreamEnded("cancelled", "control events: cancelled by the consumer")),
+        );
       },
     };
   };
@@ -353,7 +372,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
           let terminalSeen = false;
           // Armed BEFORE the fetch — the run's driver must not hang on a black-holed connect either (the connect
           // await is a pending read; headers arriving disarm it).
-          const watchdog = idleWatchdog(abort);
+          const watchdog = idleWatchdog(abort, "remote invoke");
           watchdog.arm();
           try {
             const res = await fetchFn(`${base}/control/invoke`, {
@@ -409,15 +428,14 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             }
             yield { type: "failed", details: "remote invoke: stream ended without a terminal", retryable: true };
           } catch (error) {
-            if (abort.signal.aborted) {
-              if (watchdog.stale() && !terminalSeen) {
-                yield {
-                  type: "failed",
-                  details: `remote invoke: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection`,
-                  retryable: true,
-                };
+            const ended = endedBecause(abort.signal);
+            if (ended) {
+              // A terminal already told the caller how the run ended; a second event after it would be a lie about
+              // the run rather than news about the connection.
+              if (ended.kind === "idle" && !terminalSeen) {
+                yield { type: "failed", details: ended.message, retryable: true };
               }
-              return; // the consumer walked away — cancellation, not an error
+              return; // cancellation is not an error, and an idle connection has just been reported
             }
             if (!terminalSeen) yield toFailed(error);
           } finally {
@@ -427,7 +445,9 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
         })();
       // ONE stream per invoke, like a local async generator (which is its own iterator): a second iteration must
       // never re-POST.
-      const iterator = abortFirstIterator(openStream(), () => abort.abort());
+      const iterator = abortFirstIterator(openStream(), () =>
+        abort.abort(new StreamEnded("cancelled", "remote invoke: cancelled by the consumer")),
+      );
       return {
         [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
           return iterator;
