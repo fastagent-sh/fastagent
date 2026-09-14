@@ -27,9 +27,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-live-registry-"));
     await run("npm", ["init", "-y"], { cwd: dir });
     // --ignore-scripts: a consumer install runs no build of ours, so the tarball must already be whole.
-    await run("npm", ["install", `${PACKAGE}@${VERSION}`, "--ignore-scripts"], {
-      cwd: dir,
-    });
+    await run("npm", ["install", `${PACKAGE}@${VERSION}`, "--ignore-scripts"], { cwd: dir });
 
     const cli = join(dir, "node_modules", ".bin", "fastagent");
     const { stdout } = await run(cli, ["--version"], { cwd: dir });

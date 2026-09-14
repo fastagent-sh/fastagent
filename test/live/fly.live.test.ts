@@ -7,8 +7,7 @@
  * field or stops emitting JSON, every one of those tests stays green while `deploy fly --run` starts
  * misreading its own tooling.
  *
- * READ-ONLY, on purpose. The driver's write steps (`apps create`, `volumes create`, `secrets import`,
- * `deploy`) are what cost money and leave resources behind; its read steps are where the parsing
+ * READ-ONLY, on purpose. The driver's write steps (`apps create`, `secrets import`, `deploy`) are what cost money and leave resources behind; its read steps are where the parsing
  * assumptions live, and they are free. What a real deploy would add on top of this — that pushing an
  * image succeeds — is largely covered by docker.live.test.ts, which builds and boots the SAME
  * generated Dockerfile through the SAME serving path.
@@ -100,16 +99,5 @@ describe("flyctl output still matches what the Fly driver reads", () => {
       v4: false,
       v6: false,
     });
-  });
-
-  it("`volumes list --json` parses through the same reader", async () => {
-    // listHasName serves BOTH lists, so a divergence between the two shapes would break volume
-    // detection while apps still worked — the driver would try to create an existing volume.
-    const apps = JSON.parse(await flyctl(["apps", "list", "--json"])) as { Name?: string; name?: string }[];
-    const app = requireApp(apps);
-
-    const stdout = await flyctl(["volumes", "list", "-a", app, "--json"]);
-    expect(Array.isArray(JSON.parse(stdout)), "volumes list --json is no longer a JSON array").toBe(true);
-    expect(listHasName(stdout, `absent-${randomUUID()}`)).toBe(false);
   });
 });

@@ -130,11 +130,10 @@ fastagent deploy fly
 Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy runbook:
 
 1. `fly apps create <name>` — one-time (Fly app names are globally unique; if taken, edit `app` in `fly.toml` and re-run `deploy`).
-2. The `data` volume is not a step: `fly deploy` creates it on the first deploy, in `primary_region` and at `[mounts].initial_size`. Creating it up front pins it to a host chosen without the machine, which fails the deploy with `insufficient resources … existing volume`.
-3. `fly ips allocate-v4 --shared` + `fly ips allocate-v6` — one-time, free. `[http_service]` declares a service; it does not allocate an address to reach it on. `fly deploy` does that on a *first* deploy only, and just warns when it fails — leaving a machine that serves and a `https://<name>.fly.dev` with no DNS record. Skip if `fly ips list` already shows one.
-4. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
-5. `fly deploy` builds and ships. For a new definition release, run `fastagent deploy fly` first to refresh the release manifest, then build and ship again.
-6. Register each route channel's webhook at the live URL. Locally onboarded Slack updates its App Manifest from the builder machine; scaffold-only/manual Slack prints the console URL. WebSocket long-connection channels make no registration call.
+2. `fly ips allocate-v4 --shared` + `fly ips allocate-v6` — one-time, free. `[http_service]` declares a service; it does not allocate an address to reach it on. `fly deploy` does that on a *first* deploy only, and just warns when it fails — leaving a machine that serves and a `https://<name>.fly.dev` with no DNS record. Skip if `fly ips list` already shows one.
+3. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
+4. `fly deploy` builds and ships — and creates the `data` volume on a first deploy, in `primary_region` and at `[mounts].initial_size`. Creating that volume up front instead pins it to a host chosen without the machine, which is how a deploy ends at `insufficient resources … existing volume`. For a new definition release, run `fastagent deploy fly` first to refresh the release manifest, then build and ship again.
+5. Register each route channel's webhook at the live URL. Locally onboarded Slack updates its App Manifest from the builder machine; scaffold-only/manual Slack prints the console URL. WebSocket long-connection channels make no registration call.
 
 Or let the CLI do all of it:
 
