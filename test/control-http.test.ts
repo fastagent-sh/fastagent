@@ -692,10 +692,10 @@ describe("session control over HTTP", () => {
         (async () => {
           for await (const _ of stream) void _;
         })(),
-      ).rejects.toThrow(/no response headers in 10s/);
+      ).rejects.toThrow(/no usable response in 10s/);
       // A reconnecting client WAITS on this phase before it reads history, so the connect gets the same 10s
       // black-hole budget as any other request — the 90s heartbeat limit is for a connection that is merely quiet.
-      const readyAttempt = expect(stream.ready).rejects.toThrow(/no response headers in 10s/);
+      const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
       const agentAttempt = drain(
         connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
       );
@@ -710,6 +710,61 @@ describe("session control over HTTP", () => {
     } finally {
       fakeTimers.useRealTimers();
     }
+  });
+
+  it("4xx headers with a black-holed BODY stay on the connect budget, and a cancelled connect says so", async () => {
+    // The half-dead tunnel the error path names: headers answer, the body never does. Clearing the connect deadline
+    // at the headers would have left that read to the 90s idle limit — with `ready` awaited before the backfill,
+    // that is a whole attach round spent silent.
+    const hangingBody = ((_input: string | URL | Request, init?: RequestInit) => {
+      if (String(_input).includes("/control/capabilities")) {
+        return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 502 }));
+    }) as typeof fetch;
+    const timers = await import("vitest").then((m) => m.vi);
+    timers.useFakeTimers();
+    try {
+      const remote = await connectSessionControl({ url: "http://tunnel", token: "t", fetchFn: hangingBody });
+      const stream = remote.sessions.get("s").events();
+      const iterating = expect(
+        (async () => {
+          for await (const _ of stream) void _;
+        })(),
+      ).rejects.toThrow(/no usable response in 10s/);
+      const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
+      await timers.advanceTimersByTimeAsync(10_000);
+      await iterating;
+      await readyAttempt;
+    } finally {
+      timers.useRealTimers();
+    }
+
+    // A consumer that walks away before connecting ends its ITERATION cleanly (that is not a failure), but `ready`
+    // has a promise it cannot keep — and it must not report that as an unreachable endpoint.
+    const never = ((_input: string | URL | Request, init?: RequestInit) => {
+      if (String(_input).includes("/control/capabilities")) {
+        return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+          once: true,
+        });
+      });
+    }) as typeof fetch;
+    const remote = await connectSessionControl({ url: "http://quiet", token: "t", fetchFn: never });
+    const stream = remote.sessions.get("s").events();
+    const cancelled = expect(stream.ready).rejects.toThrow(/cancelled before the subscription was established/);
+    const iterator = stream[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    await iterator.return?.(undefined);
+    expect(await pull).toMatchObject({ done: true });
+    await cancelled;
   });
 
   it("a paused consumer never trips the watchdog — it measures pending reads, not pull progress", async () => {

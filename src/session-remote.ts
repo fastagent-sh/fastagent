@@ -131,14 +131,12 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     // "every iteration is a fresh subscription".
     const openStream = (abort: AbortController) =>
       (async function* iterate(): AsyncGenerator<SessionEvent> {
-        // Armed BEFORE the fetch: the connect phase (headers never arriving from a black-holed endpoint) is otherwise
-        // a window no timeout covers.
+        // The idle watchdog governs the SUBSCRIBED stream (`sseData` arms it per read): 90s is the right limit for a
+        // connection that is merely quiet. Everything BEFORE the subscription exists rides the same black-hole budget
+        // as any other request instead — a reconnecting client now waits on this phase (`ready` precedes the
+        // backfill), so an endpoint that accepts the socket and then answers slowly, partially, or never would hold a
+        // whole attach round silently past every budget the caller counts rounds against.
         const watchdog = idleWatchdog(abort);
-        watchdog.arm(); // the connect await is a pending read
-        // The CONNECT phase gets the same black-hole budget as any other request. The heartbeat watchdog covers a
-        // dead connection at 90s, which is the right limit for a stream that is merely quiet — but a reconnecting
-        // client now WAITS on this phase (`ready` precedes the backfill), so an endpoint that accepts the socket and
-        // never answers would hold a whole attach round silently past every budget the caller counts rounds against.
         let connectTimedOut = false;
         const connectDeadline = setTimeout(() => {
           connectTimedOut = true;
@@ -151,26 +149,24 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
               headers,
               signal: abort.signal,
             });
-            clearTimeout(connectDeadline); // headers arrived: the stream's own idle limit takes over from here
-            watchdog.disarm();
-            if (!res.ok) {
-              // The error body is a pending read too — a half-dead tunnel serving 4xx headers then black-holing the
-              // body must not hang the round outside every budget.
-              watchdog.arm();
-              throw new ControlRequestError(res.status, await res.text());
-            }
+            // The error body is a pending read too — a half-dead tunnel serving 4xx headers and then black-holing the
+            // body stays on the connect deadline, which is why it is cleared only past these checks.
+            if (!res.ok) throw new ControlRequestError(res.status, await res.text());
             if (!res.body) throw new Error("control events: response has no body");
+            clearTimeout(connectDeadline); // subscribed: the stream's own idle limit takes over from here
           } catch (error) {
             clearTimeout(connectDeadline);
-            // Everything here means the subscription was never established: the endpoint is unreachable, the token
-            // was refused, the connect budget ran out, the consumer aborted before connecting. A waiter on `ready`
-            // must learn that instead of waiting out a stream that will never carry anything; the iteration fails on
-            // the same error below.
+            // The subscription was never established: the endpoint is unreachable or never completed a response, the
+            // token was refused, the consumer cancelled first. A waiter on `ready` must learn that instead of waiting
+            // out a stream that will never carry anything — including the cancellation, which the ITERATION reports
+            // as a clean end (walking away is not an error) while `ready` still has a promise it cannot keep.
             const failure = connectTimedOut
               ? new Error(
-                  `control events: no response headers in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never answered`,
+                  `control events: no usable response in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never completed one`,
                 )
-              : error;
+              : abort.signal.aborted
+                ? new Error("control events: cancelled before the subscription was established")
+                : error;
             unreachable(failure);
             throw failure;
           }
