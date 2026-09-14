@@ -247,8 +247,9 @@ export interface MountableAgent {
   /** The session-control hub, when the opener built one. A serve has it whether or not `/control/*` is published:
    *  a chat channel's stop command reaches the running turn through it. */
   sessionControl?: SessionControl;
-  /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Absent = in-process only. */
-  publishControl?: boolean;
+  /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Required, not defaulted: an
+   *  embedder assembling this by hand would otherwise lose the plane to a 404 with nothing said anywhere. */
+  publishControl: boolean;
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
 }

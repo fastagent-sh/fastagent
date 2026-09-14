@@ -19,7 +19,9 @@ export type Routes = Record<string, ChannelHandler>;
 export interface ChannelContext {
   agent: Agent;
   stateRoot: string;
-  /** The serving session-control hub, when the serve wires one (`config.sessionControl`). */
+  /** The serving session-control hub: every serve has it, so a stop command reaches the live run through it.
+   *  `config.sessionControl` decides only whether the SAME hub is also published as `/control/*` (and wires its
+   *  write side). Absent only when an embedder mounts a service without one. */
   control?: SessionControl;
 }
 
