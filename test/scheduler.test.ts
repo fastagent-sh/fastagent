@@ -459,6 +459,40 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("a stale slot is warned AND audited — a planned run that will never happen must be visible", async () => {
+    // The way in is a wall clock that moved backwards (a VM resume, a host clock correction): `nextRun` keeps
+    // producing slots behind the newest claim, the schedule stops firing, and without a record `schedule history`
+    // would show nothing at all. A duplicate delivery is the benign case and stays an info line with no record.
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    const { agent, calls } = recordingAgent();
+    seedClaim(root, "job", "2026-07-07T12:00:03.000Z", "2026-07-07T12:00:00.000Z");
+    const stale = await fireScheduleOnce({
+      agent,
+      stateRoot: root,
+      schedule: hourly(),
+      slot: new Date("2026-07-07T09:00:00Z"),
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    });
+    expect(stale.fired).toBe(false);
+    expect(calls).toHaveLength(0);
+    expect(readRuns(root, "job")).toMatchObject([
+      { outcome: "stale", ms: 0, error: expect.stringMatching(/is stale/) },
+    ]);
+    expect(warns.some((w) => /is stale/.test(w))).toBe(true);
+
+    // The duplicate path stays quiet in the audit: one line per retried delivery would drown the history.
+    await fireScheduleOnce({
+      agent,
+      stateRoot: root,
+      schedule: hourly(),
+      slot: new Date("2026-07-07T12:00:00Z"),
+      now: () => new Date("2026-07-07T12:31:00Z"),
+    });
+    expect(readRuns(root, "job")).toHaveLength(1);
+  });
+
   it("a LATER slot still fires even when the earlier delivery arrived after it", async () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();

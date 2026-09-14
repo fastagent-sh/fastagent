@@ -14,11 +14,13 @@ export interface RunRecord {
   ms: number;
   /**
    * `deferred` = a wake into a busy session, re-scheduled (not a final outcome for that wake-up).
+   * `stale` = a slot that arrived after the schedule had already claimed a later one, so it will never run — a
+   * planned turn missing from the bill, which is why it is here rather than only in a log.
    * `interrupted` = a CRON fire the process stopped in the middle of, written by the NEXT boot from the slot claim it
    * left in `schedule/claims/` (the run that owned it never got to write anything). A killed WAKE-UP produces
    * nothing: `takeFirstDueWakeup` removes it from the store before the turn starts, so no claim survives.
    */
-  outcome: "completed" | "failed" | "deferred" | "interrupted";
+  outcome: "completed" | "failed" | "deferred" | "interrupted" | "stale";
   /** The turn's full reply text (completed). */
   reply?: string;
   /** The failure details (failed). */

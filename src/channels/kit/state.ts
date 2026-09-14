@@ -1,6 +1,8 @@
 /**
- * Durable channel state for a SINGLE-PROCESS deployment (the supported production shape — no cross-instance locking;
- * two processes must not share a state dir).
+ * Durable channel state, with no cross-instance locking: every file here is keyed by CHANNEL KIND
+ * (`<stateRoot>/channels/<kind>/`), so what must not happen is two processes serving the SAME channel — which also
+ * means one ingress credential in two places, and no local guard can see that. Two processes serving different
+ * channels of one agent never touch the same file (docs/design/core.md, "the shipped file-backed implementations").
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { writeFileAtomic } from "../../atomic-write.ts";

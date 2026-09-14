@@ -164,11 +164,25 @@ export function fireScheduleOnce(opts: {
         // failure cannot burn a slot that was already claimed.
         const claim = claimSlot(stateRoot, s.name, slot, firedAt);
         if (claim.taken) return undefined;
-        const reason =
-          claim.why === "duplicate"
-            ? `slot ${slot.toISOString()} is already claimed — a duplicate delivery, or another scheduler has it`
-            : `slot ${slot.toISOString()} is stale: ${claim.newest} was already claimed, so this instant is skipped`;
-        log.info(`[schedule] ${s.name}: skipping — ${reason}`);
+        if (claim.why === "duplicate") {
+          // Ordinary: the same delivery arrived twice, or another scheduler has this slot and is running it.
+          const reason = `slot ${slot.toISOString()} is already claimed — a duplicate delivery, or another scheduler has it`;
+          log.info(`[schedule] ${s.name}: skipping — ${reason}`);
+          return reason;
+        }
+        // Not ordinary: this instant will never run. The common way in is a wall clock that moved backwards (a VM
+        // resume, a host clock correction), which keeps producing slots behind the newest claim — so it must be
+        // visible in `schedule history`, not only in a log line that looks like the benign case.
+        const reason = `slot ${slot.toISOString()} is stale: ${claim.newest} was already claimed, so this instant is skipped`;
+        log.warn(`[schedule] ${s.name}: skipping — ${reason}`);
+        appendRun(stateRoot, {
+          name: s.name,
+          session: scheduleSession(s.name),
+          firedAt: firedAt.toISOString(),
+          ms: 0,
+          outcome: "stale",
+          error: reason,
+        });
         return reason;
       },
       catch: (cause) => new PortFailure(cause),

@@ -603,7 +603,9 @@ rather than general — measured, not assumed:
   one file answers both planes — was that fire ever reported (the boot-time `interrupted` check), and
   where does catch-up resume. A second file would reintroduce a window in which a killed process leaves
   a claimed slot nothing accounts for. A claim outliving its process is correct: the slot was taken, and
-  a fire interrupted mid-turn is recorded as `interrupted` by the next start. That check has one known
+  a fire interrupted mid-turn is recorded as `interrupted` by the next start. A slot refused as stale is recorded
+  too (`stale`), because that is a planned run that will never happen; a duplicate delivery is not, because it is
+  ordinary and one line per platform retry would drown the history. That check has one known
   false positive — a second scheduler booting while the first is mid-turn reports a claim the audit does
   not account for YET, so the history carries both lines for that instant; telling them apart would need
   the claimer's liveness, which is a lease rather than a claim.

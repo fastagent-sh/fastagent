@@ -1,7 +1,7 @@
 /**
- * One property, and the only way to reach it: `claimSlot` creates the claim before it stamps it, so a failing stamp
- * must take the claim back down. Injecting that failure needs `node:fs` itself mocked, which is why this property
- * lives in its own file rather than in `scheduler.test.ts`.
+ * The two claim properties whose failure can only be injected by mocking `node:fs`, which is why they live in their
+ * own file rather than in `scheduler.test.ts`: a stamp write that fails must take the claim back down, and a claim
+ * that disappears between the listing and the read must degrade rather than fail the boot.
  */
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
 let failStamp = false;
+let vanishOnRead = false;
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -18,14 +19,19 @@ vi.mock("node:fs", async (importOriginal) => {
       if (failStamp) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
       return actual.writeFileSync(...args);
     },
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      if (vanishOnRead) throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+      return actual.readFileSync(...args);
+    },
   };
 });
 
-const { claimSlot } = await import("../src/schedule/state.ts");
+const { claimSlot, latestFire } = await import("../src/schedule/state.ts");
 
 const dirs: string[] = [];
 afterEach(() => {
   failStamp = false;
+  vanishOnRead = false;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 const fresh = (): string => {
@@ -52,4 +58,15 @@ it("a failed stamp takes the claim back down, so the slot is not eaten by a full
   failStamp = false;
   expect(claimSlot(root, "job", slot, slot)).toEqual({ taken: true }); // the same slot still fires
   expect(claims(root)).toEqual(["2026-07-07T10-00-00-000Z"]);
+});
+
+it("a claim pruned between the listing and the read falls back to its slot, not a boot failure", () => {
+  // A concurrent claim prunes while this one is reading. The slot in the file name is the fact already in hand, so
+  // this degrades the same way an unusable stamp does — `latestFire` runs inside a synchronous boot path whose
+  // throws stop the serve.
+  const root = fresh();
+  const slot = new Date("2026-07-07T10:00:00Z");
+  expect(claimSlot(root, "job", slot, new Date("2026-07-07T10:00:03Z"))).toEqual({ taken: true });
+  vanishOnRead = true;
+  expect(latestFire(root, "job")).toBe("2026-07-07T10:00:00.000Z");
 });

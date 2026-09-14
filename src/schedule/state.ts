@@ -34,8 +34,11 @@ export function writeScheduleFile(path: string, value: unknown): void {
 // ── claims/: one file per fired slot — the DECISION to fire, made atomically ──
 
 /**
- * How many claims to keep per schedule. Pruning removes the OLDEST names only, so the newest claim always survives —
- * which is what keeps the monotonic gate below working past the window.
+ * How many claims to keep per schedule. Only the newest is ever READ (the gate below and `latestFire`), so the rest
+ * buy two things and nothing else: a reader that has already listed the directory is unlikely to have its pick
+ * pruned out from under it (`latestFire` degrades rather than failing when that happens anyway), and an operator can
+ * see the last slots this state root took. Pruning removes the OLDEST names only, so the newest claim never goes —
+ * which is what keeps the gate working past the window.
  */
 const KEEP_CLAIMS = 32;
 
@@ -109,9 +112,16 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
   } catch (e) {
     // The claim exists from `openSync` on, so a failed stamp (ENOSPC, EIO) would leave a slot that can only ever be
     // read as `duplicate` — taken, never run, never audited. Remove it so the failure this rethrows costs a retry
-    // instead of the slot itself.
-    closeSync(fd);
-    unlinkSync(join(dir, wanted));
+    // instead of the slot itself. The cleanup's own failure is reported but never replaces `e`: the caller needs
+    // the reason the write failed, not the reason the rollback did.
+    try {
+      closeSync(fd);
+      unlinkSync(join(dir, wanted));
+    } catch (cleanup) {
+      log.warn(
+        `[schedule] ${name}: could not remove the unstamped claim ${wanted} — that slot is now taken but will never run: ${String(cleanup)}`,
+      );
+    }
     throw e;
   }
   closeSync(fd);
@@ -138,7 +148,14 @@ export function latestFire(stateRoot: string, name: string): string | undefined 
     throw e;
   }
   if (slot === undefined) return undefined;
-  const stamped = readFileSync(join(claimDir(stateRoot, name), slot), "utf8").trim();
+  let stamped = "";
+  try {
+    stamped = readFileSync(join(claimDir(stateRoot, name), slot), "utf8").trim();
+  } catch (e) {
+    // Pruning by a concurrent claim can remove the name between the listing and this read. The slot in that name is
+    // the fact we already have, so this is the same degradation an unusable stamp gets, not a boot failure.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
   if (stamped && !Number.isNaN(Date.parse(stamped))) return stamped;
   if (stamped) log.warn(`[schedule] ${name}: claim ${slot} carries an unreadable stamp — using the slot instant`);
   return slot.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ":$1:$2.$3Z");
