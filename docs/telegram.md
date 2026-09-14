@@ -179,9 +179,9 @@ For development bots, surfacing `failed.details` is useful. For public bots, pre
 
 ## Stopping a running turn
 
-When the serve runs with `sessionControl: true` (fastagent.config), a `/stop` **addressed to this bot**
-aborts the chat's active turn (queued asks are independent and keep running — send `/stop` again when
-one starts). Without session control the command answers with a visible "not enabled" notice.
+A `/stop` **addressed to this bot** aborts the chat's active turn (queued asks are independent and keep
+running — send `/stop` again when one starts). No configuration is needed: stopping the running turn is
+part of serving, not part of `/control/*`.
 
 Four ways to address it, all equivalent: a bare `/stop` in a private chat, `/stop@<thisbot>`,
 `@<thisbot> /stop`, and a bare `/stop` replying to one of the bot's own messages.

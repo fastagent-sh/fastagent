@@ -730,6 +730,10 @@ For agent assembly the store lives inside the opener, so ask the opener to wire 
 const { agent, sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
 ```
 
+A serve (`serving: true`, which `createAgentService` passes) gets a hub without asking, because a chat
+channel's stop command aborts the running turn through it — that action needs no boundary. What
+`sessionControl: true` adds is the write side and, in a service, the `/control/*` routes.
+
 ### Remote (HTTP + SSE)
 
 The same contract over the wire — for a Web panel, a desktop app, or `fastagent attach`. Server

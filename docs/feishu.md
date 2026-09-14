@@ -326,9 +326,9 @@ Two audiences, like the Telegram channel:
 - **Operator log**: always receives the full diagnostic details.
 - **Chat user**: every answered turn receives `onError(failed)` if provided, otherwise a neutral default keyed on `retryable`.
 
-When the serve runs with `sessionControl: true`, a summon whose whole message is "stop" or "cancel"
-aborts the session's active turn instead of becoming a turn (queued asks keep running; without
-session control it answers with a visible "not enabled" notice).
+A summon whose whole message is "stop" or "cancel" aborts the session's active turn instead of
+becoming a turn (queued asks keep running). No configuration is needed: stopping the running turn is
+part of serving, not part of `/control/*`.
 
 ## Files and images
 

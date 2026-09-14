@@ -2494,6 +2494,6 @@ describe("feishu stop command", () => {
     await idle();
     expect(calls).toHaveLength(1); // only "stop it" became a turn
     const bodies = net.calls("/im/v1/messages", "POST").map((c) => JSON.stringify(c.body));
-    expect(bodies.some((b) => b.includes("Stop isn't enabled"))).toBe(true);
+    expect(bodies.some((b) => b.includes("Stop isn't available"))).toBe(true);
   });
 });

@@ -310,10 +310,10 @@ duplicate. The tool does not hide that uncertainty with an automatic final-step 
 
 ## Stopping a running turn
 
-When the serve runs with `sessionControl: true` (fastagent.config), a DM or @mention whose whole
-message is "stop" or "cancel" aborts that conversation's active turn instead of becoming a turn.
-Queued asks are independent and keep running — stop the next one when it starts. Without session
-control the command answers with a visible "not enabled" notice.
+A DM or @mention whose whole message is "stop" or "cancel" aborts that conversation's active turn
+instead of becoming a turn. Queued asks are independent and keep running — stop the next one when it
+starts. No configuration is needed: stopping the running turn is part of serving, not part of
+`/control/*`.
 
 ## Durability and state
 

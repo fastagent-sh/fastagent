@@ -656,10 +656,13 @@ durable-intent treatment.
 
 Shipped from that list — **the user-facing stop command**: `ChannelContext.control?` hands channels the
 hub for DISPATCH only, and the chat channels map an explicit user stop (Telegram `/stop`; a bare
-"stop"/"cancel" summon on Slack/Feishu/Lark) onto `abort`. The hub stays gated by
-`config.sessionControl` (no hub → a visible "not enabled" notice, never a silent ignore); the stop
-message is a control action, never a turn; only the ACTIVE run is aborted — queued durable turns are
-independent asks and keep their at-least-once floor.
+"stop"/"cancel" summon on Slack/Feishu/Lark) onto `abort`. The hub itself is NOT gated: a serve always
+builds it, because `abort` reaches the live run through the controls `run_started` carried and needs no
+boundary wiring — asking an author to publish a remote management surface in order to stop a turn was
+paying for the wrong thing. `config.sessionControl` gates what it always meant to gate: serving
+`/control/*`, and wiring the boundary that makes writes possible at all. The stop message is a control
+action, never a turn; only the ACTIVE run is aborted — queued durable turns are independent asks and keep
+their at-least-once floor.
 
 ## 16. Invariants
 

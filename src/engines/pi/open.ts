@@ -38,7 +38,11 @@ export interface CreatePiAgentFromDirOptions {
    * actually honored.
    */
   serving?: boolean;
-  /** Assemble the session control plane over this agent's session store and return it as {@link sessionControl}. */
+  /**
+   * Wire the control plane's BOUNDARY (model changes, fork, delete) and publish it. A serve always gets the hub
+   * itself — stopping the running turn is a chat command, not a management endpoint — so this is the answer to
+   * "may a remote caller steer and rewrite this deployment", nothing else. Defaults to `config.sessionControl`.
+   */
   sessionControl?: boolean;
   /** Additional raw tap with the FULL vocabulary. */
   observer?: SessionObserver;
@@ -155,8 +159,11 @@ export async function createPiAgentFromDir(
    *  whichever layer the credential came from, so it needs both. */
   fallbackAuthPath?: string;
   sessions: PiSessionRecordStore;
-  /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
+  /** The observation plane over this agent's sessions; present on every serve (a channel's stop command reaches the
+   *  live run through it). Its boundary is wired only when {@link publishControl}. */
   sessionControl?: SessionControl;
+  /** Whether that plane is also served as `/control/*` — `config.sessionControl`. */
+  publishControl: boolean;
   /**
    * Whether the agent schedules its own follow-up turns — read from the config, so a caller assembling a service does
    * not have to reach back into it (MountableAgent).
@@ -201,20 +208,27 @@ export async function createPiAgentFromDir(
   // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
   // the store does).
   const caller = options.observer;
-  const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
+  // TWO decisions, not one. The hub is in-process bookkeeping over the run observer: a serve gets it unconditionally,
+  // because `/stop` in a chat is an ordinary thing to ask for and reaching the live run is the only way to answer it.
+  // Publishing `/control/*` — steer, rewrite, delete, over one bearer token at the public URL — is the separate
+  // decision `config.sessionControl` makes, and it is the only one that also wires the boundary.
+  const publish = options.sessionControl ?? config.sessionControl === true;
+  const wantControl = publish || options.serving === true;
   let hub: ReturnType<typeof createPiSessionControl> | undefined;
   if (wantControl) {
     // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
-    // credentials and is not.
-    const { modelRuntime, model } = await assembly.engine();
+    // credentials and is not. Resolved only when the boundary is wired, so an ordinary serve does not pay for it.
+    const boundary = publish
+      ? await assembly.engine().then(({ modelRuntime, model }) => ({
+          lease: assembly.lease,
+          models: modelRuntime,
+          sessionFactory: assembly.sessionFactory,
+          defaults: { model, thinkingLevel: assembly.thinkingLevel },
+        }))
+      : undefined;
     hub = createPiSessionControl({
       sessions,
-      boundary: {
-        lease: assembly.lease,
-        models: modelRuntime,
-        sessionFactory: assembly.sessionFactory,
-        defaults: { model, thinkingLevel: assembly.thinkingLevel },
-      },
+      boundary,
       // Skills ARE the names a client offers — the resolved set, after collisions were decided first-wins, which a
       // client cannot reconstruct from the directory.
       commands: async () => {
@@ -247,6 +261,7 @@ export async function createPiAgentFromDir(
     definition,
     sessions,
     sessionControl: hub?.control,
+    publishControl: publish,
     selfSchedule: config.selfSchedule ?? false,
     agentDir,
     workspace,
