@@ -135,6 +135,15 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         // a window no timeout covers.
         const watchdog = idleWatchdog(abort);
         watchdog.arm(); // the connect await is a pending read
+        // The CONNECT phase gets the same black-hole budget as any other request. The heartbeat watchdog covers a
+        // dead connection at 90s, which is the right limit for a stream that is merely quiet — but a reconnecting
+        // client now WAITS on this phase (`ready` precedes the backfill), so an endpoint that accepts the socket and
+        // never answers would hold a whole attach round silently past every budget the caller counts rounds against.
+        let connectTimedOut = false;
+        const connectDeadline = setTimeout(() => {
+          connectTimedOut = true;
+          abort.abort();
+        }, REQUEST_TIMEOUT_MS);
         try {
           let res: Response;
           try {
@@ -142,7 +151,8 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
               headers,
               signal: abort.signal,
             });
-            watchdog.disarm(); // headers arrived
+            clearTimeout(connectDeadline); // headers arrived: the stream's own idle limit takes over from here
+            watchdog.disarm();
             if (!res.ok) {
               // The error body is a pending read too — a half-dead tunnel serving 4xx headers then black-holing the
               // body must not hang the round outside every budget.
@@ -151,11 +161,18 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             }
             if (!res.body) throw new Error("control events: response has no body");
           } catch (error) {
+            clearTimeout(connectDeadline);
             // Everything here means the subscription was never established: the endpoint is unreachable, the token
-            // was refused, the consumer aborted before connecting. A waiter on `ready` must learn that instead of
-            // waiting out a stream that will never carry anything; the iteration fails on the same error below.
-            unreachable(error);
-            throw error;
+            // was refused, the connect budget ran out, the consumer aborted before connecting. A waiter on `ready`
+            // must learn that instead of waiting out a stream that will never carry anything; the iteration fails on
+            // the same error below.
+            const failure = connectTimedOut
+              ? new Error(
+                  `control events: no response headers in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never answered`,
+                )
+              : error;
+            unreachable(failure);
+            throw failure;
           }
           subscribed();
           let nextSeq = 0;
@@ -192,7 +209,8 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             yield wire.event;
           }
         } catch (error) {
-          if (abort.signal.aborted) {
+          // A connect timeout aborts this controller itself, so it must not be read as "the consumer walked away".
+          if (abort.signal.aborted && !connectTimedOut) {
             if (watchdog.stale()) {
               throw new Error(
                 `control events: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
@@ -202,6 +220,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           }
           throw error;
         } finally {
+          clearTimeout(connectDeadline);
           watchdog.stop();
           abort.abort();
         }

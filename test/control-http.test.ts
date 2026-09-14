@@ -668,7 +668,7 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("a black-holed CONNECT is terminated by the watchdog on both streaming planes", async () => {
+  it("a black-holed CONNECT is terminated on both streaming planes — events on its own connect budget", async () => {
     // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
     const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
@@ -687,16 +687,22 @@ describe("session control over HTTP", () => {
       // The rejection assertion attaches AT CREATION: the promise rejects while timers advance,
       // and a handler attached only afterwards would leave an unhandled-rejection window vitest
       // reports as a run-level error — noise that trains everyone to ignore the real ones.
+      const stream = remote.sessions.get("s").events();
       const eventsAttempt = expect(
         (async () => {
-          for await (const _ of remote.sessions.get("s").events()) void _;
+          for await (const _ of stream) void _;
         })(),
-      ).rejects.toThrow(/dead connection/);
+      ).rejects.toThrow(/no response headers in 10s/);
+      // A reconnecting client WAITS on this phase before it reads history, so the connect gets the same 10s
+      // black-hole budget as any other request — the 90s heartbeat limit is for a connection that is merely quiet.
+      const readyAttempt = expect(stream.ready).rejects.toThrow(/no response headers in 10s/);
       const agentAttempt = drain(
         connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
       );
-      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // past SSE_IDLE_LIMIT_MS
+      await fakeTimers.advanceTimersByTimeAsync(10_000);
       await eventsAttempt;
+      await readyAttempt;
+      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // the invoke plane still rides SSE_IDLE_LIMIT_MS
       const agentEvents = await agentAttempt;
       expect(agentEvents).toEqual([
         expect.objectContaining({ type: "failed", retryable: true, details: expect.stringContaining("no bytes") }),
@@ -1117,6 +1123,7 @@ describe("session control over HTTP", () => {
     };
     // The events stream produces IMMEDIATELY — before the backfill prints — then ends.
     const eagerEvents = () => ({
+      ready: Promise.resolve(), // a double still has to BE a SessionEventStream, or the round's wait is a no-op here
       [Symbol.asyncIterator]: async function* (): AsyncGenerator<SessionEvent> {
         yield { type: "run_started", timestamp: 0, runId: "rL", data: {} };
       },
@@ -1172,8 +1179,9 @@ describe("session control over HTTP", () => {
       ],
       leafEntryId: "e3",
     };
-    const quietEvents = (): AsyncIterable<never> => ({
-      [Symbol.asyncIterator]: async function* () {},
+    const quietEvents = () => ({
+      ready: Promise.resolve(),
+      [Symbol.asyncIterator]: async function* (): AsyncGenerator<never> {},
     });
     const fake = handleControl({
       state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
@@ -1200,6 +1208,7 @@ describe("session control over HTTP", () => {
       state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
       entries: async () => ({ entries: [] }) as never,
       events: () => ({
+        ready: Promise.resolve(),
         [Symbol.asyncIterator]: () => ({
           next: (): Promise<IteratorResult<never>> => Promise.reject(auth),
         }),
@@ -1219,6 +1228,7 @@ describe("session control over HTTP", () => {
         // A quiet stream whose return() settles the pending next() — as the real client/hub do.
         let settle: ((r: IteratorResult<never>) => void) | undefined;
         return {
+          ready: Promise.resolve(),
           [Symbol.asyncIterator]: () => ({
             next: () =>
               new Promise<IteratorResult<never>>((res) => {
@@ -1246,6 +1256,7 @@ describe("session control over HTTP", () => {
       events: () => {
         let settle: ((r: IteratorResult<never>) => void) | undefined;
         return {
+          ready: Promise.resolve(),
           [Symbol.asyncIterator]: () => ({
             next: () =>
               new Promise<IteratorResult<never>>((res) => {
