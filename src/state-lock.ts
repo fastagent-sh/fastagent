@@ -32,17 +32,31 @@ const STALE_MS = 15_000;
 
 /**
  * A short retry, for the one case that is not a real conflict: a manual restart racing the outgoing process's exit.
- * `dev`'s supervisor already respawns only after its worker exited, so this stays ~1s rather than a wait that makes
- * a genuine second writer look like a hang.
+ * `dev`'s supervisor already respawns only after its worker exited, so this stays ~1s rather than making a genuine
+ * second writer look like a hang to someone waiting on a one-shot command.
  */
 const RETRIES = { retries: 3, factor: 3, minTimeout: 100, maxTimeout: 600, randomize: true };
 
 /**
+ * What a RESIDENT server waits instead (~23s, past {@link STALE_MS}). Its predecessor may have been killed without
+ * releasing — a container OOM, a platform migration, an AgentCore runtime whose storage outlives its compute — and
+ * refusing to boot for the seconds until that claim expires costs more than waiting: on AgentCore the refusal is
+ * cached by `deferAgentcoreService` and turns the whole runtime session into 503s.
+ */
+const RESIDENT_RETRIES = { retries: 8, factor: 2, minTimeout: 250, maxTimeout: 5_000, randomize: true };
+
+/** The targets THIS process holds — the only way to tell its own claim from an identical pid it inherited. */
+const mine = new Set<string>();
+
+/**
  * Who holds the lock, and whether they are still running. The holder writes its pid into the lock target, so the
  * refusal can name a process; `kill(pid, 0)` then separates the two cases that need different advice — a live
- * second writer (stop it) from a claim a SIGKILLed holder left behind (wait out {@link STALE_MS}).
+ * second writer (stop it) from a claim a killed holder left behind (wait out {@link STALE_MS}).
  *
- * A recycled pid reads as alive, which is the current wording rather than a worse one.
+ * The pid alone is not enough IN A CONTAINER: the image runs the agent as pid 1, so a restarted container reads its
+ * predecessor's `1` and asks itself whether pid 1 is alive — it is, and it is this very process. A pid equal to
+ * ours that we did not take is therefore leftover, not a rival. A recycled pid from another process still reads as
+ * alive, which is the current wording rather than a worse one.
  */
 function holderOf(target: string): { label: string; alive: boolean } {
   let pid = 0;
@@ -54,6 +68,7 @@ function holderOf(target: string): { label: string; alive: boolean } {
     // names the path, which is the part that always exists.
   }
   if (pid === 0) return { label: "", alive: true };
+  if (pid === process.pid) return { label: ` (pid ${pid})`, alive: mine.has(target) };
   try {
     process.kill(pid, 0); // signal 0: ask whether the process exists, send nothing
     return { label: ` (pid ${pid})`, alive: true };
@@ -67,18 +82,26 @@ function holderOf(target: string): { label: string; alive: boolean } {
 /**
  * Take write ownership of every given directory, or refuse with who holds it and the ways out.
  *
+ * `resident` is the posture, not a preference: a server that is booting waits out a predecessor's expiring claim
+ * ({@link RESIDENT_RETRIES}), while a one-shot command refuses quickly rather than hanging on a live writer.
+ *
  * The returned release is for a caller that outlives its agent (an embedder unmounting a service, a test); a CLI
  * command just exits.
  */
-export async function lockAgentState(dirs: readonly string[]): Promise<() => Promise<void>> {
+export async function lockAgentState(
+  dirs: readonly string[],
+  options: { resident?: boolean } = {},
+): Promise<() => Promise<void>> {
   const targets = [...new Set(dirs.map((dir) => join(resolve(dir), LOCK_FILE)))];
   const taken: string[] = [];
   const release = async (): Promise<void> => {
     for (const target of taken.splice(0)) {
+      mine.delete(target);
       await lockfile.unlock(target, { realpath: false }).catch((error: unknown) => {
-        // ERELEASED = the lock was already compromised and dropped, which onCompromised reported at the moment it
-        // mattered. Repeating it here would put an unrelated warning on every clean shutdown after one.
-        if ((error as NodeJS.ErrnoException).code === "ERELEASED") return;
+        // ENOTACQUIRED = the lock was already compromised and dropped (a module-level `unlock` of a lock
+        // proper-lockfile no longer tracks), which onCompromised reported at the moment it mattered. Repeating it
+        // here would put an unrelated warning on every clean shutdown after one.
+        if ((error as NodeJS.ErrnoException).code === "ENOTACQUIRED") return;
         log.warn(`[fastagent] could not release the state lock ${target}: ${String(error)}`);
       });
     }
@@ -90,7 +113,7 @@ export async function lockAgentState(dirs: readonly string[]): Promise<() => Pro
       await lockfile.lock(target, {
         realpath: false,
         stale: STALE_MS,
-        retries: RETRIES,
+        retries: options.resident ? RESIDENT_RETRIES : RETRIES,
         // The lock directory vanished under us (someone cleared the state root). Default behaviour rethrows from a
         // timer, which takes the process down over a guard; the ownership is genuinely lost either way, so say so
         // and keep serving — the work in flight is what the guard exists to protect. ERROR level, because the
@@ -118,6 +141,7 @@ export async function lockAgentState(dirs: readonly string[]): Promise<() => Pro
     // Written after the lock is ours, so the pid a refusal reads is the holder's and not a loser's.
     writeFileSync(target, `${process.pid}\n`);
     taken.push(target);
+    mine.add(target);
   }
   return release;
 }

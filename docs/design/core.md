@@ -589,7 +589,8 @@ opening a directory through `createPiAgentFromDir` takes an exclusive claim on e
 (the state root and the sessions directory, which `--sessions-dir` can move apart) — `src/state-lock.ts`.
 A second opener is told the holder's pid and the ways out; `AgentService.close()` gives the claim back,
 a normal exit releases it (`proper-lockfile`'s own exit hook, which covers signals too), and a killed
-holder's claim expires after the stale window. `chat` is outside the guard: pi's TUI owns its own
+holder's claim expires after the stale window — which a booting server waits out, because on a host that
+turns a boot failure into a cached 503 (AgentCore) refusing for those seconds costs more than waiting. `chat` is outside the guard: pi's TUI owns its own
 session storage, and what it shares with the state root is a settings file. `exclusive: false` is for a caller that coordinates writers itself. Multiple
 instances still require shared session, lease, credential, and channel-state backends.
 

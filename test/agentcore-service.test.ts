@@ -6,6 +6,7 @@ import type { AgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
+import { lockAgentState } from "../src/state-lock.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -37,6 +38,9 @@ describe("deferred AgentCore initialization", () => {
     try {
       await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/channel setup is invalid/);
       expect(exit).not.toHaveBeenCalled();
+      // And the write claim is back. Here the rejection does NOT end the process (it becomes a 503), so a leaked
+      // claim would lock this storage against every later container on the same volume.
+      await (await lockAgentState([join(dir, ".state")]))();
     } finally {
       exit.mockRestore();
     }

@@ -97,6 +97,26 @@ it("an opener that fails after taking the claim gives it back, so the retry sees
   }
 });
 
+it("a leftover claim carrying OUR OWN pid reads as gone — the container case, where the agent is pid 1", async () => {
+  // A restarted container inherits its predecessor's pid, so asking the OS "is pid 1 alive?" answers yes about
+  // itself. Simulated the way the platform leaves it: the lock directory and a pid file this process did not write.
+  const state = fresh();
+  writeFileSync(join(state, "writer.lock"), `${process.pid}\n`);
+  mkdirSync(join(state, "writer.lock.lock"));
+  await expect(lockAgentState([state])).rejects.toThrow(/claimed by a process that is gone/);
+});
+
+it("a resident boot waits out an expiring claim; a one-shot command refuses instead of hanging", async () => {
+  const state = fresh();
+  const release = await lockAgentState([state]);
+  const booting = lockAgentState([state], { resident: true });
+  // Longer than the one-shot budget (~1s), far shorter than the stale window a container would otherwise wait out.
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await expect(lockAgentState([state])).rejects.toThrow(/already writing/); // the one-shot posture, unchanged
+  await release();
+  await (await booting)();
+});
+
 it("the opener takes ownership, and `exclusive: false` is how a caller declines it", async () => {
   const dir = fresh("fa-lock-agent-");
   mkdirSync(join(dir, "fastagent"));

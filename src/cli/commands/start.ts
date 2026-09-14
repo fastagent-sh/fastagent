@@ -194,12 +194,19 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   }
   const traced = logAgentLoop(agent);
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  // The same release `createAgentService` owes: composition (channel imports, a control-plane route collision) runs
+  // before the scope whose finalizer gives the write claim back. On AgentCore this is not academic — the failure is
+  // caught into a 503 instead of exiting, so a leaked claim would lock the storage against every later container.
   const service = await (isAgentcoreRuntime()
     ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
     : mountAgentService(
         opened,
         cliMountOptions(() => traced),
-      ));
+      )
+  ).catch(async (error: unknown) => {
+    await opened.releaseState?.();
+    throw error;
+  });
   return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
 }
 

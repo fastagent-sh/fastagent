@@ -200,7 +200,11 @@ export async function createPiAgentFromDir(
   // Single-writer, enforced where the writable store is opened rather than remembered by each command. Both paths,
   // because they come apart: `--sessions-dir` moves the journals out of the state root, and a second run pointed at
   // the same journals through a different state root must still contend.
-  const releaseState = options.exclusive === false ? undefined : await lockAgentState([stateRoot, sessionsDir]);
+  const releaseState =
+    options.exclusive === false
+      ? undefined
+      : // `serving` is what tells a booting server from a one-shot command, which is exactly the two waits.
+        await lockAgentState([stateRoot, sessionsDir], { resident: options.serving === true });
   // Everything below can throw (a definition that will not load, an unknown model, a credential the registry
   // rejects) — and the claim above is already taken. Without this the caller's retry is refused by its OWN
   // abandoned claim, and the error that actually stopped it never appears again.
