@@ -31,9 +31,10 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     return;
   }
   if (fires.length === 0) {
+    // No special case for "wake": `discover.ts` no longer reserves that name, so a schedule may be called it — and a
+    // hint saying "wake-ups are not recorded here" would be a wrong explanation for an author's own `wake` schedule
+    // that simply has not fired yet.
     console.error(`no recorded fires for "${name}" (state: ${stateRoot})`);
-    // The agent's own wake-ups have no claim to record: they are removed from the store before the turn starts.
-    if (name === "wake") console.error("self-scheduled wake-ups are not recorded here — see the service logs");
     return;
   }
   // The question is "did LAST NIGHT's run fail?", so text mode tails the most recent fires; --json above is the
@@ -41,8 +42,10 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   const TAIL = 20;
   const shown = fires.slice(-TAIL);
   for (const f of shown) {
-    const outcome = f.outcome ?? "unreported";
-    console.log(`${f.firedAt}  ${outcome.padEnd(11)} ${String(f.ms ?? 0).padStart(6)}ms`);
+    // An unreported fire has no duration to print, and `0ms` would be a value a fast turn really produces — the
+    // column stays empty rather than claiming the turn took no time.
+    const took = f.ms === undefined ? "" : `${f.ms}ms`;
+    console.log(`${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}`);
   }
   const scope =
     fires.length > shown.length

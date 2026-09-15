@@ -108,21 +108,25 @@ const isOutcome = (s: string | undefined): s is FireOutcome =>
   s === "completed" || s === "failed" || s === "interrupted";
 
 /**
- * Read one claim file: `<firedAt>`, or `<firedAt> <outcome> <ms>` once the turn has reported.
+ * Read one claim file: `<firedAt>`, or `<firedAt> <outcome> <ms>` once the turn has reported. `undefined` means the
+ * file is GONE — a concurrent claim pruned it between the listing and this read.
+ *
+ * That case is distinct from "exists but unsettled" and must stay distinct: the reconciler settles what it finds
+ * unsettled, and `settleClaim` CREATES the file it writes, so treating a pruned claim as unsettled would resurrect
+ * an old slot and invent an `interrupted` fire for a run that finished long ago.
  *
  * An unusable stamp — empty because the process died between the create and the write, or not a date at all — falls
  * back to the slot instant in the file name. That is the earliest moment the fire can have happened, so the only
  * degradation is catching up one run that already ran: too many rather than too few.
  */
-function readClaim(dir: string, name: string): Fire {
+function readClaim(dir: string, name: string): Fire | undefined {
   const slot = slotInstant(name);
   let raw = "";
   try {
     raw = readFileSync(join(dir, name), "utf8").trim();
   } catch (e) {
-    // Pruning by a concurrent claim can remove the name between the listing and this read. The slot in that name is
-    // the fact we already have, so this is the same degradation an unusable stamp gets, not a boot failure.
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw e; // unreadable state (EACCES, EIO): the boot fails on it rather than running blind
   }
   const [stamp, outcome, ms] = raw.split(/\s+/);
   const fire: Fire = { slot, firedAt: slot };
@@ -233,7 +237,9 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
  */
 export function readFires(stateRoot: string, name: string): Fire[] {
   const dir = claimDir(stateRoot, name);
-  return listClaims(dir).map((slot) => readClaim(dir, slot));
+  // A claim pruned between the listing and the read is not a fire this state root still keeps — dropping it is what
+  // keeps the reconciler from settling (and so re-creating) a slot that is already gone.
+  return listClaims(dir).flatMap((slot) => readClaim(dir, slot) ?? []);
 }
 
 /**
@@ -251,7 +257,10 @@ export function settleClaim(stateRoot: string, name: string, slot: Date, outcome
   const dir = claimDir(stateRoot, name);
   const file = claimName(slot);
   try {
-    writeFileSync(join(dir, file), `${readClaim(dir, file).firedAt} ${outcome} ${Math.round(ms)}`);
+    // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from. A claim pruned out from under
+    // a running turn keeps its slot instant, which is the earliest the fire can have happened.
+    const firedAt = readClaim(dir, file)?.firedAt ?? slotInstant(file);
+    writeFileSync(join(dir, file), `${firedAt} ${outcome} ${Math.round(ms)}`);
   } catch (e) {
     // Housekeeping, like the pruning below: the turn itself already happened, and the worst case is that the next
     // boot reports this fire as interrupted.
