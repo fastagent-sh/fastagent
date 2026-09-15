@@ -808,8 +808,16 @@ describe("session control over HTTP", () => {
       const remote = await connectSessionControl({ url: "http://slow", token: "t", fetchFn: heartbeating });
       const stream = remote.sessions.get("s").events();
       const seen: SessionEvent[] = [];
+      // The iterator is HELD: releasing the connection means returning the one that opened it, and a fresh
+      // `stream[Symbol.asyncIterator]()` would have been a different (unstarted) one — the connection and its idle
+      // timer would have outlived the test.
+      const iterator = stream[Symbol.asyncIterator]();
       const watching = (async () => {
-        for await (const ev of stream) seen.push(ev);
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) return;
+          seen.push(next.value);
+        }
       })();
       await stream.ready;
       // Quiet for three times the connect limit, with only the heartbeats a real server sends.
@@ -821,8 +829,8 @@ describe("session control over HTTP", () => {
       push(`data: ${JSON.stringify({ seq: 0, event: { type: "run_started", timestamp: 0, data: {} } })}\n\n`);
       await timers.advanceTimersByTimeAsync(0);
       expect(seen.map((e) => e.type)).toEqual(["run_started"]); // still alive after 90s of heartbeat-only traffic
-      await stream[Symbol.asyncIterator]().return?.(undefined);
-      void watching.catch(() => {});
+      await iterator.return?.(undefined);
+      await watching; // the connection is actually released — a clean end, not a dangling stream
     } finally {
       timers.useRealTimers();
     }

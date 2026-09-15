@@ -198,8 +198,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     // A consumer that never awaits `ready` (it can iterate and let the stream report the same failure) would
     // otherwise take an unhandled rejection for a connection that legitimately failed. Awaiters still get it.
     ready.catch(() => {});
-    // Each ITERATION opens its own connection (gen/abort created inside asyncIterator), matching the local hub's
-    // "every iteration is a fresh subscription".
+    // ONE CALL IS ONE SUBSCRIPTION — one connection, one readiness. A second iteration would open a second
+    // connection and inherit this `ready`, reporting a boundary the first one crossed; it is refused instead, the
+    // same way the local hub refuses it.
     const openStream = (abort: AbortController) =>
       (async function* iterate(): AsyncGenerator<SessionEvent> {
         const budget = readBudget(abort, "control events");
@@ -267,9 +268,14 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           abort.abort();
         }
       })();
+    let iterated = false;
     return {
       ready,
       [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+        if (iterated) {
+          throw new Error("control events: this stream is one subscription — call events() again for another");
+        }
+        iterated = true;
         const abort = new AbortController();
         // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a generator suspended
         // on a quiet stream read.

@@ -405,23 +405,33 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     events(session: string): SessionEventStream {
-      // EVERY ITERATION IS A FRESH SUBSCRIPTION — the per-subscription state lives inside
-      // asyncIterator(), matching the remote client (one connection per iteration): two concurrent
-      // iterations each get the full stream, and one iteration's end does not poison the next.
-      // Registration happens on the FIRST next(), not at iterator creation: subscription semantics
-      // = you are subscribed while you iterate; an iterator obtained but never driven must not
-      // buffer. Teardown goes through Subscriber.close() so a `return()` on a QUIET stream
-      // resolves promptly instead of queueing behind a never-settling pull — without it every
-      // attach/detach against an idle session would leak a permanently registered subscriber.
-      // `ready` is resolved by the registration below — the moment after which nothing emitted for this session can
-      // be missed. It is what a reconnecting client awaits before reading history (session.ts, SessionEventStream).
+      // ONE CALL IS ONE SUBSCRIPTION, and `ready` is its boundary: the moment after which nothing emitted for this
+      // session can be missed (session.ts, SessionEventStream). A second iteration of the same stream would be a
+      // second subscription inheriting the first one's readiness — a guarantee it never earned — so it is refused
+      // rather than documented. Matching the remote client, which opens one connection per stream.
+      //
+      // Registration happens on the FIRST next(), not at iterator creation: subscription semantics = you are
+      // subscribed while you iterate; an iterator obtained but never driven must not buffer. Teardown goes through
+      // Subscriber.close() so a `return()` on a QUIET stream resolves promptly instead of queueing behind a
+      // never-settling pull — without it every attach/detach against an idle session would leak a permanently
+      // registered subscriber.
       let registered: () => void;
-      const ready = new Promise<void>((resolve) => {
+      let unestablished: (error: unknown) => void;
+      const ready = new Promise<void>((resolve, reject) => {
         registered = resolve;
+        unestablished = reject;
       });
+      // An awaiter gets the rejection; a consumer that only iterates would otherwise take an unhandled one for a
+      // cancellation it performed itself.
+      ready.catch(() => {});
+      let iterated = false;
       return {
         ready,
         [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+          if (iterated) {
+            throw new Error("session events: this stream is one subscription — call events() again for another");
+          }
+          iterated = true;
           let sub: Subscriber | undefined;
           // `finished` is its own state: `sub === undefined` alone would conflate "not yet
           // registered" with "terminated", and a post-done next() would silently REGISTER A FRESH
@@ -430,7 +440,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           let finished = false;
           const cleanup = (): void => {
             finished = true;
-            if (!sub) return;
+            if (!sub) {
+              // Cancelled before it registered: `ready` has a promise it cannot keep, and hanging on it is the one
+              // outcome a caller cannot diagnose. The remote client answers the same way.
+              unestablished(new Error("session events: cancelled before the subscription was established"));
+              return;
+            }
             sub.close();
             const set = subscribers.get(session);
             if (set) {

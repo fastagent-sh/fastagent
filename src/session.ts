@@ -240,9 +240,13 @@ export interface SessionEntry {
  * happens on the first pull, and over HTTP it happens on the server before the response headers. `ready` is that
  * boundary made waitable, so the recipe is subscribe → await ready → backfill, with no timing guess in it.
  *
- * It settles for the FIRST iteration this stream starts (each iteration is its own subscription), and REJECTS when
- * that subscription cannot be established at all — an unreachable endpoint or a refused token. A stream nobody
- * iterates never settles, matching the rule that an iterator obtained but never driven is not subscribed.
+ * ONE stream IS one subscription, which is what makes `ready` mean anything: readiness belongs to a subscription, so
+ * a stream that could start several would be promising the second one something the first established. Iterating the
+ * same stream twice is refused for that reason — call `events()` again, and get the readiness that goes with it.
+ *
+ * `ready` REJECTS when the subscription cannot be established at all: an unreachable endpoint, a refused token, or an
+ * iteration cancelled before it registered. A stream nobody iterates never settles, matching the rule that an
+ * iterator obtained but never driven is not subscribed.
  */
 export interface SessionEventStream extends AsyncIterable<SessionEvent> {
   ready: Promise<void>;

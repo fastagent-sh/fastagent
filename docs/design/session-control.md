@@ -341,7 +341,9 @@ registers before it writes the response headers), which is what `ready` makes wa
 first EVENT instead cannot work — an idle session may stay quiet indefinitely — and a fixed delay only
 moves the race.
 
-Live events during the backfill are buffered by the client, so the overlap is display-level: durable
+Each `events()` call is ONE subscription with one readiness: iterating the same stream twice is refused,
+and reconnecting means calling `events()` again. Live events during the backfill are buffered by the
+client, so the overlap is display-level: durable
 records may appear both in the replay and in the live stream, and live-only events have no entry id to
 deduplicate against. Live events are not the durable history API; a product that needs replayable run
 timelines persists normalized events above FastAgent.

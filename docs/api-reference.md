@@ -610,7 +610,9 @@ const watching = (async () => {
 })();
 // `ready` settles when the subscription EXISTS (it registers on the first pull, and remotely on the
 // server before the response headers), so nothing after it can be missed. Reconnecting clients await
-// it before reading history — see the reconnect recipe in docs/design/session-control.md §7.
+// it before reading history — see the reconnect recipe in docs/design/session-control.md §7. One
+// `events()` call is one subscription: iterate the returned stream once, and call it again to
+// resubscribe.
 await stream.ready;
 for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
 await watching;
