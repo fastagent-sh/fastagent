@@ -65,6 +65,69 @@ async function serveControl() {
   };
 }
 
+/**
+ * THE fake control-plane `fetch`, because a hand-written one keeps forgetting the same clause.
+ *
+ * A real `fetch` ends its work when the caller aborts: the promise rejects, or the body errors. A fake that ignores
+ * `init.signal` still SERVES every test that only reads bytes — and silently reports "pass" for every claim about
+ * when the client does or does not tear a connection down. Two such fakes existed here, and under a mutation that
+ * killed healthy connections both stayed green. So the contract lives in one place that cannot forget it, and the
+ * knobs below are the only things a caller may vary.
+ */
+function fakeSse(options: { status?: number; blocks?: string[] } = {}): {
+  fetchFn: typeof fetch;
+  /** Feed one SSE block. Before anything connects it is QUEUED, so a test never has to know when the client's first
+   *  pull reaches the fetch. Unusable with `blocks`, which delivers its own and closes the stream. */
+  push(block: string): void;
+} {
+  const encoder = new TextEncoder();
+  const queued: string[] = [];
+  let feed: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input).includes("/control/capabilities")) {
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }
+    // The other half of the clause: a signal that is ALREADY aborted never reaches a listener, and a real fetch
+    // rejects on the spot rather than opening anything.
+    if (init?.signal?.aborted) return Promise.reject(init.signal.reason);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        feed = controller;
+        for (const block of [...queued.splice(0), ...(options.blocks ?? [])]) {
+          controller.enqueue(encoder.encode(block));
+        }
+        if (options.blocks) controller.close();
+        // THE clause: a body outlives its caller only until the caller says stop.
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+      },
+    });
+    return new Response(body, {
+      status: options.status ?? 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch;
+  return {
+    fetchFn,
+    push: (block) => (feed ? feed.enqueue(encoder.encode(block)) : void queued.push(block)),
+  };
+}
+
+/** A `fetch` whose connect never completes — the black hole no request timeout used to cover. */
+function fakeUnreachable(): typeof fetch {
+  return ((input: string | URL | Request, init?: RequestInit) => {
+    if (String(input).includes("/control/capabilities")) {
+      return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+    }
+    if (init?.signal?.aborted) return Promise.reject(init.signal.reason);
+    return new Promise<Response>((_resolve, reject) => {
+      // Same clause: an endpoint that never answers still lets go when the caller does.
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")), {
+        once: true,
+      });
+    });
+  }) as typeof fetch;
+}
+
 /** A control whose per-session calls are the ones given — the handle shape, faked. `attachRound`
  *  takes a SessionControl and reaches a session through it, so a fake has to have that shape too. */
 function handleControl(session: Record<string, unknown>): never {
@@ -670,16 +733,7 @@ describe("session control over HTTP", () => {
 
   it("a black-holed CONNECT is terminated on both streaming planes, each on its caller's budget", async () => {
     // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
-    const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
-      new Promise<Response>((resolve, reject) => {
-        if (String(_input).includes("/control/capabilities")) {
-          resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
-          return;
-        }
-        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
-          once: true,
-        });
-      })) as typeof fetch;
+    const blackHole = fakeUnreachable();
     const fakeTimers = await import("vitest").then((m) => m.vi);
     fakeTimers.useFakeTimers();
     try {
@@ -723,17 +777,7 @@ describe("session control over HTTP", () => {
     // The half-dead tunnel the error path names: headers answer, the body never does. Clearing the connect deadline
     // at the headers would have left that read to the 90s idle limit — with `ready` awaited before the backfill,
     // that is a whole attach round spent silent.
-    const hangingBody = ((_input: string | URL | Request, init?: RequestInit) => {
-      if (String(_input).includes("/control/capabilities")) {
-        return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
-      }
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
-        },
-      });
-      return Promise.resolve(new Response(body, { status: 502 }));
-    }) as typeof fetch;
+    const { fetchFn: hangingBody } = fakeSse({ status: 502 }); // headers answer, the body never does
     const timers = await import("vitest").then((m) => m.vi);
     timers.useFakeTimers();
     try {
@@ -767,16 +811,7 @@ describe("session control over HTTP", () => {
     // A consumer that walks away before connecting ends its ITERATION cleanly (that is not a failure), but `ready`
     // has a promise it cannot keep — and it must say WHY it cannot keep it, not report an unreachable endpoint. The
     // two readers disagree on purpose, and they read the same stated reason to do it.
-    const never = ((_input: string | URL | Request, init?: RequestInit) => {
-      if (String(_input).includes("/control/capabilities")) {
-        return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
-      }
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
-          once: true,
-        });
-      });
-    }) as typeof fetch;
+    const never = fakeUnreachable();
     const remote = await connectSessionControl({ url: "http://quiet", token: "t", fetchFn: never });
     const stream = remote.sessions.get("s").events();
     const cancelled = expect(stream.ready).rejects.toThrow(/cancelled by the consumer/);
@@ -801,21 +836,7 @@ describe("session control over HTTP", () => {
     const timers = await import("vitest").then((m) => m.vi);
     timers.useFakeTimers();
     try {
-      let push!: (chunk: string) => void;
-      const heartbeating = ((_input: string | URL | Request, init?: RequestInit) => {
-        if (String(_input).includes("/control/capabilities")) {
-          return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
-        }
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            const encoder = new TextEncoder();
-            push = (chunk: string) => controller.enqueue(encoder.encode(chunk));
-            // The fake has to HONOUR the signal, or a client that kills a healthy stream looks fine here.
-            init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
-          },
-        });
-        return Promise.resolve(new Response(body, { headers: { "content-type": "text/event-stream" } }));
-      }) as typeof fetch;
+      const { fetchFn: heartbeating, push } = fakeSse();
       const remote = await connectSessionControl({ url: "http://slow", token: "t", fetchFn: heartbeating });
       const stream = remote.sessions.get("s").events();
       const seen: SessionEvent[] = [];
@@ -852,32 +873,20 @@ describe("session control over HTTP", () => {
     // healthy connection must not be misdiagnosed as dead — on the invoke plane that abort would
     // cancel the run the stream drives.
     const fakeTimers = await import("vitest").then((m) => m.vi);
-    const enc = new TextEncoder();
-    let feed!: ReadableStreamDefaultController<Uint8Array>;
-    const body = new ReadableStream<Uint8Array>({
-      start(c) {
-        feed = c;
-      },
-    });
-    const fetchFn = (async (input: string | URL | Request) => {
-      if (String(input).includes("/control/capabilities")) {
-        return new Response("{}", { headers: { "content-type": "application/json" } });
-      }
-      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-    }) as typeof fetch;
+    const { fetchFn, push } = fakeSse();
     const wire = (seq: number, event: object) =>
-      enc.encode(`data: ${JSON.stringify({ sessionId: "s", epoch: "e", seq, event })}\n\n`);
+      `data: ${JSON.stringify({ sessionId: "s", epoch: "e", seq, event })}\n\n`;
     fakeTimers.useFakeTimers();
     try {
       const remote = await connectSessionControl({ url: "http://x", token: "t", fetchFn });
       const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
-      feed.enqueue(wire(0, { type: "run_started", timestamp: 1, data: {} }));
+      push(wire(0, { type: "run_started", timestamp: 1, data: {} }));
       expect(((await iterator.next()).value as SessionEvent).type).toBe("run_started");
       // The consumer pauses far past the idle limit — no pending read, watchdog disarmed.
       await fakeTimers.advanceTimersByTimeAsync(4 * 30_000);
       // Resume: the connection was never killed; the next event flows.
       const resumed = iterator.next();
-      feed.enqueue(wire(1, { type: "run_settled", timestamp: 2, data: { status: "completed" } }));
+      push(wire(1, { type: "run_settled", timestamp: 2, data: { status: "completed" } }));
       expect(((await resumed).value as SessionEvent).type).toBe("run_settled");
       await iterator.return?.(undefined);
     } finally {
@@ -934,21 +943,7 @@ describe("session control over HTTP", () => {
   });
 
   it("non-envelope stream data is protocol mismatch — thrown, not misdiagnosed as a gap", async () => {
-    const makeFetch = (body: string) =>
-      (async (input: string | URL | Request) => {
-        if (String(input).includes("/control/capabilities")) {
-          return new Response("{}", { headers: { "content-type": "application/json" } });
-        }
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(c) {
-              c.enqueue(new TextEncoder().encode(body));
-              c.close();
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        );
-      }) as typeof fetch;
+    const makeFetch = (body: string) => fakeSse({ blocks: [body] }).fetchFn;
     // Valid JSON, wrong shape (a foreign SSE endpoint) — and plain non-JSON: both THROW so a
     // consumer's failure budget applies; reconnecting can never fix a protocol mismatch.
     for (const body of [
@@ -971,20 +966,7 @@ describe("session control over HTTP", () => {
       `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 0, event: { type: "run_started", timestamp: 1, runId: "r", data: {} } })}\n\n`,
       `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 2, event: { type: "run_settled", timestamp: 2, runId: "r", data: { status: "completed" } } })}\n\n`,
     ];
-    const fetchFn = (async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.includes("/control/capabilities")) {
-        return new Response("{}", { headers: { "content-type": "application/json" } });
-      }
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          const enc = new TextEncoder();
-          for (const block of sse) controller.enqueue(enc.encode(block));
-          controller.close();
-        },
-      });
-      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
-    }) as typeof fetch;
+    const { fetchFn } = fakeSse({ blocks: sse });
     const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn });
     const seen: string[] = [];
     // The gap THROWS (same discipline as protocol mismatch) after yielding everything before it:
