@@ -59,11 +59,12 @@ function endedBecause(signal: AbortSignal): StreamEnded | undefined {
 
 /**
  * ONE limit on a pending read, whose value depends on the phase — the only question either wire plane asks about
- * time. Before the stream is connected a read rides the same black-hole budget as any other request
- * ({@link REQUEST_TIMEOUT_MS}): a reconnecting client WAITS on that phase (`ready` precedes its backfill), so an
- * endpoint that accepts the socket and then answers slowly, partially, or never must not hold the caller past every
- * budget it counts rounds against. Once connected the limit becomes the heartbeat one, which is the right answer for
- * a stream that is merely quiet.
+ * time. Before the stream is connected a read rides `connectMs`, the caller's answer to "how long may an endpoint
+ * that accepted the socket take to answer": the events plane gives it the black-hole budget every other request
+ * carries ({@link REQUEST_TIMEOUT_MS}), because a reconnecting client WAITS on that phase and attach counts those
+ * rounds against a budget; the invoke plane gives it the payload one ({@link PAYLOAD_TIMEOUT_MS}), because a
+ * scale-to-zero host legitimately holds a POST open while a machine boots. Once connected the limit becomes the
+ * heartbeat one for both, which is the right answer for a stream that is merely quiet.
  *
  * It counts only while ARMED — armed means a read is actually pending (the connect awaiting headers or its error
  * body, a body read awaiting bytes), never while the consumer is simply not pulling.
@@ -75,7 +76,7 @@ interface ReadBudget {
   connected(): void;
   stop(): void;
 }
-function readBudget(abort: AbortController, what: string): ReadBudget {
+function readBudget(abort: AbortController, what: string, connectMs: number): ReadBudget {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let connected = false;
   const expire = (): void =>
@@ -87,7 +88,7 @@ function readBudget(abort: AbortController, what: string): ReadBudget {
           )
         : new StreamEnded(
             "connect-timeout",
-            `${what}: no usable response in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never completed one`,
+            `${what}: no usable response in ${connectMs / 1000}s — the endpoint accepted the connection and never completed one`,
           ),
     );
   const disarm = (): void => {
@@ -97,7 +98,7 @@ function readBudget(abort: AbortController, what: string): ReadBudget {
   return {
     // `??=`: a nested arm does not restart the clock, so one long read cannot be extended by re-arming inside it.
     arm: () => {
-      timer ??= setTimeout(expire, connected ? SSE_IDLE_LIMIT_MS : REQUEST_TIMEOUT_MS);
+      timer ??= setTimeout(expire, connected ? SSE_IDLE_LIMIT_MS : connectMs);
     },
     disarm,
     connected: () => {
@@ -203,7 +204,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     // same way the local hub refuses it.
     const openStream = (abort: AbortController) =>
       (async function* iterate(): AsyncGenerator<SessionEvent> {
-        const budget = readBudget(abort, "control events");
+        const budget = readBudget(abort, "control events", REQUEST_TIMEOUT_MS);
         try {
           let body: ReadableStream<Uint8Array>;
           try {
@@ -279,9 +280,14 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         const abort = new AbortController();
         // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a generator suspended
         // on a quiet stream read.
-        return abortFirstIterator(openStream(abort), () =>
-          abort.abort(new StreamEnded("cancelled", "control events: cancelled by the consumer")),
-        );
+        return abortFirstIterator(openStream(abort), () => {
+          const cancelled = new StreamEnded("cancelled", "control events: cancelled by the consumer");
+          abort.abort(cancelled);
+          // Said HERE as well as in the generator's catch, because a generator that was never pulled does not run its
+          // body on `return()` — and then nothing else would ever settle `ready`. Rejecting an already-settled
+          // promise is a no-op, so the connected case still reports whatever ended it.
+          unreachable(cancelled);
+        });
       },
     };
   };
@@ -405,10 +411,12 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
           }
           // A terminal closes the stream. Cleanup errors must not append a second terminal.
           let terminalSeen = false;
-          // The run's driver rides the same connect budget as the events plane: a black-holed POST must not hang it
-          // either. A connect failure lands in the catch below, which is where every non-terminal failure is turned
-          // into the one `failed` event this stream owes its caller.
-          const budget = readBudget(abort, "remote invoke");
+          // The run's driver rides the same mechanism as the events plane, with the connect limit its own callers
+          // need: a black-holed POST must not hang it, but a scale-to-zero host (fly `auto_start_machines`, a cold
+          // AgentCore container) can legitimately hold this open for tens of seconds before the first header, and
+          // that is a slow success, not a dead endpoint. A connect failure lands in the catch below, which is where
+          // every non-terminal failure becomes the one `failed` event this stream owes its caller.
+          const budget = readBudget(abort, "remote invoke", PAYLOAD_TIMEOUT_MS);
           try {
             const body = await openStreamBody({
               fetchFn,

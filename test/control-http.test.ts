@@ -668,7 +668,7 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("a black-holed CONNECT is terminated on both streaming planes, on the same budget", async () => {
+  it("a black-holed CONNECT is terminated on both streaming planes, each on its caller's budget", async () => {
     // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
     const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
@@ -702,14 +702,16 @@ describe("session control over HTTP", () => {
       await fakeTimers.advanceTimersByTimeAsync(10_000);
       await eventsAttempt;
       await readyAttempt;
-      // The invoke plane connects through the same phase, so it fails on the same budget — it used to wait out the
-      // 90s idle limit for a connection that had not even answered, because the two planes only LOOKED alike.
+      // The invoke plane connects through the same phase with its own limit: it used to have NO connect budget at
+      // all (it waited out the 90s idle limit for a connection that had not even answered), and it must not inherit
+      // attach's 10s either — a scale-to-zero host holds a POST open while the machine boots.
+      await fakeTimers.advanceTimersByTimeAsync(50_000);
       const agentEvents = await agentAttempt;
       expect(agentEvents).toEqual([
         expect.objectContaining({
           type: "failed",
           retryable: true,
-          details: expect.stringContaining("no usable response in 10s"),
+          details: expect.stringContaining("no usable response in 60s"),
         }),
       ]);
     } finally {
@@ -743,8 +745,8 @@ describe("session control over HTTP", () => {
         })(),
       ).rejects.toThrow(/no usable response in 10s/);
       const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
-      // The invoke plane opens through the SAME phase, so the tunnel cannot hold it either — it used to fall back to
-      // the 90s idle limit here, because the two planes were two copies of one sequence.
+      // The invoke plane opens through the SAME phase, so the tunnel cannot hold it open forever either — it used to
+      // fall back to the 90s idle limit here, because the two planes were two copies of one sequence.
       const invoked = drain(
         connectAgent({ url: "http://tunnel", token: "t", fetchFn: hangingBody }).invoke(
           { session: "s" },
@@ -754,8 +756,9 @@ describe("session control over HTTP", () => {
       await timers.advanceTimersByTimeAsync(10_000);
       await iterating;
       await readyAttempt;
+      await timers.advanceTimersByTimeAsync(50_000);
       expect(await invoked).toEqual([
-        expect.objectContaining({ type: "failed", details: expect.stringContaining("no usable response in 10s") }),
+        expect.objectContaining({ type: "failed", details: expect.stringContaining("no usable response in 60s") }),
       ]);
     } finally {
       timers.useRealTimers();
@@ -782,6 +785,14 @@ describe("session control over HTTP", () => {
     await iterator.return?.(undefined);
     expect(await pull).toMatchObject({ done: true });
     await cancelled;
+
+    // …and the harder shape: walking away WITHOUT ever pulling. A generator that was never started does not run its
+    // body on `return()`, so nothing inside it can settle `ready` — this used to hang, which is the one outcome a
+    // caller cannot diagnose, and the local hub rejects it (session-control.test.ts owns that half).
+    const untouched = remote.sessions.get("s").events();
+    const neverPulled = untouched[Symbol.asyncIterator]();
+    await neverPulled.return?.(undefined);
+    await expect(untouched.ready).rejects.toThrow(/cancelled by the consumer/);
   });
 
   it("the connect limit ends WITH the connect: a heartbeating stream survives long past it", async () => {

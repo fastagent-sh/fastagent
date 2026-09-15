@@ -767,7 +767,11 @@ for await (const ev of remote.sessions.get("s1").events()) console.log(ev.type);
 The DATA plane travels the same wire: `connectAgent({ url, token })` returns an `Agent` whose
 `invoke` drives `POST /control/invoke` (mounted when the serve wires an agent — dev/start do) —
 paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
-same two contracts local code uses. Disconnecting the invoke stream cancels the run. The invoke wire is
+same two contracts local code uses. Disconnecting the invoke stream cancels the run. Both streams refuse
+an endpoint that accepts the connection and never answers — the events stream after 10s (a reconnecting
+client waits on it, and `attach` counts that round against a budget), `invoke` after 60s, since a
+scale-to-zero host holds the POST open while a machine boots; once connected, either stream fails after
+90s without bytes, heartbeats included. The invoke wire is
 text-only for now (images fail visibly there); `steer`/`followUp` carry full Prompts, images
 included — within the action body cap (1 MiB, with base64 inflation counted; oversized bodies get a
 413 naming the limit).
