@@ -3,40 +3,43 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { readRuns } from "../../schedule/audit.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
+import { isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 /**
- * `fastagent schedule history <name> [dir]`: print the run audit for one schedule (or "wake") — fired time, outcome,
- * duration, reply/error.
+ * `fastagent schedule history <name> [dir]`: print this schedule's fired slots — when each fired, how it ended, how
+ * long it took.
+ *
+ * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
+ * what the run SAID is a log line, and the logs are where a deployment already rotates them.
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
-  const runs = readRuns(resolveStateRoot(target), name);
+  const stateRoot = resolveStateRoot(target);
+  if (!isSafeScheduleName(name)) {
+    console.error(`"${name}" is not a schedule name`);
+    return;
+  }
+  const fires = readFires(stateRoot, name);
   if (json) {
-    console.log(JSON.stringify(runs, null, 2));
+    console.log(JSON.stringify(fires, null, 2));
     return;
   }
-  if (runs.length === 0) {
-    console.error(`no recorded runs for "${name}" (state: ${resolveStateRoot(target)})`);
+  if (fires.length === 0) {
+    console.error(`no recorded fires for "${name}" (state: ${stateRoot})`);
+    // The agent's own wake-ups have no claim to record: they are removed from the store before the turn starts.
+    if (name === "wake") console.error("self-scheduled wake-ups are not recorded here — see the service logs");
     return;
   }
-  // The question is "did LAST NIGHT's run fail?" — so text mode tails the most recent runs (chronological within the
-  // tail); --json above returns the full history.
-  const TAIL = 20;
-  const shown = runs.slice(-TAIL);
-  if (runs.length > shown.length) {
-    console.error(`(showing the last ${shown.length} of ${runs.length} runs — --json for all)`);
+  for (const f of fires) {
+    const outcome = f.outcome ?? "unreported";
+    console.log(`${f.firedAt}  ${outcome.padEnd(11)} ${String(f.ms ?? 0).padStart(6)}ms`);
   }
-  for (const r of shown) {
-    const detail = r.error ?? r.reply ?? "";
-    const preview = detail.replace(/\s+/g, " ").slice(0, 100);
-    console.log(`${r.firedAt}  ${r.outcome.padEnd(11)} ${String(r.ms).padStart(6)}ms  ${preview}`);
-  }
+  console.error(`(the last ${fires.length} fires — what each run said is in the service logs)`);
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */

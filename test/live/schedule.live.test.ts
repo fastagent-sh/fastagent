@@ -1,10 +1,9 @@
 /**
- * A schedule on disk fires a real turn and lands in the audit log — the whole chain, once, on a real
- * model. Offline the pieces are covered separately and each against fakes: discovery reads a directory
- * (schedule-discover.test.ts), the scheduler arms and claims against a fake clock
- * (scheduler.test.ts), the audit appends a record (schedule-audit.test.ts). Nothing joins them, so a
- * seam between two of them — a schedule that loads but never reaches the agent, a fire whose outcome
- * never reaches `runs.jsonl` — is invisible to all three.
+ * A schedule on disk fires a real turn, reports it, and settles its claim — the whole chain, once, on a
+ * real model. Offline the pieces are covered separately and each against fakes: discovery reads a
+ * directory (schedule-discover.test.ts), the scheduler arms, claims and settles against a fake clock
+ * (scheduler.test.ts). Nothing joins them, so a seam between two of them — a schedule that loads but
+ * never reaches the agent, a fire whose outcome never reaches its claim — is invisible to both.
  *
  * The fire comes from the catch-up branch: `start()` anchors a never-fired schedule on `now` (so a new
  * schedule cannot back-fire), which would mean waiting out a real cron instant. Seeding one past fire
@@ -14,11 +13,10 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
-import { type RunRecord, readRuns } from "../../src/schedule/audit.ts";
-import { claimSlot } from "../../src/schedule/state.ts";
+import { claimSlot, type Fire, readFires } from "../../src/schedule/state.ts";
 import { startSchedules } from "../../src/service.ts";
 import { requireEnv } from "./env.ts";
 
@@ -36,8 +34,13 @@ afterAll(() => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("schedules: a cron fire reaches the agent and the audit log", () => {
+describe("schedules: a cron fire reaches the agent, the log, and its claim", () => {
   it("catches up an overdue slot, runs the turn, and records the outcome", async () => {
+    // The turn's reply is a LOG line now (12-factor XI), so the probe reads the logs the way an
+    // operator would: `fastagent start` writes them to stderr and the platform keeps them.
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    cleanups.push(() => vi.restoreAllMocks());
     const dir = await mkdtemp(join(tmpdir(), "fa-live-schedule-"));
     await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
@@ -68,35 +71,32 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
       "the schedules/ file did not load",
     ).toEqual([SCHEDULE]);
 
-    // The seeded claim is reconciled first, and correctly: a claim no record accounts for IS a fire the process was
-    // killed in the middle of (`recordInterruptedFires`), and nothing distinguishes this one from a real one. So the
-    // record under test is the CATCH-UP fire's, which carries a wall-clock `firedAt` later than the seed.
+    // The seeded claim is reconciled first, and correctly: an unsettled claim IS a fire the process was killed in
+    // the middle of (`markInterruptedFires`), and nothing distinguishes this one from a real one. So the record
+    // under test is the CATCH-UP fire's, which carries a wall-clock `firedAt` later than the seed.
     //
-    // The fire is a real model turn; poll the audit log rather than guessing a duration. The budget is
-    // the file timeout minus room for teardown, not an estimate of a turn: a queued or thinking model
-    // running long is the one thing this must not report as a schedule that never fired.
-    const fired = (): RunRecord[] =>
-      readRuns(stateRoot, SCHEDULE).filter((r) => Date.parse(r.firedAt) > seededAt.getTime());
-    let runs = fired();
-    for (let waited = 0; runs.length === 0 && waited < BUDGET_MS; waited += 500) {
-      await sleep(500);
-      runs = fired();
-    }
+    // The fire is a real model turn; poll the settled claim rather than guessing a duration. The budget
+    // is the file timeout minus room for teardown, not an estimate of a turn: a queued or thinking
+    // model running long is the one thing this must not report as a schedule that never fired.
+    const settled = (): Fire[] =>
+      readFires(stateRoot, SCHEDULE).filter((f) => f.outcome !== undefined && Date.parse(f.firedAt) > seededAt.getTime());
+    for (let waited = 0; settled().length === 0 && waited < BUDGET_MS; waited += 500) await sleep(500);
 
+    const fires = settled();
     expect(
-      runs,
-      `no run recorded in ${BUDGET_MS / 1000}s: the schedule never fired, or its turn is still running`,
+      fires,
+      `no fire settled in ${BUDGET_MS / 1000}s: the schedule never fired, or its turn is still running`,
     ).toHaveLength(1);
-    // The record travels IN the message: `toMatchObject` diffs only the keys it was given, so a `failed` record's
-    // `error` — the difference between knowing why an unattended nightly went red and re-running it — was omitted
-    // from the log as "matching properties omitted from actual".
-    expect(runs[0]?.outcome, `the scheduled turn did not complete: ${JSON.stringify(runs[0])}`).toBe("completed");
-    expect(runs[0]?.name).toBe(SCHEDULE);
-    // toBeTruthy, not `.not.toBe("")`: a MISSING reply is exactly the regression this guards, and
-    // `undefined?.trim()` is undefined, which is not "".
-    expect(runs[0]?.reply?.trim(), "a completed run must carry the turn's reply").toBeTruthy();
-    // The session is derived from the schedule's name, not minted per fire — that is what makes a
-    // schedule's turns one continuing conversation.
-    expect(runs[0]?.session).toContain(SCHEDULE);
+    // The claim says how it ended, and WHY a failed one failed is in the log the same turn wrote — so both travel
+    // IN the failure message: a bare matcher would print "expected 'failed' to be 'completed'" and leave the reason
+    // in a log nobody kept, which is the difference between knowing why an unattended nightly went red and
+    // re-running it.
+    const seen = `${JSON.stringify(fires[0])}\n${logs.join("\n")}`;
+    expect(fires[0]?.outcome, `the scheduled turn did not complete: ${seen}`).toBe("completed");
+    // The reply reached the log — the regression this guards is a completed turn that says nothing
+    // anywhere. The session is derived from the schedule's name, not minted per fire, which is what
+    // makes a schedule's turns one continuing conversation.
+    expect(logs.join("\n")).toMatch(new RegExp(`${SCHEDULE} completed \\(\\d+ms\\): \\S`));
+    expect(logs.join("\n")).toContain(`firing (session=schedule:${SCHEDULE})`);
   });
 });

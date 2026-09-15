@@ -4,13 +4,28 @@
  * means one ingress credential in two places, and no local guard can see that. Two processes serving different
  * channels of one agent never touch the same file (docs/design/core.md, "the shipped file-backed implementations").
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 
-/** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
+/**
+ * Create the channel's state home — the one shared spelling of it, so no channel invents its own — and clear the
+ * inbound attachments inside it.
+ *
+ * `files/` is `/tmp`, not storage: every image a chat sends lands there and nothing ever asked for it back, so on a
+ * real volume it is unbounded. Clearing at mount gives it the contract `/tmp` has had since V7 — emptied when the
+ * machine comes up — which needs no ager, no TTL, and no reference tracking. The cost is named: a session that still
+ * points at an attachment from before this process reads ENOENT, exactly as a `/tmp` path from the last boot does.
+ *
+ * Mount time is the whole point: channels mount once when the service starts, so a one-shot `invoke` running beside a
+ * live server never touches these files.
+ */
 export function ensureStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
+  // No catch, for the same reason `mkdirSync` has none: a state home this process cannot manage is an environment
+  // fault, and starting on it would only move the failure somewhere less legible.
+  rmSync(join(dir, "files"), { recursive: true, force: true });
 }
 
 /** Returns `unknown` on purpose — no generic pretending otherwise. */

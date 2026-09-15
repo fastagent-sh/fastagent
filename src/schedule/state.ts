@@ -45,6 +45,59 @@ const KEEP_CLAIMS = 32;
 /** A slot instant as a filename (ISO minus the characters a path cannot carry); sorts in slot order. */
 const claimName = (slot: Date): string => slot.toISOString().replace(/[:.]/g, "-");
 
+/** The instant a claim's file name stands for — `claimName` read backwards. */
+const slotInstant = (name: string): string => name.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ":$1:$2.$3Z");
+
+/**
+ * How a fired slot ended. There is no `deferred` or `stale` here because neither has a claim: a deferred wake-up was
+ * never claimed, and a stale delivery is refused before one is taken. Both are log lines.
+ */
+export type FireOutcome = "completed" | "failed" | "interrupted";
+
+/** One fired slot, as its claim file records it. `outcome` absent = claimed, never settled. */
+export interface Fire {
+  /** The slot this fire was FOR (the claim's name). */
+  slot: string;
+  /** When the claim was taken (falls back to `slot` when the stamp is unusable). */
+  firedAt: string;
+  outcome?: FireOutcome;
+  ms?: number;
+}
+
+const isOutcome = (s: string | undefined): s is FireOutcome =>
+  s === "completed" || s === "failed" || s === "interrupted";
+
+/**
+ * Read one claim file: `<firedAt>`, or `<firedAt> <outcome> <ms>` once the turn has reported.
+ *
+ * An unusable stamp — empty because the process died between the create and the write, or not a date at all — falls
+ * back to the slot instant in the file name. That is the earliest moment the fire can have happened, so the only
+ * degradation is catching up one run that already ran: too many rather than too few.
+ */
+function readClaim(dir: string, name: string): Fire {
+  const slot = slotInstant(name);
+  let raw = "";
+  try {
+    raw = readFileSync(join(dir, name), "utf8").trim();
+  } catch (e) {
+    // Pruning by a concurrent claim can remove the name between the listing and this read. The slot in that name is
+    // the fact we already have, so this is the same degradation an unusable stamp gets, not a boot failure.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  const [stamp, outcome, ms] = raw.split(/\s+/);
+  const fire: Fire = { slot, firedAt: slot };
+  if (stamp && !Number.isNaN(Date.parse(stamp))) fire.firedAt = stamp;
+  else if (stamp) log.warn(`[schedule] claim ${join(dir, name)} carries an unreadable stamp — using the slot instant`);
+  if (isOutcome(outcome)) {
+    fire.outcome = outcome;
+    fire.ms = Number(ms) || 0;
+  } else if (outcome) {
+    // A word we do not know is not an outcome: the fire reads as unsettled, which the next boot reports.
+    log.warn(`[schedule] claim ${join(dir, name)} carries an unknown outcome — reading it as unsettled: ${outcome}`);
+  }
+  return fire;
+}
+
 /**
  * A schedule name becomes a path segment (its claims live in `claims/<name>/`), so the rule is exactly the safety
  * boundary and nothing more: a name may not leave that directory. The name comes from a filename under `schedules/`,
@@ -111,7 +164,7 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
     writeFileSync(fd, firedAt.toISOString());
   } catch (e) {
     // The claim exists from `openSync` on, so a failed stamp (ENOSPC, EIO) would leave a slot that can only ever be
-    // read as `duplicate` — taken, never run, never audited. Remove it so the failure this rethrows costs a retry
+    // read as `duplicate` — taken, never run, never reported. Remove it so the failure this rethrows costs a retry
     // instead of the slot itself. The cleanup's own failure is reported but never replaces `e`: the caller needs
     // the reason the write failed, not the reason the rollback did.
     try {
@@ -134,31 +187,58 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
  * reconciler (was that fire ever reported?) and catch-up (where does the next run resume from?).
  *
  * Pruning only ever removes the oldest names, so the newest claim is never the one that goes.
- *
- * An unusable stamp — empty because the process died between the create and the write, or not a date at all — falls
- * back to the slot instant in the file name. That is the earliest moment the fire can have happened, so the only
- * degradation is catching up one run that already ran: too many rather than too few.
  */
 export function latestFire(stateRoot: string, name: string): string | undefined {
+  const dir = claimDir(stateRoot, name);
   let slot: string | undefined;
   try {
-    slot = readdirSync(claimDir(stateRoot, name)).sort().at(-1);
+    slot = readdirSync(dir).sort().at(-1);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw e;
   }
   if (slot === undefined) return undefined;
-  let stamped = "";
+  return readClaim(dir, slot).firedAt;
+}
+
+/**
+ * Every fire this state root still keeps for `name`, oldest first — the run history, bounded by `KEEP_CLAIMS`
+ * because the claims ARE the history. Nothing here grows: the pruning that keeps the claim gate cheap keeps the
+ * history's size fixed too, which is why there is no separate audit file to rotate (the turn's own narrative is a
+ * log line, and rotating logs is the platform's job — 12-factor XI).
+ */
+export function readFires(stateRoot: string, name: string): Fire[] {
+  const dir = claimDir(stateRoot, name);
+  let slots: string[];
   try {
-    stamped = readFileSync(join(claimDir(stateRoot, name), slot), "utf8").trim();
+    slots = readdirSync(dir).sort();
   } catch (e) {
-    // Pruning by a concurrent claim can remove the name between the listing and this read. The slot in that name is
-    // the fact we already have, so this is the same degradation an unusable stamp gets, not a boot failure.
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
   }
-  if (stamped && !Number.isNaN(Date.parse(stamped))) return stamped;
-  if (stamped) log.warn(`[schedule] ${name}: claim ${slot} carries an unreadable stamp — using the slot instant`);
-  return slot.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ":$1:$2.$3Z");
+  return slots.map((slot) => readClaim(dir, slot));
+}
+
+/**
+ * Write back how the claimed fire ended, into the claim file itself.
+ *
+ * The SAME file, because a second one would reintroduce the window this whole design closes: a killed process would
+ * leave a claimed slot that nothing accounts for. An unsettled claim IS the record of an interrupted fire.
+ *
+ * NOT `writeFileAtomic`: its temp lands in the directory `claimSlot` lists, where a leftover `<slot>.tmp` would sort
+ * after every real claim and poison both the staleness gate and `latestFire`. A torn write degrades the way an
+ * unusable stamp already does (`readClaim`) — the slot is re-read as unsettled, which is visible, not lost.
+ */
+export function settleClaim(stateRoot: string, name: string, slot: Date, outcome: FireOutcome, ms: number): void {
+  const dir = claimDir(stateRoot, name);
+  const file = claimName(slot);
+  try {
+    writeFileSync(join(dir, file), `${readClaim(dir, file).firedAt} ${outcome} ${Math.round(ms)}`);
+  } catch (e) {
+    // Housekeeping, like the pruning below: the turn itself already happened, and the worst case is that the next
+    // boot reports this fire as interrupted.
+    log.warn(`[schedule] ${name}: could not record the ${outcome} outcome of slot ${file}: ${String(e)}`);
+  }
 }
 
 function pruneClaims(dir: string, taken: readonly string[]): void {
