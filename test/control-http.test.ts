@@ -76,20 +76,26 @@ async function serveControl() {
  */
 function fakeSse(options: { status?: number; blocks?: string[] } = {}): {
   fetchFn: typeof fetch;
-  /** Feed one SSE block to a connected stream (no-op before anything connects). */
+  /** Feed one SSE block. Before anything connects it is QUEUED, so a test never has to know when the client's first
+   *  pull reaches the fetch. Unusable with `blocks`, which delivers its own and closes the stream. */
   push(block: string): void;
-  close(): void;
 } {
   const encoder = new TextEncoder();
+  const queued: string[] = [];
   let feed: ReadableStreamDefaultController<Uint8Array> | undefined;
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input).includes("/control/capabilities")) {
       return new Response("{}", { headers: { "content-type": "application/json" } });
     }
+    // The other half of the clause: a signal that is ALREADY aborted never reaches a listener, and a real fetch
+    // rejects on the spot rather than opening anything.
+    if (init?.signal?.aborted) return Promise.reject(init.signal.reason);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         feed = controller;
-        for (const block of options.blocks ?? []) controller.enqueue(encoder.encode(block));
+        for (const block of [...queued.splice(0), ...(options.blocks ?? [])]) {
+          controller.enqueue(encoder.encode(block));
+        }
         if (options.blocks) controller.close();
         // THE clause: a body outlives its caller only until the caller says stop.
         init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
@@ -102,8 +108,7 @@ function fakeSse(options: { status?: number; blocks?: string[] } = {}): {
   }) as typeof fetch;
   return {
     fetchFn,
-    push: (block) => feed?.enqueue(encoder.encode(block)),
-    close: () => feed?.close(),
+    push: (block) => (feed ? feed.enqueue(encoder.encode(block)) : void queued.push(block)),
   };
 }
 
@@ -113,6 +118,7 @@ function fakeUnreachable(): typeof fetch {
     if (String(input).includes("/control/capabilities")) {
       return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
     }
+    if (init?.signal?.aborted) return Promise.reject(init.signal.reason);
     return new Promise<Response>((_resolve, reject) => {
       // Same clause: an endpoint that never answers still lets go when the caller does.
       init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")), {
@@ -874,11 +880,8 @@ describe("session control over HTTP", () => {
     try {
       const remote = await connectSessionControl({ url: "http://x", token: "t", fetchFn });
       const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
-      // Pull FIRST: nothing can be fed to a stream that has not been opened, and opening it is what the first pull
-      // does. (The previous fake hid that by building its body before any fetch — a shape no server has.)
-      const first = iterator.next();
       push(wire(0, { type: "run_started", timestamp: 1, data: {} }));
-      expect(((await first).value as SessionEvent).type).toBe("run_started");
+      expect(((await iterator.next()).value as SessionEvent).type).toBe("run_started");
       // The consumer pauses far past the idle limit — no pending read, watchdog disarmed.
       await fakeTimers.advanceTimersByTimeAsync(4 * 30_000);
       // Resume: the connection was never killed; the next event flows.
