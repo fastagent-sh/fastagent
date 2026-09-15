@@ -20,9 +20,10 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
+  // A name that cannot be a schedule is a MISTYPED ARGUMENT, and it must not look like an empty history: exit 1 the
+  // way every other user-input refusal does, so `--json` printing nothing is never read as "the command succeeded".
   if (!isSafeScheduleName(name)) {
-    console.error(`"${name}" is not a schedule name`);
-    return;
+    failStartup(new Error(`"${name}" cannot be a schedule name (no path separators, "." or "..")`));
   }
   const fires = readFires(stateRoot, name);
   if (json) {
@@ -35,11 +36,19 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     if (name === "wake") console.error("self-scheduled wake-ups are not recorded here — see the service logs");
     return;
   }
-  for (const f of fires) {
+  // The question is "did LAST NIGHT's run fail?", so text mode tails the most recent fires; --json above is the
+  // whole retained window.
+  const TAIL = 20;
+  const shown = fires.slice(-TAIL);
+  for (const f of shown) {
     const outcome = f.outcome ?? "unreported";
     console.log(`${f.firedAt}  ${outcome.padEnd(11)} ${String(f.ms ?? 0).padStart(6)}ms`);
   }
-  console.error(`(the last ${fires.length} fires — what each run said is in the service logs)`);
+  const scope =
+    fires.length > shown.length
+      ? `the last ${shown.length} of ${fires.length} fires — --json for all`
+      : `the last ${shown.length} fires`;
+  console.error(`(${scope}; what each run said is in the service logs)`);
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */

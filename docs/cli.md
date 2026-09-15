@@ -231,7 +231,8 @@ between claiming that slot and finishing its turn — a restart or rolling deplo
 stays skipped (it is not replayed), and the next start records it.
 
 The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
-construction — the last 32 fires per schedule, nothing that grows. It carries no turn text: **what a run
+construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
+nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window. It carries no turn text: **what a run
 said is a log line** (`fastagent logs`, `docker logs`, journald), where a deployment already bounds and
 rotates it. Read-only; `--json` prints the same records as JSON.
 

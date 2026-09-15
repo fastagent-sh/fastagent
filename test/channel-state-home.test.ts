@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { ensureStateHome } from "../src/channels/kit/state.ts";
+import { mountStateHome } from "../src/channels/kit/state.ts";
 import { attachmentPath } from "../src/channels/kit/attachment-path.ts";
 
 it("clears the inbound attachments at mount and keeps the rest of the state home", () => {
@@ -20,7 +20,7 @@ it("clears the inbound attachments at mount and keeps the rest of the state home
   mkdirSync(attachment.dir, { recursive: true });
   writeFileSync(attachment.path, "bytes");
 
-  ensureStateHome(home);
+  mountStateHome(home);
 
   expect(existsSync(attachment.path)).toBe(false);
   expect(existsSync(join(home, "files"))).toBe(false); // the directory goes too — the channel recreates it per file
@@ -29,6 +29,6 @@ it("clears the inbound attachments at mount and keeps the rest of the state home
 
 it("creates a state home that does not exist yet, with nothing to clear", () => {
   const home = join(mkdtempSync(join(tmpdir(), "fa-state-home-")), "channels", "slack");
-  expect(() => ensureStateHome(home)).not.toThrow();
+  expect(() => mountStateHome(home)).not.toThrow();
   expect(existsSync(home)).toBe(true);
 });

@@ -9,7 +9,7 @@ import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
-import { claimSlot, latestFire, readFires, settleClaim } from "./state.ts";
+import { claimSlot, type Fire, readFires, settleClaim } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /** A schedule shares one continuing conversation without depending on engine session storage. */
@@ -31,18 +31,16 @@ export function scheduleSession(name: string): string {
  * YET, and reports it; the first process then overwrites the outcome when its turn settles. Telling them apart needs
  * the claimer's liveness, which is a lease, not a claim — and the whole point of the claim is that it needs none.
  */
-function markInterruptedFires(stateRoot: string, schedules: LoadedSchedule[]): void {
-  for (const s of schedules) {
-    // No catch: this reads the same directory `latestFire` just read in `start()`, which throws a boot failure on an
-    // unreadable one. A second, softer opinion about the same fault would only be dead code.
-    for (const fire of readFires(stateRoot, s.name)) {
-      if (fire.outcome !== undefined) continue;
-      log.warn(
-        `[schedule] ${s.name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
-          `and that slot stays skipped (see \`fastagent schedule history ${s.name}\`)`,
-      );
-      settleClaim(stateRoot, s.name, new Date(fire.slot), "interrupted", 0);
-    }
+function markInterruptedFires(stateRoot: string, name: string, fires: Fire[]): void {
+  for (const fire of fires) {
+    if (fire.outcome !== undefined) continue;
+    log.warn(
+      `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
+        `and that slot stays skipped (see \`fastagent schedule history ${name}\`)`,
+    );
+    // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
+    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from.
+    settleClaim(stateRoot, name, new Date(fire.slot), "interrupted", 0);
   }
 }
 
@@ -281,16 +279,18 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     return {
       start() {
         stopped = false;
-        // ONE read of the claims, for the two planes that must agree on when this schedule last fired: the
-        // reconciler (was that fire ever reported?) and catch-up (where does the next run resume?). A boot-time read
-        // fault stays synchronous, before any timers or turns are started.
+        // ONE read of the claims per schedule, for the two planes that must agree on them: the reconciler (was that
+        // fire ever reported?) and catch-up (where does the next run resume?). A boot-time read fault stays
+        // synchronous, before any timers or turns are started — an unreadable claims directory is not a schedule to
+        // run blind, it is a boot failure.
         const lastFires = new Map<string, string>();
         if (!externalClock) {
           for (const s of schedules) {
-            const fired = latestFire(stateRoot, s.name);
+            const fires = readFires(stateRoot, s.name);
+            const fired = fires.at(-1)?.firedAt;
             if (fired !== undefined) lastFires.set(s.name, fired);
+            markInterruptedFires(stateRoot, s.name, fires);
           }
-          markInterruptedFires(stateRoot, schedules);
         }
         const current = now();
         for (const s of externalClock ? [] : schedules) {

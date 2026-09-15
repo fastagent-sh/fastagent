@@ -11,7 +11,7 @@ import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSession
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import { latestFire, readFires } from "../src/schedule/state.ts";
+import { readFires } from "../src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -42,7 +42,9 @@ const freshRoot = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-sched-"));
 const seedClaim = (root: string, name: string, firedAt: string, slot = firedAt, settled = true): void => {
   const dir = join(root, "schedule", "claims", name);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, slot.replace(/[:.]/g, "-")), settled ? `${firedAt} completed 1` : firedAt);
+  // Through `toISOString` first: a claim file name is the shape `claimSlot` writes, and nothing else is read as one.
+  const file = new Date(slot).toISOString().replace(/[:.]/g, "-");
+  writeFileSync(join(dir, file), settled ? `${firedAt} completed 1` : firedAt);
 };
 /** How this state root says the fires for `name` ended. */
 const outcomes = (root: string, name: string): (string | undefined)[] => readFires(root, name).map((f) => f.outcome);
@@ -55,7 +57,7 @@ const claimed = (root: string, name: string): string[] => {
   }
 };
 /** When this state root says the schedule last fired — read the way the scheduler reads it. */
-const lastFire = (root: string, name: string): string | undefined => latestFire(root, name);
+const lastFire = (root: string, name: string): string | undefined => readFires(root, name).at(-1)?.firedAt;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -110,6 +112,31 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(outcomes(root, "job")).toEqual(["interrupted"]); // still one fire, still one outcome
     expect(warns.some((w) => /never finished/.test(w))).toBe(false);
     again.stop();
+  });
+
+  it("a file that is not a claim is not read as one — it decides nothing and breaks nothing", async () => {
+    // A claims directory is a directory: macOS drops `.DS_Store` into any it opens, and such a name sorts after
+    // every real claim. Read as the newest one it would decide whether the next slot is refused as stale, where
+    // catch-up resumes, and which fire the reconciler settles — and its slot cannot be parsed back, which used to
+    // take `start()` down with `RangeError: Invalid time value`.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    seedClaim(root, "job", "2026-07-07T08:00:00Z");
+    writeFileSync(join(root, "schedule", "claims", "job", ".DS_Store"), "junk");
+    writeFileSync(join(root, "schedule", "claims", "job", "2026-07-07T09-00-00-000Z.tmp"), "half a write");
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    });
+    expect(() => s.start()).not.toThrow();
+    // The overdue slot still catches up, and both fires on record are the real ones: neither stray file became a
+    // fire, and neither was settled as interrupted.
+    await vi.waitFor(() => expect(outcomes(root, "job")).toEqual(["completed", "completed"]));
+    expect(calls).toHaveLength(1);
+    s.stop();
   });
 
   it("an unusable claim stamp falls back to the slot instant — catch-up may repeat, never skip", async () => {
@@ -340,7 +367,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("a busy RECURRING occurrence is SKIPPED (audited failed) — the recurrence continues untouched", async () => {
+  it("a busy RECURRING occurrence is SKIPPED (reported, never stored) — the recurrence continues untouched", async () => {
     const root = await freshRoot();
     mkdirSync(join(root, "schedule"), { recursive: true });
     writeFileSync(
@@ -365,7 +392,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("a busy wake dropped at the retry ceiling is audited FAILED (a final silent loss), not deferred", async () => {
+  it("a busy wake dropped at the retry ceiling is reported as an ERROR (a final silent loss), not deferred", async () => {
     const root = await freshRoot();
     // Seed the wake already AT the attempt cap — the next busy defer drops it.
     mkdirSync(join(root, "schedule"), { recursive: true });
