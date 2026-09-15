@@ -27,11 +27,26 @@ const OUTPUTS = JSON.stringify([
   { OutputKey: "ForwarderUrl", OutputValue: "https://xyz.lambda-url.us-west-2.on.aws/" },
 ]);
 
-/** Default happy-path aws script: identity + login password + stack outputs succeed. */
-const happyAws = (args: string[]): { code?: number; stdout?: string } => {
+/** The CLI's answer for a stack that is not there — what a FIRST deploy reads. */
+const NO_SUCH_STACK = {
+  code: 254,
+  stderr:
+    "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id " +
+    "fastagent-my-agent does not exist",
+};
+
+/**
+ * Default happy-path aws script: identity + login password + stack outputs succeed, and the stack does not exist yet.
+ * The two `describe-stacks` calls ask DIFFERENT questions (status before the build, outputs after the deploy) and get
+ * different answers here — one reply for both would make every case a redeploy and leave the double unable to express
+ * a first deploy at all.
+ */
+const happyAws = (args: string[]): { code?: number; stdout?: string; stderr?: string } => {
   if (args[0] === "sts") return { stdout: IDENTITY };
   if (args[0] === "ecr" && args[1] === "get-login-password") return { stdout: "hunter2" };
-  if (args[0] === "cloudformation" && args[1] === "describe-stacks") return { stdout: OUTPUTS };
+  if (args[0] === "cloudformation" && args[1] === "describe-stacks") {
+    return args.includes("Stacks[0].StackStatus") ? NO_SUCH_STACK : { stdout: OUTPUTS };
+  }
   return {};
 };
 
@@ -170,6 +185,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "sts get-caller-identity --output json",
       // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
       "bedrock-agentcore-control list-agent-runtimes --max-items 1 --region us-west-2",
+      // The stack is read ONCE, here: what it says (a redeploy that replaces state, or a failed first create) is
+      // only actionable before the build, and step 7 reuses this answer instead of asking again.
+      "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       // The deployment bucket: created if absent, its safety/durability properties re-converged every
       // deploy, then the content-hashed forwarder package uploaded.
@@ -180,7 +198,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         /^s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip$/,
       ),
       "ecr get-login-password",
-      "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
@@ -287,6 +304,100 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({ ok: true });
     expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
     expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
+    // Settled before the build: one read answers both questions, and step 7 does not ask again.
+    expect(cmds().filter((c) => c.includes("Stacks[0].StackStatus"))).toHaveLength(1);
+  });
+
+  it("a rollback still RUNNING before the build is re-read after it, and the settled stack is deleted", async () => {
+    // The common first-failure loop: create fails, the user re-runs immediately, and the minutes of arm64 build are
+    // exactly long enough for ROLLBACK_IN_PROGRESS to become ROLLBACK_COMPLETE. A pre-build snapshot would skip the
+    // delete and hand back a `cloudformation deploy` failure after the whole build.
+    const statuses = ["ROLLBACK_IN_PROGRESS\n", "ROLLBACK_COMPLETE\n"];
+    const { cli: aws, cmds } = fakeCli((a) => {
+      if (a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")) {
+        return { stdout: statuses.shift() ?? "ROLLBACK_COMPLETE\n" };
+      }
+      return happyAws(a);
+    });
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true });
+    expect(cmds().filter((c) => c.includes("Stacks[0].StackStatus"))).toHaveLength(2);
+    expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
+    expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
+  });
+
+  describe("a redeploy replaces the agent's memory, and says so while stopping is still free", () => {
+    /** Run with a scripted answer to the pre-build stack-status question. */
+    const withStack = async (
+      status: { code?: number; stdout?: string; stderr?: string },
+      over: Partial<AgentcoreRunPlan> = {},
+    ) => {
+      const logs: string[] = [];
+      const { cli: aws, calls } = fakeCli((a) =>
+        a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
+          ? status
+          : happyAws(a),
+      );
+      await deployAgentcoreRun(plan(over), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
+        telegram: async () => "registered",
+      });
+      return { logs, calls };
+    };
+
+    it("warns before the build when the stack already exists", async () => {
+      const { logs, calls } = await withStack({ stdout: "UPDATE_COMPLETE\n" });
+
+      const warned = logs.findIndex((l) => l.includes("REDEPLOY"));
+      expect(warned).toBeGreaterThanOrEqual(0);
+      expect(logs[warned]).toContain("/mnt/data");
+      expect(logs[warned]).toContain("pending wake-ups");
+      // The point of saying it here: the operator can still ctrl-c for free, before the multi-minute arm64 build.
+      expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
+      // And nothing but reads precedes the question, so the warning cannot arrive after this deploy changed something.
+      const asked = calls.findIndex((c) => c.args.includes("Stacks[0].StackStatus"));
+      expect(
+        calls.slice(0, asked).every((c) => ["sts", "configure", "bedrock-agentcore-control"].includes(c.args[0]!)),
+      ).toBe(true);
+    });
+
+    it("stays quiet on a first deploy and on every shape of a create that never succeeded", async () => {
+      const first = await withStack(NO_SUCH_STACK);
+      expect(first.logs.join("\n")).not.toContain("REDEPLOY");
+
+      // A failed first create is an EMPTY stack whatever status it stopped at — warning here would have the operator
+      // abort a deploy to protect memory that never existed.
+      for (const status of ["ROLLBACK_COMPLETE", "CREATE_FAILED", "ROLLBACK_IN_PROGRESS", "REVIEW_IN_PROGRESS"]) {
+        const { logs } = await withStack({ stdout: `${status}\n` });
+        expect(logs.join("\n"), status).not.toContain("REDEPLOY");
+      }
+    });
+
+    it("says the question went UNANSWERED when the stack cannot be read, and gates nothing", async () => {
+      // A role with `sts` but no `cloudformation:DescribeStacks` is an ordinary least-privilege setup: reading that
+      // failure as "no stack, nothing to lose" silences the warning exactly where it matters most.
+      const denied = {
+        code: 254,
+        stderr: "An error occurred (AccessDenied) when calling the DescribeStacks operation: not authorized",
+      };
+      const { logs } = await withStack(denied);
+
+      const warned = logs.findIndex((l) => l.includes("could not read stack fastagent-my-agent"));
+      expect(warned).toBeGreaterThanOrEqual(0);
+      expect(logs[warned]).toContain("AccessDenied"); // the CLI's own reason, not our guess
+      expect(logs[warned]).toContain("/mnt/data");
+      expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
+    });
+
+    it("blames FASTAGENT_AUTH_SEED only when this deploy carries one", async () => {
+      const carried = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { FASTAGENT_AUTH_SEED: "seed" } });
+      expect(carried.logs.join("\n")).toContain("re-seeded from FASTAGENT_AUTH_SEED");
+
+      // A provider API key deployment re-seeds nothing; saying it would send the operator after a credential
+      // problem that does not exist.
+      const apiKey = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { OPENAI_API_KEY: "k" } });
+      expect(apiKey.logs.join("\n")).toContain("REDEPLOY");
+      expect(apiKey.logs.join("\n")).not.toContain("FASTAGENT_AUTH_SEED");
+    });
   });
 
   it("gates an auth seed beyond the chunk ceiling and any other >2048-char secret", async () => {
