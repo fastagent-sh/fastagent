@@ -3,40 +3,55 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { readRuns } from "../../schedule/audit.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
+import { isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 /**
- * `fastagent schedule history <name> [dir]`: print the run audit for one schedule (or "wake") — fired time, outcome,
- * duration, reply/error.
+ * `fastagent schedule history <name> [dir]`: print this schedule's fired slots — when each fired, how it ended, how
+ * long it took.
+ *
+ * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
+ * what the run SAID is a log line, and the logs are where a deployment already rotates them.
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
-  const runs = readRuns(resolveStateRoot(target), name);
+  const stateRoot = resolveStateRoot(target);
+  // A name that cannot be a schedule is a MISTYPED ARGUMENT, and it must not look like an empty history: exit 1 the
+  // way every other user-input refusal does, so `--json` printing nothing is never read as "the command succeeded".
+  if (!isSafeScheduleName(name)) {
+    failStartup(new Error(`"${name}" cannot be a schedule name (no path separators, "." or "..")`));
+  }
+  const fires = readFires(stateRoot, name);
   if (json) {
-    console.log(JSON.stringify(runs, null, 2));
+    console.log(JSON.stringify(fires, null, 2));
     return;
   }
-  if (runs.length === 0) {
-    console.error(`no recorded runs for "${name}" (state: ${resolveStateRoot(target)})`);
+  if (fires.length === 0) {
+    // No special case for "wake": `discover.ts` no longer reserves that name, so a schedule may be called it — and a
+    // hint saying "wake-ups are not recorded here" would be a wrong explanation for an author's own `wake` schedule
+    // that simply has not fired yet.
+    console.error(`no recorded fires for "${name}" (state: ${stateRoot})`);
     return;
   }
-  // The question is "did LAST NIGHT's run fail?" — so text mode tails the most recent runs (chronological within the
-  // tail); --json above returns the full history.
+  // The question is "did LAST NIGHT's run fail?", so text mode tails the most recent fires; --json above is the
+  // whole retained window.
   const TAIL = 20;
-  const shown = runs.slice(-TAIL);
-  if (runs.length > shown.length) {
-    console.error(`(showing the last ${shown.length} of ${runs.length} runs — --json for all)`);
+  const shown = fires.slice(-TAIL);
+  for (const f of shown) {
+    // An unreported fire has no duration to print, and `0ms` would be a value a fast turn really produces — the
+    // column stays empty rather than claiming the turn took no time.
+    const took = f.ms === undefined ? "" : `${f.ms}ms`;
+    console.log(`${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}`);
   }
-  for (const r of shown) {
-    const detail = r.error ?? r.reply ?? "";
-    const preview = detail.replace(/\s+/g, " ").slice(0, 100);
-    console.log(`${r.firedAt}  ${r.outcome.padEnd(11)} ${String(r.ms).padStart(6)}ms  ${preview}`);
-  }
+  const scope =
+    fires.length > shown.length
+      ? `the last ${shown.length} of ${fires.length} fires — --json for all`
+      : `the last ${shown.length} fires`;
+  console.error(`(${scope}; what each run said is in the service logs)`);
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */

@@ -295,6 +295,20 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/looked in .*fastagent\/schedules/);
   });
 
+  it("schedule history refuses an impossible name with exit 1, not an empty history", async () => {
+    // The difference that matters to a script: a mistyped argument and "this schedule has never fired" must not
+    // both look like success with no output — which is exactly what `--json` printing nothing would say.
+    const dir = await agentWorkspace("fa-history-");
+    const bad = await run(["schedule", "history", "../escape", dir, "--json"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toMatch(/cannot be a schedule name/);
+    // A real name that simply has no claims is the other case, and it succeeds with an empty history.
+    const empty = await run(["schedule", "history", "daily", dir, "--json"]);
+    expect(empty.code).toBe(0);
+    expect(JSON.parse(empty.stdout)).toEqual([]);
+  });
+
   it("an unknown name still reports the file that failed to load — that IS why the name is missing", async () => {
     // A broken file is absent from the available list, so "unknown tool/schedule" is exactly the case
     // where the author needs to hear about the import error rather than doubt their spelling.

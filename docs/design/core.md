@@ -543,23 +543,37 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 
 Static schedules are `schedules/<name>.ts` files exporting `{ cron, tz?, prompt }`. The scheduler
 derives the stable session `schedule:<name>`, claims a slot before invoking, catches up one overdue
-occurrence after downtime (not every missed slot), records each run in
-`<stateRoot>/schedule/runs.jsonl`, and leaves delivery to agent tools.
+occurrence after downtime (not every missed slot), writes the outcome back into that claim, and leaves
+delivery to agent tools.
+
+**The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
+one fixed-size line — `<firedAt> <outcome> <ms>` — pruned to the newest 512, which is what makes
+`fastagent schedule history` bounded by construction rather than by a retention policy. The turn's
+narrative (its reply, its error) is a log line instead of a stored field: rotating a narrative is the
+job of the layer that carries it (12-factor XI), and the reply is capped per line so one huge turn
+cannot evict the diagnostics around it. Where that layer's bound comes from differs by host and is
+stated per host: Fly and Railway retain logs for a bounded window of their own, `deploy docker` writes
+the bound into the compose file (`logging: json-file` with `max-size`, since Docker's default has
+none), and AgentCore is the one host with NO default bound — CloudWatch keeps log data indefinitely,
+so its runbook ends with the `put-retention-policy` call that closes it. An append-only file of model
+replies on a minute cron has no such layer at all, which is how a volume fills. Two events have no claim and
+therefore no stored record at all: a wake-up (removed from the store before its turn starts) and a
+stale slot (refused before a claim is taken; it is a WARN line where a duplicate delivery is INFO).
 
 The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use the
 captured Effect clock; Croner computes calendar instants, with capped waits rechecking wall time. Cron
-claim IO failures are typed: the resident loop logs and audits a skipped fire, while external slot
-delivery receives the original error.
+claim IO failures are typed: the resident loop logs a skipped fire, while external slot delivery
+receives the original error.
 
 `stop()` interrupts pending waits synchronously without draining or canceling a claimed occurrence.
 That occurrence finishes execution and settlement before its loop exits; no next wake is claimed. The
-process itself is not waited for, so a restart can still land between a cron claim and its audit line:
-the next `start()` reconciles the claims it is about to arm against the audit and records an unreported
-one as `interrupted`, with a warning. It is not re-fired — a turn that kills its own process would then
-replay on every boot — and external slot delivery skips the check, having no durable audit to read. A
+process itself is not waited for, so a restart can still land between a cron claim and its settlement:
+the next `start()` reads the claims it is about to arm and settles an unsettled one as `interrupted`,
+with a warning — which also makes the check idempotent across boots. It is not re-fired — a turn that
+kills its own process would then replay on every boot — and external slot delivery skips the check. A
 killed wake-up leaves nothing to reconcile: its claim removes it from the store before the turn starts.
 Waiting loops do not count as business work. Wake execution keeps its busy ownership through one-shot
-deferral and audit, so the idle notification observes settled state.
+deferral and settlement, so the idle notification observes settled state.
 
 With `selfSchedule: true`, the serving path mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
 minimum delay/frequency and per-session count, and fired back into the originating session. A one-shot
@@ -576,9 +590,15 @@ would silently miss clock events.
 ```txt
 <stateRoot>/                # <agent dir>/.state (FASTAGENT_STATE_DIR overrides)
 ├── sessions/
-├── channels/telegram/  channels/slack/  channels/feishu/
+├── channels/telegram/  channels/slack/  channels/feishu/   # …/files/ is scratch: cleared at mount
 └── schedule/
 ```
+
+Nothing under this root grows without a ceiling, and each part gets the cheapest ceiling that fits what
+it is. Fired-slot claims are pruned by count (§8). A channel's `files/` holds inbound attachments, which
+nothing ever asks for back — so it is `/tmp`, emptied when the channel mounts, needing no ager, no TTL
+and no reference tracking; the cost is that a session pointing at an attachment from before the current
+process reads ENOENT, exactly as a `/tmp` path from the last boot does.
 
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
@@ -601,14 +621,15 @@ rather than general — measured, not assumed:
   event for up to 24h (EventBridge) would otherwise get a stale slot fired once its own claim aged out.
   The claim is the ONLY state this path writes, and it carries the wall-clock instant it was taken, so
   one file answers both planes — was that fire ever reported (the boot-time `interrupted` check), and
-  where does catch-up resume. A second file would reintroduce a window in which a killed process leaves
-  a claimed slot nothing accounts for. A claim outliving its process is correct: the slot was taken, and
-  a fire interrupted mid-turn is recorded as `interrupted` by the next start. A slot refused as stale is recorded
-  too (`stale`), because that is a planned run that will never happen; a duplicate delivery is not, because it is
-  ordinary and one line per platform retry would drown the history. That check has one known
-  false positive — a second scheduler booting while the first is mid-turn reports a claim the audit does
-  not account for YET, so the history carries both lines for that instant; telling them apart would need
-  the claimer's liveness, which is a lease rather than a claim.
+  where does catch-up resume — and the turn's outcome is written back into that same file. A second file
+  would reintroduce a window in which a killed process leaves a claimed slot nothing accounts for. A
+  claim outliving its process is correct: the slot was taken, and a fire interrupted mid-turn is settled
+  `interrupted` by the next start. That check has one known false positive — a second scheduler booting
+  while the first is mid-turn settles a claim nothing accounts for YET, which the first process then
+  overwrites when its turn ends; telling them apart would need the claimer's liveness, which is a lease
+  rather than a claim. The settlement is a plain write, not the atomic rename `writeFileAtomic` does:
+  its temp file would land in the directory the claim gate lists, where a leftover would sort after
+  every real claim. A torn write reads back as an unsettled claim, which is visible, not lost.
 - **Recovered turns can run twice** if two resident processes share a directory, which is the
   already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
   a killed process block its own replay, which is worse than the duplicate.

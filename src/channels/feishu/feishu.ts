@@ -10,7 +10,8 @@ import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
+import { attachmentsDir } from "../kit/attachment-path.ts";
+import { mountStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
@@ -298,7 +299,7 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
-    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
+    mountStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const botOpenId = createBotIdentity({ api, appId, label, botFile: join(stateHome, "bot.json") });
     const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId: botOpenId() }));
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
@@ -414,7 +415,7 @@ function createFeishuRuntimeFactory(
             {
               api,
               chatId: rec.chatId,
-              filesDir: join(stateHome, "files"),
+              filesDir: attachmentsDir(stateHome),
               label,
               appId,
               ...(parentSession !== undefined ? { parentSession } : {}),
