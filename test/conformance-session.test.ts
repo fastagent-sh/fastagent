@@ -33,7 +33,7 @@ import { telegramReply } from "../src/channels/telegram/preview.ts";
 import { createScheduler } from "../src/schedule/scheduler.ts";
 import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
-import { readRuns } from "../src/schedule/audit.ts";
+import { readFires } from "../src/schedule/state.ts";
 
 afterEach(() => vi.restoreAllMocks());
 import { makeFaux } from "./faux.ts";
@@ -332,7 +332,7 @@ it.each([
   },
 );
 
-it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and audit", async () => {
+it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and report", async () => {
   for (const kind of ["cron", "wake"] as const) {
     const stateRoot = await mkdtemp(join(tmpdir(), "fa-scheduled-sdk-"));
     const entered = Promise.withResolvers<void>();
@@ -365,7 +365,7 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and au
       // The claim a previous, completed fire left: where catch-up resumes from.
       const claims = join(stateRoot, "schedule", "claims", "job");
       mkdirSync(claims, { recursive: true });
-      writeFileSync(join(claims, "2026-07-07T08-00-00-000Z"), "2026-07-07T08:00:00.000Z");
+      writeFileSync(join(claims, "2026-07-07T08-00-00-000Z"), "2026-07-07T08:00:00.000Z completed 1");
     } else
       writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
         { id: "first", session: sessionId, prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
@@ -379,18 +379,22 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and au
         now: () => new Date("2026-07-07T10:30:00Z"),
       }),
     );
+    // The turn's own report is a log line (a wake-up has no claim to settle at all), so that is what both kinds are
+    // observed through.
+    const logs: string[] = [];
+    const stderr = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     try {
       s.start();
       await entered.promise;
       expect(s.stop(), kind).toBeUndefined();
       expect(abort, kind).not.toHaveBeenCalled();
       expect(lease.tryAcquire(sessionId), kind).toBeNull();
-      // The seeded claim has no audit record, so start() books it as interrupted — not this test's subject.
-      const audited = () => readRuns(stateRoot).filter((r) => r.outcome !== "interrupted");
-      expect(audited(), kind).toEqual([]);
+      const reported = () => logs.filter((l) => /completed \(\d+ms\): done/.test(l));
+      expect(reported(), kind).toEqual([]);
       finish.resolve();
-      await vi.waitFor(() => expect(audited(), kind).toHaveLength(1));
-      expect(audited()[0], kind).toMatchObject({ outcome: "completed", reply: "done" });
+      await vi.waitFor(() => expect(reported(), kind).toHaveLength(1));
+      // The cron fire also settles its claim; the wake-up's whole record is the line above.
+      if (kind === "cron") expect(readFires(stateRoot, "job").at(-1)).toMatchObject({ outcome: "completed" });
       expect(abort, kind).not.toHaveBeenCalled();
       expect(bound, kind).toHaveBeenCalledOnce();
       if (kind === "wake") expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);
@@ -400,6 +404,7 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and au
     } finally {
       s.stop();
       finish.resolve();
+      stderr.mockRestore();
     }
   }
 });

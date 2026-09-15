@@ -107,7 +107,7 @@ src/
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
-│   │   ├── state.ts, seen.ts # atomic channel state + bounded durable delivery dedup
+│   │   ├── state.ts, seen.ts # atomic channel state (+ files/ is scratch: cleared at mount) + delivery dedup
 │   │   ├── signature.ts    # replay window for a signed webhook ingress
 │   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
 │   │   ├── text.ts         # Unicode-safe code-point slicing
@@ -176,11 +176,11 @@ src/
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
 │   ├── discover.ts         # schedules/ filesystem discovery; a bad file is isolated
-│   ├── scheduler.ts        # the resident clock loops + claim/run/audit; stop cancels waits, claimed turns finish
+│   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
-│   ├── audit.ts            # runs.jsonl append-only run audit + the `schedule history` reader
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules
-│   └── state.ts            # atomic schedule state under <stateRoot>/schedule/
+│   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
+│                           # the outcome written back into it, and therefore the whole (bounded) fire history
 └── engines/pi/             # the pi reference implementation
     ├── service.ts          # createAgentService: this engine's opener + the neutral mountAgentService
     ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, engine thunk)
