@@ -259,30 +259,34 @@ export async function deployAgentcoreRun(
     );
   }
 
-  // 3d. Read the stack ONCE, here, for the two questions that both depend on it: does this deploy destroy the agent's
-  // memory (below), and is there a failed first create to clear (step 7)? Nothing between here and there can change
-  // the answer, and the destructive one is only worth saying while the multi-minute build has not run yet.
-  const stackStatus = await aws(
-    [
-      "cloudformation",
-      "describe-stacks",
-      "--stack-name",
-      stack,
-      "--query",
-      "Stacks[0].StackStatus",
-      "--output",
-      "text",
-    ],
-    // stderr is CLASSIFIED here (no stack vs unreadable), so it must not stream to the terminal as this deploy's
-    // first visible line either.
-    { capture: true, captureStderr: true },
-  );
+  // 3d. Read the stack here, for the two questions that both depend on it: does this deploy destroy the agent's
+  // memory (below), and is there a failed first create to clear (step 7)? The destructive one is only worth saying
+  // while the multi-minute build has not run yet, and step 7 reuses this answer unless it was still in flight.
+  const readStackStatus = () =>
+    aws(
+      [
+        "cloudformation",
+        "describe-stacks",
+        "--stack-name",
+        stack,
+        "--query",
+        "Stacks[0].StackStatus",
+        "--output",
+        "text",
+      ],
+      // stderr is CLASSIFIED here (no stack vs unreadable), so it must not stream to the terminal as this deploy's
+      // first visible line either.
+      { capture: true, captureStderr: true },
+    );
+  const stackStatus = await readStackStatus();
   // The one non-zero exit that ANSWERS the question. Every other failure (no `cloudformation:DescribeStacks` on the
   // role, throttling, an endpoint that does not resolve) leaves it unanswered — and an unanswered question must not
   // read as "a first deploy, nothing to lose". `sts get-caller-identity` succeeding says nothing about CFN reads.
   const noStack = /does not exist|ValidationError/i.test(stackStatus.stderr ?? "");
   const status = stackStatus.code === 0 ? stackStatus.stdout.trim() : "";
-  const rolledBack = status === "ROLLBACK_COMPLETE";
+  // The only answers the build can invalidate: one still in flight (a first create rolling back is exactly what step 7
+  // exists for, and minutes of arm64 build are long enough for it to settle), and one we never got.
+  const settling = status.endsWith("_IN_PROGRESS") || (stackStatus.code !== 0 && !noStack);
   // Warn, never gate — same as the region probe above: a role without this read, or an older CLI, must not refuse a
   // legitimate deploy.
   if (stackStatus.code !== 0 && !noStack) {
@@ -373,8 +377,9 @@ export async function deployAgentcoreRun(
     return gate("`docker buildx build` failed — see the output above; fix and re-run");
   }
 
-  // 7. (the status was read at 3d, before the build)
-  if (rolledBack) {
+  // 7. The 3d answer stands unless it was still settling then — a second read is the narrow exception, not the rule.
+  const beforeDeploy = settling ? await readStackStatus() : stackStatus;
+  if (beforeDeploy.code === 0 && beforeDeploy.stdout.trim() === "ROLLBACK_COMPLETE") {
     log(`stack ${stack} is ROLLBACK_COMPLETE (a failed first create) — deleting it before re-creating…`);
     if ((await aws(["cloudformation", "delete-stack", "--stack-name", stack])).code !== 0) {
       return gate("`aws cloudformation delete-stack` failed — see the output above");

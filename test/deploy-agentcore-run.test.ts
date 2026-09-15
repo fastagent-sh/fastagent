@@ -304,6 +304,26 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({ ok: true });
     expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
     expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
+    // Settled before the build: one read answers both questions, and step 7 does not ask again.
+    expect(cmds().filter((c) => c.includes("Stacks[0].StackStatus"))).toHaveLength(1);
+  });
+
+  it("a rollback still RUNNING before the build is re-read after it, and the settled stack is deleted", async () => {
+    // The common first-failure loop: create fails, the user re-runs immediately, and the minutes of arm64 build are
+    // exactly long enough for ROLLBACK_IN_PROGRESS to become ROLLBACK_COMPLETE. A pre-build snapshot would skip the
+    // delete and hand back a `cloudformation deploy` failure after the whole build.
+    const statuses = ["ROLLBACK_IN_PROGRESS\n", "ROLLBACK_COMPLETE\n"];
+    const { cli: aws, cmds } = fakeCli((a) => {
+      if (a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")) {
+        return { stdout: statuses.shift() ?? "ROLLBACK_COMPLETE\n" };
+      }
+      return happyAws(a);
+    });
+    const out = await run(plan(), aws, fakeCli().cli);
+    expect(out).toMatchObject({ ok: true });
+    expect(cmds().filter((c) => c.includes("Stacks[0].StackStatus"))).toHaveLength(2);
+    expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
+    expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
   });
 
   describe("a redeploy replaces the agent's memory, and says so while stopping is still free", () => {
