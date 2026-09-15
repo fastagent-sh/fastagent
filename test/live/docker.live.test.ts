@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { exists } from "../../src/paths.ts";
-import { CLI, answerOf, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 const VERSION = await liveVersion();
@@ -87,12 +87,9 @@ describe("deploy docker --run: a definition serving real turns in a container", 
     expect(await fetch(`${baseUrl}/health`).then((r) => r.text())).toBe("ok\n");
 
     const session = "live-docker";
-    // toMatchObject, not `.at(-1)?.type`: a `failed` terminal carries `details`/`retryable` (SPEC
-    // MUST 2), and a mismatch prints the whole event. Nobody is watching a nightly run, so a bare
-    // `expected 'failed' to be 'completed'` costs a full re-run to learn why.
-    expect((await invoke(baseUrl, session, "Remember this number: 47. Reply with just: ok")).at(-1)).toMatchObject({
-      type: "completed",
-    });
+    // Nobody is watching a nightly run, so the terminal event travels IN the failure message (see
+    // expectCompleted): a `failed` terminal carries the `details` that say why, and losing them costs a full re-run.
+    expectCompleted(await invoke(baseUrl, session, "Remember this number: 47. Reply with just: ok"), "the first turn");
 
     // The state volume is the deployment's continuity. Restarting the container drops every bit of
     // in-process state, so what answers afterwards can only have come off the volume.
@@ -102,7 +99,7 @@ describe("deploy docker --run: a definition serving real turns in a container", 
     expect(listed.stdout.trim()).not.toBe("");
 
     const second = await invoke(baseUrl, session, "What number did I ask you to remember? Reply with digits only.");
-    expect(second.at(-1)).toMatchObject({ type: "completed" });
+    expectCompleted(second, "the turn after the restart");
     expect(answerOf(second)).toContain("47");
   });
 });

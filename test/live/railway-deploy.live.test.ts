@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toRailwayName } from "../../src/deploy/railway/plan.ts";
-import { CLI, RAILWAY_PROBE_PROJECT, answerOf, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, RAILWAY_PROBE_PROJECT, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("RAILWAY_API_TOKEN", "an ACCOUNT-scoped Railway token — this probe creates and destroys a project");
@@ -111,11 +111,10 @@ describe("deploy railway --run: a real project, provisioned and destroyed", () =
     expect(await waitForHealth(`${url}/health`, 180_000, 3_000), `${url}/health never came up`).toBe(true);
 
     const session = "live-railway";
-    expect(
-      (await invoke(url as string, session, "Remember this number: 47. Reply with just: ok")).at(-1),
-    ).toMatchObject({
-      type: "completed",
-    });
+    expectCompleted(
+      await invoke(url as string, session, "Remember this number: 47. Reply with just: ok"),
+      "the first turn",
+    );
 
     // Session continuity on the deployed service. Unlike the fly probe this does NOT restart first:
     // `railway redeploy` replaces the machine but the CLI offers no wait-for-ready, so a restart
@@ -125,7 +124,7 @@ describe("deploy railway --run: a real project, provisioned and destroyed", () =
       session,
       "What number did I ask you to remember? Reply with digits only.",
     );
-    expect(second.at(-1)).toMatchObject({ type: "completed" });
+    expectCompleted(second, "the second turn");
     expect(answerOf(second)).toContain("47");
   }, 900_000);
 });

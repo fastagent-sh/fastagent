@@ -124,6 +124,19 @@ export async function invoke(baseUrl: string, session: string, text: string): Pr
 }
 
 /**
+ * One invoke's TERMINAL, asserted with the event itself in the message.
+ *
+ * `toMatchObject({ type: "completed" })` was believed to print a `failed` terminal's `details` — it does not.
+ * vitest diffs only the keys the matcher named and reports the rest as "(2 matching properties omitted from actual)",
+ * so three nightlies went red with nothing in the log but `+ "type": "failed"`, and the reason each turn died was
+ * discardable only by re-running a 20-minute probe against a platform that had already moved on.
+ */
+export function expectCompleted(events: AgentEvent[], what: string): void {
+  const terminal = events.at(-1);
+  expect(terminal?.type, `${what} did not complete: ${JSON.stringify(terminal)}`).toBe("completed");
+}
+
+/**
  * The ANSWER, and only it. Asserting on the raw SSE text would be wrong in both directions: a
  * provider that splits `47` into two tokens never spells it literally, and a `thinking` delta that
  * reasoned about the number would satisfy the assertion even when the answer got it wrong.
