@@ -162,13 +162,20 @@ export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
 
 /**
  * Stable `SessionResult.error.code` for a multi-field {@link Session.update} that wrote some of its fields and then
- * failed.
+ * failed — the ONE code that reports durable work behind an `ok: false`. The message names what landed, and a
+ * `state_changed` event reporting the record as it now is precedes it.
  */
 export const PARTIAL_UPDATE_CODE = "partial_update";
 
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately succeeded (outcomes
  * are `run_settled` events / the invoke terminal).
+ *
+ * `ok: false` means the command did not COMPLETE, which is not the same as "nothing happened". Every code except
+ * {@link PARTIAL_UPDATE_CODE} is a rejection before acceptance with nothing durable landed; that one reports fields
+ * that did land, because properties are separate journal entries and no engine here can roll them back. So the
+ * question "may I send this again" is answered by `retryable`, never by `ok` — a client that blindly re-sends every
+ * `ok: false` re-applies what a partial update already wrote.
  */
 export type SessionResult =
   | { ok: true; runId?: string }

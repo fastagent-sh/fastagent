@@ -138,25 +138,35 @@ export class ControlRequestError extends Error {
    * §13).
    */
   readonly code?: string;
-  constructor(status: number, body: string, code?: string) {
+  /**
+   * Whether re-sending is worth it, as the plane itself answered — the same question `SessionResult.retryable`
+   * answers for a write, carried here because a throwing read has no result to put it in. Absent when the reply
+   * declared no opinion; a caller then has only the status.
+   */
+  readonly retryable?: boolean;
+  constructor(status: number, body: string, declared?: { code?: string; retryable?: boolean }) {
     super(`control request failed: ${status} ${body}`);
     this.status = status;
-    if (code !== undefined) this.code = code;
+    if (declared?.code !== undefined) this.code = declared.code;
+    if (declared?.retryable !== undefined) this.retryable = declared.retryable;
   }
 }
 
-/** A non-2xx reply as an error, carrying the plane's code when the reply declared one. */
+/** A non-2xx reply as an error, carrying what the plane declared about it. */
 async function controlError(res: Response): Promise<ControlRequestError> {
   const body = await res.text();
   if (!res.headers.get("content-type")?.includes("application/json")) return new ControlRequestError(res.status, body);
-  let parsed: { code?: unknown } | null;
+  let parsed: { code?: unknown; retryable?: unknown } | null;
   try {
     parsed = JSON.parse(body) as typeof parsed;
   } catch {
     // The reply declared JSON and is not — a protocol fault worth seeing, but not worth losing the status over.
     return new ControlRequestError(res.status, `${body} (declared application/json but did not parse)`);
   }
-  return new ControlRequestError(res.status, body, typeof parsed?.code === "string" ? parsed.code : undefined);
+  return new ControlRequestError(res.status, body, {
+    ...(typeof parsed?.code === "string" ? { code: parsed.code } : {}),
+    ...(typeof parsed?.retryable === "boolean" ? { retryable: parsed.retryable } : {}),
+  });
 }
 
 /**

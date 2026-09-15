@@ -1523,7 +1523,14 @@ describe("session control over HTTP", () => {
 
         // And the client can READ that code — the whole point of carrying it on the wire.
         const remote = await connectSessionControl({ url: `http://127.0.0.1:${faultyPort}`, token: TOKEN });
-        await expect(remote.sessions.list()).rejects.toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, status: 503 });
+        // `retryable` travels too: a THROWING read has no `SessionResult` to carry it, and the rule is that
+        // `retryable` answers whether to re-send — leaving the caller to infer it from the status would make that
+        // rule false on the one path that can reject.
+        await expect(remote.sessions.list()).rejects.toMatchObject({
+          code: SESSIONS_UNAVAILABLE_CODE,
+          status: 503,
+          retryable: true,
+        });
       } finally {
         await faulty.close();
       }
