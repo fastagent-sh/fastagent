@@ -24,6 +24,15 @@ import {
 const SSE_IDLE_LIMIT_MS = 3 * SSE_HEARTBEAT_MS;
 
 /**
+ * Every request carries a TIMEOUT: attach's whole reliability model counts failed rounds against a budget
+ * ("unreachable for ~Ns"), which a black-hole endpoint (firewall drop, half-dead tunnel) would silently defeat — a
+ * hung state()/entries(), or a stream that never finishes connecting, ticks nothing.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+/** The PAYLOAD-bearing calls get a longer budget than the black-hole detector's 10s. */
+const PAYLOAD_TIMEOUT_MS = 60_000;
+
+/**
  * WHY a stream connection ended, carried BY the abort that ended it.
  *
  * Three independent deciders abort one connection — the consumer walking away, a phase deadline, the idle watchdog —
@@ -49,35 +58,77 @@ function endedBecause(signal: AbortSignal): StreamEnded | undefined {
 }
 
 /**
- * The watchdog counts only while ARMED — armed means "a read is actually pending" (the connect awaiting headers, a
- * body read awaiting bytes).
+ * ONE limit on a pending read, whose value depends on the phase — the only question either wire plane asks about
+ * time. Before the stream is connected a read rides the same black-hole budget as any other request
+ * ({@link REQUEST_TIMEOUT_MS}): a reconnecting client WAITS on that phase (`ready` precedes its backfill), so an
+ * endpoint that accepts the socket and then answers slowly, partially, or never must not hold the caller past every
+ * budget it counts rounds against. Once connected the limit becomes the heartbeat one, which is the right answer for
+ * a stream that is merely quiet.
+ *
+ * It counts only while ARMED — armed means a read is actually pending (the connect awaiting headers or its error
+ * body, a body read awaiting bytes), never while the consumer is simply not pulling.
  */
-interface ReadWatch {
+interface ReadBudget {
   arm(): void;
   disarm(): void;
+  /** The connect phase is over: later reads ride the idle limit instead. */
+  connected(): void;
   stop(): void;
 }
-function idleWatchdog(abort: AbortController, what: string): ReadWatch {
-  let armedAt: number | undefined;
-  const timer = setInterval(() => {
-    if (armedAt !== undefined && Date.now() - armedAt > SSE_IDLE_LIMIT_MS) {
-      abort.abort(
-        new StreamEnded(
-          "idle",
-          `${what}: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
-        ),
-      );
-    }
-  }, SSE_HEARTBEAT_MS);
-  return {
-    arm: () => {
-      armedAt ??= Date.now();
-    },
-    disarm: () => {
-      armedAt = undefined;
-    },
-    stop: () => clearInterval(timer),
+function readBudget(abort: AbortController, what: string): ReadBudget {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let connected = false;
+  const expire = (): void =>
+    abort.abort(
+      connected
+        ? new StreamEnded(
+            "idle",
+            `${what}: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection`,
+          )
+        : new StreamEnded(
+            "connect-timeout",
+            `${what}: no usable response in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never completed one`,
+          ),
+    );
+  const disarm = (): void => {
+    clearTimeout(timer);
+    timer = undefined;
   };
+  return {
+    // `??=`: a nested arm does not restart the clock, so one long read cannot be extended by re-arming inside it.
+    arm: () => {
+      timer ??= setTimeout(expire, connected ? SSE_IDLE_LIMIT_MS : REQUEST_TIMEOUT_MS);
+    },
+    disarm,
+    connected: () => {
+      disarm();
+      connected = true;
+    },
+    stop: disarm,
+  };
+}
+
+/**
+ * Open a streaming response — the one connect sequence both wire planes perform, under one budget: the headers, the
+ * error body of a non-2xx (a half-dead tunnel answering 4xx and then black-holing the body is the case that makes
+ * this one phase rather than two), and the check that a body exists at all. It returns only once the connection is
+ * something that can carry events, which is the moment the budget switches to the idle limit.
+ */
+async function openStreamBody(options: {
+  fetchFn: typeof fetch;
+  url: string;
+  init: RequestInit;
+  abort: AbortController;
+  budget: ReadBudget;
+  what: string;
+}): Promise<ReadableStream<Uint8Array>> {
+  const { fetchFn, url, init, abort, budget, what } = options;
+  budget.arm(); // the connect await is a pending read
+  const res = await fetchFn(url, { ...init, signal: abort.signal });
+  if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+  if (!res.body) throw new Error(`${what}: response has no body`);
+  budget.connected();
+  return res.body;
 }
 
 /** A control request the server answered with a non-2xx status. */
@@ -127,12 +178,6 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
   const base = url.replace(/\/$/, "");
   const headers = { authorization: `Bearer ${token}` };
 
-  // Non-streaming requests carry a TIMEOUT: attach's whole reliability model counts failed rounds against a budget
-  // ("unreachable for ~Ns"), which a black-hole endpoint (firewall drop, half-dead tunnel) would silently defeat — a
-  // hung state()/entries() ticks nothing.
-  const REQUEST_TIMEOUT_MS = 10_000;
-  // The PAYLOAD-bearing calls get a longer budget than the black-hole detector's 10s.
-  const PAYLOAD_TIMEOUT_MS = 60_000;
   const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
     const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw await controlError(res);
@@ -157,34 +202,19 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     // "every iteration is a fresh subscription".
     const openStream = (abort: AbortController) =>
       (async function* iterate(): AsyncGenerator<SessionEvent> {
-        // The idle watchdog governs the SUBSCRIBED stream (`sseData` arms it per read): 90s is the right limit for a
-        // connection that is merely quiet. Everything BEFORE the subscription exists rides the same black-hole budget
-        // as any other request instead — a reconnecting client now waits on this phase (`ready` precedes the
-        // backfill), so an endpoint that accepts the socket and then answers slowly, partially, or never would hold a
-        // whole attach round silently past every budget the caller counts rounds against.
-        const watchdog = idleWatchdog(abort, "control events");
-        const connectDeadline = setTimeout(() => {
-          abort.abort(
-            new StreamEnded(
-              "connect-timeout",
-              `control events: no usable response in ${REQUEST_TIMEOUT_MS / 1000}s — the endpoint accepted the connection and never completed one`,
-            ),
-          );
-        }, REQUEST_TIMEOUT_MS);
+        const budget = readBudget(abort, "control events");
         try {
-          let res: Response;
+          let body: ReadableStream<Uint8Array>;
           try {
-            res = await fetchFn(`${base}/control/sessions/${encodeURIComponent(session)}/events`, {
-              headers,
-              signal: abort.signal,
+            body = await openStreamBody({
+              fetchFn,
+              url: `${base}/control/sessions/${encodeURIComponent(session)}/events`,
+              init: { headers },
+              abort,
+              budget,
+              what: "control events",
             });
-            // The error body is a pending read too — a half-dead tunnel serving 4xx headers and then black-holing the
-            // body stays on the connect deadline, which is why it is cleared only past these checks.
-            if (!res.ok) throw new ControlRequestError(res.status, await res.text());
-            if (!res.body) throw new Error("control events: response has no body");
-            clearTimeout(connectDeadline); // subscribed: the stream's own idle limit takes over from here
           } catch (error) {
-            clearTimeout(connectDeadline);
             // The subscription was never established: the endpoint is unreachable or never completed a response, the
             // token was refused, the consumer cancelled first. Whoever ended it said why, and `fetch` rejected with
             // that very object. A waiter on `ready` must learn it instead of waiting out a stream that will never
@@ -196,7 +226,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           }
           subscribed();
           let nextSeq = 0;
-          for await (const data of sseData(res.body, watchdog)) {
+          for await (const data of sseData(body, budget)) {
             // Parse discipline, same as the other two wire planes (dispatch parses, invoke classifies drift): a
             // non-JSON or non-envelope payload is PROTOCOL MISMATCH.
             let wire: WireEvent;
@@ -233,8 +263,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           if (ended?.kind === "cancelled") return; // the consumer walked away — clean end, not an error
           throw ended ?? error;
         } finally {
-          clearTimeout(connectDeadline);
-          watchdog.stop();
+          budget.stop();
           abort.abort();
         }
       })();
@@ -370,37 +399,31 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
           }
           // A terminal closes the stream. Cleanup errors must not append a second terminal.
           let terminalSeen = false;
-          // Armed BEFORE the fetch — the run's driver must not hang on a black-holed connect either (the connect
-          // await is a pending read; headers arriving disarm it).
-          const watchdog = idleWatchdog(abort, "remote invoke");
-          watchdog.arm();
+          // The run's driver rides the same connect budget as the events plane: a black-holed POST must not hang it
+          // either. A connect failure lands in the catch below, which is where every non-terminal failure is turned
+          // into the one `failed` event this stream owes its caller.
+          const budget = readBudget(abort, "remote invoke");
           try {
-            const res = await fetchFn(`${base}/control/invoke`, {
-              method: "POST",
-              headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-              body: JSON.stringify({
-                session: scope.session,
-                text: prompt.text,
-                // Lineage rides the wire so a remote thread scope inherits server-side; the server reads it on the
-                // session-create path only, same as in-process.
-                ...(scope.parentSession !== undefined ? { parentSession: scope.parentSession } : {}),
-                ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
-              }),
-              signal: abort.signal,
+            const body = await openStreamBody({
+              fetchFn,
+              url: `${base}/control/invoke`,
+              init: {
+                method: "POST",
+                headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                body: JSON.stringify({
+                  session: scope.session,
+                  text: prompt.text,
+                  // Lineage rides the wire so a remote thread scope inherits server-side; the server reads it on the
+                  // session-create path only, same as in-process.
+                  ...(scope.parentSession !== undefined ? { parentSession: scope.parentSession } : {}),
+                  ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
+                }),
+              },
+              abort,
+              budget,
+              what: "remote invoke",
             });
-            watchdog.disarm(); // headers arrived
-            if (!res.ok) {
-              watchdog.arm(); // the error body is a pending read too — see the events() twin
-              const failure = toFailed(new ControlRequestError(res.status, await res.text()));
-              watchdog.disarm();
-              yield failure;
-              return;
-            }
-            if (!res.body) {
-              yield { type: "failed", details: "remote invoke: response has no body", retryable: true };
-              return;
-            }
-            for await (const data of sseData(res.body, watchdog)) {
+            for await (const data of sseData(body, budget)) {
               let event: AgentEvent;
               try {
                 event = JSON.parse(data) as AgentEvent;
@@ -429,17 +452,14 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             yield { type: "failed", details: "remote invoke: stream ended without a terminal", retryable: true };
           } catch (error) {
             const ended = endedBecause(abort.signal);
-            if (ended) {
-              // A terminal already told the caller how the run ended; a second event after it would be a lie about
-              // the run rather than news about the connection.
-              if (ended.kind === "idle" && !terminalSeen) {
-                yield { type: "failed", details: ended.message, retryable: true };
-              }
-              return; // cancellation is not an error, and an idle connection has just been reported
-            }
-            if (!terminalSeen) yield toFailed(error);
+            // Cancellation is the consumer's own doing — reporting it back would be news to nobody. Any other stated
+            // reason is a connection that died under the run, and this stream still owes its caller a terminal —
+            // unless one was already sent, since a second would describe the run rather than the connection.
+            if (ended?.kind === "cancelled") return;
+            if (!terminalSeen)
+              yield ended ? { type: "failed", details: ended.message, retryable: true } : toFailed(error);
           } finally {
-            watchdog.stop();
+            budget.stop();
             abort.abort();
           }
         })();
@@ -458,7 +478,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
 }
 
 /** Minimal SSE reader: yields each `data:` payload; ignores comments (heartbeats) and other fields. */
-async function* sseData(body: ReadableStream<Uint8Array>, watch?: ReadWatch): AsyncGenerator<string> {
+async function* sseData(body: ReadableStream<Uint8Array>, watch?: ReadBudget): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = "";
   const reader = body.getReader();

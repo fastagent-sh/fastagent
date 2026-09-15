@@ -668,7 +668,7 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("a black-holed CONNECT is terminated on both streaming planes — events on its own connect budget", async () => {
+  it("a black-holed CONNECT is terminated on both streaming planes, on the same budget", async () => {
     // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
     const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
@@ -702,10 +702,15 @@ describe("session control over HTTP", () => {
       await fakeTimers.advanceTimersByTimeAsync(10_000);
       await eventsAttempt;
       await readyAttempt;
-      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // the invoke plane still rides SSE_IDLE_LIMIT_MS
+      // The invoke plane connects through the same phase, so it fails on the same budget — it used to wait out the
+      // 90s idle limit for a connection that had not even answered, because the two planes only LOOKED alike.
       const agentEvents = await agentAttempt;
       expect(agentEvents).toEqual([
-        expect.objectContaining({ type: "failed", retryable: true, details: expect.stringContaining("no bytes") }),
+        expect.objectContaining({
+          type: "failed",
+          retryable: true,
+          details: expect.stringContaining("no usable response in 10s"),
+        }),
       ]);
     } finally {
       fakeTimers.useRealTimers();
@@ -738,9 +743,20 @@ describe("session control over HTTP", () => {
         })(),
       ).rejects.toThrow(/no usable response in 10s/);
       const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
+      // The invoke plane opens through the SAME phase, so the tunnel cannot hold it either — it used to fall back to
+      // the 90s idle limit here, because the two planes were two copies of one sequence.
+      const invoked = drain(
+        connectAgent({ url: "http://tunnel", token: "t", fetchFn: hangingBody }).invoke(
+          { session: "s" },
+          { text: "x" },
+        ),
+      );
       await timers.advanceTimersByTimeAsync(10_000);
       await iterating;
       await readyAttempt;
+      expect(await invoked).toEqual([
+        expect.objectContaining({ type: "failed", details: expect.stringContaining("no usable response in 10s") }),
+      ]);
     } finally {
       timers.useRealTimers();
     }
@@ -766,6 +782,50 @@ describe("session control over HTTP", () => {
     await iterator.return?.(undefined);
     expect(await pull).toMatchObject({ done: true });
     await cancelled;
+  });
+
+  it("the connect limit ends WITH the connect: a heartbeating stream survives long past it", async () => {
+    // One mechanism, two limits — and the switch is the whole point. Keeping the 10s connect limit on a subscribed
+    // stream would kill every healthy connection, since the server only heartbeats every 30s.
+    const timers = await import("vitest").then((m) => m.vi);
+    timers.useFakeTimers();
+    try {
+      let push!: (chunk: string) => void;
+      const heartbeating = ((_input: string | URL | Request, init?: RequestInit) => {
+        if (String(_input).includes("/control/capabilities")) {
+          return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+        }
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const encoder = new TextEncoder();
+            push = (chunk: string) => controller.enqueue(encoder.encode(chunk));
+            // The fake has to HONOUR the signal, or a client that kills a healthy stream looks fine here.
+            init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+          },
+        });
+        return Promise.resolve(new Response(body, { headers: { "content-type": "text/event-stream" } }));
+      }) as typeof fetch;
+      const remote = await connectSessionControl({ url: "http://slow", token: "t", fetchFn: heartbeating });
+      const stream = remote.sessions.get("s").events();
+      const seen: SessionEvent[] = [];
+      const watching = (async () => {
+        for await (const ev of stream) seen.push(ev);
+      })();
+      await stream.ready;
+      // Quiet for three times the connect limit, with only the heartbeats a real server sends.
+      for (let i = 0; i < 3; i++) {
+        await timers.advanceTimersByTimeAsync(30_000);
+        push(": ping\n\n");
+        await timers.advanceTimersByTimeAsync(0);
+      }
+      push(`data: ${JSON.stringify({ seq: 0, event: { type: "run_started", timestamp: 0, data: {} } })}\n\n`);
+      await timers.advanceTimersByTimeAsync(0);
+      expect(seen.map((e) => e.type)).toEqual(["run_started"]); // still alive after 90s of heartbeat-only traffic
+      await stream[Symbol.asyncIterator]().return?.(undefined);
+      void watching.catch(() => {});
+    } finally {
+      timers.useRealTimers();
+    }
   });
 
   it("a paused consumer never trips the watchdog — it measures pending reads, not pull progress", async () => {
