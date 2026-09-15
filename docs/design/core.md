@@ -550,10 +550,13 @@ delivery to agent tools.
 one fixed-size line — `<firedAt> <outcome> <ms>` — pruned to the newest 512, which is what makes
 `fastagent schedule history` bounded by construction rather than by a retention policy. The turn's
 narrative (its reply, its error) is a log line instead of a stored field: rotating a narrative is the
-job of the layer that carries it (12-factor XI) — Fly, Railway and AgentCore ship logs to a platform
-that bounds them, and `deploy docker` writes the bound itself (`logging: json-file` with `max-size`,
-since Docker's default has none), while an append-only file of model replies on a minute cron has no
-such layer and is how a volume fills. Two events have no claim and
+job of the layer that carries it (12-factor XI), and the reply is capped per line so one huge turn
+cannot evict the diagnostics around it. Where that layer's bound comes from differs by host and is
+stated per host: Fly and Railway retain logs for a bounded window of their own, `deploy docker` writes
+the bound into the compose file (`logging: json-file` with `max-size`, since Docker's default has
+none), and AgentCore is the one host with NO default bound — CloudWatch keeps log data indefinitely,
+so its runbook ends with the `put-retention-policy` call that closes it. An append-only file of model
+replies on a minute cron has no such layer at all, which is how a volume fills. Two events have no claim and
 therefore no stored record at all: a wake-up (removed from the store before its turn starts) and a
 stale slot (refused before a claim is taken; it is a WARN line where a duplicate delivery is INFO).
 

@@ -257,10 +257,13 @@ export function settleClaim(stateRoot: string, name: string, slot: Date, outcome
   const dir = claimDir(stateRoot, name);
   const file = claimName(slot);
   try {
-    // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from. A claim pruned out from under
-    // a running turn keeps its slot instant, which is the earliest the fire can have happened.
-    const firedAt = readClaim(dir, file)?.firedAt ?? slotInstant(file);
-    writeFileSync(join(dir, file), `${firedAt} ${outcome} ${Math.round(ms)}`);
+    const claimed = readClaim(dir, file);
+    // Gone means a concurrent claimer pruned this slot while its turn was still running. Writing would RE-CREATE
+    // the file pruning just removed — the same rule `readClaim` states for the reconciler, applied to its other
+    // caller. The outcome is lost with the slot, which is what pruning already decided.
+    if (claimed === undefined) return;
+    // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from.
+    writeFileSync(join(dir, file), `${claimed.firedAt} ${outcome} ${Math.round(ms)}`);
   } catch (e) {
     // Housekeeping, like the pruning below: the turn itself already happened, and the worst case is that the next
     // boot reports this fire as interrupted.

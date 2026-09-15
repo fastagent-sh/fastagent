@@ -234,8 +234,10 @@ The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), s
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window. It carries no turn text: **what a run
 said is a log line** (`fastagent logs`, `docker logs`, journald), which is the layer that bounds and rotates
-it: Fly, Railway and AgentCore ship logs to a platform that already does, and the generated Compose file
-pins `json-file` to `max-size: 10m` / `max-file: 3` because Docker's default does not. Read-only; `--json` prints the same records as JSON.
+it: Fly and Railway retain a bounded window of their own, the generated Compose file pins `json-file` to
+`max-size: 10m` / `max-file: 3` because Docker's default does not, and on AgentCore the retention period is
+yours to set (CloudWatch keeps log data indefinitely; the deploy runbook prints the `put-retention-policy`
+command). Read-only; `--json` prints the same records as JSON.
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

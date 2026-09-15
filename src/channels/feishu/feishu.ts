@@ -10,6 +10,7 @@ import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
+import { attachmentsDir } from "../kit/attachment-path.ts";
 import { mountStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
@@ -414,7 +415,7 @@ function createFeishuRuntimeFactory(
             {
               api,
               chatId: rec.chatId,
-              filesDir: join(stateHome, "files"),
+              filesDir: attachmentsDir(stateHome),
               label,
               appId,
               ...(parentSession !== undefined ? { parentSession } : {}),
