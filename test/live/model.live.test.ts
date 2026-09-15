@@ -197,6 +197,7 @@ export default defineTool({
       ),
     );
     const called = events.flatMap((event) => (event.type === "tool_started" ? [event.name] : []));
+    const text = events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
 
     // The two hops, asserted separately: "the loader was never reached" and "the loader ran but
     // activation did not take" are different defects, and a single end-to-end check reports the wrong
@@ -204,12 +205,17 @@ export default defineTool({
     expect(called, `search_tools was never called (tools called: ${called.join(", ") || "none"})`).toContain(
       "search_tools",
     );
+    // What the loader ANSWERED, carried into the failure: this probe cannot see activation directly, so without it a
+    // red nightly cannot be told apart into "the loader did not list the tool" (ours) and "it did, and the model
+    // declined the second hop" (the model's). The second has already happened on a green build, and re-running to
+    // find out which one it was means paying for another real turn on a provider that has since moved on.
+    const searchId = events.flatMap((e) => (e.type === "tool_started" && e.name === "search_tools" ? [e.id] : []))[0];
+    const answered = events.flatMap((e) => (e.type === "tool_ended" && e.id === searchId ? [e.content] : []))[0];
     expect(
       called,
-      `search_tools ran but the deferred tool never became callable (tools called: ${called.join(", ")})`,
+      `search_tools ran but get_vault_code was never called (tools called: ${called.join(", ")}). ` +
+        `search_tools returned: ${JSON.stringify(answered)?.slice(0, 600)} — the answer was: ${text.slice(0, 200)}`,
     ).toContain("get_vault_code");
-
-    const text = events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
     expect(text, `the deferred tool ran but its value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
 
