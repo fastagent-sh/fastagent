@@ -547,7 +547,7 @@ occurrence after downtime (not every missed slot), writes the outcome back into 
 delivery to agent tools.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
-one fixed-size line — `<firedAt> <outcome> <ms>` — pruned to the newest 32, which is what makes
+one fixed-size line — `<firedAt> <outcome> <ms>` — pruned to the newest 512, which is what makes
 `fastagent schedule history` bounded by construction rather than by a retention policy. The turn's
 narrative (its reply, its error) is a log line instead of a stored field: rotating a narrative is the
 platform's job (12-factor XI — `docker logs`, journald and every deploy host already bound it), and an

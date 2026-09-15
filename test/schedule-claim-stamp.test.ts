@@ -26,7 +26,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const { claimSlot, latestFire } = await import("../src/schedule/state.ts");
+const { claimSlot, readFires } = await import("../src/schedule/state.ts");
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -48,7 +48,7 @@ const claims = (root: string): string[] => {
 };
 
 it("a failed stamp takes the claim back down, so the slot is not eaten by a full disk", () => {
-  // Left behind, an unstamped claim would read as `duplicate` forever: the slot taken, never run, never audited.
+  // Left behind, an unstamped claim would read as `duplicate` forever: the slot taken, never run, never reported.
   const root = fresh();
   const slot = new Date("2026-07-07T10:00:00Z");
   failStamp = true;
@@ -62,11 +62,11 @@ it("a failed stamp takes the claim back down, so the slot is not eaten by a full
 
 it("a claim pruned between the listing and the read falls back to its slot, not a boot failure", () => {
   // A concurrent claim prunes while this one is reading. The slot in the file name is the fact already in hand, so
-  // this degrades the same way an unusable stamp does — `latestFire` runs inside a synchronous boot path whose
+  // this degrades the same way an unusable stamp does — `readFires` runs inside a synchronous boot path whose
   // throws stop the serve.
   const root = fresh();
   const slot = new Date("2026-07-07T10:00:00Z");
   expect(claimSlot(root, "job", slot, new Date("2026-07-07T10:00:03Z"))).toEqual({ taken: true });
   vanishOnRead = true;
-  expect(latestFire(root, "job")).toBe("2026-07-07T10:00:00.000Z");
+  expect(readFires(root, "job").at(-1)?.firedAt).toBe("2026-07-07T10:00:00.000Z");
 });

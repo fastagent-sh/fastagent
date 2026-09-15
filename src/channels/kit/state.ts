@@ -10,18 +10,19 @@ import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 
 /**
- * Create the channel's state home — the one shared spelling of it, so no channel invents its own — and clear the
- * inbound attachments inside it.
+ * MOUNT the channel's state home: create it, and clear the inbound attachments inside it. Called once, from a
+ * channel factory — the name says "mount" because the second half DELETES DATA, and only a process that is about to
+ * own this channel may do that. Anything that merely wants the directory to exist calls `mkdirSync` itself.
  *
  * `files/` is `/tmp`, not storage: every image a chat sends lands there and nothing ever asked for it back, so on a
  * real volume it is unbounded. Clearing at mount gives it the contract `/tmp` has had since V7 — emptied when the
  * machine comes up — which needs no ager, no TTL, and no reference tracking. The cost is named: a session that still
  * points at an attachment from before this process reads ENOENT, exactly as a `/tmp` path from the last boot does.
  *
- * Mount time is the whole point: channels mount once when the service starts, so a one-shot `invoke` running beside a
- * live server never touches these files.
+ * Mount time is also what keeps it safe: channels mount when the service starts, so a one-shot `invoke` running
+ * beside a live server never touches these files.
  */
-export function ensureStateHome(dir: string): void {
+export function mountStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
   // No catch, for the same reason `mkdirSync` has none: a state home this process cannot manage is an environment
   // fault, and starting on it would only move the failure somewhere less legible.

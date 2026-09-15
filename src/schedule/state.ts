@@ -34,19 +34,59 @@ export function writeScheduleFile(path: string, value: unknown): void {
 // ── claims/: one file per fired slot — the DECISION to fire, made atomically ──
 
 /**
- * How many claims to keep per schedule. Only the newest is ever READ (the gate below and `latestFire`), so the rest
- * buy two things and nothing else: a reader that has already listed the directory is unlikely to have its pick
- * pruned out from under it (`latestFire` degrades rather than failing when that happens anyway), and an operator can
- * see the last slots this state root took. Pruning removes the OLDEST names only, so the newest claim never goes —
- * which is what keeps the gate working past the window.
+ * How many claims to keep per schedule — and therefore how far back `fastagent schedule history` can see, since
+ * the claims ARE the history.
+ *
+ * The gate below reads only the newest, so this number is set by the QUESTION the history exists to answer: "did
+ * last night's run silently fail?". At 512 a minute cron keeps ~8.5 hours, a five-minute one ~1.8 days, an hourly
+ * one ~3 weeks. A claim is one short line, so the whole window is tens of kilobytes — still bounded by construction,
+ * which is the property that matters, rather than by a retention policy someone has to run.
+ *
+ * Pruning removes the OLDEST names only, so the newest claim never goes — which is what keeps the gate working
+ * past the window.
  */
-const KEEP_CLAIMS = 32;
+const KEEP_CLAIMS = 512;
 
 /** A slot instant as a filename (ISO minus the characters a path cannot carry); sorts in slot order. */
 const claimName = (slot: Date): string => slot.toISOString().replace(/[:.]/g, "-");
 
 /** The instant a claim's file name stands for — `claimName` read backwards. */
 const slotInstant = (name: string): string => name.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ":$1:$2.$3Z");
+
+/**
+ * Is this file name one `claimName` produced? Defined by the round trip, so the answer is exactly "this is a slot
+ * instant this code could have written", with no second spelling to keep in sync.
+ *
+ * It has to be asked because a claims directory is a directory: a `.DS_Store`, an editor backup or a half-finished
+ * copy would otherwise sort after every real claim and be read as the newest one — which decides whether the next
+ * slot is refused as stale, where catch-up resumes, and which fire the boot reconciler settles.
+ */
+const isClaimName = (name: string): boolean => {
+  const instant = Date.parse(slotInstant(name));
+  return !Number.isNaN(instant) && claimName(new Date(instant)) === name;
+};
+
+/**
+ * THE listing of a claims directory: claim files only, oldest slot first. Every reader goes through it — the gate,
+ * the history, and the pruning — so "what counts as a claim" is decided once instead of by whoever reads next.
+ */
+function listClaims(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return []; // never fired here yet
+    throw e; // unreadable state: the boot fails on it rather than running blind
+  }
+  const claims: string[] = [];
+  for (const name of names.sort()) {
+    if (isClaimName(name)) claims.push(name);
+    // Not an error of ours and not the operator's to fix on a schedule's behalf (macOS writes `.DS_Store` into any
+    // directory someone opens), so it is skipped at debug level rather than warned about on every single fire.
+    else log.debug(`[schedule] ignoring ${join(dir, name)}: not a fired-slot claim`);
+  }
+  return claims;
+}
 
 /**
  * How a fired slot ended. There is no `deferred` or `stale` here because neither has a claim: a deferred wake-up was
@@ -144,12 +184,12 @@ export type SlotClaimOutcome =
  * to 24h), and firing it would bill a turn for an instant the schedule has already moved past.
  *
  * The claim carries the wall-clock instant it was taken, so the next boot can tell a fire that never reported from
- * one that did (`recordInterruptedFires`) without depending on a second file being written after it.
+ * one that did (`markInterruptedFires`) without depending on a second file being written after it.
  */
 export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: Date): SlotClaimOutcome {
   const dir = claimDir(stateRoot, name);
   mkdirSync(dir, { recursive: true });
-  const taken = readdirSync(dir).sort();
+  const taken = listClaims(dir);
   const wanted = claimName(slot);
   const newest = taken.at(-1);
   if (newest !== undefined && wanted < newest) return { taken: false, why: "stale", newest };
@@ -183,40 +223,17 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
 }
 
 /**
- * When this schedule last fired here, from its newest claim — the ONE durable fact both planes read: the boot-time
- * reconciler (was that fire ever reported?) and catch-up (where does the next run resume from?).
+ * Every fire this state root still keeps for `name`, oldest first — bounded by `KEEP_CLAIMS` because the claims ARE
+ * the history. Nothing here grows: the pruning that keeps the claim gate cheap keeps the history's size fixed too,
+ * which is why there is no separate audit file to rotate (the turn's own narrative is a log line, and rotating logs
+ * is the platform's job — 12-factor XI).
  *
- * Pruning only ever removes the oldest names, so the newest claim is never the one that goes.
- */
-export function latestFire(stateRoot: string, name: string): string | undefined {
-  const dir = claimDir(stateRoot, name);
-  let slot: string | undefined;
-  try {
-    slot = readdirSync(dir).sort().at(-1);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw e;
-  }
-  if (slot === undefined) return undefined;
-  return readClaim(dir, slot).firedAt;
-}
-
-/**
- * Every fire this state root still keeps for `name`, oldest first — the run history, bounded by `KEEP_CLAIMS`
- * because the claims ARE the history. Nothing here grows: the pruning that keeps the claim gate cheap keeps the
- * history's size fixed too, which is why there is no separate audit file to rotate (the turn's own narrative is a
- * log line, and rotating logs is the platform's job — 12-factor XI).
+ * THE read for both planes that ask about past fires: where catch-up resumes (`.at(-1)`) and which fires were never
+ * reported. Deriving those separately is how they come to disagree about the same directory.
  */
 export function readFires(stateRoot: string, name: string): Fire[] {
   const dir = claimDir(stateRoot, name);
-  let slots: string[];
-  try {
-    slots = readdirSync(dir).sort();
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw e;
-  }
-  return slots.map((slot) => readClaim(dir, slot));
+  return listClaims(dir).map((slot) => readClaim(dir, slot));
 }
 
 /**
@@ -225,9 +242,10 @@ export function readFires(stateRoot: string, name: string): Fire[] {
  * The SAME file, because a second one would reintroduce the window this whole design closes: a killed process would
  * leave a claimed slot that nothing accounts for. An unsettled claim IS the record of an interrupted fire.
  *
- * NOT `writeFileAtomic`: its temp lands in the directory `claimSlot` lists, where a leftover `<slot>.tmp` would sort
- * after every real claim and poison both the staleness gate and `latestFire`. A torn write degrades the way an
- * unusable stamp already does (`readClaim`) — the slot is re-read as unsettled, which is visible, not lost.
+ * NOT `writeFileAtomic`: its temp would land in the directory `claimSlot` lists (`<slot>.tmp` is not a claim name,
+ * so `listClaims` skips a leftover one, but the rename would still be a second writer of the same directory for no
+ * gain). A torn write degrades the way an unusable stamp already does (`readClaim`) — the slot is re-read as
+ * unsettled, which is visible, not lost.
  */
 export function settleClaim(stateRoot: string, name: string, slot: Date, outcome: FireOutcome, ms: number): void {
   const dir = claimDir(stateRoot, name);

@@ -19,7 +19,7 @@ import {
   type ScheduleFireOutcome,
   type Scheduler,
 } from "../src/schedule/scheduler.ts";
-import { latestFire, readFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import { readFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { log } from "../src/log.ts";
 
@@ -35,14 +35,15 @@ function seedFiredSlots(stateRoot: string, names: string[], firedAt: string, slo
   for (const name of names) {
     const dir = join(stateRoot, "schedule", "claims", name);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, slot.replace(/[:.]/g, "-")), `${firedAt} completed 1`);
+    // Through `toISOString` first: a claim file name is the shape `claimSlot` writes, and nothing else is read as one.
+    writeFileSync(join(dir, new Date(slot).toISOString().replace(/[:.]/g, "-")), `${firedAt} completed 1`);
   }
 }
 /** How this state root says each fire of `name` ended — `undefined` = claimed, never settled. */
 const outcomes = (stateRoot: string, name = "job"): (string | undefined)[] =>
   readFires(stateRoot, name).map((f) => f.outcome);
 /** When a state root says this schedule last fired — the claim, read the way the scheduler reads it. */
-const lastFire = (stateRoot: string, name: string): string | undefined => latestFire(stateRoot, name);
+const lastFire = (stateRoot: string, name: string): string | undefined => readFires(stateRoot, name).at(-1)?.firedAt;
 
 afterEach(() => vi.restoreAllMocks());
 
