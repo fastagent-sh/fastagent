@@ -159,8 +159,7 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 ```
 
 - A patch's VALIDATION is all-or-nothing: every field is checked before anything is written, so a
-  rejected patch leaves nothing behind — the property that makes `ok: false` safe to retry. An empty
-  patch is `ok: true`. The WRITES are not one operation, because an engine records properties as
+  patch rejected by validation leaves nothing behind. An empty patch is `ok: true`. The WRITES are not one operation, because an engine records properties as
   separate journal entries: a failure between them answers `partial_update`, naming what landed, after
   an event reporting the record as it now is. A field the deployment does not know rejects
   `unsupported_capability`; it is never dropped.
@@ -214,9 +213,13 @@ type SessionResult =
 ```
 
 `ok: true` means the command was admitted or applied, never that the run ultimately succeeded: run
-outcomes are reported by `run_settled` and by the invoke stream's terminal event. `ok: false` is
-guaranteed to mean rejection **before** acceptance — the only case safe to blindly retry. Work that
-fails after acceptance surfaces through events and durable entries, never as a second result.
+outcomes are reported by `run_settled` and by the invoke stream's terminal event. `ok: false` means the
+command did not COMPLETE, which is not the same as nothing having happened: every code except
+`partial_update` is a rejection **before** acceptance with nothing durable landed, and that one names
+the fields that did land (a multi-field `update` writes separate journal entries, and no engine here
+can roll them back). Whether a command may be re-sent is therefore answered by `retryable`, never by
+`ok` alone. Work that fails after acceptance otherwise surfaces through events and durable entries,
+never as a second result.
 
 ### 5.3 Capabilities
 
@@ -695,7 +698,9 @@ Implementation review should reject changes that violate these:
 5. All durable session writes happen under the shared lease.
 6. Residency is an invisible cache: no residency lifecycle in the contract, correctness via durable
    revalidation.
-7. Acceptance is not outcome; `ok: false` always means rejected before acceptance.
+7. Acceptance is not outcome; `ok: false` means the command did not complete — rejected before
+   acceptance for every code but `partial_update`, which names what landed. `retryable` is what
+   answers whether it may be re-sent.
 8. The embedded contract is semantic-only; correlation, ordering, and epoch identity live in the
    transport envelope.
 9. FastAgent Definition artifacts, not ambient pi globals, determine behavior; pi imports stay under

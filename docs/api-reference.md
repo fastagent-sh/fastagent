@@ -684,10 +684,23 @@ await s1.update({ leafEntryId: entryId });                      // move the leaf
 await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" }); // one call, one event
 ```
 
-A patch is validated as a whole — a rejected one leaves nothing behind, which is what makes
-`ok: false` safe to retry. The writes themselves are separate journal entries, so a failure BETWEEN
-them (a full disk) answers `partial_update` naming what landed, after an event reporting the record
-as it now is: read `state()` before retrying. A field this serve does not know rejects
+A patch is validated as a whole, so a patch rejected by validation leaves nothing behind. The writes
+themselves are separate journal entries, so a failure BETWEEN them (a full disk) answers
+`partial_update` naming what landed, after an event reporting the record as it now is — the one
+`ok: false` that carries durable work:
+
+```ts
+const r = await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" });
+if (!r.ok && r.error.code === "partial_update") {
+  const now = await s1.state();  // some fields ARE applied; the message and the event both name which
+  // Re-send only what is still missing. Blind retry re-applies what landed — which for `name` or
+  // `leafEntryId` means overwriting or moving back.
+  if (now.thinkingLevel !== "high") await s1.update({ thinkingLevel: "high" });
+}
+```
+
+`retryable` is what answers whether a call may be re-sent; `ok: false` on its own does not, and this
+is the code it does not hold for. A field this serve does not know rejects
 `unsupported_capability` — the same code on both planes, naming the field, so a newer client talking
 to an older serve knows which one to drop; a wrong value type is `invalid_command`.
 
