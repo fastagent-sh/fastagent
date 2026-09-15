@@ -65,6 +65,16 @@ const EMPTY_STACK_STATUSES = new Set([
   "DELETE_COMPLETE",
 ]);
 
+/**
+ * Does this `describe-stacks` failure ANSWER "is there a stack?" — the CLI's own "no such stack" — or leave it
+ * unanswered (no `cloudformation:DescribeStacks` on the role, throttling, an endpoint that does not resolve)? The
+ * difference decides whether a deploy stays quiet about replacing the agent's memory. Exported for the live probe:
+ * only a real `aws` CLI can say whether this wording still holds.
+ */
+export function isMissingStack(stderr: string | undefined): boolean {
+  return /does not exist|ValidationError/i.test(stderr ?? "");
+}
+
 /** Budget for image pull, storage initialization and channel construction. */
 const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
@@ -279,10 +289,9 @@ export async function deployAgentcoreRun(
       { capture: true, captureStderr: true },
     );
   const stackStatus = await readStackStatus();
-  // The one non-zero exit that ANSWERS the question. Every other failure (no `cloudformation:DescribeStacks` on the
-  // role, throttling, an endpoint that does not resolve) leaves it unanswered — and an unanswered question must not
-  // read as "a first deploy, nothing to lose". `sts get-caller-identity` succeeding says nothing about CFN reads.
-  const noStack = /does not exist|ValidationError/i.test(stackStatus.stderr ?? "");
+  // An unanswered question must not read as "a first deploy, nothing to lose": `sts get-caller-identity` succeeding
+  // says nothing about whether this role can read CloudFormation.
+  const noStack = isMissingStack(stackStatus.stderr);
   const status = stackStatus.code === 0 ? stackStatus.stdout.trim() : "";
   // The only answers the build can invalidate: one still in flight (a first create rolling back is exactly what step 7
   // exists for, and minutes of arm64 build are long enough for it to settle), and one we never got.
