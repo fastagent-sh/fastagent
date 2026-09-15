@@ -49,6 +49,22 @@ export interface AgentcoreRunPlan {
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
+/**
+ * Stack statuses that hold NO agent memory: a create that never succeeded, its rollback, a change set never
+ * executed, or a stack already gone. Everything else — including `UPDATE_ROLLBACK_COMPLETE` and any status AWS adds
+ * later — is treated as carrying state, so an unrecognized status over-warns instead of quietly promising nothing is
+ * lost.
+ */
+const EMPTY_STACK_STATUSES = new Set([
+  "CREATE_FAILED",
+  "CREATE_IN_PROGRESS",
+  "ROLLBACK_IN_PROGRESS",
+  "ROLLBACK_FAILED",
+  "ROLLBACK_COMPLETE",
+  "REVIEW_IN_PROGRESS",
+  "DELETE_COMPLETE",
+]);
+
 /** Budget for image pull, storage initialization and channel construction. */
 const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
@@ -257,16 +273,31 @@ export async function deployAgentcoreRun(
       "--output",
       "text",
     ],
-    { capture: true },
+    // stderr is CLASSIFIED here (no stack vs unreadable), so it must not stream to the terminal as this deploy's
+    // first visible line either.
+    { capture: true, captureStderr: true },
   );
-  const rolledBack = stackStatus.code === 0 && stackStatus.stdout.trim() === "ROLLBACK_COMPLETE";
-  // A stack that exists and is not a failed first create carries state this update replaces. `describe-stacks` exits
-  // non-zero when there is no stack, so a first deploy stays quiet — it has nothing to lose.
-  if (stackStatus.code === 0 && !rolledBack) {
+  // The one non-zero exit that ANSWERS the question. Every other failure (no `cloudformation:DescribeStacks` on the
+  // role, throttling, an endpoint that does not resolve) leaves it unanswered — and an unanswered question must not
+  // read as "a first deploy, nothing to lose". `sts get-caller-identity` succeeding says nothing about CFN reads.
+  const noStack = /does not exist|ValidationError/i.test(stackStatus.stderr ?? "");
+  const status = stackStatus.code === 0 ? stackStatus.stdout.trim() : "";
+  const rolledBack = status === "ROLLBACK_COMPLETE";
+  // Warn, never gate — same as the region probe above: a role without this read, or an older CLI, must not refuse a
+  // legitimate deploy.
+  if (stackStatus.code !== 0 && !noStack) {
+    const why = (stackStatus.stderr ?? "").trim().split("\n")[0];
+    log(
+      `warn: could not read stack ${stack}${why ? ` (${why})` : ""} — if it exists, this deploy resets its managed ` +
+        `SessionStorage (${MOUNT}) and a failed first create will not be cleared`,
+    );
+  } else if (status !== "" && !EMPTY_STACK_STATUSES.has(status)) {
     log(
       `warn: this is a REDEPLOY and AWS resets managed SessionStorage (${MOUNT}) on every runtime version update — ` +
-        `sessions, channel state and pending wake-ups start blank, and the model credential is re-seeded from ` +
-        `FASTAGENT_AUTH_SEED. Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
+        `sessions, channel state and pending wake-ups start blank` +
+        // Only the carried auth.json is re-seeded; a provider API key deployment has no such step to blame.
+        `${seed ? ", and the model credential is re-seeded from FASTAGENT_AUTH_SEED" : ""}. ` +
+        `Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
     );
   }
 

@@ -27,11 +27,26 @@ const OUTPUTS = JSON.stringify([
   { OutputKey: "ForwarderUrl", OutputValue: "https://xyz.lambda-url.us-west-2.on.aws/" },
 ]);
 
-/** Default happy-path aws script: identity + login password + stack outputs succeed. */
-const happyAws = (args: string[]): { code?: number; stdout?: string } => {
+/** The CLI's answer for a stack that is not there — what a FIRST deploy reads. */
+const NO_SUCH_STACK = {
+  code: 254,
+  stderr:
+    "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id " +
+    "fastagent-my-agent does not exist",
+};
+
+/**
+ * Default happy-path aws script: identity + login password + stack outputs succeed, and the stack does not exist yet.
+ * The two `describe-stacks` calls ask DIFFERENT questions (status before the build, outputs after the deploy) and get
+ * different answers here — one reply for both would make every case a redeploy and leave the double unable to express
+ * a first deploy at all.
+ */
+const happyAws = (args: string[]): { code?: number; stdout?: string; stderr?: string } => {
   if (args[0] === "sts") return { stdout: IDENTITY };
   if (args[0] === "ecr" && args[1] === "get-login-password") return { stdout: "hunter2" };
-  if (args[0] === "cloudformation" && args[1] === "describe-stacks") return { stdout: OUTPUTS };
+  if (args[0] === "cloudformation" && args[1] === "describe-stacks") {
+    return args.includes("Stacks[0].StackStatus") ? NO_SUCH_STACK : { stdout: OUTPUTS };
+  }
   return {};
 };
 
@@ -292,15 +307,18 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
   });
 
   describe("a redeploy replaces the agent's memory, and says so while stopping is still free", () => {
-    /** Run with a scripted stack status; code 254 is the CLI's "no such stack". */
-    const withStack = async (status: { code?: number; stdout?: string }) => {
+    /** Run with a scripted answer to the pre-build stack-status question. */
+    const withStack = async (
+      status: { code?: number; stdout?: string; stderr?: string },
+      over: Partial<AgentcoreRunPlan> = {},
+    ) => {
       const logs: string[] = [];
       const { cli: aws, calls } = fakeCli((a) =>
         a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
           ? status
           : happyAws(a),
       );
-      await deployAgentcoreRun(plan(), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
+      await deployAgentcoreRun(plan(over), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
         telegram: async () => "registered",
       });
       return { logs, calls };
@@ -322,12 +340,43 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       ).toBe(true);
     });
 
-    it("stays quiet on a first deploy and on a failed first create — neither has state to lose", async () => {
-      const first = await withStack({ code: 254, stdout: "" });
+    it("stays quiet on a first deploy and on every shape of a create that never succeeded", async () => {
+      const first = await withStack(NO_SUCH_STACK);
       expect(first.logs.join("\n")).not.toContain("REDEPLOY");
 
-      const rolledBack = await withStack({ stdout: "ROLLBACK_COMPLETE\n" });
-      expect(rolledBack.logs.join("\n")).not.toContain("REDEPLOY");
+      // A failed first create is an EMPTY stack whatever status it stopped at — warning here would have the operator
+      // abort a deploy to protect memory that never existed.
+      for (const status of ["ROLLBACK_COMPLETE", "CREATE_FAILED", "ROLLBACK_IN_PROGRESS", "REVIEW_IN_PROGRESS"]) {
+        const { logs } = await withStack({ stdout: `${status}\n` });
+        expect(logs.join("\n"), status).not.toContain("REDEPLOY");
+      }
+    });
+
+    it("says the question went UNANSWERED when the stack cannot be read, and gates nothing", async () => {
+      // A role with `sts` but no `cloudformation:DescribeStacks` is an ordinary least-privilege setup: reading that
+      // failure as "no stack, nothing to lose" silences the warning exactly where it matters most.
+      const denied = {
+        code: 254,
+        stderr: "An error occurred (AccessDenied) when calling the DescribeStacks operation: not authorized",
+      };
+      const { logs } = await withStack(denied);
+
+      const warned = logs.findIndex((l) => l.includes("could not read stack fastagent-my-agent"));
+      expect(warned).toBeGreaterThanOrEqual(0);
+      expect(logs[warned]).toContain("AccessDenied"); // the CLI's own reason, not our guess
+      expect(logs[warned]).toContain("/mnt/data");
+      expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
+    });
+
+    it("blames FASTAGENT_AUTH_SEED only when this deploy carries one", async () => {
+      const carried = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { FASTAGENT_AUTH_SEED: "seed" } });
+      expect(carried.logs.join("\n")).toContain("re-seeded from FASTAGENT_AUTH_SEED");
+
+      // A provider API key deployment re-seeds nothing; saying it would send the operator after a credential
+      // problem that does not exist.
+      const apiKey = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { OPENAI_API_KEY: "k" } });
+      expect(apiKey.logs.join("\n")).toContain("REDEPLOY");
+      expect(apiKey.logs.join("\n")).not.toContain("FASTAGENT_AUTH_SEED");
     });
   });
 
