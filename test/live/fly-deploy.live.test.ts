@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toFlyAppName } from "../../src/deploy/fly/plan.ts";
 import { listHasName } from "../../src/deploy/fly/run.ts";
-import { CLI, answerOf, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("FLY_API_TOKEN", "a Fly API token WITH write scope — this probe creates and destroys an app");
@@ -107,7 +107,7 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
 
     const session = "live-fly";
     const first = await invoke(URL_BASE, session, "Remember this number: 47. Reply with just: ok");
-    expect(first.at(-1)).toMatchObject({ type: "completed" });
+    expectCompleted(first, "the first turn");
 
     // Restart BETWEEN the turns, which is what makes the next answer evidence about the VOLUME rather
     // than about the record store: a rolling restart replaces the machine's filesystem, so anything
@@ -118,7 +118,7 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     expect(await waitForHealth(`${URL_BASE}/health`, 180_000, 3_000), `${URL_BASE}/health never came back`).toBe(true);
 
     const second = await invoke(URL_BASE, session, "What number did I ask you to remember? Reply with digits only.");
-    expect(second.at(-1)).toMatchObject({ type: "completed" });
+    expectCompleted(second, "the turn after the restart");
     expect(answerOf(second)).toContain("47");
   }, 900_000);
 });

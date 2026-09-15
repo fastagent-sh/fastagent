@@ -236,6 +236,13 @@ export default defineTool({
     // 400 is decisive: re-sending it would fail identically, and `retryable` is what a caller branches
     // on. This is the half a faux provider cannot settle — the shape of a real provider error as it
     // travels through pi's stack into our classifier.
-    expect(events.at(-1)).toMatchObject({ type: "failed", retryable: false });
+    // The terminal travels IN the message for the reason `expectCompleted` exists: a matcher's diff prints only the
+    // keys it named, and `details` — what the provider actually said — is the whole point of a probe about
+    // classification. `expectCompleted` is the wrong shape here: this case EXPECTS a failure.
+    const terminal = events.at(-1);
+    expect(terminal, `the refused turn did not fail non-retryably: ${JSON.stringify(terminal)}`).toMatchObject({
+      type: "failed",
+      retryable: false,
+    });
   });
 });

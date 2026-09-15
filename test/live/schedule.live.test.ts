@@ -80,9 +80,11 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
       runs,
       `no run recorded in ${BUDGET_MS / 1000}s: the schedule never fired, or its turn is still running`,
     ).toHaveLength(1);
-    // toMatchObject: a `failed` record carries `error`, and printing it is the difference between
-    // knowing why an unattended nightly went red and having to re-run it.
-    expect(runs[0]).toMatchObject({ name: SCHEDULE, outcome: "completed" });
+    // The record travels IN the message: `toMatchObject` diffs only the keys it was given, so a `failed` record's
+    // `error` — the difference between knowing why an unattended nightly went red and re-running it — was omitted
+    // from the log as "matching properties omitted from actual".
+    expect(runs[0]?.outcome, `the scheduled turn did not complete: ${JSON.stringify(runs[0])}`).toBe("completed");
+    expect(runs[0]?.name).toBe(SCHEDULE);
     // toBeTruthy, not `.not.toBe("")`: a MISSING reply is exactly the regression this guards, and
     // `undefined?.trim()` is undefined, which is not "".
     expect(runs[0]?.reply?.trim(), "a completed run must carry the turn's reply").toBeTruthy();
