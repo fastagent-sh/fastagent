@@ -11,7 +11,7 @@ import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSession
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import { readFires } from "../src/schedule/state.ts";
+import { readFires, settleClaim } from "../src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -137,6 +137,19 @@ describe("schedule/scheduler: fire algorithm", () => {
     await vi.waitFor(() => expect(outcomes(root, "job")).toEqual(["completed", "completed"]));
     expect(calls).toHaveLength(1);
     s.stop();
+  });
+
+  it("settling a claim that was pruned mid-turn does not re-create it", async () => {
+    // Pruning removed the slot while its turn was still running (512 newer claims during one turn). `settleClaim`
+    // WRITES the file it settles, so without the check it would put the pruned slot back — and a resurrected claim
+    // is a fire in the history that this state root had already decided to forget.
+    const root = await freshRoot();
+    const slot = new Date("2026-07-07T10:00:00.000Z");
+    seedClaim(root, "job", slot.toISOString(), undefined, false);
+    rmSync(join(root, "schedule", "claims", "job", "2026-07-07T10-00-00-000Z"));
+    settleClaim(root, "job", slot, "completed", 12);
+    expect(claimed(root, "job")).toEqual([]);
+    expect(readFires(root, "job")).toEqual([]);
   });
 
   it("an unusable claim stamp falls back to the slot instant — catch-up may repeat, never skip", async () => {
@@ -445,6 +458,20 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const stored = readFires(root, "job");
     expect(stored).toMatchObject([{ outcome: "completed" }]);
     expect(JSON.stringify(stored)).not.toContain("digest");
+  });
+
+  it("caps the logged reply, so one huge turn cannot evict the diagnostics around it", async () => {
+    // A reply is model output — a turn that echoes a file it read is hundreds of kilobytes, and the rotation window
+    // it now lives in is finite. The line says how much it dropped rather than pretending that was the whole reply.
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const huge = "x".repeat(50_000);
+    const { agent } = recordingAgent([{ type: "text", delta: huge }, { type: "completed" }]);
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const line = logs.find((l) => /job completed/.test(l)) ?? "";
+    expect(line).toContain("… (50000 chars)");
+    expect(line.length).toBeLessThan(2500);
   });
 
   it("skips a duplicate slot delivery (at-least-once external clock → at-most-once fire)", async () => {

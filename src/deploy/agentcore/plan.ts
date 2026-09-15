@@ -694,6 +694,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
           `fastagent logs agentcore --source forwarder --follow`,
         ]
       : []),
+    ``,
+    `# 6. Set a log retention period. The runtime creates its own log group, and CloudWatch keeps log data`,
+    `#    indefinitely by default — a schedule logs what each turn replied, so that storage is billed forever`,
+    `#    unless you say otherwise. This is the ONE state path this host does not reclaim on its own.`,
+    `aws logs put-retention-policy --log-group-name <the group \`fastagent logs agentcore\` resolves> --retention-in-days 14`,
   );
 
   // Model-auth guidance mirrors the other hosts: an env key became a parameter above; OAuth/stored can't be read at

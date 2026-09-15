@@ -1,5 +1,13 @@
-/** Where an inbound attachment lands: `<filesDir>/<conversation>/<file>`. */
-import { resolve, sep } from "node:path";
+/** Where an inbound attachment lands: `<stateHome>/files/<conversation>/<file>`. */
+import { join, resolve, sep } from "node:path";
+
+/**
+ * THE inbound-attachment root inside a channel's state home. One spelling because two parties must agree on it and
+ * cannot check each other: the channels that WRITE here, and `mountStateHome`, which EMPTIES it at mount (that is
+ * what keeps it bounded). Spelled `join(stateHome, "files")` in both places, the clearing would silently become a
+ * no-op the day a channel picked another name, with nothing failing.
+ */
+export const attachmentsDir = (stateHome: string): string => join(stateHome, "files");
 
 export function attachmentPath(
   filesDir: string,

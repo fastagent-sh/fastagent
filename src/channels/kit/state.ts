@@ -5,7 +5,7 @@
  * channels of one agent never touch the same file (docs/design/core.md, "the shipped file-backed implementations").
  */
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { attachmentsDir } from "./attachment-path.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 
@@ -26,7 +26,7 @@ export function mountStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
   // No catch, for the same reason `mkdirSync` has none: a state home this process cannot manage is an environment
   // fault, and starting on it would only move the failure somewhere less legible.
-  rmSync(join(dir, "files"), { recursive: true, force: true });
+  rmSync(attachmentsDir(dir), { recursive: true, force: true });
 }
 
 /** Returns `unknown` on purpose — no generic pretending otherwise. */

@@ -65,6 +65,21 @@ export interface SchedulerOptions {
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
 
+/**
+ * How much of a reply the completed line carries. A reply is model output with no natural ceiling — one turn that
+ * echoes a file it read is hundreds of kilobytes — and the rotation window it now lives in is finite, so an
+ * uncapped line would evict the diagnostics around it: exactly what moving the reply into the log was for.
+ * The full text is not promised anywhere; the length is, so a truncated line says what it dropped.
+ */
+const REPLY_LOG_LIMIT = 2000;
+
+function replySuffix(reply: string): string {
+  const text = reply.trim();
+  if (text === "") return "";
+  if (text.length <= REPLY_LOG_LIMIT) return `: ${text}`;
+  return `: ${text.slice(0, REPLY_LOG_LIMIT)}… (${text.length} chars)`;
+}
+
 /** The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup. */
 function runTurn(agent: Agent, label: string, session: string, prompt: string) {
   return Effect.gen(function* () {
@@ -94,10 +109,7 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
           // The reply goes to the LOG, not to disk: it is the turn's narrative, and rotating a narrative is the
           // platform's job (12-factor XI): a log has a layer whose job is to bound it — a platform's shipper, or
           // the `logging:` block `deploy docker` generates — and a file we append to forever does not.
-          else
-            log.info(
-              `[schedule] ${label} completed (${elapsed()}ms)${result.reply.trim() ? `: ${result.reply.trim()}` : ""}`,
-            );
+          else log.info(`[schedule] ${label} completed (${elapsed()}ms)${replySuffix(result.reply)}`);
           return { ...result, ms: elapsed() };
         },
         onFailure: (error) => {
