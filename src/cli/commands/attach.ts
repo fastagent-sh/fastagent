@@ -230,8 +230,8 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     );
   });
 
-  // Every round has ONE shape: subscribe → backfill (render the durable record since the cursor) → drain live until
-  // the stream drops.
+  // Every round has ONE shape, the one `attachRound` documents: subscribe → wait for the subscription to exist →
+  // backfill (render the durable record since the cursor) → drain live until the stream drops.
   let cursor = state.leafEntryId;
   // LIVENESS IS PROBED, NEVER INFERRED FROM THE FILE: control.json is advisory.
   let failingSince: number | undefined;

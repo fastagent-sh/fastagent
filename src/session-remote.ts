@@ -74,7 +74,6 @@ interface ReadBudget {
   disarm(): void;
   /** The connect phase is over: later reads ride the idle limit instead. */
   connected(): void;
-  stop(): void;
 }
 function readBudget(abort: AbortController, what: string, connectMs: number): ReadBudget {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -105,7 +104,6 @@ function readBudget(abort: AbortController, what: string, connectMs: number): Re
       disarm();
       connected = true;
     },
-    stop: disarm,
   };
 }
 
@@ -265,7 +263,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           if (ended?.kind === "cancelled") return; // the consumer walked away — clean end, not an error
           throw ended ?? error;
         } finally {
-          budget.stop();
+          budget.disarm();
           abort.abort();
         }
       })();
@@ -473,7 +471,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             if (!terminalSeen)
               yield ended ? { type: "failed", details: ended.message, retryable: true } : toFailed(error);
           } finally {
-            budget.stop();
+            budget.disarm();
             abort.abort();
           }
         })();

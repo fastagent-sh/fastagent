@@ -342,10 +342,16 @@ first EVENT instead cannot work — an idle session may stay quiet indefinitely 
 moves the race.
 
 Each `events()` call is ONE subscription with one readiness: iterating the same stream twice is refused,
-and reconnecting means calling `events()` again. Live events during the backfill are buffered by the
-client, so the overlap is display-level: durable
-records may appear both in the replay and in the live stream, and live-only events have no entry id to
-deduplicate against. Live events are not the durable history API; a product that needs replayable run
+and reconnecting means calling `events()` again.
+
+**Keep pulling the stream while the backfill runs.** Events emitted during those two round trips are
+buffered by the SERVER, per subscriber and with a ceiling (10,000 events / 8 MiB in the pi hub); a
+subscriber past it is closed, which is exactly the loss the recipe exists to prevent. So the two reads
+belong on a task beside a live iteration, not in front of one — `attach` starts its drain first and
+buffers only the RENDERING of it (`src/cli/commands/attach.ts`), and the
+[api-reference example](../api-reference.md#session-control-observation-plane) has the same shape. The overlap that
+follows is display-level: durable records may appear both in the replay and in the live stream, and
+live-only events have no entry id to deduplicate against. Live events are not the durable history API; a product that needs replayable run
 timelines persists normalized events above FastAgent.
 
 The neutral state never exposes session file paths, working directories, provider base URLs,
