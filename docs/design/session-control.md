@@ -510,9 +510,39 @@ POST   /control/invoke                         the DATA plane
   boundary, never cast through. An unknown key is REJECTED there, not dropped: silently ignoring it
   answers `ok: true` for a patch that set nothing. It rejects with the same `unsupported_capability`
   the in-process path answers, naming the field.
-- A `SessionResult` rides HTTP **200 either way**: `ok: false` is a protocol-level answer, not a
-  transport failure. A non-2xx means the transport or auth failed — or, for the one read that may
-  reject, that the store could not be enumerated.
+- **The status code answers whether the LOCAL call returns or throws, not whether the command
+  succeeded.** That one rule produces every status this plane emits, and it is what makes local and
+  remote consumers isomorphic — the client turns non-2xx back into a `throw` and a 2xx body back into
+  a return value, so caller code is identical on both sides.
+
+  | in process | on the wire |
+  |---|---|
+  | `update` / `fork` / `delete` / actions return a `SessionResult` and never throw | **200 either way**, `ok: false` included |
+  | `state` / `entries` / `capabilities` / `commands` return a value | 200 |
+  | `list()` throws (the one read that may) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either |
+  | a read throws unexpectedly | 500 from the plane's boundary |
+  | the request never reached the plane (token, JSON, body cap, route) | 401 / 400 / 413 / 404 / 405 |
+
+  So an application failure and a transport failure are separate channels, which is the ordinary
+  arrangement rather than an invention here: JSON-RPC over HTTP answers 200 for both result and error
+  objects, MCP splits protocol errors (JSON-RPC) from tool execution errors (a successful result with
+  `isError: true`), and GraphQL's `application/json` form carries `errors` under 200.
+
+  **`ok: false` is deliberately not mapped onto 4xx/5xx.** The retry decision belongs to the client
+  that can read `retryable`, and a status code hands it to every intermediary in between: HTTP
+  libraries, proxies and gateways retry 5xx on their own, which for `partial_update` means re-applying
+  what already landed. Mapping stays possible later — the modern GraphQL-over-HTTP rule is the shape
+  to follow (the body stays authoritative and is parsed independently of the status), and the codes
+  that ARE safe to signal are the ones no middleware auto-retries. It would cost a second copy of the
+  same knowledge (a code→status table beside the codes themselves), so it waits for a consumer that
+  needs it — a monitoring dashboard or a gateway counting failures.
+
+  `retryable` living in the result rather than in the status is likewise the common arrangement, for
+  the same layering reason: the contract exists where HTTP does not. Smithy models it as `@retryable`
+  on the error shape and `@httpError` as the protocol binding — both, on the same error — and Google's
+  APIs carry `RetryInfo` in `Status.details` beside the code. Temporal marks non-retryable application
+  errors for the reason `partial_update` carries `retryable: false`: re-sending the identical call
+  cannot succeed.
 - **Events** carry the one explicit envelope:
 
   ```ts
@@ -560,8 +590,8 @@ enumerated must not borrow it. pi's own session listing catches every IO error a
 the store reads the records directory itself and lets that read fail, treating only "the directory is
 not there" as an empty store. (Guarding it with `existsSync` or `statSync({ throwIfNoEntry: false })`
 was tried and is wrong: both collapse ENOTDIR and permission faults into "absent".) The rule: a read
-that CAN be total stays total; one that cannot REJECTS, and the transport carries the same error shape
-a `SessionResult` does on a non-2xx — `sessions_unavailable` + 503 here.
+that CAN be total stays total; one that cannot REJECTS — and rejecting in process is exactly what the
+transport turns into a non-2xx (§13), `sessions_unavailable` + 503 here.
 
 ## 14. Security boundary
 
