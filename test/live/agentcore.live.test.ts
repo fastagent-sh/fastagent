@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { TEMPLATE_FILE, agentcoreName, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
+import { isMissingStack } from "../../src/deploy/agentcore/run.ts";
 import { CLI, aws, run } from "./env.ts";
 
 /** Generated artifact dirs, removed however the run ends: this probe writes a template per run and
@@ -93,14 +94,43 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // the failure SAYS is what separates a first deploy from a broken key.
     const stack = await aws(["cloudformation", "describe-stacks", "--stack-name", "fastagent-live-probe-absent"]);
     expect(stack.code).not.toBe(0);
-    expect(stack.stderr, `describe-stacks on a missing stack now says: ${stack.stderr}`).toMatch(
-      /does not exist|ValidationError/i,
-    );
+    // Through the driver's own classifier, not a copy of its regex: the same call decides whether a
+    // deploy warns that it is about to replace the agent's memory, and a copy here would keep agreeing
+    // with itself after the production one drifted.
+    expect(isMissingStack(stack.stderr), `describe-stacks on a missing stack now says: ${stack.stderr}`).toBe(true);
 
     const repo = await aws(["ecr", "describe-repositories", "--repository-names", "fastagent/live-probe-absent"]);
     expect(repo.code).not.toBe(0);
     expect(repo.stderr, `describe-repositories on a missing repo now says: ${repo.stderr}`).toMatch(
       /RepositoryNotFound/i,
     );
+  });
+
+  it("a failure that answers NOTHING does not read as 'no such stack'", async () => {
+    // The classifier's dangerous direction. A deploy that cannot read the stack must say so; if some
+    // other failure's wording ever matched, the deploy would silently treat a live stack — sessions,
+    // channel state, pending wake-ups — as a first deploy with nothing to lose.
+    //
+    // An unroutable region stands in for the real unanswered cases (AccessDenied, throttling) because
+    // it needs no second credential: this probe's role has DescribeStacks, and a nightly cannot mint a
+    // restricted one. The timeouts bound the CLI's connect retries. AccessDenied's exact wording
+    // remains unverified here — it is checked only against AWS's documented error codes.
+    const unreachable = await aws([
+      "cloudformation",
+      "describe-stacks",
+      "--stack-name",
+      "fastagent-live-probe-absent",
+      "--region",
+      "us-fake-1",
+      "--cli-connect-timeout",
+      "3",
+      "--cli-read-timeout",
+      "3",
+    ]);
+    expect(unreachable.code).not.toBe(0);
+    expect(
+      isMissingStack(unreachable.stderr),
+      `an unreachable endpoint now reads as a missing stack: ${unreachable.stderr}`,
+    ).toBe(false);
   });
 });
