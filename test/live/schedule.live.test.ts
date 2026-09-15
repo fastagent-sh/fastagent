@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
-import { readRuns } from "../../src/schedule/audit.ts";
+import { type RunRecord, readRuns } from "../../src/schedule/audit.ts";
 import { claimSlot } from "../../src/schedule/state.ts";
 import { startSchedules } from "../../src/service.ts";
 import { requireEnv } from "./env.ts";
@@ -56,7 +56,8 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
     // Two minutes back, seeded before the scheduler starts: the next 1-minute slot after it is already
     // in the past, so start() catches up instead of arming a timer.
     // A claim two minutes old: the catch-up start point, without pretending a slot was fired since.
-    claimSlot(stateRoot, SCHEDULE, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    const seededAt = new Date(Date.now() - 120_000);
+    claimSlot(stateRoot, SCHEDULE, seededAt, seededAt);
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.
@@ -67,13 +68,19 @@ describe("schedules: a cron fire reaches the agent and the audit log", () => {
       "the schedules/ file did not load",
     ).toEqual([SCHEDULE]);
 
+    // The seeded claim is reconciled first, and correctly: a claim no record accounts for IS a fire the process was
+    // killed in the middle of (`recordInterruptedFires`), and nothing distinguishes this one from a real one. So the
+    // record under test is the CATCH-UP fire's, which carries a wall-clock `firedAt` later than the seed.
+    //
     // The fire is a real model turn; poll the audit log rather than guessing a duration. The budget is
     // the file timeout minus room for teardown, not an estimate of a turn: a queued or thinking model
     // running long is the one thing this must not report as a schedule that never fired.
-    let runs = readRuns(stateRoot, SCHEDULE);
+    const fired = (): RunRecord[] =>
+      readRuns(stateRoot, SCHEDULE).filter((r) => Date.parse(r.firedAt) > seededAt.getTime());
+    let runs = fired();
     for (let waited = 0; runs.length === 0 && waited < BUDGET_MS; waited += 500) {
       await sleep(500);
-      runs = readRuns(stateRoot, SCHEDULE);
+      runs = fired();
     }
 
     expect(
