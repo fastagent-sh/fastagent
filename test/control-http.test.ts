@@ -444,14 +444,17 @@ describe("session control over HTTP", () => {
     try {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
       const seen: SessionEvent[] = [];
+      const stream = remote.sessions.get("sE").events();
       const watching = (async () => {
-        for await (const ev of remote.sessions.get("sE").events()) {
+        for await (const ev of stream) {
           seen.push(ev);
           if (ev.type === "run_settled") break;
         }
       })();
-      // Subscription races the run start: give the SSE connection a beat to establish.
-      await new Promise((r) => setTimeout(r, 100));
+      // The subscription race, ANSWERED rather than slept on: the server subscribes before it writes the response
+      // headers, so `ready` settling means every event from here on is ours — on an idle session that emits nothing
+      // to wait for, which is the case a "wait for the first event" rule cannot serve.
+      await stream.ready;
       await drain(served.agent.invoke({ session: "sE" }, { text: "hi" }));
       await watching;
 
@@ -665,7 +668,7 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("a black-holed CONNECT is terminated by the watchdog on both streaming planes", async () => {
+  it("a black-holed CONNECT is terminated on both streaming planes, each on its caller's budget", async () => {
     // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
     const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
@@ -684,22 +687,163 @@ describe("session control over HTTP", () => {
       // The rejection assertion attaches AT CREATION: the promise rejects while timers advance,
       // and a handler attached only afterwards would leave an unhandled-rejection window vitest
       // reports as a run-level error — noise that trains everyone to ignore the real ones.
+      const stream = remote.sessions.get("s").events();
       const eventsAttempt = expect(
         (async () => {
-          for await (const _ of remote.sessions.get("s").events()) void _;
+          for await (const _ of stream) void _;
         })(),
-      ).rejects.toThrow(/dead connection/);
+      ).rejects.toThrow(/no usable response in 10s/);
+      // A reconnecting client WAITS on this phase before it reads history, so the connect gets the same 10s
+      // black-hole budget as any other request — the 90s heartbeat limit is for a connection that is merely quiet.
+      const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
       const agentAttempt = drain(
         connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
       );
-      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // past SSE_IDLE_LIMIT_MS
+      await fakeTimers.advanceTimersByTimeAsync(10_000);
       await eventsAttempt;
+      await readyAttempt;
+      // The invoke plane connects through the same phase with its own limit: it used to have NO connect budget at
+      // all (it waited out the 90s idle limit for a connection that had not even answered), and it must not inherit
+      // attach's 10s either — a scale-to-zero host holds a POST open while the machine boots.
+      await fakeTimers.advanceTimersByTimeAsync(50_000);
       const agentEvents = await agentAttempt;
       expect(agentEvents).toEqual([
-        expect.objectContaining({ type: "failed", retryable: true, details: expect.stringContaining("no bytes") }),
+        expect.objectContaining({
+          type: "failed",
+          retryable: true,
+          details: expect.stringContaining("no usable response in 60s"),
+        }),
       ]);
     } finally {
       fakeTimers.useRealTimers();
+    }
+  });
+
+  it("4xx headers with a black-holed BODY stay on the connect budget, and a cancelled connect says so", async () => {
+    // The half-dead tunnel the error path names: headers answer, the body never does. Clearing the connect deadline
+    // at the headers would have left that read to the 90s idle limit — with `ready` awaited before the backfill,
+    // that is a whole attach round spent silent.
+    const hangingBody = ((_input: string | URL | Request, init?: RequestInit) => {
+      if (String(_input).includes("/control/capabilities")) {
+        return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 502 }));
+    }) as typeof fetch;
+    const timers = await import("vitest").then((m) => m.vi);
+    timers.useFakeTimers();
+    try {
+      const remote = await connectSessionControl({ url: "http://tunnel", token: "t", fetchFn: hangingBody });
+      const stream = remote.sessions.get("s").events();
+      const iterating = expect(
+        (async () => {
+          for await (const _ of stream) void _;
+        })(),
+      ).rejects.toThrow(/no usable response in 10s/);
+      const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
+      // The invoke plane opens through the SAME phase, so the tunnel cannot hold it open forever either — it used to
+      // fall back to the 90s idle limit here, because the two planes were two copies of one sequence.
+      const invoked = drain(
+        connectAgent({ url: "http://tunnel", token: "t", fetchFn: hangingBody }).invoke(
+          { session: "s" },
+          { text: "x" },
+        ),
+      );
+      await timers.advanceTimersByTimeAsync(10_000);
+      await iterating;
+      await readyAttempt;
+      await timers.advanceTimersByTimeAsync(50_000);
+      expect(await invoked).toEqual([
+        expect.objectContaining({ type: "failed", details: expect.stringContaining("no usable response in 60s") }),
+      ]);
+    } finally {
+      timers.useRealTimers();
+    }
+
+    // A consumer that walks away before connecting ends its ITERATION cleanly (that is not a failure), but `ready`
+    // has a promise it cannot keep — and it must say WHY it cannot keep it, not report an unreachable endpoint. The
+    // two readers disagree on purpose, and they read the same stated reason to do it.
+    const never = ((_input: string | URL | Request, init?: RequestInit) => {
+      if (String(_input).includes("/control/capabilities")) {
+        return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+          once: true,
+        });
+      });
+    }) as typeof fetch;
+    const remote = await connectSessionControl({ url: "http://quiet", token: "t", fetchFn: never });
+    const stream = remote.sessions.get("s").events();
+    const cancelled = expect(stream.ready).rejects.toThrow(/cancelled by the consumer/);
+    const iterator = stream[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    await iterator.return?.(undefined);
+    expect(await pull).toMatchObject({ done: true });
+    await cancelled;
+
+    // …and the harder shape: walking away WITHOUT ever pulling. A generator that was never started does not run its
+    // body on `return()`, so nothing inside it can settle `ready` — this used to hang, which is the one outcome a
+    // caller cannot diagnose, and the local hub rejects it (session-control.test.ts owns that half).
+    const untouched = remote.sessions.get("s").events();
+    const neverPulled = untouched[Symbol.asyncIterator]();
+    await neverPulled.return?.(undefined);
+    await expect(untouched.ready).rejects.toThrow(/cancelled by the consumer/);
+  });
+
+  it("the connect limit ends WITH the connect: a heartbeating stream survives long past it", async () => {
+    // One mechanism, two limits — and the switch is the whole point. Keeping the 10s connect limit on a subscribed
+    // stream would kill every healthy connection, since the server only heartbeats every 30s.
+    const timers = await import("vitest").then((m) => m.vi);
+    timers.useFakeTimers();
+    try {
+      let push!: (chunk: string) => void;
+      const heartbeating = ((_input: string | URL | Request, init?: RequestInit) => {
+        if (String(_input).includes("/control/capabilities")) {
+          return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+        }
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const encoder = new TextEncoder();
+            push = (chunk: string) => controller.enqueue(encoder.encode(chunk));
+            // The fake has to HONOUR the signal, or a client that kills a healthy stream looks fine here.
+            init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+          },
+        });
+        return Promise.resolve(new Response(body, { headers: { "content-type": "text/event-stream" } }));
+      }) as typeof fetch;
+      const remote = await connectSessionControl({ url: "http://slow", token: "t", fetchFn: heartbeating });
+      const stream = remote.sessions.get("s").events();
+      const seen: SessionEvent[] = [];
+      // The iterator is HELD: releasing the connection means returning the one that opened it, and a fresh
+      // `stream[Symbol.asyncIterator]()` would have been a different (unstarted) one — the connection and its idle
+      // timer would have outlived the test.
+      const iterator = stream[Symbol.asyncIterator]();
+      const watching = (async () => {
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) return;
+          seen.push(next.value);
+        }
+      })();
+      await stream.ready;
+      // Quiet for three times the connect limit, with only the heartbeats a real server sends.
+      for (let i = 0; i < 3; i++) {
+        await timers.advanceTimersByTimeAsync(30_000);
+        push(": ping\n\n");
+        await timers.advanceTimersByTimeAsync(0);
+      }
+      push(`data: ${JSON.stringify({ seq: 0, event: { type: "run_started", timestamp: 0, data: {} } })}\n\n`);
+      await timers.advanceTimersByTimeAsync(0);
+      expect(seen.map((e) => e.type)).toEqual(["run_started"]); // still alive after 90s of heartbeat-only traffic
+      await iterator.return?.(undefined);
+      await watching; // the connection is actually released — a clean end, not a dangling stream
+    } finally {
+      timers.useRealTimers();
     }
   });
 
@@ -1026,6 +1170,84 @@ describe("session control over HTTP", () => {
     });
   });
 
+  it("a slow subscription is WAITED for, not slept past: the event during the join lands in this round", async () => {
+    // The defect: a fixed settle delay meant a connection slower than the guess started its backfill before the
+    // subscription existed, and `state_changed` / `run_settled` in that window are live-only — no cursor recovers
+    // them, and a healthy connection never reconnects to notice. Readiness makes the window impossible instead of
+    // unlikely.
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const lines: string[] = [];
+    const io = { println: (l: string) => lines.push(l), write: () => {}, warn: (l: string) => lines.push(`W:${l}`) };
+    let subscribed!: () => void;
+    const ready = new Promise<void>((r) => {
+      subscribed = r;
+    });
+    const emitted: SessionEvent[] = [];
+    let backfilled = false;
+    const stream = {
+      ready,
+      [Symbol.asyncIterator]: async function* (): AsyncGenerator<SessionEvent> {
+        // Far past the 300ms the old code waited — a tunnel, a cold container, a loaded box.
+        await new Promise((r) => setTimeout(r, 400));
+        subscribed();
+        // The run finishes DURING the join/backfill window: live-only, and the only way to see it is to have been
+        // subscribed before the history read.
+        const settled: SessionEvent = { type: "run_settled", timestamp: 1, runId: "rJ", data: { status: "ok" } };
+        emitted.push(settled);
+        yield settled;
+      },
+    };
+    const fake = handleControl({
+      state: async () => {
+        expect(backfilled).toBe(true);
+        return { status: "idle", pending: { steering: 0, followUp: 0 } } as never;
+      },
+      entries: async () => {
+        // Proof of ORDER: the history read cannot begin before the subscription exists.
+        await ready;
+        backfilled = true;
+        return { entries: [] } as never;
+      },
+      events: () => stream,
+    });
+    const round = await attachRound(fake as never, "s", undefined, io);
+    expect(emitted).toHaveLength(1);
+    expect(round.sawProgress).toBe(true); // delivered in THIS round — no second disconnect needed
+    expect(lines.join("\n")).toMatch(/run settled: ok/);
+  });
+
+  it("a subscription that cannot be established fails the round instead of stalling it", async () => {
+    // `ready` rejects when the endpoint is unreachable or the token is refused. Without that, awaiting readiness
+    // would replace a bad guess with a hang — and an idle session emits nothing to time out on.
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const { ControlRequestError } = await import("../src/session-remote.ts");
+    const io = { println: () => {}, write: () => {}, warn: () => {} };
+    const gone = new Error("connect ECONNREFUSED");
+    const dead = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async () => {
+        throw new Error("the backfill must not be attempted");
+      },
+      events: () => ({
+        ready: Promise.reject(gone),
+        [Symbol.asyncIterator]: () => ({ next: (): Promise<IteratorResult<never>> => Promise.reject(gone) }),
+      }),
+    });
+    await expect(attachRound(dead as never, "s", undefined, io)).rejects.toThrow(/ECONNREFUSED/);
+
+    // An auth rejection is still the round's 401, not the generic failure: the caller stops instead of retrying.
+    const auth = new ControlRequestError(401, "unauthorized");
+    const refused = handleControl({
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async () => ({ entries: [] }) as never,
+      events: () => ({
+        ready: Promise.reject(auth),
+        [Symbol.asyncIterator]: () => ({ next: (): Promise<IteratorResult<never>> => Promise.reject(auth) }),
+      }),
+    });
+    await expect(attachRound(refused as never, "s", undefined, io)).rejects.toBe(auth);
+  });
+
   it("attachRound buffers live output during the replay block and flushes it after, failure path included", async () => {
     const { attachRound } = await import("../src/cli/commands/attach.ts");
     const lines: string[] = [];
@@ -1036,6 +1258,7 @@ describe("session control over HTTP", () => {
     };
     // The events stream produces IMMEDIATELY — before the backfill prints — then ends.
     const eagerEvents = () => ({
+      ready: Promise.resolve(), // a double still has to BE a SessionEventStream, or the round's wait is a no-op here
       [Symbol.asyncIterator]: async function* (): AsyncGenerator<SessionEvent> {
         yield { type: "run_started", timestamp: 0, runId: "rL", data: {} };
       },
@@ -1049,7 +1272,7 @@ describe("session control over HTTP", () => {
         }) as never,
       events: eagerEvents,
     });
-    const buffered = await attachRound(fake as never, "s", undefined, io, 25);
+    const buffered = await attachRound(fake as never, "s", undefined, io);
     expect(buffered.sawProgress).toBe(true); // a live event arrived
     // Contiguity: the whole replay block (and the state line) precede the buffered live output.
     expect(lines).toEqual([
@@ -1071,7 +1294,7 @@ describe("session control over HTTP", () => {
         throw new Error("backfill 500");
       },
     });
-    await expect(attachRound(failing as never, "s", undefined, io2, 1)).rejects.toThrow(/backfill 500/);
+    await expect(attachRound(failing as never, "s", undefined, io2)).rejects.toThrow(/backfill 500/);
     expect(lines2).toContain("── run rL started ──");
   });
 
@@ -1091,8 +1314,9 @@ describe("session control over HTTP", () => {
       ],
       leafEntryId: "e3",
     };
-    const quietEvents = (): AsyncIterable<never> => ({
-      [Symbol.asyncIterator]: async function* () {},
+    const quietEvents = () => ({
+      ready: Promise.resolve(),
+      [Symbol.asyncIterator]: async function* (): AsyncGenerator<never> {},
     });
     const fake = handleControl({
       state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
@@ -1102,7 +1326,7 @@ describe("session control over HTTP", () => {
       },
       events: quietEvents,
     });
-    const round = await attachRound(fake as never, "s", "e1", io, 1);
+    const round = await attachRound(fake as never, "s", "e1", io);
     expect(round.cursor).toBe("e3"); // advanced by append order
     expect(round.sawProgress).toBe(true); // the backfill delivered records
     expect(lines).toEqual([
@@ -1119,12 +1343,13 @@ describe("session control over HTTP", () => {
       state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
       entries: async () => ({ entries: [] }) as never,
       events: () => ({
+        ready: Promise.resolve(),
         [Symbol.asyncIterator]: () => ({
           next: (): Promise<IteratorResult<never>> => Promise.reject(auth),
         }),
       }),
     });
-    await expect(attachRound(failing as never, "s", undefined, io, 1)).rejects.toBe(auth);
+    await expect(attachRound(failing as never, "s", undefined, io)).rejects.toBe(auth);
 
     // A backfill failure closes the round's OWN subscription before propagating — a retrying
     // caller must never stack a second concurrent stream.
@@ -1138,6 +1363,7 @@ describe("session control over HTTP", () => {
         // A quiet stream whose return() settles the pending next() — as the real client/hub do.
         let settle: ((r: IteratorResult<never>) => void) | undefined;
         return {
+          ready: Promise.resolve(),
           [Symbol.asyncIterator]: () => ({
             next: () =>
               new Promise<IteratorResult<never>>((res) => {
@@ -1152,7 +1378,7 @@ describe("session control over HTTP", () => {
         };
       },
     });
-    await expect(attachRound(leaky as never, "s", undefined, io, 1)).rejects.toThrow(/transient 500/);
+    await expect(attachRound(leaky as never, "s", undefined, io)).rejects.toThrow(/transient 500/);
     expect(returned).toBe(true);
 
     // The SAME discipline for a state() re-check failure — the round's stream must close too.
@@ -1165,6 +1391,7 @@ describe("session control over HTTP", () => {
       events: () => {
         let settle: ((r: IteratorResult<never>) => void) | undefined;
         return {
+          ready: Promise.resolve(),
           [Symbol.asyncIterator]: () => ({
             next: () =>
               new Promise<IteratorResult<never>>((res) => {
@@ -1179,7 +1406,7 @@ describe("session control over HTTP", () => {
         };
       },
     });
-    await expect(attachRound(stateFails as never, "s", undefined, io, 1)).rejects.toThrow(/state 500/);
+    await expect(attachRound(stateFails as never, "s", undefined, io)).rejects.toThrow(/state 500/);
     expect(returned2).toBe(true);
   });
 

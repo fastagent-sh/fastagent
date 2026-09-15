@@ -44,7 +44,7 @@ export interface Session {
    * branch structure.
    */
   entries(options?: { since?: string }): Promise<SessionEntries>;
-  events(): AsyncIterable<SessionEvent>;
+  events(): SessionEventStream;
   /** Set durable session properties. */
   update(patch: SessionUpdate): Promise<SessionResult>;
   /** Join the active run: delivered after the current turn's tool calls, before the next model call. */
@@ -230,6 +230,27 @@ export interface SessionEntry {
 }
 
 // ── Live events (observation plane) ──────────────────────────────────────────
+
+/**
+ * A live event subscription, plus the ONE thing a reconnecting client cannot infer: when it started.
+ *
+ * Reconnect has to subscribe BEFORE it reads history, or an event landing between the read and the subscription is
+ * lost — it is live-only (`state_changed`, `run_settled`), so no cursor brings it back. Subscribing first is not
+ * enough on its own, because "the call returned" is not "the subscription exists": in process the registration
+ * happens on the first pull, and over HTTP it happens on the server before the response headers. `ready` is that
+ * boundary made waitable, so the recipe is subscribe → await ready → backfill, with no timing guess in it.
+ *
+ * ONE stream IS one subscription, which is what makes `ready` mean anything: readiness belongs to a subscription, so
+ * a stream that could start several would be promising the second one something the first established. Iterating the
+ * same stream twice is refused for that reason — call `events()` again, and get the readiness that goes with it.
+ *
+ * `ready` REJECTS when the subscription cannot be established at all: an unreachable endpoint, a refused token, or an
+ * iteration cancelled before it registered. A stream nobody iterates never settles, matching the rule that an
+ * iterator obtained but never driven is not subscribed.
+ */
+export interface SessionEventStream extends AsyncIterable<SessionEvent> {
+  ready: Promise<void>;
+}
 
 /**
  * Semantic-only: no sequence, no epoch, no session id — in-process the stream is lossless and ordered, and those

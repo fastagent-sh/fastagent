@@ -867,7 +867,9 @@ describe("session control: run modulation", () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("sOversized"));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("bytes"));
-      const fresh = events[Symbol.asyncIterator]();
+      // Reconnection is a NEW subscription, so it is a new `events()` — the stream that just died carries the
+      // readiness of the subscription that died with it.
+      const fresh = control.sessions.get("sOversized").events()[Symbol.asyncIterator]();
       try {
         const pending = fresh.next();
         const event = { type: "run_settled", timestamp: 1, runId: "r", data: { status: "completed" } };
@@ -882,23 +884,64 @@ describe("session control: run modulation", () => {
     }
   });
 
-  it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
+  it("ready settles exactly at registration — not at events(), not at the first event", async () => {
+    // The reconnect ordering rests on this: after `ready`, nothing emitted for the session can be missed. Before it,
+    // the stream is not subscribed at all — which is why an iterable nobody drives must not report readiness (it
+    // would promise delivery to a subscription that does not exist).
     const { control, observer } = createPiSessionControl({
       sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
     });
-    const iterable = control.sessions.get("sReIter").events();
-    // First iteration: consume one event, then walk away.
-    const first = iterable[Symbol.asyncIterator]();
+    const stream = control.sessions.get("sReady").events();
+    let settled = false;
+    void stream.ready.then(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false); // obtained, never driven: not subscribed
+
+    const iterator = stream[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    await stream.ready; // the pull registered it — and this resolves on an IDLE session, with no event to wait for
+    // Emitted strictly after readiness, which is the guarantee a reconnecting client buys with it.
+    observer("sReady", { type: "run_started", timestamp: 0, runId: "rR", data: {} });
+    expect(((await pull) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_started");
+    await iterator.return?.(undefined);
+  }, 5_000);
+
+  it("one stream is ONE subscription: a second iteration is refused, a new events() is how you reconnect", async () => {
+    // `ready` belongs to a subscription. A stream that could start several would hand the second one the first's
+    // readiness — a boundary it never crossed — so the trap is removed rather than documented. The remote client
+    // refuses it the same way (one connection per stream).
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const stream = control.sessions.get("sReIter").events();
+    const first = stream[Symbol.asyncIterator]();
     const p1 = first.next();
     observer("sReIter", { type: "run_started", timestamp: 0, runId: "r1", data: {} });
     expect(((await p1) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_started");
+    expect(() => stream[Symbol.asyncIterator]()).toThrow(/one subscription — call events\(\) again/);
     await first.return?.(undefined);
-    // Second iteration of the SAME iterable: a fresh subscription, not a poisoned/shared one.
-    const second = iterable[Symbol.asyncIterator]();
-    const p2 = second.next();
+
+    // A fresh call is a fresh subscription with its own readiness, and the ended one does not poison it.
+    const second = control.sessions.get("sReIter").events();
+    const it2 = second[Symbol.asyncIterator]();
+    const p2 = it2.next();
+    await second.ready;
     observer("sReIter", { type: "run_settled", timestamp: 1, runId: "r1", data: { status: "completed" } });
     expect(((await p2) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
-    await second.return?.(undefined);
+    await it2.return?.(undefined);
+  }, 5_000);
+
+  it("cancelling before the subscription registers REJECTS ready — the same answer the remote client gives", async () => {
+    // Hanging is the one outcome a caller cannot diagnose, and the two planes must not differ on it.
+    const { control } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
+    const stream = control.sessions.get("sGone").events();
+    const iterator = stream[Symbol.asyncIterator]();
+    await iterator.return?.(undefined); // walked away without ever pulling
+    await expect(stream.ready).rejects.toThrow(/cancelled before the subscription was established/);
   }, 5_000);
 
   it("concurrent next() calls on one events subscription both settle", async () => {

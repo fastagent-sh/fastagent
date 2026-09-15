@@ -601,12 +601,20 @@ const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer 
 
 // Live events are NOT durable history: a subscription sees only what happens while it iterates,
 // so start watching BEFORE (or while) the run is driven — never after it drained.
+const stream = control.sessions.get("s1").events();
 const watching = (async () => {
-  for await (const ev of control.sessions.get("s1").events()) {
+  for await (const ev of stream) {
     console.log(ev.type); // run_started, message_delta, tool_started, …
     if (ev.type === "run_settled") break; // events() has no natural end — the consumer decides
   }
 })();
+// `ready` settles when the subscription EXISTS (it registers on the first pull, and remotely on the
+// server before the response headers), so nothing after it can be missed. Reconnecting clients await
+// it before reading history — see the reconnect recipe in docs/design/session-control.md §7. One
+// `events()` call is one subscription: iterate the returned stream once, and call it again to
+// resubscribe. Note the shape: the iteration runs BESIDE the work, never after it — a subscriber that
+// stops pulling is buffered by the server only up to a ceiling, then closed.
+await stream.ready;
 for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
 await watching;
 
@@ -760,7 +768,11 @@ for await (const ev of remote.sessions.get("s1").events()) console.log(ev.type);
 The DATA plane travels the same wire: `connectAgent({ url, token })` returns an `Agent` whose
 `invoke` drives `POST /control/invoke` (mounted when the serve wires an agent — dev/start do) —
 paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
-same two contracts local code uses. Disconnecting the invoke stream cancels the run. The invoke wire is
+same two contracts local code uses. Disconnecting the invoke stream cancels the run. Both streams refuse
+an endpoint that accepts the connection and never answers — the events stream after 10s (a reconnecting
+client waits on it, and `attach` counts that round against a budget), `invoke` after 60s, since a
+scale-to-zero host holds the POST open while a machine boots; once connected, either stream fails after
+90s without bytes, heartbeats included. The invoke wire is
 text-only for now (images fail visibly there); `steer`/`followUp` carry full Prompts, images
 included — within the action body cap (1 MiB, with base64 inflation counted; oversized bodies get a
 413 naming the limit).
