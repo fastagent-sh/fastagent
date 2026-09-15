@@ -520,8 +520,8 @@ POST   /control/invoke                         the DATA plane
   |---|---|
   | `update` / `fork` / `delete` / actions return a `SessionResult` and never throw | **200 either way**, `ok: false` included |
   | `state` / `entries` / `capabilities` / `commands` return a value | 200 |
-  | `list()` throws (the one read that may) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either |
-  | a read throws unexpectedly | 500 from the plane's boundary |
+  | `list()` throws a store fault (a coded one) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either; the remote client carries all three on the error it throws |
+  | any other read throws — `commands()` on an unreadable definition, `list()` on something that is not a store fault | 500 from the plane's boundary |
   | the request never reached the plane (token, JSON, body cap, route) | 401 / 400 / 413 / 404 / 405 |
 
   `POST /control/invoke` is the exception, and for a contract reason rather than a transport one: an

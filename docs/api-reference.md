@@ -684,8 +684,7 @@ await s1.update({ leafEntryId: entryId });                      // move the leaf
 await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" }); // one call, one event
 ```
 
-A patch is validated as a whole, so a patch rejected by validation leaves nothing behind. The writes
-themselves are separate journal entries, so a failure BETWEEN them (a full disk) answers
+The writes themselves are separate journal entries, so a failure BETWEEN them (a full disk) answers
 `partial_update` naming what landed, after an event reporting the record as it now is — the one
 `ok: false` that carries durable work:
 

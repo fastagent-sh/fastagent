@@ -1170,8 +1170,8 @@ describe("session control: boundary mutations", () => {
     const after = await control.sessions.get("sPatch").state();
     expect(after).toMatchObject({ model: spec, thinkingLevel: "high", name: "Both at once" });
 
-    // And a patch that fails VALIDATION leaves nothing behind — the property that makes ok:false
-    // safe to retry.
+    // And a patch that fails VALIDATION leaves nothing behind. (Only that — whether re-sending is worth it is
+    // `retryable`'s answer, and the case below is the one where it says no.)
     const rejected = await control.sessions.get("sPatch").update({ name: "changed", model: "nope/nothing" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
