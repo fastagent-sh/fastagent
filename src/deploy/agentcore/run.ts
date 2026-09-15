@@ -8,6 +8,7 @@ import { Buffer } from "node:buffer";
 import {
   AUTH_SEED_CHUNK_SIZE,
   AUTH_SEED_MAX_CHUNKS,
+  MOUNT,
   type AgentcoreTopology,
   cfnParamName,
   forwarderSource,
@@ -242,6 +243,33 @@ export async function deployAgentcoreRun(
     );
   }
 
+  // 3d. Read the stack ONCE, here, for the two questions that both depend on it: does this deploy destroy the agent's
+  // memory (below), and is there a failed first create to clear (step 7)? Nothing between here and there can change
+  // the answer, and the destructive one is only worth saying while the multi-minute build has not run yet.
+  const stackStatus = await aws(
+    [
+      "cloudformation",
+      "describe-stacks",
+      "--stack-name",
+      stack,
+      "--query",
+      "Stacks[0].StackStatus",
+      "--output",
+      "text",
+    ],
+    { capture: true },
+  );
+  const rolledBack = stackStatus.code === 0 && stackStatus.stdout.trim() === "ROLLBACK_COMPLETE";
+  // A stack that exists and is not a failed first create carries state this update replaces. `describe-stacks` exits
+  // non-zero when there is no stack, so a first deploy stays quiet — it has nothing to lose.
+  if (stackStatus.code === 0 && !rolledBack) {
+    log(
+      `warn: this is a REDEPLOY and AWS resets managed SessionStorage (${MOUNT}) on every runtime version update — ` +
+        `sessions, channel state and pending wake-ups start blank, and the model credential is re-seeded from ` +
+        `FASTAGENT_AUTH_SEED. Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
+    );
+  }
+
   // 4.
   const registry = `${account}.dkr.ecr.${region}.amazonaws.com`;
   const image = `${registry}/${repo}:${plan.tag}`;
@@ -314,21 +342,8 @@ export async function deployAgentcoreRun(
     return gate("`docker buildx build` failed — see the output above; fix and re-run");
   }
 
-  // 7.
-  const status = await aws(
-    [
-      "cloudformation",
-      "describe-stacks",
-      "--stack-name",
-      stack,
-      "--query",
-      "Stacks[0].StackStatus",
-      "--output",
-      "text",
-    ],
-    { capture: true },
-  );
-  if (status.code === 0 && status.stdout.trim() === "ROLLBACK_COMPLETE") {
+  // 7. (the status was read at 3d, before the build)
+  if (rolledBack) {
     log(`stack ${stack} is ROLLBACK_COMPLETE (a failed first create) — deleting it before re-creating…`);
     if ((await aws(["cloudformation", "delete-stack", "--stack-name", stack])).code !== 0) {
       return gate("`aws cloudformation delete-stack` failed — see the output above");

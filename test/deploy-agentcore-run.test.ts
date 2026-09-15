@@ -170,6 +170,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "sts get-caller-identity --output json",
       // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
       "bedrock-agentcore-control list-agent-runtimes --max-items 1 --region us-west-2",
+      // The stack is read ONCE, here: what it says (a redeploy that replaces state, or a failed first create) is
+      // only actionable before the build, and step 7 reuses this answer instead of asking again.
+      "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       // The deployment bucket: created if absent, its safety/durability properties re-converged every
       // deploy, then the content-hashed forwarder package uploaded.
@@ -180,7 +183,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         /^s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip$/,
       ),
       "ecr get-login-password",
-      "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
@@ -287,6 +289,46 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({ ok: true });
     expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
     expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
+  });
+
+  describe("a redeploy replaces the agent's memory, and says so while stopping is still free", () => {
+    /** Run with a scripted stack status; code 254 is the CLI's "no such stack". */
+    const withStack = async (status: { code?: number; stdout?: string }) => {
+      const logs: string[] = [];
+      const { cli: aws, calls } = fakeCli((a) =>
+        a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
+          ? status
+          : happyAws(a),
+      );
+      await deployAgentcoreRun(plan(), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
+        telegram: async () => "registered",
+      });
+      return { logs, calls };
+    };
+
+    it("warns before the build when the stack already exists", async () => {
+      const { logs, calls } = await withStack({ stdout: "UPDATE_COMPLETE\n" });
+
+      const warned = logs.findIndex((l) => l.includes("REDEPLOY"));
+      expect(warned).toBeGreaterThanOrEqual(0);
+      expect(logs[warned]).toContain("/mnt/data");
+      expect(logs[warned]).toContain("pending wake-ups");
+      // The point of saying it here: the operator can still ctrl-c for free, before the multi-minute arm64 build.
+      expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
+      // And nothing but reads precedes the question, so the warning cannot arrive after this deploy changed something.
+      const asked = calls.findIndex((c) => c.args.includes("Stacks[0].StackStatus"));
+      expect(
+        calls.slice(0, asked).every((c) => ["sts", "configure", "bedrock-agentcore-control"].includes(c.args[0]!)),
+      ).toBe(true);
+    });
+
+    it("stays quiet on a first deploy and on a failed first create — neither has state to lose", async () => {
+      const first = await withStack({ code: 254, stdout: "" });
+      expect(first.logs.join("\n")).not.toContain("REDEPLOY");
+
+      const rolledBack = await withStack({ stdout: "ROLLBACK_COMPLETE\n" });
+      expect(rolledBack.logs.join("\n")).not.toContain("REDEPLOY");
+    });
   });
 
   it("gates an auth seed beyond the chunk ceiling and any other >2048-char secret", async () => {
