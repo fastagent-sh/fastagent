@@ -159,10 +159,10 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 ```
 
 - A patch's VALIDATION is all-or-nothing: every field is checked before anything is written, so a
-  patch rejected by validation leaves nothing behind. An empty patch is `ok: true`. The WRITES are not one operation, because an engine records properties as
-  separate journal entries: a failure between them answers `partial_update`, naming what landed, after
-  an event reporting the record as it now is. A field the deployment does not know rejects
-  `unsupported_capability`; it is never dropped.
+  patch rejected by validation leaves nothing behind. An empty patch is `ok: true`. The WRITES are not
+  one operation, because an engine records properties as separate journal entries: a failure between
+  them answers `partial_update`, naming what landed, after an event reporting the record as it now is.
+  A field the deployment does not know rejects `unsupported_capability`; it is never dropped.
 - `model` takes a FastAgent model spec, constrained by the assembled definition and host policy. It
   never accepts provider credentials. `thinkingLevel` is a string because supported levels are
   MODEL-dependent — and a patch carrying both is checked against the model it LEAVES the session on.
@@ -510,10 +510,11 @@ POST   /control/invoke                         the DATA plane
   boundary, never cast through. An unknown key is REJECTED there, not dropped: silently ignoring it
   answers `ok: true` for a patch that set nothing. It rejects with the same `unsupported_capability`
   the in-process path answers, naming the field.
-- **The status code answers whether the LOCAL call returns or throws, not whether the command
-  succeeded.** That one rule produces every status this plane emits, and it is what makes local and
-  remote consumers isomorphic — the client turns non-2xx back into a `throw` and a 2xx body back into
-  a return value, so caller code is identical on both sides.
+- **On the CONTROL plane's request/response routes, the status code answers whether the LOCAL call
+  returns or throws — not whether the command succeeded.** That one rule produces every status those
+  routes emit, and it is what makes local and remote consumers isomorphic: the client turns non-2xx
+  back into a `throw` and a 2xx body back into a return value, so caller code is identical on both
+  sides.
 
   | in process | on the wire |
   |---|---|
@@ -522,6 +523,11 @@ POST   /control/invoke                         the DATA plane
   | `list()` throws (the one read that may) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either |
   | a read throws unexpectedly | 500 from the plane's boundary |
   | the request never reached the plane (token, JSON, body cap, route) | 401 / 400 / 413 / 404 / 405 |
+
+  `POST /control/invoke` is the exception, and for a contract reason rather than a transport one: an
+  `Agent` may not throw out of its iteration (SPEC MUST 2), so `connectAgent` has no `throw` to map a
+  status onto. Every non-2xx it meets — including the 400/413/405 its own handler emits — becomes a
+  `failed` event whose `retryable` is derived from the status (429 and 5xx are worth re-sending).
 
   So an application failure and a transport failure are separate channels, which is the ordinary
   arrangement rather than an invention here: JSON-RPC over HTTP answers 200 for both result and error
@@ -591,7 +597,7 @@ the store reads the records directory itself and lets that read fail, treating o
 not there" as an empty store. (Guarding it with `existsSync` or `statSync({ throwIfNoEntry: false })`
 was tried and is wrong: both collapse ENOTDIR and permission faults into "absent".) The rule: a read
 that CAN be total stays total; one that cannot REJECTS — and rejecting in process is exactly what the
-transport turns into a non-2xx (§13), `sessions_unavailable` + 503 here.
+transport turns into a non-2xx (the table above), `sessions_unavailable` + 503 here.
 
 ## 14. Security boundary
 

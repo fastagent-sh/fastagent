@@ -692,7 +692,9 @@ themselves are separate journal entries, so a failure BETWEEN them (a full disk)
 ```ts
 const r = await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" });
 if (!r.ok && r.error.code === "partial_update") {
-  const now = await s1.state();  // some fields ARE applied; the message and the event both name which
+  // `error.message` names the fields that landed; `state()` is what they now are. (The preceding
+  // `state_changed` may carry less: a model/level pair that cannot be resolved is logged, not reported.)
+  const now = await s1.state();
   // Re-send only what is still missing. Blind retry re-applies what landed — which for `name` or
   // `leafEntryId` means overwriting or moving back.
   if (now.thinkingLevel !== "high") await s1.update({ thinkingLevel: "high" });
