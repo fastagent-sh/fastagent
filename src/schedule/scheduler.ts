@@ -92,7 +92,8 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
         onSuccess: (result) => {
           if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms): ${result.failed}`);
           // The reply goes to the LOG, not to disk: it is the turn's narrative, and rotating a narrative is the
-          // platform's job (12-factor XI — `docker logs`/journald already bound it, a file we append to does not).
+          // platform's job (12-factor XI): a log has a layer whose job is to bound it — a platform's shipper, or
+          // the `logging:` block `deploy docker` generates — and a file we append to forever does not.
           else
             log.info(
               `[schedule] ${label} completed (${elapsed()}ms)${result.reply.trim() ? `: ${result.reply.trim()}` : ""}`,

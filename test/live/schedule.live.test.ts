@@ -79,7 +79,9 @@ describe("schedules: a cron fire reaches the agent, the log, and its claim", () 
     // is the file timeout minus room for teardown, not an estimate of a turn: a queued or thinking
     // model running long is the one thing this must not report as a schedule that never fired.
     const settled = (): Fire[] =>
-      readFires(stateRoot, SCHEDULE).filter((f) => f.outcome !== undefined && Date.parse(f.firedAt) > seededAt.getTime());
+      readFires(stateRoot, SCHEDULE).filter(
+        (f) => f.outcome !== undefined && Date.parse(f.firedAt) > seededAt.getTime(),
+      );
     for (let waited = 0; settled().length === 0 && waited < BUDGET_MS; waited += 500) await sleep(500);
 
     const fires = settled();

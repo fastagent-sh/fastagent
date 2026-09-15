@@ -48,6 +48,9 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain('FASTAGENT_SECRETS_DIR: "/data/.secrets"');
     expect(yaml).toContain("- state:/data");
     expect(yaml).toContain("restart: unless-stopped");
+    // Docker's default json-file driver never rotates, and this agent logs what its turns said — so the topology
+    // carries the bound the host does not.
+    expect(yaml).toMatch(/logging:\n\s+driver: json-file\n\s+options:\n\s+max-size: "10m"\n\s+max-file: "3"/);
     expect(yaml).not.toContain("cloudflared");
     expect(yaml).not.toContain("trycloudflare");
     expect(yaml).not.toContain("TUNNEL_TOKEN");

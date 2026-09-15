@@ -60,13 +60,14 @@ it("a failed stamp takes the claim back down, so the slot is not eaten by a full
   expect(claims(root)).toEqual(["2026-07-07T10-00-00-000Z"]);
 });
 
-it("a claim pruned between the listing and the read falls back to its slot, not a boot failure", () => {
-  // A concurrent claim prunes while this one is reading. The slot in the file name is the fact already in hand, so
-  // this degrades the same way an unusable stamp does — `readFires` runs inside a synchronous boot path whose
-  // throws stop the serve.
+it("a claim pruned between the listing and the read is DROPPED, not read as an unsettled fire", () => {
+  // A concurrent claim prunes while this one is reading. Two things must hold: `readFires` runs inside a
+  // synchronous boot path whose throws stop the serve, so it must not throw — and the vanished claim must not come
+  // back as an `outcome`-less fire, because the boot reconciler settles exactly those, and `settleClaim` CREATES
+  // the file it writes. That would resurrect a pruned slot and invent an `interrupted` run that never happened.
   const root = fresh();
   const slot = new Date("2026-07-07T10:00:00Z");
   expect(claimSlot(root, "job", slot, new Date("2026-07-07T10:00:03Z"))).toEqual({ taken: true });
   vanishOnRead = true;
-  expect(readFires(root, "job").at(-1)?.firedAt).toBe("2026-07-07T10:00:00.000Z");
+  expect(readFires(root, "job")).toEqual([]);
 });

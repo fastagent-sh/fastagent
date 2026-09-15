@@ -550,8 +550,10 @@ delivery to agent tools.
 one fixed-size line — `<firedAt> <outcome> <ms>` — pruned to the newest 512, which is what makes
 `fastagent schedule history` bounded by construction rather than by a retention policy. The turn's
 narrative (its reply, its error) is a log line instead of a stored field: rotating a narrative is the
-platform's job (12-factor XI — `docker logs`, journald and every deploy host already bound it), and an
-append-only file of model replies on a minute cron is how a volume fills. Two events have no claim and
+job of the layer that carries it (12-factor XI) — Fly, Railway and AgentCore ship logs to a platform
+that bounds them, and `deploy docker` writes the bound itself (`logging: json-file` with `max-size`,
+since Docker's default has none), while an append-only file of model replies on a minute cron has no
+such layer and is how a volume fills. Two events have no claim and
 therefore no stored record at all: a wake-up (removed from the store before its turn starts) and a
 stale slot (refused before a claim is taken; it is a WARN line where a duplicate delivery is INFO).
 
