@@ -217,11 +217,17 @@ export default defineTool({
     const searchIds = new Set(
       events.flatMap((e) => (e.type === "tool_started" && e.name === "search_tools" ? [e.id] : [])),
     );
-    const answered = events.flatMap((e) => (e.type === "tool_ended" && searchIds.has(e.id) ? [e.content] : []));
+    //
+    // Truncated PER ANSWER, not once over the array: a miss lists the active tools with their descriptions, which is
+    // long enough to eat the hit that followed it — the same degradation, reached by formatting. The cap clears 350,
+    // the length of a real activation answer, because `addedToolNames` is the last field in it and IS the decider.
+    const answered = events.flatMap((e) =>
+      e.type === "tool_ended" && searchIds.has(e.id) ? [JSON.stringify(e.content).slice(0, 600)] : [],
+    );
     expect(
       called,
       `search_tools ran but get_vault_code was never called (tools called: ${called.join(", ")}). ` +
-        `search_tools returned: ${JSON.stringify(answered).slice(0, 600)} — the answer was: ${text.slice(0, 200)}`,
+        `search_tools returned: ${answered.join(" | ") || "[]"} — the answer was: ${text.slice(0, 200)}`,
     ).toContain("get_vault_code");
     expect(text, `the deferred tool ran but its value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
