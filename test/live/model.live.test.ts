@@ -209,12 +209,19 @@ export default defineTool({
     // red nightly cannot be told apart into "the loader did not list the tool" (ours) and "it did, and the model
     // declined the second hop" (the model's). The second has already happened on a green build, and re-running to
     // find out which one it was means paying for another real turn on a provider that has since moved on.
-    const searchId = events.flatMap((e) => (e.type === "tool_started" && e.name === "search_tools" ? [e.id] : []))[0];
-    const answered = events.flatMap((e) => (e.type === "tool_ended" && e.id === searchId ? [e.content] : []))[0];
+    //
+    // EVERY search, not the first: the loader's own wording invites a second one (`No tools matched "…"`, or
+    // `Narrow the query` past MAX_ACTIVATIONS_PER_SEARCH), so a miss-then-hit run is ordinary here — printing only the
+    // first would show `No tools matched` and frame a model's choice as our loader failing. An array also keeps
+    // "no tool_ended observed" (`[]`) distinct from a loader that answered nothing.
+    const searchIds = new Set(
+      events.flatMap((e) => (e.type === "tool_started" && e.name === "search_tools" ? [e.id] : [])),
+    );
+    const answered = events.flatMap((e) => (e.type === "tool_ended" && searchIds.has(e.id) ? [e.content] : []));
     expect(
       called,
       `search_tools ran but get_vault_code was never called (tools called: ${called.join(", ")}). ` +
-        `search_tools returned: ${JSON.stringify(answered)?.slice(0, 600)} — the answer was: ${text.slice(0, 200)}`,
+        `search_tools returned: ${JSON.stringify(answered).slice(0, 600)} — the answer was: ${text.slice(0, 200)}`,
     ).toContain("get_vault_code");
     expect(text, `the deferred tool ran but its value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
