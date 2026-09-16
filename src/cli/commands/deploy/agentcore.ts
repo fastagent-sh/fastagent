@@ -12,6 +12,7 @@ import {
   FORWARDER_FILE,
   TEMPLATE_FILE,
   agentcoreName,
+  forwarderLogGroup,
   ingressSessionId,
   isGeneratedAgentcoreTemplate,
   planAgentcoreDeploy,
@@ -199,15 +200,16 @@ async function runDeployAgentcore(
     }
     // `--run` never prints the runbook, and this is the ONE step in it that nothing else will remind anyone of: a
     // log group is created by whatever writes it, CloudWatch keeps log data indefinitely, and a schedule logs what
-    // each turn replied. The runtime's group name is only known after discovery; the forwarder's is known here.
+    // each turn replied. The runtime's group name is only known after discovery, so it is named by the command that
+    // resolves it — spelled out, because the line above it may be the forwarder's.
     console.error(
       `[fastagent] logs are kept FOREVER until you say otherwise: aws logs put-retention-policy ` +
-        `--log-group-name <the group the command above resolves> --retention-in-days 14`,
+        `--log-group-name <the group \`fastagent logs agentcore ${logsDir} --follow\` resolves> --retention-in-days 14`,
     );
     if (topology.forwarder) {
       console.error(
         `[fastagent] ...and for the forwarder: aws logs put-retention-policy ` +
-          `--log-group-name /aws/lambda/fastagent-${name}-forwarder --retention-in-days 14`,
+          `--log-group-name ${forwarderLogGroup(name)} --retention-in-days 14`,
       );
     }
     console.error(

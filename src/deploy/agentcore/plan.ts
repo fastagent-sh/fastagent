@@ -129,6 +129,20 @@ export function toRuntimeName(basename: string): string {
   return (/^[a-zA-Z]/.test(slug) ? slug : `agent_${slug || "fastagent"}`).slice(0, 48);
 }
 
+/** The forwarder Lambda's name — and therefore its log group, which AWS derives from it. */
+function forwarderFunctionName(name: string): string {
+  return `fastagent-${name}-forwarder`;
+}
+
+/**
+ * Where the forwarder's logs land. Lambda creates this group itself, from the function name, so three parties have
+ * to agree on a string none of them can check against the others: the template that names the function, the runbook
+ * and `--run` summary that tell an operator to set its retention, and `fastagent logs --source forwarder`.
+ */
+export function forwarderLogGroup(name: string): string {
+  return `/aws/lambda/${forwarderFunctionName(name)}`;
+}
+
 /** The ONE fixed ingress session id (webhooks + schedule fires). */
 export function ingressSessionId(name: string): string {
   return `fastagent-ingress-${name}`.padEnd(33, "0").slice(0, 128);
@@ -428,7 +442,7 @@ function template(
       `  Forwarder:`,
       `    Type: AWS::Lambda::Function`,
       `    Properties:`,
-      `      FunctionName: fastagent-${input.name}-forwarder`,
+      `      FunctionName: ${forwarderFunctionName(input.name)}`,
       `      Runtime: nodejs22.x`,
       `      Handler: index.handler`,
       `      # Webhook ACKs are fast, but schedule-fire holds the connection for the WHOLE agent turn`,
@@ -703,7 +717,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ...(needsForwarder
       ? [
           `# The forwarder is a separate Lambda, so its group is separate and defaults the same way:`,
-          `aws logs put-retention-policy --log-group-name /aws/lambda/fastagent-${input.name}-forwarder --retention-in-days 14`,
+          `aws logs put-retention-policy --log-group-name ${forwarderLogGroup(input.name)} --retention-in-days 14`,
         ]
       : []),
   );

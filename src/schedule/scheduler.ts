@@ -9,7 +9,7 @@ import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
-import { claimSlot, type Fire, readFires, settleClaim } from "./state.ts";
+import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /** A schedule shares one continuing conversation without depending on engine session storage. */
@@ -27,22 +27,25 @@ export function scheduleSession(name: string): string {
  * NOT re-fired: a turn that kills its own process would then replay on every boot. Cron only: a killed wake-up
  * leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
  *
+ * THE NEWEST CLAIM ONLY. A schedule's loop runs one turn at a time, so a killed process leaves exactly one claim
+ * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can
+ * produce, and would instead rewrite every claim an OLDER FORMAT left without an outcome, turning a window of runs
+ * that actually succeeded into `interrupted`.
+ *
  * KNOWN FALSE POSITIVE: a second scheduler booting while the first is mid-turn sees a claim nothing accounts for
  * YET, and reports it; the first process then overwrites the outcome when its turn settles. Telling them apart needs
  * the claimer's liveness, which is a lease, not a claim — and the whole point of the claim is that it needs none.
  */
-function markInterruptedFires(stateRoot: string, name: string, fires: Fire[]): void {
-  for (const fire of fires) {
-    if (fire.outcome !== undefined) continue;
-    log.warn(
-      `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
-        `and that slot stays skipped (see \`fastagent schedule history ${name}\`)`,
-    );
-    // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
-    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
-    // turn was never timed, and the process that could have timed it is gone.
-    settleClaim(stateRoot, name, new Date(fire.slot), "interrupted");
-  }
+function markInterruptedFire(stateRoot: string, name: string, fire: Fire | undefined): void {
+  if (fire === undefined || fire.outcome !== undefined) return;
+  log.warn(
+    `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
+      `and that slot stays skipped (see \`fastagent schedule history ${name}\`)`,
+  );
+  // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
+  // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
+  // turn was never timed, and the process that could have timed it is gone.
+  settleClaim(stateRoot, name, new Date(fire.slot), "interrupted");
 }
 
 export interface Scheduler {
@@ -311,17 +314,17 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     return {
       start() {
         stopped = false;
-        // ONE read of the claims per schedule, for the two planes that must agree on them: the reconciler (was that
-        // fire ever reported?) and catch-up (where does the next run resume?). A boot-time read fault stays
-        // synchronous, before any timers or turns are started — an unreadable claims directory is not a schedule to
-        // run blind, it is a boot failure.
+        // ONE claim read per schedule — the newest — for the two planes that must agree about it: the reconciler
+        // (was that fire ever reported?) and catch-up (where does the next run resume?). A read fault on it stays
+        // synchronous, before any timers or turns are started: a schedule whose newest claim cannot be read is not
+        // one to run blind, it is a boot failure. The rest of the window is history, and history does not gate a
+        // boot (`latestFire`).
         const lastFires = new Map<string, string>();
         if (!externalClock) {
           for (const s of schedules) {
-            const fires = readFires(stateRoot, s.name);
-            const fired = fires.at(-1)?.firedAt;
-            if (fired !== undefined) lastFires.set(s.name, fired);
-            markInterruptedFires(stateRoot, s.name, fires);
+            const fire = latestFire(stateRoot, s.name);
+            if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
+            markInterruptedFire(stateRoot, s.name, fire);
           }
         }
         const current = now();

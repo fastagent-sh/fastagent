@@ -114,6 +114,54 @@ describe("schedule/scheduler: fire algorithm", () => {
     again.stop();
   });
 
+  it("only the NEWEST unsettled claim is settled interrupted", async () => {
+    // A schedule's loop runs one turn at a time, so a killed process leaves exactly one claim unsettled. Walking the
+    // whole window would add nothing it can produce — and would rewrite every claim an OLDER FORMAT left without an
+    // outcome, turning runs that actually succeeded into `interrupted`.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    seedClaim(root, "job", "2026-07-07T08:00:00.000Z", undefined, false); // what the previous format wrote
+    seedClaim(root, "job", "2026-07-07T09:00:00.000Z", undefined, false);
+    seedClaim(root, "job", "2026-07-07T10:00:00.000Z", undefined, false); // the fire that was actually killed
+    const { agent } = recordingAgent();
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T10:30:00Z"),
+    });
+    s.start();
+    expect(outcomes(root, "job")).toEqual([undefined, undefined, "interrupted"]);
+    s.stop();
+  });
+
+  it("an OLD claim that cannot be read costs the history, not the boot — the newest one is still fatal", async () => {
+    // The boot reads one claim, so a file kept only for an operator to look at cannot decide whether a service
+    // starts. The newest claim is the opposite: it decides the stale gate and the resume point.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = join(root, "schedule", "claims", "job");
+    seedClaim(root, "job", "2026-07-07T09:00:00.000Z");
+    mkdirSync(join(claims, "2026-07-07T08-00-00-000Z")); // a DIRECTORY where an old claim goes: EISDIR on read
+    const { agent, calls } = recordingAgent();
+    const options = {
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T12:30:00Z"),
+    };
+    const s = createScheduler(options);
+    expect(() => s.start()).not.toThrow();
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the overdue slot still catches up
+    s.stop();
+
+    // …and the same fault on the NEWEST claim stops the boot instead of arming a schedule on a claim nobody read.
+    mkdirSync(join(claims, "2026-07-07T13-00-00-000Z"));
+    const again = createScheduler(options);
+    expect(() => again.start()).toThrow(/EISDIR|illegal operation on a directory/);
+    again.stop();
+  });
+
   it("a file that is not a claim is not read as one — it decides nothing and breaks nothing", async () => {
     // A claims directory is a directory: macOS drops `.DS_Store` into any it opens, and such a name sorts after
     // every real claim. Read as the newest one it would decide whether the next slot is refused as stale, where

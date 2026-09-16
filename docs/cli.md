@@ -226,8 +226,9 @@ fastagent schedule history <name> [dir] [--json]
 ```
 
 Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`,
-or `unreported` for a fire still running), and how long it took (blank when nothing timed it — an
-`interrupted` fire was never timed by anybody). `interrupted` means the process stopped between claiming
+or `unreported` for a fire nothing has settled — one still running, or one from a state root written before
+this format), and how long it took (blank when nothing timed it — an `interrupted` fire was never timed by
+anybody). `interrupted` means the process stopped between claiming
 that slot and finishing its turn — a restart or rolling deploy landing mid-run. The slot stays skipped (it
 is not replayed), and the next start records it.
 
@@ -235,6 +236,12 @@ The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), s
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
+
+On a state root written by an earlier version, the fires already in that window carry no outcome and print
+as `unreported` — there is no migration, and those rows age out as new fires arrive. Only the newest of
+them is settled, as `interrupted`: a schedule runs one turn at a time, so the newest unsettled claim is the
+one a killed process was actually in. Delete `<state root>/schedule/claims/` if you would rather start the
+history empty.
 
 **WHAT a run said and WHY a failed one failed are not here — they are log lines** (`fastagent logs`,
 `docker logs`, journald), and two consequences follow that this command cannot fix for you:

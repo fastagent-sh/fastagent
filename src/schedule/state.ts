@@ -250,14 +250,38 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
  * which is why there is no separate audit file to rotate (the turn's own narrative is a log line, and rotating logs
  * is the platform's job — 12-factor XI).
  *
- * THE read for both planes that ask about past fires: where catch-up resumes (`.at(-1)`) and which fires were never
- * reported. Deriving those separately is how they come to disagree about the same directory.
+ * THE HISTORY read, and its only caller is the read-only `schedule history` — which translates a read fault into a
+ * one-line refusal. The serving boot reads `latestFire` instead: it asks about ONE claim, and a window of files kept
+ * for an operator to look at has no business deciding whether a service starts.
  */
 export function readFires(stateRoot: string, name: string): Fire[] {
   const dir = claimDir(stateRoot, name);
   // A claim pruned between the listing and the read is not a fire this state root still keeps — dropping it is what
   // keeps the reconciler from settling (and so re-creating) a slot that is already gone.
   return listClaims(dir).flatMap((slot) => readClaim(dir, slot) ?? []);
+}
+
+/**
+ * The NEWEST fire recorded for `name` — the one claim the serving boot reads, for the two planes that must agree
+ * about it: where catch-up resumes (`firedAt`) and whether that fire ever reported (`outcome`). Deriving those
+ * separately is how they come to disagree about the same file.
+ *
+ * Only the newest matters to either. A schedule's resident loop runs one turn at a time, so it can leave at most one
+ * unsettled claim behind; an older unsettled one needs a second writer, and the second-writer topology (an external
+ * clock) skips the reconciler entirely. Reading the whole retained window here would instead make a file that is
+ * 400 fires old — kept only so an operator can look at it — able to fail a boot.
+ *
+ * A read fault on THIS claim stays fatal: it decides the stale gate and the resume point, and running blind on it
+ * fires a slot twice or never.
+ */
+export function latestFire(stateRoot: string, name: string): Fire | undefined {
+  const dir = claimDir(stateRoot, name);
+  for (const slot of listClaims(dir).reverse()) {
+    // `undefined` = pruned between the listing and the read; the one before it is then the newest that still exists.
+    const fire = readClaim(dir, slot);
+    if (fire !== undefined) return fire;
+  }
+  return undefined;
 }
 
 /**
