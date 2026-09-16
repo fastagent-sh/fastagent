@@ -163,10 +163,11 @@ describe("schedule/scheduler: fire algorithm", () => {
   });
 
   it("a file that is not a claim is not read as one — it decides nothing and breaks nothing", async () => {
-    // A claims directory is a directory: macOS drops `.DS_Store` into any it opens, and such a name sorts after
-    // every real claim. Read as the newest one it would decide whether the next slot is refused as stale, where
-    // catch-up resumes, and which fire the reconciler settles — and its slot cannot be parsed back, which used to
-    // take `start()` down with `RangeError: Invalid time value`.
+    // A claims directory is a directory, and a foreign name breaks things two ways. `<slot>.tmp` sorts AFTER every
+    // real claim, so read as the newest one it would decide whether the next slot is refused as stale, where
+    // catch-up resumes, and which fire the reconciler settles. `.DS_Store` (which macOS drops into any directory it
+    // opens) sorts before them all and does the other kind of damage: its name cannot be parsed back into a slot,
+    // which used to take `start()` down with `RangeError: Invalid time value`.
     const root = await freshRoot();
     vi.spyOn(console, "error").mockImplementation(() => {});
     seedClaim(root, "job", "2026-07-07T08:00:00Z");

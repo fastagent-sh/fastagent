@@ -69,9 +69,11 @@ const slotInstant = (name: string): string => name.replace(/-(\d{2})-(\d{2})-(\d
  * Is this file name one `claimName` produced? Defined by the round trip, so the answer is exactly "this is a slot
  * instant this code could have written", with no second spelling to keep in sync.
  *
- * It has to be asked because a claims directory is a directory: a `.DS_Store`, an editor backup or a half-finished
- * copy would otherwise sort after every real claim and be read as the newest one — which decides whether the next
- * slot is refused as stale, where catch-up resumes, and which fire the boot reconciler settles.
+ * It has to be asked because a claims directory is a directory, and a foreign name breaks things two ways. A name
+ * that sorts AFTER every real claim (`<slot>.tmp`, an editor's `<slot>~`) would be read as the newest one — which
+ * decides whether the next slot is refused as stale, where catch-up resumes, and which fire the boot reconciler
+ * settles. Any other name (`.DS_Store`, which sorts before all of them) cannot be turned back into a slot instant,
+ * and the reconciler's `new Date(fire.slot)` on it throws `RangeError: Invalid time value` out of `start()`.
  */
 const isClaimName = (name: string): boolean => {
   const instant = Date.parse(slotInstant(name));
@@ -208,7 +210,7 @@ export type SlotClaimOutcome =
  * to 24h), and firing it would bill a turn for an instant the schedule has already moved past.
  *
  * The claim carries the wall-clock instant it was taken, so the next boot can tell a fire that never reported from
- * one that did (`markInterruptedFires`) without depending on a second file being written after it.
+ * one that did (`markInterruptedFire`) without depending on a second file being written after it.
  */
 export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: Date): SlotClaimOutcome {
   const dir = claimDir(stateRoot, name);

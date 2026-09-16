@@ -72,7 +72,7 @@ describe("schedules: a cron fire reaches the agent, the log, and its claim", () 
     ).toEqual([SCHEDULE]);
 
     // The seeded claim is reconciled first, and correctly: an unsettled claim IS a fire the process was killed in
-    // the middle of (`markInterruptedFires`), and nothing distinguishes this one from a real one. So the record
+    // the middle of (`markInterruptedFire`), and nothing distinguishes this one from a real one. So the record
     // under test is the CATCH-UP fire's, which carries a wall-clock `firedAt` later than the seed.
     //
     // The fire is a real model turn; poll the settled claim rather than guessing a duration. The budget

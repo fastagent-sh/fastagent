@@ -231,7 +231,12 @@ Telegram documents/audio/video and Slack files are downloaded under:
 
 The directory is `c-` followed by the URL-encoded conversation id, so an id carrying `/` or `:`
 (a Feishu thread, a custom route's own id) still names one directory: `oc_x:thread/1` is stored as
-`c-oc_x%3Athread%2F1`. The full path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.
+`c-oc_x%3Athread%2F1`. The full path is appended to the prompt. Make sure the agent has filesystem tools enabled.
+
+**`files/` is emptied every time the channel mounts** (every `start`, every `dev` restart), so the most
+common ENOENT here is an agent following a path from a conversation the previous process handled — ask
+the user to send the file again, or have the agent copy what it needs out of `files/` during the turn.
+Nothing else clears it and nothing needs to: the directory is bounded by that clearing alone.
 
 ## Feishu URL verification fails
 
