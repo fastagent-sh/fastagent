@@ -233,10 +233,9 @@ Prints one schedule's recent fires: when each fired, its outcome (`completed` / 
 rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start of a
 **resident** scheduler (`start`, `dev`, `deploy docker|fly|railway`) records it.
 
-A fire reads `unreported` when nothing settled it: one still running, one from a state root written before
-this format (there is no migration — those rows age out, and `rm -r <state root>/schedule/claims/` starts
-the history empty), or one nothing will ever settle. That last case is AgentCore: it delivers slots from an
-external clock, so no boot of it runs the reconciler, on the host that reclaims its container most often.
+A fire reads `unreported` when nothing settled it: one still running, or one nothing will ever settle. The
+second case is AgentCore: it delivers slots from an external clock, so no boot of it runs the reconciler,
+on the host that reclaims its container most often.
 
 The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),

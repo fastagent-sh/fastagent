@@ -25,6 +25,8 @@ installProxyFetch();
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 const SCHEDULE = "heartbeat";
+/** The schedule's instruction. Removed from the journal, what is left can only be the model's own answer. */
+const PROMPT = "Reply with just: tick";
 const BUDGET_MS = 480_000;
 
 const cleanups: (() => void)[] = [];
@@ -51,7 +53,7 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
     // needs, since that one is testing the loader itself).
     await writeFile(
       join(dir, "schedules", `${SCHEDULE}.ts`),
-      `export default { cron: "* * * * *", prompt: "Reply with just: tick" };\n`,
+      `export default { cron: "* * * * *", prompt: ${JSON.stringify(PROMPT)} };\n`,
     );
 
     const { agent, stateRoot } = await createPiAgentFromDir(dir, { serving: true });
@@ -98,13 +100,17 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
     // The session is derived from the schedule's name, not minted per fire — that is what makes a
     // schedule's turns one continuing conversation, and it is where the turn's text lives.
     expect(logs.join("\n")).toContain(`firing (session=schedule:${SCHEDULE})`);
-    // The regression this guards is a completed turn whose content reached nothing: the claim would still
-    // say `completed` while the conversation was never written.
+    // The regression this guards is a completed turn that ANSWERED NOTHING: the claim would still say `completed`
+    // while the conversation holds only the prompt. So the prompt is removed from the journal before looking for
+    // the answer — asserting on text the scheduler itself wrote would pass with no model output at all.
     const sessionsDir = join(stateRoot, "sessions");
     const files = await readdir(sessionsDir, { recursive: true, withFileTypes: true });
     const journals = await Promise.all(
       files.filter((f) => f.isFile()).map((f) => readFile(join(f.parentPath, f.name), "utf8")),
     );
-    expect(journals.join("\n"), `nothing was persisted under ${sessionsDir}`).toContain("Reply with just: tick");
+    const journal = journals.join("\n");
+    expect(journal, `nothing was persisted under ${sessionsDir}`).toContain(PROMPT);
+    const answered = journal.replaceAll(PROMPT, "");
+    expect(answered, `the turn completed without answering: ${journal.slice(-2000)}`).toMatch(/tick/i);
   });
 });
