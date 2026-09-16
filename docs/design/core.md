@@ -572,9 +572,10 @@ rather than accidents of it:
   no human in it, so the log is the only place its answer ever appears. A WAKE-UP is the opposite case
   and is NOT logged with its reply: it runs in the session that scheduled it — a Telegram group, a
   Feishu thread — where the answer is delivered to the people in that conversation, so copying it into
-  the operator's log would buy no diagnosis and widen the audience of a private exchange. There is no
-  per-agent switch either way: the level (`FASTAGENT_LOG_LEVEL`) is the only lever, and it is
-  all-or-nothing for `info`.
+  the operator's log would buy no diagnosis and widen the audience of a private exchange. A cron whose
+  answer IS the sensitive part opts out per schedule with `defineSchedule({ logReply: false })`, which
+  keeps its `firing`/`completed`/`failed` lines — the distinction `FASTAGENT_LOG_LEVEL` cannot make,
+  being all-or-nothing for `info`.
 - **Its retention, which is now independent of the outcome's.** The claims answer "did last night's run
   fail?" for as far back as 512 fires reach (~3 weeks hourly); the log answers "why" for as long as
   that host keeps logs, which on Fly and Railway is typically shorter. A `failed` row can therefore
@@ -620,10 +621,12 @@ it is. Fired-slot claims are pruned by count (§8). A channel's `files/` holds i
 nothing ever asks for back — so it is `/tmp`, emptied when the channel mounts, needing no ager, no TTL
 and no reference tracking; the cost is that a session pointing at an attachment from before the current
 process reads ENOENT, exactly as a `/tmp` path from the last boot does. The clearing reaches one channel
-KIND's directory, so it stays inside the same boundary the rest of this section draws: the topologies
-listed above are untouched, and the one it can damage — a second process mounting the SAME channel, which
-clears the running one's attachments before it even binds — is the one already ruled out here for a
-different reason.
+KIND's directory, so it stays inside the same boundary the multi-process list below draws: two processes
+serving DIFFERENT channels never touch the same directory, and the one topology it can damage — a second
+process mounting the SAME channel, which clears the running one's attachments before it even binds — is
+the one that list already rules out for a different reason. Two more processes never reach a channel
+factory at all, so they cannot clear anything: `invoke`/`chat`/`tool` do not mount channels, and `dev`'s
+supervisor respawns its worker only after the old one has exited (`src/dev-supervisor.ts`).
 
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the

@@ -31,6 +31,16 @@ describe("schedule/discover", () => {
     expect(failures.find((f) => f.label.includes("bad"))?.message).toMatch(/invalid cron/);
   });
 
+  it("carries logReply through, and refuses a non-boolean instead of coercing it", async () => {
+    // `logReply: "false"` is truthy: coercing it would publish the reply of a schedule whose author meant to keep
+    // it out of the logs, which is the one mistake the option exists to prevent.
+    const quiet = `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\nexport default defineSchedule({ cron: "0 * * * *", prompt: "go", logReply: false });\n`;
+    const dir = await ws({ "quiet.ts": quiet, "typo.ts": quiet.replace("logReply: false", 'logReply: "false"') });
+    const { schedules, failures } = await loadSchedules(dir);
+    expect(schedules).toEqual([{ name: "quiet", cron: "0 * * * *", tz: undefined, prompt: "go", logReply: false }]);
+    expect(failures.find((f) => f.label.includes("typo"))?.message).toMatch(/logReply must be a boolean/);
+  });
+
   it("isolates a non-schedule default export", async () => {
     const dir = await ws({ "x.ts": "export default { nope: true };\n" });
     const { schedules, failures } = await loadSchedules(dir);

@@ -13,6 +13,16 @@ export interface Schedule {
   tz?: string;
   /** The turn's text = the job's instruction. */
   prompt: string;
+  /**
+   * Whether this schedule's reply is logged with its `completed` line (default true).
+   *
+   * An unattended turn's answer is otherwise seen by nobody, which is why it is logged at all — but a scheduled
+   * turn often replies with what it just read (an inbox, a customer record, a token in some API response), and a
+   * log stream has a wider audience than the state volume ever had. `false` keeps the fire's `firing`/`completed`/
+   * `failed` lines and drops only the answer, which `FASTAGENT_LOG_LEVEL` cannot do (it is all-or-nothing for
+   * `info`).
+   */
+  logReply?: boolean;
   /** Env vars this schedule declared — carried by `deploy`, asserted before the scheduler starts. */
   secrets?: readonly string[];
 }
@@ -23,6 +33,8 @@ export interface DefineScheduleOptions<S extends readonly string[]> {
   cron: string;
   tz?: string;
   prompt: string | ((secrets: Record<S[number], string>) => string);
+  /** Log this schedule's reply with its `completed` line (default true) — set `false` for a sensitive job. */
+  logReply?: boolean;
   /**
    * Env vars this schedule needs (`["SLACK_DIGEST_CHANNEL"]`), typed into the `prompt` builder.
    * `deploy` carries them and the scheduler refuses to start while one is unset, naming this file

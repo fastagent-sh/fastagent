@@ -561,6 +561,19 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(JSON.stringify(stored)).not.toContain("digest");
   });
 
+  it("logReply: false drops the answer and keeps the fire's own lines", async () => {
+    // The lever `FASTAGENT_LOG_LEVEL` cannot be: a sensitive job stops publishing what it read, while `firing` and
+    // `completed` stay — those are what an operator watches a schedule with.
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const { agent } = recordingAgent([{ type: "text", delta: "the inbox says 12345" }, { type: "completed" }]);
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly({ logReply: false }), slot });
+    expect(logs.join("\n")).toMatch(/job completed \(\d+ms\)$/m);
+    expect(logs.join("\n")).toContain("job firing");
+    expect(logs.join("\n")).not.toContain("inbox says");
+  });
+
   it("caps the logged reply, so one huge turn cannot evict the diagnostics around it", async () => {
     // A reply is model output — a turn that echoes a file it read is hundreds of kilobytes, and the rotation window
     // it now lives in is finite. The line says how much it dropped rather than pretending that was the whole reply.

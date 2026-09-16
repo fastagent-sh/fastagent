@@ -188,7 +188,9 @@ export function fireScheduleOnce(opts: {
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt, true);
+    // Default true: an unattended turn's answer is seen by nobody otherwise. An author turns it off per schedule
+    // (`defineSchedule({ logReply: false })`) when that answer is the sensitive part.
+    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt, s.logReply ?? true);
     settleClaim(stateRoot, s.name, slot, r.failed ? "failed" : "completed", r.ms);
     return { fired: true, failed: r.failed, ms: r.ms };
   }).pipe(Effect.uninterruptible);

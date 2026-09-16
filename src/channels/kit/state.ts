@@ -20,9 +20,10 @@ import { log } from "../../log.ts";
  * points at an attachment from before this process reads ENOENT, exactly as a `/tmp` path from the last boot does.
  *
  * WHAT IT CAN REACH is one channel KIND's directory, which is what keeps mount-time clearing safe under the
- * topologies this project supports (docs/design/core.md §9): `invoke`/`chat`/`tool` never reach a channel factory,
- * `dev`'s supervisor respawns only after the old worker has exited, and two processes serving DIFFERENT channels
- * touch different directories. What it does destroy is a live process's in-flight attachments when a second process
+ * topologies this project supports (docs/design/core.md §9, "the shipped file-backed implementations are
+ * single-process" and the `files/` paragraph above it): `invoke`/`chat`/`tool` never reach a channel factory,
+ * `dev`'s supervisor respawns only after the old worker has exited (`src/dev-supervisor.ts`), and two processes
+ * serving DIFFERENT channels touch different directories. What it does destroy is a live process's in-flight attachments when a second process
  * mounts THE SAME channel — which is the one topology already ruled out there, because it also means one ingress
  * credential in two places and no local guard can see that. Concretely: a second `fastagent start` on the same
  * definition clears the running one's files before it ever binds, so even the run that then dies on EADDRINUSE has

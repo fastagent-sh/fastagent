@@ -49,8 +49,10 @@ export function writeScheduleFile(path: string, value: unknown): void {
  *
  * The gate below reads only the newest, so this number is set by the QUESTION the history exists to answer: "did
  * last night's run silently fail?". At 512 a minute cron keeps ~8.5 hours, a five-minute one ~1.8 days, an hourly
- * one ~3 weeks. A claim is one short line, so the whole window is tens of kilobytes — still bounded by construction,
- * which is the property that matters, rather than by a retention policy someone has to run.
+ * one ~3 weeks. The cost is 512 FILES and inodes per schedule, not their contents: each claim is one short line
+ * (~25 KB of bytes in total) but occupies a block, so budget ~2 MiB per schedule on a 4 KiB-block filesystem
+ * (ext4/overlayfs/EFS). Still bounded by construction, which is the property that matters, rather than by a
+ * retention policy someone has to run — but raise this constant by file count, not by byte count.
  *
  * Pruning removes the OLDEST names only, so the newest claim never goes — which is what keeps the gate working
  * past the window.

@@ -38,13 +38,18 @@ export async function loadSchedules(dir: string): Promise<{
       if (declaration.error !== undefined) throw new Error(declaration.error);
       const err = cronError(s.cron, s.tz);
       if (err) throw new Error(`${label}: invalid cron/tz — ${err}`);
+      // Checked, not coerced: `logReply: "false"` is truthy, and silently publishing the reply of a schedule whose
+      // author meant to keep it out of the logs is the one mistake this option exists to prevent.
+      if (s.logReply !== undefined && typeof s.logReply !== "boolean") {
+        throw new Error(`${label}: logReply must be a boolean`);
+      }
       // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`), so anything that could
       // leave that directory is refused here — where the author sees which file is wrong — rather than deeper.
       if (!isSafeScheduleName(name)) {
         throw new Error(`${label}: a schedule name cannot be ".", ".." or contain a path separator`);
       }
       if (byName.has(name)) throw new Error(`${label}: duplicate schedule name "${name}" — kept the first`);
-      byName.set(name, { name, cron: s.cron, tz: s.tz, prompt: s.prompt });
+      byName.set(name, { name, cron: s.cron, tz: s.tz, prompt: s.prompt, logReply: s.logReply });
       secrets.set(name, declaration.secrets);
     } catch (error) {
       failures.push({ label, file, message: (error as Error).message });
