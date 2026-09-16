@@ -564,14 +564,17 @@ is a WARN line where a duplicate delivery is INFO).
 Moving the narrative into the log moved two things with it, and both are properties of the design
 rather than accidents of it:
 
-- **Its readership.** A reply written to `<stateRoot>` was readable by whoever could read the agent's
-  volume; a reply written to stdout at `info` is readable by whoever can read the deployment's logs —
-  `docker logs`, journald, a platform aggregator, CloudWatch under a retention policy an operator was
-  just told to set. A scheduled turn can say anything the agent read, so this widens who sees that.
-  There is no separate switch: the level (`FASTAGENT_LOG_LEVEL`) is the only lever, and it is all-or-
-  nothing for `info`. The trade is deliberate — an unattended turn that fails silently is the failure
-  this whole area exists to prevent, and a record only the volume holds is one nobody reads until
-  after the fact.
+- **Its readership, and therefore WHOSE turn gets logged.** A reply written to `<stateRoot>` was
+  readable by whoever could read the agent's volume; a reply written to stdout at `info` is readable by
+  whoever can read the deployment's logs — `docker logs`, journald, a platform aggregator, CloudWatch
+  under a retention policy an operator was just told to set. A CRON fire can say anything the agent
+  read, and it is logged anyway because nobody is watching that turn: its `schedule:<name>` session has
+  no human in it, so the log is the only place its answer ever appears. A WAKE-UP is the opposite case
+  and is NOT logged with its reply: it runs in the session that scheduled it — a Telegram group, a
+  Feishu thread — where the answer is delivered to the people in that conversation, so copying it into
+  the operator's log would buy no diagnosis and widen the audience of a private exchange. There is no
+  per-agent switch either way: the level (`FASTAGENT_LOG_LEVEL`) is the only lever, and it is
+  all-or-nothing for `info`.
 - **Its retention, which is now independent of the outcome's.** The claims answer "did last night's run
   fail?" for as far back as 512 fires reach (~3 weeks hourly); the log answers "why" for as long as
   that host keeps logs, which on Fly and Railway is typically shorter. A `failed` row can therefore

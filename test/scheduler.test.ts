@@ -158,6 +158,30 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(logs).toEqual([]);
   });
 
+  it("a duration that is not a number reads as NO duration, never as 0ms", async () => {
+    // The third field can be torn by a half-written settle. `0` would print as a turn that really did finish
+    // instantly, which is the one value this format refuses to invent — the same rule an untimed fire follows.
+    const root = await freshRoot();
+    const dir = join(root, "schedule", "claims", "job");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), "2026-07-07T10:00:00.000Z completed 12x45");
+    expect(readFires(root, "job")[0]).toMatchObject({ outcome: "completed" });
+    expect(readFires(root, "job")[0]).not.toHaveProperty("ms");
+  });
+
+  it("re-settling a claim leaves no tail of the longer line it replaced", async () => {
+    // `completed 12345` settled again as the shorter `interrupted` would otherwise leave `45` behind, and the next
+    // reader parses whatever follows the outcome as this claim's duration — inventing a turn that took 45ms.
+    const root = await freshRoot();
+    const slot = new Date("2026-07-07T10:00:00.000Z");
+    seedClaim(root, "job", slot.toISOString(), undefined, false);
+    settleClaim(root, "job", slot, "completed", 12345);
+    expect(readFires(root, "job")[0]).toMatchObject({ outcome: "completed", ms: 12345 });
+    settleClaim(root, "job", slot, "interrupted");
+    expect(readFires(root, "job")[0]).toMatchObject({ outcome: "interrupted" });
+    expect(readFires(root, "job")[0]).not.toHaveProperty("ms");
+  });
+
   it("an unusable claim stamp falls back to the slot instant — catch-up may repeat, never skip", async () => {
     // The claim's content is now what catch-up resumes from, so a truncated or corrupt stamp must degrade in the
     // safe direction: the slot in the file name is the earliest the fire can have happened.
@@ -287,6 +311,29 @@ describe("schedule/scheduler: fire algorithm", () => {
       /^\[wake-up [0-9a-f-]+ fired — YOUR self-scheduled turn, not a user message\] resume$/,
     );
     expect(listWakeups(root)).toHaveLength(0); // claimed + fired, not left pending
+    s.stop();
+  });
+
+  it("a wake-up's ANSWER stays in its conversation — the log gets the outcome, not the reply", async () => {
+    // The opposite case from a cron fire: this turn runs in the session that scheduled it, where humans read the
+    // answer. Logging it would copy a private exchange into the operator's log stream for no diagnostic gain.
+    const root = await freshRoot();
+    addWakeup(
+      root,
+      { session: "conv-9", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const { agent, calls } = recordingAgent([
+      { type: "text", delta: "your bank balance is 12345" },
+      { type: "completed" },
+    ]);
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start();
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    await vi.waitFor(() => expect(logs.some((l) => /wake \w+ completed \(\d+ms\)/.test(l))).toBe(true));
+    expect(logs.join("\n")).not.toContain("bank balance");
     s.stop();
   });
 

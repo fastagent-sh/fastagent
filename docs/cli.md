@@ -239,12 +239,13 @@ Read-only.
 **WHAT a run said and WHY a failed one failed are not here — they are log lines** (`fastagent logs`,
 `docker logs`, journald), and two consequences follow that this command cannot fix for you:
 
-- **Its readers are the log's readers.** A completed fire logs up to 2000 characters of the turn's reply at
-  `info`, which is `start`'s default level — so whatever a scheduled turn read (an inbox, a customer
-  record, a token in some API response) is visible to everyone with access to that log stream, including a
-  platform's aggregator. If that is not acceptable for a given agent, keep its scheduled turns from
-  answering with the sensitive part; `FASTAGENT_LOG_LEVEL=warn` silences it but takes every other `info`
-  line with it.
+- **Its readers are the log's readers.** A completed CRON fire logs up to 2000 characters of the turn's
+  reply at `info`, which is `start`'s default level — so whatever that unattended turn read (an inbox, a
+  customer record, a token in some API response) is visible to everyone with access to that log stream,
+  including a platform's aggregator. If that is not acceptable for a given agent, keep its scheduled turns
+  from answering with the sensitive part; `FASTAGENT_LOG_LEVEL=warn` silences it but takes every other
+  `info` line with it. A self-scheduled **wake-up** logs only its outcome: its answer goes to the
+  conversation that scheduled it, and that is where it stays.
 - **The two retention windows are independent, and the log's is usually the shorter one.** This history can
   reach ~3 weeks for an hourly schedule, while Fly's built-in log search covers a short recent window and
   Railway's depends on the plan (often under a week). A `failed` row whose explaining log line has aged out

@@ -307,6 +307,16 @@ describe("cli papercuts", () => {
     const empty = await run(["schedule", "history", "daily", dir, "--json"]);
     expect(empty.code).toBe(0);
     expect(JSON.parse(empty.stdout)).toEqual([]);
+
+    // Unreadable state is a THIRD case, and it is the operator's to fix: a read-only command says so in one line
+    // rather than printing the Node stack `readFires` throws for the serving boot's benefit.
+    await mkdir(join(dir, "fastagent", ".state", "schedule", "claims"), { recursive: true });
+    await writeFile(join(dir, "fastagent", ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
+    const broken = await run(["schedule", "history", "daily", dir, "--json"]);
+    expect(broken.code).toBe(1);
+    expect(broken.stdout).toBe("");
+    expect(broken.stderr).toMatch(/fired-slot claims for "daily" are unreadable/);
+    expect(broken.stderr).not.toMatch(/at listClaims/); // no stack
   });
 
   it("an unknown name still reports the file that failed to load — that IS why the name is missing", async () => {

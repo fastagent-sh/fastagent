@@ -389,7 +389,10 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and re
       expect(s.stop(), kind).toBeUndefined();
       expect(abort, kind).not.toHaveBeenCalled();
       expect(lease.tryAcquire(sessionId), kind).toBeNull();
-      const reported = () => logs.filter((l) => /completed \(\d+ms\): done/.test(l));
+      // A cron fire's line carries its reply; a wake-up's carries only the outcome (its answer belongs to the
+      // conversation that scheduled it), so the shared observable is the completion itself.
+      const reported = () =>
+        logs.filter((l) => new RegExp(`completed \\(\\d+ms\\)${kind === "cron" ? ": done" : ""}`).test(l));
       expect(reported(), kind).toEqual([]);
       finish.resolve();
       await vi.waitFor(() => expect(reported(), kind).toHaveLength(1));

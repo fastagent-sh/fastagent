@@ -1,5 +1,15 @@
 /** Durable scheduler state under `<stateRoot>/schedule/`. */
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
@@ -112,36 +122,42 @@ const isOutcome = (s: string | undefined): s is FireOutcome =>
  * file is GONE — a concurrent claim pruned it between the listing and this read.
  *
  * That case is distinct from "exists but unsettled" and must stay distinct: the reconciler settles what it finds
- * unsettled, and `settleClaim` CREATES the file it writes, so treating a pruned claim as unsettled would resurrect
- * an old slot and invent an `interrupted` fire for a run that finished long ago.
+ * unsettled, so treating a pruned claim as unsettled would invent an `interrupted` fire for a run that finished long
+ * ago.
  *
  * An unusable stamp — empty because the process died between the create and the write, or not a date at all — falls
  * back to the slot instant in the file name. That is the earliest moment the fire can have happened, so the only
  * degradation is catching up one run that already ran: too many rather than too few.
  */
-function readClaim(dir: string, name: string): Fire | undefined {
+function parseClaim(raw: string, dir: string, name: string): Fire {
   const slot = slotInstant(name);
-  let raw = "";
-  try {
-    raw = readFileSync(join(dir, name), "utf8").trim();
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw e; // unreadable state (EACCES, EIO): the boot fails on it rather than running blind
-  }
-  const [stamp, outcome, ms] = raw.split(/\s+/);
+  const [stamp, outcome, ms] = raw.trim().split(/\s+/);
   const fire: Fire = { slot, firedAt: slot };
   if (stamp && !Number.isNaN(Date.parse(stamp))) fire.firedAt = stamp;
   else if (stamp) log.warn(`[schedule] claim ${join(dir, name)} carries an unreadable stamp — using the slot instant`);
   if (isOutcome(outcome)) {
     fire.outcome = outcome;
-    // A settled fire may still carry NO duration: an `interrupted` one was never timed by anybody (see
-    // `settleClaim`). Absent stays absent — `0` here would be a value a fast turn really produces.
-    if (ms !== undefined && ms !== "") fire.ms = Number(ms) || 0;
+    // A settled fire may carry NO duration: an `interrupted` one was never timed by anybody (see `settleClaim`), and
+    // a torn write can leave a third field that is not a number. Both stay ABSENT — coercing to `0` would print as a
+    // turn that really did finish instantly, which is the one value this format refuses to invent.
+    const took = Number(ms);
+    if (ms !== undefined && ms !== "" && Number.isFinite(took)) fire.ms = took;
   } else if (outcome) {
     // A word we do not know is not an outcome: the fire reads as unsettled, which the next boot reports.
     log.warn(`[schedule] claim ${join(dir, name)} carries an unknown outcome — reading it as unsettled: ${outcome}`);
   }
   return fire;
+}
+
+function readClaim(dir: string, name: string): Fire | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(join(dir, name), "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw e; // unreadable state (EACCES, EIO): the boot fails on it rather than running blind
+  }
+  return parseClaim(raw, dir, name);
 }
 
 /**
@@ -252,37 +268,44 @@ export function readFires(stateRoot: string, name: string): Fire[] {
  *
  * NOT `writeFileAtomic`: its temp would land in the directory `claimSlot` lists (`<slot>.tmp` is not a claim name,
  * so `listClaims` skips a leftover one, but the rename would still be a second writer of the same directory for no
- * gain). A torn write degrades the way an unusable stamp already does (`readClaim`) — the slot is re-read as
+ * gain) — and a rename would re-create a name a concurrent prune had just removed, which the open below exists to
+ * prevent. A torn write degrades the way an unusable stamp already does (`parseClaim`) — the slot is re-read as
  * unsettled, which is visible, not lost.
  */
 export function settleClaim(stateRoot: string, name: string, slot: Date, outcome: FireOutcome, ms?: number): void {
   const dir = claimDir(stateRoot, name);
   const file = claimName(slot);
-  let claimed: Fire | undefined;
+  let fd: number;
   try {
-    claimed = readClaim(dir, file);
+    // `r+`, so this can only ever write a claim that EXISTS. A concurrent `claimSlot` may prune this slot while its
+    // turn is still running; reading first and then writing by path would put the pruned file back — a fire in the
+    // history that this state root had already decided to forget. Held open, a later unlink leaves the writes on a
+    // dead inode instead, which is exactly the outcome being dropped along with the slot.
+    fd = openSync(join(dir, file), "r+");
   } catch (e) {
-    // An unreadable claim (EACCES, EIO) — `readClaim` throws it so a BOOT fails rather than running blind, but this
-    // is after the turn: the fire happened, and killing the schedule's loop over its bookkeeping would cost every
-    // later fire too. Reported, and the next boot reads the slot as interrupted.
-    log.warn(`[schedule] ${name}: could not read the claim for slot ${file} to settle it: ${String(e)}`);
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return; // pruned: the outcome goes with the slot, silently
+    // EACCES/EIO. The fire happened; killing the schedule's loop over its bookkeeping would cost every later fire
+    // too, so this is reported and the next boot reads the slot as interrupted.
+    log.warn(`[schedule] ${name}: could not open the claim for slot ${file} to settle it: ${String(e)}`);
     return;
   }
-  // Gone means a concurrent claimer pruned this slot while its turn was still running. Writing would RE-CREATE the
-  // file pruning just removed — the same rule `readClaim` states for the reconciler, applied to its other caller.
-  // The outcome is lost with the slot, which is what pruning already decided. Deliberately OUTSIDE the writes'
-  // catch: a bug here must surface as a throw, not as a warn that looks exactly like a full disk.
-  if (claimed === undefined) return;
   try {
     // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from. A duration is written only
     // when one was measured: nobody timed an `interrupted` fire, and writing `0` for it would print as a turn that
     // took no time — the same false value the history deliberately leaves blank.
+    const claimed = parseClaim(readFileSync(fd, "utf8"), dir, file);
     const took = ms === undefined ? "" : ` ${Math.round(ms)}`;
-    writeFileSync(join(dir, file), `${claimed.firedAt} ${outcome}${took}`);
+    const line = `${claimed.firedAt} ${outcome}${took}`;
+    // Truncate first: settling `completed 12345` as the shorter `interrupted` would otherwise leave the old tail
+    // behind, and the next reader would parse those bytes as this claim's third field.
+    ftruncateSync(fd, 0);
+    writeSync(fd, line, 0);
   } catch (e) {
-    // Housekeeping, like the pruning below: the turn itself already happened, and the worst case is that the next
-    // boot reports this fire as interrupted.
+    // Housekeeping: the turn itself already happened, and the worst case is that the next boot reports this fire as
+    // interrupted.
     log.warn(`[schedule] ${name}: could not record the ${outcome} outcome of slot ${file}: ${String(e)}`);
+  } finally {
+    closeSync(fd);
   }
 }
 

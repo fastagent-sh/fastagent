@@ -72,8 +72,10 @@ const WAKEUP_POLL_MS = 30_000;
  * uncapped line would evict the diagnostics around it: exactly what moving the reply into the log was for.
  * The full text is not promised anywhere; the length is, so a truncated line says what it dropped.
  *
- * This also decides WHO reads a scheduled turn's answer: the log's audience, which on a deployment is wider than the
- * state volume's was (docs/design/core.md §8 states the trade and the only lever, `FASTAGENT_LOG_LEVEL`).
+ * This also decides WHO reads the answer: the log's audience, which on a deployment is wider than the state volume's
+ * was (docs/design/core.md §8 states the trade and the only lever, `FASTAGENT_LOG_LEVEL`). That trade is made for a
+ * CRON fire, whose turn nobody is watching — which is why `runTurn` takes `logReply` rather than doing this for
+ * every caller: see the wake-up path.
  */
 const REPLY_LOG_LIMIT = 2000;
 
@@ -89,8 +91,15 @@ function replySuffix(reply: string): string {
   return `: ${safe}… (${text.length} chars)`;
 }
 
-/** The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup. */
-function runTurn(agent: Agent, label: string, session: string, prompt: string) {
+/**
+ * The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup.
+ *
+ * `logReply` is not a preference: a CRON fire runs unattended in its own `schedule:<name>` session, so the log is the
+ * only place its answer is ever seen. A WAKE-UP runs in the session that asked for it — a Telegram group, a Feishu
+ * thread, a Slack channel — where a human reads the answer in the conversation itself. Copying that into the
+ * operator's log buys no diagnosis and moves private conversation content into a wider audience.
+ */
+function runTurn(agent: Agent, label: string, session: string, prompt: string, logReply: boolean) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const startedAt = clock.currentTimeMillisUnsafe();
@@ -118,7 +127,7 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
           // The reply goes to the LOG, not to disk: it is the turn's narrative, and rotating a narrative is the
           // platform's job (12-factor XI): a log has a layer whose job is to bound it — a platform's shipper, or
           // the `logging:` block `deploy docker` generates — and a file we append to forever does not.
-          else log.info(`[schedule] ${label} completed (${elapsed()}ms)${replySuffix(result.reply)}`);
+          else log.info(`[schedule] ${label} completed (${elapsed()}ms)${logReply ? replySuffix(result.reply) : ""}`);
           return { ...result, ms: elapsed() };
         },
         onFailure: (error) => {
@@ -176,7 +185,7 @@ export function fireScheduleOnce(opts: {
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
+    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt, true);
     settleClaim(stateRoot, s.name, slot, r.failed ? "failed" : "completed", r.ms);
     return { fired: true, failed: r.failed, ms: r.ms };
   }).pipe(Effect.uninterruptible);
@@ -261,7 +270,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         () =>
           Effect.gen(function* () {
             const label = `wake ${w.id.slice(0, 8)}`;
-            const r = yield* runTurn(agent, label, w.session, wakeEnvelope(w));
+            // No reply in the log: this turn's answer belongs to the conversation that scheduled it (see `runTurn`).
+            const r = yield* runTurn(agent, label, w.session, wakeEnvelope(w), false);
             let kept = false;
             if (r.busy && !w.cron) {
               kept = yield* Effect.try({

@@ -5,7 +5,7 @@ import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { isSafeScheduleName, readFires } from "../../schedule/state.ts";
+import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
@@ -25,7 +25,15 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   if (!isSafeScheduleName(name)) {
     failStartup(new Error(`"${name}" cannot be a schedule name (no path separators, "." or "..")`));
   }
-  const fires = readFires(stateRoot, name);
+  // `readFires` throws a raw fs error on unreadable state, because its other caller is the serving boot, which must
+  // fail rather than arm a schedule it cannot read. This caller is a read-only CLI command: the same fact is an
+  // operator's to fix, so it exits the way every other refusal in this file does instead of printing a Node stack.
+  let fires: Fire[];
+  try {
+    fires = readFires(stateRoot, name);
+  } catch (e) {
+    failStartup(new Error(`the fired-slot claims for "${name}" are unreadable (state: ${stateRoot}): ${String(e)}`));
+  }
   if (json) {
     console.log(JSON.stringify(fires, null, 2));
     return;
