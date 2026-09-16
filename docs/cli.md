@@ -233,37 +233,21 @@ Prints one schedule's recent fires: when each fired, its outcome (`completed` / 
 rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start of a
 **resident** scheduler (`start`, `dev`, `deploy docker|fly|railway`) records it.
 
-A fire reads `unreported` when it is still running, when the state root was written before this format, or
-when nothing will ever settle it. That last case is AgentCore: it delivers slots from an external clock, so
-no boot of it runs the reconciler — and it is also the host that reclaims its container most often, so an
-interrupted fire there stays `unreported` rather than becoming `interrupted`. A failed settle (a full or
-read-only volume, reported as a warning at the time) has the same ending unless that claim is still the
-newest one at the next boot.
+A fire reads `unreported` when nothing settled it: one still running, one from a state root written before
+this format (there is no migration — those rows age out, and `rm -r <state root>/schedule/claims/` starts
+the history empty), or one nothing will ever settle. That last case is AgentCore: it delivers slots from an
+external clock, so no boot of it runs the reconciler, on the host that reclaims its container most often.
 
 The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-On a state root written by an earlier version, the fires already in that window carry no outcome and print
-as `unreported` — there is no migration, and those rows age out as new fires arrive. Only the newest of
-them is settled, as `interrupted`: a schedule runs one turn at a time, so the newest unsettled claim is the
-one a killed process was actually in. Delete `<state root>/schedule/claims/` if you would rather start the
-history empty.
-
-**WHAT a run said is not here, and not in the logs either.** Every fire runs in a session
-(`schedule:<name>` for a cron), persisted under `<state root>/sessions/` like any other conversation — so
-the turn's own text is already stored exactly once, and `fastagent attach schedule:<name>` reads it. The
-history answers "did it happen and did it fail"; the session answers "what did it say".
-
-**WHY a failed one failed is a log line** (`fastagent logs`, `docker logs`, journald), and that window is
-independent of this one: the claims reach ~3 weeks for an hourly schedule, while Fly's built-in log search
-covers a short recent window and Railway's depends on the plan (often under a week). A `failed` row whose
-explaining log line has aged out leaves you re-running the schedule to see the error again. Ship logs
-somewhere durable if that matters. On Docker the compose file pins `json-file` to `max-size: 10m` /
-`max-file: 3` (Docker's default never rotates); on AgentCore the retention period is yours to set entirely
-(CloudWatch keeps log data indefinitely — the deploy runbook and `--run` both print the
-`put-retention-policy` command).
+**WHAT a run said is not here.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
+under `<state root>/sessions/` like any other conversation, so the turn's text is stored once and
+`fastagent attach schedule:<name>` reads it. **WHY a failed one failed is a log line** — and that window is
+the host's, not this one's: claims can reach ~3 weeks while Fly's and Railway's log retention is typically
+days, so a `failed` row can outlive its own explanation ([Deploy](deploy.md) covers per-host retention).
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

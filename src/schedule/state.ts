@@ -45,17 +45,12 @@ export function writeScheduleFile(path: string, value: unknown): void {
 
 /**
  * How many claims to keep per schedule — and therefore how far back `fastagent schedule history` can see, since
- * the claims ARE the history.
+ * the claims ARE the history. The gate below reads only the newest, so this number answers the history's question,
+ * "did last night's run silently fail?": at 512 a minute cron keeps ~8.5 hours, an hourly one ~3 weeks.
  *
- * The gate below reads only the newest, so this number is set by the QUESTION the history exists to answer: "did
- * last night's run silently fail?". At 512 a minute cron keeps ~8.5 hours, a five-minute one ~1.8 days, an hourly
- * one ~3 weeks. The cost is 512 FILES and inodes per schedule, not their contents: each claim is one short line
- * (~25 KB of bytes in total) but occupies a block, so budget ~2 MiB per schedule on a 4 KiB-block filesystem
- * (ext4/overlayfs/EFS). Still bounded by construction, which is the property that matters, rather than by a
- * retention policy someone has to run — but raise this constant by file count, not by byte count.
- *
- * Pruning removes the OLDEST names only, so the newest claim never goes — which is what keeps the gate working
- * past the window.
+ * Raise it by FILE COUNT, not by byte count: 512 short lines are ~25 KB of content but ~2 MiB of blocks and 512
+ * inodes per schedule on a 4 KiB-block filesystem. Pruning removes the OLDEST names only, so the newest claim never
+ * goes — which is what keeps the gate working past the window.
  */
 const KEEP_CLAIMS = 512;
 

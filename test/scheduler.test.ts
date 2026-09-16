@@ -120,8 +120,8 @@ describe("schedule/scheduler: fire algorithm", () => {
     // outcome, turning runs that actually succeeded into `interrupted`.
     const root = await freshRoot();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    seedClaim(root, "job", "2026-07-07T08:00:00.000Z", undefined, false); // claimed, never settled
-    seedClaim(root, "job", "2026-07-07T09:00:00.000Z", undefined, false);
+    seedClaim(root, "job", "2026-07-07T08:00:01.000Z", "2026-07-07T08:00:00.000Z"); // a completed fire
+    seedClaim(root, "job", "2026-07-07T09:00:00.000Z", undefined, false); // claimed, never settled
     seedClaim(root, "job", "2026-07-07T10:00:00.000Z", undefined, false); // the fire that was actually killed
     const { agent } = recordingAgent();
     const s = createScheduler({
@@ -131,7 +131,7 @@ describe("schedule/scheduler: fire algorithm", () => {
       now: () => new Date("2026-07-07T10:30:00Z"),
     });
     s.start();
-    expect(outcomes(root, "job")).toEqual([undefined, undefined, "interrupted"]);
+    expect(outcomes(root, "job")).toEqual(["completed", undefined, "interrupted"]);
     s.stop();
   });
 
@@ -215,36 +215,27 @@ describe("schedule/scheduler: fire algorithm", () => {
     ["an earlier format's bare timestamp", "2026-07-07T10:00:00.000Z"],
     ["JSON that is not a record", "null"],
     ["JSON that is a number", "12"],
-  ])("content that is not a claim record (%s) reads as UNSETTLED, and never throws", async (_kind, content) => {
-    // The write is deliberately not atomic, so a torn claim is a real state — and `null` parses FINE, so reading it
-    // as a record would throw on the synchronous boot path: a service that does not start, over one unreadable file.
-    // Every one of these degrades the same way, to the slot instant in the file NAME.
-    const root = await freshRoot();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const dir = join(root, "schedule", "claims", "job");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), content);
-    const fire = readFires(root, "job")[0];
-    expect(fire).toMatchObject({ firedAt: "2026-07-07T10:00:00.000Z" });
-    expect(fire).not.toHaveProperty("outcome"); // so the next boot settles it as interrupted, which is true
-    expect(fire).not.toHaveProperty("ms");
-  });
-
-  it("a state root full of an earlier format's claims does not shout at the operator", async () => {
-    // There is no migration, so every one of the 512 retained claims can be the old bare timestamp. The consequence
-    // is already visible — every row reads `unreported` — so the per-file detail belongs at debug, not in a wall of
-    // warnings that reads like corruption.
-    const root = await freshRoot();
-    const warns: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
-    const dir = join(root, "schedule", "claims", "job");
-    mkdirSync(dir, { recursive: true });
-    for (const hour of ["08", "09", "10"]) {
-      writeFileSync(join(dir, `2026-07-07T${hour}-00-00-000Z`), `2026-07-07T${hour}:00:00.000Z`);
-    }
-    expect(readFires(root, "job").map((f) => f.outcome)).toEqual([undefined, undefined, undefined]);
-    expect(warns).toEqual([]);
-  });
+  ])(
+    "content that is not a claim record (%s) reads as UNSETTLED, never throws, never shouts",
+    async (_kind, content) => {
+      // The write is deliberately not atomic, so a torn claim is a real state — and `null` parses FINE, so reading it
+      // as a record would throw on the synchronous boot path: a service that does not start, over one unreadable file.
+      // Every one of these degrades the same way, to the slot instant in the file NAME.
+      const root = await freshRoot();
+      const warns: string[] = [];
+      vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+      const dir = join(root, "schedule", "claims", "job");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), content);
+      const fire = readFires(root, "job")[0];
+      expect(fire).toMatchObject({ firedAt: "2026-07-07T10:00:00.000Z" });
+      expect(fire).not.toHaveProperty("outcome"); // so the next boot settles it as interrupted, which is true
+      expect(fire).not.toHaveProperty("ms");
+      // And quietly: with no migration every one of the 512 retained claims can be the old format, and a wall of
+      // warnings reads like corruption. The consequence is already visible — each of these rows prints `unreported`.
+      expect(warns).toEqual([]);
+    },
+  );
 
   it("a duration that is not a number reads as NO duration, never as 0ms", async () => {
     // `0` would print as a turn that really did finish instantly, which is the one value this record will not
@@ -283,25 +274,6 @@ describe("schedule/scheduler: fire algorithm", () => {
     // An empty file (killed between the create and the write) takes the same path, without the warning.
     seedClaim(root, "other", "", "2026-07-07T11:00:00.000Z", false);
     expect(lastFire(root, "other")).toBe("2026-07-07T11:00:00.000Z");
-  });
-
-  it("reports the unsettled claim only — the settled fires beside it stay as they are", async () => {
-    // Each claim carries its own outcome, so a completed history neither hides the fire that came after it and never
-    // reported, nor gets rewritten by the reconciler.
-    const root = await freshRoot();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    seedClaim(root, "job", "2026-07-07T08:00:01Z", "2026-07-07T08:00:00Z"); // the PREVIOUS, completed fire
-    seedClaim(root, "job", "2026-07-07T10:00:00.000Z", undefined, false); // the fire that was killed
-    const { agent } = recordingAgent();
-    const s = createScheduler({
-      agent,
-      stateRoot: root,
-      schedules: [hourly()],
-      now: () => new Date("2026-07-07T10:30:00Z"),
-    });
-    s.start();
-    expect(outcomes(root, "job")).toEqual(["completed", "interrupted"]);
-    s.stop();
   });
 
   it("refuses a slot older than the newest claim, past the pruning window (a stale platform retry)", async () => {

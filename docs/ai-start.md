@@ -377,7 +377,7 @@ These commands read the selected local state root, not a deployed host's state.
 
 `fire` runs one real turn immediately and prints its reply without advancing the cron fire state.
 It can still perform real tool side effects and update conversation history; it is not a dry run.
-A serving-time fire records its outcome in the slot it claimed, and what it said in the service logs.
+A serving-time fire records its outcome in the slot it claimed; what it said is in its session, like any other turn.
 `invoke` and `fire` do not mount the serving-time `wake` tool or prove that a future timer fires.
 
 Enable `selfSchedule: true` in the existing config only when autonomous follow-ups are wanted. Then test

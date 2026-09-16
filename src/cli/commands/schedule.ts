@@ -14,7 +14,7 @@ import { failStartup, placementOrExit } from "../fail.ts";
  * long it took.
  *
  * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
- * what the run SAID is a log line, and the logs are where a deployment already rotates them.
+ * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's.
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
@@ -39,9 +39,7 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     return;
   }
   if (fires.length === 0) {
-    // No special case for "wake": `discover.ts` no longer reserves that name, so a schedule may be called it — and a
-    // hint saying "wake-ups are not recorded here" would be a wrong explanation for an author's own `wake` schedule
-    // that simply has not fired yet.
+    // No special case for "wake": it is an ordinary schedule name now (`discover.ts` stopped reserving it).
     console.error(`no recorded fires for "${name}" (state: ${stateRoot})`);
     return;
   }
@@ -55,11 +53,9 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     const took = f.ms === undefined ? "" : `${f.ms}ms`;
     console.log(`${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}`);
   }
-  const scope =
-    fires.length > shown.length
-      ? `the last ${shown.length} of ${fires.length} fires — --json for all`
-      : `the last ${shown.length} fires`;
-  console.error(`(${scope}; what each run said is in the service logs)`);
+  if (fires.length > shown.length) {
+    console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
+  }
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */
