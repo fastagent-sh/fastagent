@@ -313,7 +313,9 @@ export function settleClaim(stateRoot: string, name: string, slot: Date, outcome
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return; // pruned: the outcome goes with the slot, silently
     // EACCES/EIO. The fire happened; killing the schedule's loop over its bookkeeping would cost every later fire
-    // too, so this is reported and the next boot reads the slot as interrupted.
+    // too, so this is reported instead. The outcome is then lost: the slot stays `unreported` in the history, and
+    // the next boot settles it as `interrupted` ONLY if it is still the newest claim by then (`markInterruptedFire`
+    // reads that one) — a later fire on the same schedule leaves it unreported for good.
     log.warn(`[schedule] ${name}: could not open the claim for slot ${file} to settle it: ${String(e)}`);
     return;
   }
@@ -329,8 +331,9 @@ export function settleClaim(stateRoot: string, name: string, slot: Date, outcome
     ftruncateSync(fd, 0);
     writeSync(fd, line, 0);
   } catch (e) {
-    // Housekeeping: the turn itself already happened, and the worst case is that the next boot reports this fire as
-    // interrupted.
+    // Housekeeping: the turn itself already happened. The outcome is lost the same way the open failure above
+    // loses it — `unreported` in the history, settled as `interrupted` by the next boot only while it is still the
+    // newest claim.
     log.warn(`[schedule] ${name}: could not record the ${outcome} outcome of slot ${file}: ${String(e)}`);
   } finally {
     closeSync(fd);

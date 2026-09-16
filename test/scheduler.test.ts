@@ -575,6 +575,37 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(logs.join("\n")).not.toContain("inbox says");
   });
 
+  it("a reply with newlines stays ONE line — a turn cannot forge a log record", async () => {
+    // `log.ts` prefixes only the first line, so an unfolded newline emits a second line byte-for-byte identical to a
+    // real record — and a scheduled turn's reply is untrusted by construction ("read the inbox and summarise").
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const forged = "all good\nERROR [schedule] daily failed (1ms): DISK ON FIRE";
+    const { agent } = recordingAgent([{ type: "text", delta: forged }, { type: "completed" }]);
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const line = logs.find((l) => /job completed/.test(l)) ?? "";
+    expect(line).not.toContain("\n");
+    expect(line).toContain("all good ERROR [schedule] daily failed (1ms): DISK ON FIRE"); // folded, not dropped
+    expect(logs.filter((l) => /^ERROR/.test(l))).toEqual([]); // nothing the turn wrote became its own record
+  });
+
+  it("a multi-line failure detail is folded and capped like a reply", async () => {
+    // The failure path is a record too, and a provider error carrying a stack is exactly the multi-line case.
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const { agent } = recordingAgent([
+      { type: "failed", retryable: false, details: `boom\n  at somewhere\n${"x".repeat(5000)}` },
+    ]);
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const line = logs.find((l) => /job failed/.test(l)) ?? "";
+    expect(line).not.toContain("\n");
+    expect(line).toContain("boom at somewhere");
+    expect(line).toContain("chars)"); // capped, and it says how much it dropped
+    expect(line.length).toBeLessThan(2500);
+  });
+
   it("caps the logged reply, so one huge turn cannot evict the diagnostics around it", async () => {
     // A reply is model output — a turn that echoes a file it read is hundreds of kilobytes, and the rotation window
     // it now lives in is finite. The line says how much it dropped rather than pretending that was the whole reply.

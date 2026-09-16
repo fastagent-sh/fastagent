@@ -225,12 +225,20 @@ only fires and logs. See the [API reference](./api-reference.md#schedule-authori
 fastagent schedule history <name> [dir] [--json]
 ```
 
-Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`,
-or `unreported` for a fire nothing has settled — one still running, or one from a state root written before
-this format), and how long it took (blank when nothing timed it — an `interrupted` fire was never timed by
-anybody). `interrupted` means the process stopped between claiming
-that slot and finishing its turn — a restart or rolling deploy landing mid-run. The slot stays skipped (it
-is not replayed), and the next start records it.
+Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`, or
+`unreported` for a fire nothing settled), and how long it took (blank when nothing timed it — an
+`interrupted` fire was never timed by anybody).
+
+`interrupted` means the process stopped between claiming that slot and finishing its turn — a restart or
+rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start of a
+**resident** scheduler (`start`, `dev`, `deploy docker|fly|railway`) records it.
+
+A fire reads `unreported` when it is still running, when the state root was written before this format, or
+when nothing will ever settle it. That last case is AgentCore: it delivers slots from an external clock, so
+no boot of it runs the reconciler — and it is also the host that reclaims its container most often, so an
+interrupted fire there stays `unreported` rather than becoming `interrupted`. A failed settle (a full or
+read-only volume, reported as a warning at the time) has the same ending unless that claim is still the
+newest one at the next boot.
 
 The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),

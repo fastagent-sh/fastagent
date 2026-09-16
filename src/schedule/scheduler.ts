@@ -82,16 +82,29 @@ const WAKEUP_POLL_MS = 30_000;
  */
 const REPLY_LOG_LIMIT = 2000;
 
-function replySuffix(reply: string): string {
-  const text = reply.trim();
-  if (text === "") return "";
-  if (text.length <= REPLY_LOG_LIMIT) return `: ${text}`;
-  const cut = text.slice(0, REPLY_LOG_LIMIT);
+/**
+ * THE tail of every line a turn contributes — its reply, its failure details, its thrown cause — as `: <text>`, or
+ * nothing when there is none to add.
+ *
+ * ONE LINE, ALWAYS. `log.ts` prefixes only the first line, so a newline anywhere in here emits a second line that is
+ * byte-for-byte a real record: `ERROR [schedule] daily failed (1ms): DISK ON FIRE` is something a scheduled turn's
+ * own reply can produce, and a scheduled turn's reply is untrusted by construction ("read the inbox and summarise").
+ * Collapsing whitespace also keeps the line-oriented consumers this design leans on — `docker logs`, journald,
+ * CloudWatch — reading one fire as one event.
+ *
+ * Capped for the same reason as the reply: this text lives in a finite rotation window, and a failure detail
+ * carrying a whole stack would evict the diagnostics around it.
+ */
+function turnDetail(text: string): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  if (one === "") return "";
+  if (one.length <= REPLY_LOG_LIMIT) return `: ${one}`;
+  const cut = one.slice(0, REPLY_LOG_LIMIT);
   // The limit counts UTF-16 units, so it can land inside a surrogate pair and log half an emoji as \uFFFD. Dropping
   // a trailing high surrogate is the whole fix; `channels/kit/text.ts`'s `codePointPrefix` is the same idea, but the
   // kit is importable only from `channels/<platform>/` (package-boundary.test.ts) and this is one line.
   const safe = /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
-  return `: ${safe}… (${text.length} chars)`;
+  return `: ${safe}… (${one.length} chars)`;
 }
 
 /**
@@ -126,16 +139,16 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string, l
     }).pipe(
       Effect.match({
         onSuccess: (result) => {
-          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms): ${result.failed}`);
+          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${turnDetail(result.failed)}`);
           // The reply goes to the LOG, not to disk: it is the turn's narrative, and rotating a narrative is the
           // platform's job (12-factor XI): a log has a layer whose job is to bound it — a platform's shipper, or
           // the `logging:` block `deploy docker` generates — and a file we append to forever does not.
-          else log.info(`[schedule] ${label} completed (${elapsed()}ms)${logReply ? replySuffix(result.reply) : ""}`);
+          else log.info(`[schedule] ${label} completed (${elapsed()}ms)${logReply ? turnDetail(result.reply) : ""}`);
           return { ...result, ms: elapsed() };
         },
         onFailure: (error) => {
           // An iterator throw violates SPEC MUST 2 and is never a replay-safe busy rejection.
-          log.error(`[schedule] ${label} errored (${elapsed()}ms): ${String(error.cause)}`);
+          log.error(`[schedule] ${label} errored (${elapsed()}ms)${turnDetail(String(error.cause))}`);
           return { busy: false, failed: String(error.cause), reply: "", ms: elapsed() };
         },
       }),

@@ -592,7 +592,9 @@ That occurrence finishes execution and settlement before its loop exits; no next
 process itself is not waited for, so a restart can still land between a cron claim and its settlement:
 the next `start()` reads the claims it is about to arm and settles an unsettled one as `interrupted`,
 with a warning — which also makes the check idempotent across boots. It is not re-fired — a turn that
-kills its own process would then replay on every boot — and external slot delivery skips the check. A
+kills its own process would then replay on every boot — and external slot delivery skips the check, so
+on AgentCore an interrupted fire stays `unreported` forever (there is no boot of a resident scheduler
+to reconcile it, and that host reclaims its container most often). A
 killed wake-up leaves nothing to reconcile: its claim removes it from the store before the turn starts.
 Waiting loops do not count as business work. Wake execution keeps its busy ownership through one-shot
 deferral and settlement, so the idle notification observes settled state.
