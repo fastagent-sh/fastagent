@@ -256,12 +256,22 @@ export function readFires(stateRoot: string, name: string): Fire[] {
 export function settleClaim(stateRoot: string, name: string, slot: Date, outcome: FireOutcome, ms: number): void {
   const dir = claimDir(stateRoot, name);
   const file = claimName(slot);
+  let claimed: Fire | undefined;
   try {
-    const claimed = readClaim(dir, file);
-    // Gone means a concurrent claimer pruned this slot while its turn was still running. Writing would RE-CREATE
-    // the file pruning just removed — the same rule `readClaim` states for the reconciler, applied to its other
-    // caller. The outcome is lost with the slot, which is what pruning already decided.
-    if (claimed === undefined) return;
+    claimed = readClaim(dir, file);
+  } catch (e) {
+    // An unreadable claim (EACCES, EIO) — `readClaim` throws it so a BOOT fails rather than running blind, but this
+    // is after the turn: the fire happened, and killing the schedule's loop over its bookkeeping would cost every
+    // later fire too. Reported, and the next boot reads the slot as interrupted.
+    log.warn(`[schedule] ${name}: could not read the claim for slot ${file} to settle it: ${String(e)}`);
+    return;
+  }
+  // Gone means a concurrent claimer pruned this slot while its turn was still running. Writing would RE-CREATE the
+  // file pruning just removed — the same rule `readClaim` states for the reconciler, applied to its other caller.
+  // The outcome is lost with the slot, which is what pruning already decided. Deliberately OUTSIDE the writes'
+  // catch: a bug here must surface as a throw, not as a warn that looks exactly like a full disk.
+  if (claimed === undefined) return;
+  try {
     // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from.
     writeFileSync(join(dir, file), `${claimed.firedAt} ${outcome} ${Math.round(ms)}`);
   } catch (e) {

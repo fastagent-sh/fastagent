@@ -45,10 +45,12 @@ it("nothing under src/ spells the attachments directory for itself", async () =>
     }
     return out;
   };
-  // BUILDING A PATH that ends in `files`, in either spelling drift takes — `join(x, "files")` and `${x}/files`.
-  // A bare `"files"` string is not the subject: a multipart field name or a `body["files"]` key would be reported
-  // under a message telling its author to call `attachmentsDir()`, which is the wrong instruction.
-  const spellings = [/\bjoin\([^)]*["']files["']\s*\)/, /\$\{[^}]*\}\/files\b/];
+  // BUILDING A PATH that contains `files`, in any spelling drift takes: `join(x, "files")`, the deeper
+  // `join(x, "files", chatId)` a channel writing its own per-conversation path would produce, `resolve(...)`, the
+  // formatter's multi-line form, and `${x}/files`. A bare `"files"` string is NOT the subject: a multipart field
+  // name or a `body["files"]` key would be reported under a message telling its author to call `attachmentsDir()`,
+  // which is the wrong instruction.
+  const spellings = [/\b(?:join|resolve)\([^)]*["']files["']/, /\$\{[^}]*\}\/files\b/];
   const offenders: string[] = [];
   for (const file of await walk("")) {
     if (file === owner) continue;

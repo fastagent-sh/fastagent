@@ -77,7 +77,12 @@ function replySuffix(reply: string): string {
   const text = reply.trim();
   if (text === "") return "";
   if (text.length <= REPLY_LOG_LIMIT) return `: ${text}`;
-  return `: ${text.slice(0, REPLY_LOG_LIMIT)}… (${text.length} chars)`;
+  const cut = text.slice(0, REPLY_LOG_LIMIT);
+  // The limit counts UTF-16 units, so it can land inside a surrogate pair and log half an emoji as \uFFFD. Dropping
+  // a trailing high surrogate is the whole fix; `channels/kit/text.ts`'s `codePointPrefix` is the same idea, but the
+  // kit is importable only from `channels/<platform>/` (package-boundary.test.ts) and this is one line.
+  const safe = /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+  return `: ${safe}… (${text.length} chars)`;
 }
 
 /** The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup. */

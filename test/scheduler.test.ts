@@ -144,12 +144,18 @@ describe("schedule/scheduler: fire algorithm", () => {
     // WRITES the file it settles, so without the check it would put the pruned slot back — and a resurrected claim
     // is a fire in the history that this state root had already decided to forget.
     const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const slot = new Date("2026-07-07T10:00:00.000Z");
     seedClaim(root, "job", slot.toISOString(), undefined, false);
     rmSync(join(root, "schedule", "claims", "job", "2026-07-07T10-00-00-000Z"));
     settleClaim(root, "job", slot, "completed", 12);
     expect(claimed(root, "job")).toEqual([]);
     expect(readFires(root, "job")).toEqual([]);
+    // SILENTLY: a pruned slot is not a fault. Without this, dropping the guard would still leave the file absent
+    // (the write would throw and be caught) and the test could not tell the two apart — the warn line is what
+    // makes "decided not to write" observably different from "tried and failed".
+    expect(logs).toEqual([]);
   });
 
   it("an unusable claim stamp falls back to the slot instant — catch-up may repeat, never skip", async () => {
@@ -472,6 +478,20 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const line = logs.find((l) => /job completed/.test(l)) ?? "";
     expect(line).toContain("… (50000 chars)");
     expect(line.length).toBeLessThan(2500);
+  });
+
+  it("cuts the logged reply between characters, never through one", async () => {
+    // The limit counts UTF-16 units, and an emoji is two of them — a cut landing between them would log a lone
+    // surrogate, which every terminal renders as \uFFFD. The reply here puts a pair exactly across the boundary.
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const reply = `${"x".repeat(1999)}😀${"y".repeat(100)}`; // the emoji starts at unit 1999, so unit 2000 is its tail
+    const { agent } = recordingAgent([{ type: "text", delta: reply }, { type: "completed" }]);
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const line = logs.find((l) => /job completed/.test(l)) ?? "";
+    expect(line).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/); // no unpaired high surrogate
+    expect(line).toContain(`${"x".repeat(1999)}…`); // the pair went whole rather than half
   });
 
   it("skips a duplicate slot delivery (at-least-once external clock → at-most-once fire)", async () => {
