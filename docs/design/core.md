@@ -547,40 +547,28 @@ occurrence after downtime (not every missed slot), writes the outcome back into 
 delivery to agent tools.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
-one fixed-size line — `<firedAt> <outcome>` plus the duration when something timed it — pruned to the
-newest 512, which is what makes `fastagent schedule history` bounded by construction rather than by a
-retention policy. The turn's narrative (its reply, its error) is a log line instead of a stored field:
-rotating a narrative is the job of the layer that carries it (12-factor XI), and the reply is capped
-per line so one huge turn cannot evict the diagnostics around it. Where that layer's bound comes from
-differs by host and is stated per host: Fly and Railway retain logs for a bounded window of their own,
-`deploy docker` writes the bound into the compose file (`logging: json-file` with `max-size`, since
-Docker's default has none), and AgentCore is the one host with NO default bound — CloudWatch keeps log
-data indefinitely, so its runbook and its `--run` summary both end with the `put-retention-policy` call
-that closes it. An append-only file of model replies on a minute cron has no such layer at all, which
-is how a volume fills. Two events have no claim and therefore no stored record at all: a wake-up
-(removed from the store before its turn starts) and a stale slot (refused before a claim is taken; it
-is a WARN line where a duplicate delivery is INFO).
+one short line — `<firedAt> <outcome>` plus the duration when something timed it — pruned to the newest
+512, which is what makes `fastagent schedule history` bounded by construction rather than by a retention
+policy. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
+before its turn starts) and a stale slot (refused before a claim is taken; it is a WARN line where a
+duplicate delivery is INFO).
 
-Moving the narrative into the log moved two things with it, and both are properties of the design
-rather than accidents of it:
+**What the turn SAID is stored once, and not here.** Every fire runs in a session — `schedule:<name>` for
+a cron, the asking conversation for a wake-up — and a session is persisted under `<stateRoot>/sessions/`
+like any other, with the engine's own storage and compaction semantics. The claim therefore carries the
+outcome and nothing else, and the log carries the fact that the fire completed, plus the failure detail
+when it did not. #546 was about model output accumulating where nothing prunes it; a second copy in the
+claim file and a third in a log stream are both that same accumulation, so neither exists. A log line is
+also the wrong shape for it: it has no escaping (a reply containing a newline would emit a second line
+byte-for-byte identical to a real record — `oneLine` folds the failure detail for exactly this reason),
+its audience is every reader of the deployment's log stream rather than of the agent's volume, and its
+retention is set per host, so it would answer "why did last night's run fail" for a different length of
+time than the claim answers "did it".
 
-- **Its readership, and therefore WHOSE turn gets logged.** A reply written to `<stateRoot>` was
-  readable by whoever could read the agent's volume; a reply written to stdout at `info` is readable by
-  whoever can read the deployment's logs — `docker logs`, journald, a platform aggregator, CloudWatch
-  under a retention policy an operator was just told to set. A CRON fire can say anything the agent
-  read, and it is logged anyway because nobody is watching that turn: its `schedule:<name>` session has
-  no human in it, so the log is the only place its answer ever appears. A WAKE-UP is the opposite case
-  and is NOT logged with its reply: it runs in the session that scheduled it — a Telegram group, a
-  Feishu thread — where the answer is delivered to the people in that conversation, so copying it into
-  the operator's log would buy no diagnosis and widen the audience of a private exchange. A cron whose
-  answer IS the sensitive part opts out per schedule with `defineSchedule({ logReply: false })`, which
-  keeps its `firing`/`completed`/`failed` lines — the distinction `FASTAGENT_LOG_LEVEL` cannot make,
-  being all-or-nothing for `info`.
-- **Its retention, which is now independent of the outcome's.** The claims answer "did last night's run
-  fail?" for as far back as 512 fires reach (~3 weeks hourly); the log answers "why" for as long as
-  that host keeps logs, which on Fly and Railway is typically shorter. A `failed` row can therefore
-  outlive its own explanation. Aligning them is an operator decision (ship logs somewhere durable, or
-  read the claim window as bounded by log retention), not something the scheduler can do from inside.
+Logs still need a bound for ordinary reasons, and the hosts differ: Fly and Railway retain a window of
+their own, `deploy docker` writes one into the compose file (`logging: json-file` with `max-size`, since
+Docker's default never rotates), and AgentCore has no default at all — CloudWatch keeps log data
+indefinitely, so its runbook and its `--run` summary both print the `put-retention-policy` call.
 
 The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use the
 captured Effect clock; Croner computes calendar instants, with capped waits rechecking wall time. Cron

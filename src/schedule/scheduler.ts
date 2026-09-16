@@ -70,52 +70,28 @@ const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
 
 /**
- * How much of a reply the completed line carries. A reply is model output with no natural ceiling — one turn that
- * echoes a file it read is hundreds of kilobytes — and the rotation window it now lives in is finite, so an
- * uncapped line would evict the diagnostics around it: exactly what moving the reply into the log was for.
- * The full text is not promised anywhere; the length is, so a truncated line says what it dropped.
+ * ONE LINE, ALWAYS: the tail a failure contributes to its log line, as `: <text>`, or nothing when there is none.
  *
- * This also decides WHO reads the answer: the log's audience, which on a deployment is wider than the state volume's
- * was (docs/design/core.md §8 states the trade and the only lever, `FASTAGENT_LOG_LEVEL`). That trade is made for a
- * CRON fire, whose turn nobody is watching — which is why `runTurn` takes `logReply` rather than doing this for
- * every caller: see the wake-up path.
+ * `log.ts` prefixes only the first line, so a newline anywhere in here emits a second line that is byte-for-byte a
+ * real record (`ERROR [schedule] daily failed (1ms): DISK ON FIRE`) — and a failure detail can carry model or
+ * provider text. Folding also keeps the line-oriented consumers — `docker logs`, journald, CloudWatch — reading one
+ * fire as one event.
  */
-const REPLY_LOG_LIMIT = 2000;
-
-/**
- * THE tail of every line a turn contributes — its reply, its failure details, its thrown cause — as `: <text>`, or
- * nothing when there is none to add.
- *
- * ONE LINE, ALWAYS. `log.ts` prefixes only the first line, so a newline anywhere in here emits a second line that is
- * byte-for-byte a real record: `ERROR [schedule] daily failed (1ms): DISK ON FIRE` is something a scheduled turn's
- * own reply can produce, and a scheduled turn's reply is untrusted by construction ("read the inbox and summarise").
- * Collapsing whitespace also keeps the line-oriented consumers this design leans on — `docker logs`, journald,
- * CloudWatch — reading one fire as one event.
- *
- * Capped for the same reason as the reply: this text lives in a finite rotation window, and a failure detail
- * carrying a whole stack would evict the diagnostics around it.
- */
-function turnDetail(text: string): string {
-  const one = text.replace(/\s+/g, " ").trim();
-  if (one === "") return "";
-  if (one.length <= REPLY_LOG_LIMIT) return `: ${one}`;
-  const cut = one.slice(0, REPLY_LOG_LIMIT);
-  // The limit counts UTF-16 units, so it can land inside a surrogate pair and log half an emoji as \uFFFD. Dropping
-  // a trailing high surrogate is the whole fix; `channels/kit/text.ts`'s `codePointPrefix` is the same idea, but the
-  // kit is importable only from `channels/<platform>/` (package-boundary.test.ts) and this is one line.
-  const safe = /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
-  return `: ${safe}… (${one.length} chars)`;
+function oneLine(text: string): string {
+  const folded = text.replace(/\s+/g, " ").trim();
+  return folded === "" ? "" : `: ${folded}`;
 }
 
 /**
  * The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup.
  *
- * `logReply` is not a preference: a CRON fire runs unattended in its own `schedule:<name>` session, so the log is the
- * only place its answer is ever seen. A WAKE-UP runs in the session that asked for it — a Telegram group, a Feishu
- * thread, a Slack channel — where a human reads the answer in the conversation itself. Copying that into the
- * operator's log buys no diagnosis and moves private conversation content into a wider audience.
+ * WHAT THE TURN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
+ * (`schedule:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
+ * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
+ * unstructured, in a stream with a wider audience and a bound that differs per host — which is the growth #546 asked
+ * us to stop, relocated rather than removed.
  */
-function runTurn(agent: Agent, label: string, session: string, prompt: string, logReply: boolean) {
+function runTurn(agent: Agent, label: string, session: string, prompt: string) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const startedAt = clock.currentTimeMillisUnsafe();
@@ -139,16 +115,13 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string, l
     }).pipe(
       Effect.match({
         onSuccess: (result) => {
-          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${turnDetail(result.failed)}`);
-          // The reply goes to the LOG, not to disk: it is the turn's narrative, and rotating a narrative is the
-          // platform's job (12-factor XI): a log has a layer whose job is to bound it — a platform's shipper, or
-          // the `logging:` block `deploy docker` generates — and a file we append to forever does not.
-          else log.info(`[schedule] ${label} completed (${elapsed()}ms)${logReply ? turnDetail(result.reply) : ""}`);
+          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${oneLine(result.failed)}`);
+          else log.info(`[schedule] ${label} completed (${elapsed()}ms)`);
           return { ...result, ms: elapsed() };
         },
         onFailure: (error) => {
           // An iterator throw violates SPEC MUST 2 and is never a replay-safe busy rejection.
-          log.error(`[schedule] ${label} errored (${elapsed()}ms)${turnDetail(String(error.cause))}`);
+          log.error(`[schedule] ${label} errored (${elapsed()}ms)${oneLine(String(error.cause))}`);
           return { busy: false, failed: String(error.cause), reply: "", ms: elapsed() };
         },
       }),
@@ -201,9 +174,7 @@ export function fireScheduleOnce(opts: {
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    // Default true: an unattended turn's answer is seen by nobody otherwise. An author turns it off per schedule
-    // (`defineSchedule({ logReply: false })`) when that answer is the sensitive part.
-    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt, s.logReply ?? true);
+    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
     settleClaim(stateRoot, s.name, slot, r.failed ? "failed" : "completed", r.ms);
     return { fired: true, failed: r.failed, ms: r.ms };
   }).pipe(Effect.uninterruptible);
@@ -288,8 +259,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         () =>
           Effect.gen(function* () {
             const label = `wake ${w.id.slice(0, 8)}`;
-            // No reply in the log: this turn's answer belongs to the conversation that scheduled it (see `runTurn`).
-            const r = yield* runTurn(agent, label, w.session, wakeEnvelope(w), false);
+            const r = yield* runTurn(agent, label, w.session, wakeEnvelope(w));
             let kept = false;
             if (r.busy && !w.cron) {
               kept = yield* Effect.try({

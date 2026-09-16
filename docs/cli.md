@@ -251,25 +251,19 @@ them is settled, as `interrupted`: a schedule runs one turn at a time, so the ne
 one a killed process was actually in. Delete `<state root>/schedule/claims/` if you would rather start the
 history empty.
 
-**WHAT a run said and WHY a failed one failed are not here — they are log lines** (`fastagent logs`,
-`docker logs`, journald), and two consequences follow that this command cannot fix for you:
+**WHAT a run said is not here, and not in the logs either.** Every fire runs in a session
+(`schedule:<name>` for a cron), persisted under `<state root>/sessions/` like any other conversation — so
+the turn's own text is already stored exactly once, and `fastagent attach schedule:<name>` reads it. The
+history answers "did it happen and did it fail"; the session answers "what did it say".
 
-- **Its readers are the log's readers.** A completed CRON fire logs up to 2000 characters of the turn's
-  reply at `info`, which is `start`'s default level — so whatever that unattended turn read (an inbox, a
-  customer record, a token in some API response) is visible to everyone with access to that log stream,
-  including a platform's aggregator. If that is not acceptable for a given agent, keep its scheduled turns
-  from answering with the sensitive part, or set `logReply: false` on that schedule — it keeps the
-  `firing`/`completed`/`failed` lines and drops only the answer, which `FASTAGENT_LOG_LEVEL=warn` cannot do
-  (that silences every other `info` line too). A self-scheduled **wake-up** never logs its reply: its answer
-  goes to the conversation that scheduled it, and that is where it stays.
-- **The two retention windows are independent, and the log's is usually the shorter one.** This history can
-  reach ~3 weeks for an hourly schedule, while Fly's built-in log search covers a short recent window and
-  Railway's depends on the plan (often under a week). A `failed` row whose explaining log line has aged out
-  leaves you re-running the schedule to see the error again. Ship logs somewhere durable, or read
-  `KEEP_CLAIMS` as "as far back as your log retention", not further. On Docker the compose file pins
-  `json-file` to `max-size: 10m` / `max-file: 3` (Docker's default never rotates); on AgentCore the
-  retention period is yours to set entirely (CloudWatch keeps log data indefinitely — the deploy runbook and
-  `--run` both print the `put-retention-policy` command).
+**WHY a failed one failed is a log line** (`fastagent logs`, `docker logs`, journald), and that window is
+independent of this one: the claims reach ~3 weeks for an hourly schedule, while Fly's built-in log search
+covers a short recent window and Railway's depends on the plan (often under a week). A `failed` row whose
+explaining log line has aged out leaves you re-running the schedule to see the error again. Ship logs
+somewhere durable if that matters. On Docker the compose file pins `json-file` to `max-size: 10m` /
+`max-file: 3` (Docker's default never rotates); on AgentCore the retention period is yours to set entirely
+(CloudWatch keeps log data indefinitely — the deploy runbook and `--run` both print the
+`put-retention-policy` command).
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

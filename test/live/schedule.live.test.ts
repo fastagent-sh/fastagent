@@ -10,7 +10,7 @@
  * makes the next slot already due, so the probe exercises catch-up — a real behaviour worth asserting
  * — instead of sleeping through a minute. The cron stays the documented 5-field form.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -34,10 +34,10 @@ afterAll(() => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("schedules: a cron fire reaches the agent, the log, and its claim", () => {
+describe("schedules: a cron fire reaches the agent, its session, and its claim", () => {
   it("catches up an overdue slot, runs the turn, and records the outcome", async () => {
-    // The turn's reply is a LOG line now (12-factor XI), so the probe reads the logs the way an
-    // operator would: `fastagent start` writes them to stderr and the platform keeps them.
+    // The fire's own lines go to stderr, the way an operator reads them; what the turn SAID goes to the
+    // session, which is the only place it is stored.
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     cleanups.push(() => vi.restoreAllMocks());
@@ -95,10 +95,16 @@ describe("schedules: a cron fire reaches the agent, the log, and its claim", () 
     // re-running it.
     const seen = `${JSON.stringify(fires[0])}\n${logs.join("\n")}`;
     expect(fires[0]?.outcome, `the scheduled turn did not complete: ${seen}`).toBe("completed");
-    // The reply reached the log — the regression this guards is a completed turn that says nothing
-    // anywhere. The session is derived from the schedule's name, not minted per fire, which is what
-    // makes a schedule's turns one continuing conversation.
-    expect(logs.join("\n")).toMatch(new RegExp(`${SCHEDULE} completed \\(\\d+ms\\): \\S`));
+    // The session is derived from the schedule's name, not minted per fire — that is what makes a
+    // schedule's turns one continuing conversation, and it is where the turn's text lives.
     expect(logs.join("\n")).toContain(`firing (session=schedule:${SCHEDULE})`);
+    // The regression this guards is a completed turn whose content reached nothing: the claim would still
+    // say `completed` while the conversation was never written.
+    const sessionsDir = join(stateRoot, "sessions");
+    const files = await readdir(sessionsDir, { recursive: true, withFileTypes: true });
+    const journals = await Promise.all(
+      files.filter((f) => f.isFile()).map((f) => readFile(join(f.parentPath, f.name), "utf8")),
+    );
+    expect(journals.join("\n"), `nothing was persisted under ${sessionsDir}`).toContain("Reply with just: tick");
   });
 });

@@ -548,90 +548,35 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(readFires(root, "job")).toMatchObject([{ firedAt: "2026-07-07T10:00:03.000Z", outcome: "completed" }]);
   });
 
-  it("the reply goes to the log, never to disk — rotating it is the platform's job", async () => {
+  it("what the turn SAID is neither logged nor stored \u2014 it is already in the session", async () => {
+    // #546 asked us to stop storing model output that nothing prunes. The reply is durable exactly once, in the
+    // session this fire ran in (`schedule:job`, persisted under `<stateRoot>/sessions/` like any other): the claim
+    // carries the outcome, and the log carries the fact that it completed.
     const root = await freshRoot();
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const { agent } = recordingAgent([{ type: "text", delta: "the digest, in full" }, { type: "completed" }]);
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
-    expect(logs.some((l) => /job completed \(\d+ms\): the digest, in full/.test(l))).toBe(true);
-    // Nothing under the state root carries the turn's text: the claim holds an outcome and a duration, and there is
-    // no other file. This is the property the whole change exists for — a chatty minute-cron cannot fill a volume.
+    expect(logs.some((l) => /job completed \(\d+ms\)$/.test(l))).toBe(true);
+    expect(logs.join("\n")).not.toContain("digest");
     const stored = readFires(root, "job");
     expect(stored).toMatchObject([{ outcome: "completed" }]);
     expect(JSON.stringify(stored)).not.toContain("digest");
   });
 
-  it("logReply: false drops the answer and keeps the fire's own lines", async () => {
-    // The lever `FASTAGENT_LOG_LEVEL` cannot be: a sensitive job stops publishing what it read, while `firing` and
-    // `completed` stay — those are what an operator watches a schedule with.
-    const root = await freshRoot();
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent } = recordingAgent([{ type: "text", delta: "the inbox says 12345" }, { type: "completed" }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly({ logReply: false }), slot });
-    expect(logs.join("\n")).toMatch(/job completed \(\d+ms\)$/m);
-    expect(logs.join("\n")).toContain("job firing");
-    expect(logs.join("\n")).not.toContain("inbox says");
-  });
-
-  it("a reply with newlines stays ONE line — a turn cannot forge a log record", async () => {
+  it("a multi-line failure detail stays ONE line \u2014 a turn cannot forge a log record", async () => {
     // `log.ts` prefixes only the first line, so an unfolded newline emits a second line byte-for-byte identical to a
-    // real record — and a scheduled turn's reply is untrusted by construction ("read the inbox and summarise").
+    // real record. A failure detail is the remaining path that carries model or provider text.
     const root = await freshRoot();
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const forged = "all good\nERROR [schedule] daily failed (1ms): DISK ON FIRE";
-    const { agent } = recordingAgent([{ type: "text", delta: forged }, { type: "completed" }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
-    const line = logs.find((l) => /job completed/.test(l)) ?? "";
-    expect(line).not.toContain("\n");
-    expect(line).toContain("all good ERROR [schedule] daily failed (1ms): DISK ON FIRE"); // folded, not dropped
-    expect(logs.filter((l) => /^ERROR/.test(l))).toEqual([]); // nothing the turn wrote became its own record
-  });
-
-  it("a multi-line failure detail is folded and capped like a reply", async () => {
-    // The failure path is a record too, and a provider error carrying a stack is exactly the multi-line case.
-    const root = await freshRoot();
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent } = recordingAgent([
-      { type: "failed", retryable: false, details: `boom\n  at somewhere\n${"x".repeat(5000)}` },
-    ]);
+    const forged = "boom\n  at somewhere\nERROR [schedule] daily failed (1ms): DISK ON FIRE";
+    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: forged }]);
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
     const line = logs.find((l) => /job failed/.test(l)) ?? "";
     expect(line).not.toContain("\n");
-    expect(line).toContain("boom at somewhere");
-    expect(line).toContain("chars)"); // capped, and it says how much it dropped
-    expect(line.length).toBeLessThan(2500);
-  });
-
-  it("caps the logged reply, so one huge turn cannot evict the diagnostics around it", async () => {
-    // A reply is model output — a turn that echoes a file it read is hundreds of kilobytes, and the rotation window
-    // it now lives in is finite. The line says how much it dropped rather than pretending that was the whole reply.
-    const root = await freshRoot();
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const huge = "x".repeat(50_000);
-    const { agent } = recordingAgent([{ type: "text", delta: huge }, { type: "completed" }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
-    const line = logs.find((l) => /job completed/.test(l)) ?? "";
-    expect(line).toContain("… (50000 chars)");
-    expect(line.length).toBeLessThan(2500);
-  });
-
-  it("cuts the logged reply between characters, never through one", async () => {
-    // The limit counts UTF-16 units, and an emoji is two of them — a cut landing between them would log a lone
-    // surrogate, which every terminal renders as \uFFFD. The reply here puts a pair exactly across the boundary.
-    const root = await freshRoot();
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const reply = `${"x".repeat(1999)}😀${"y".repeat(100)}`; // the emoji starts at unit 1999, so unit 2000 is its tail
-    const { agent } = recordingAgent([{ type: "text", delta: reply }, { type: "completed" }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
-    const line = logs.find((l) => /job completed/.test(l)) ?? "";
-    expect(line).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/); // no unpaired high surrogate
-    expect(line).toContain(`${"x".repeat(1999)}…`); // the pair went whole rather than half
+    expect(line).toContain("boom at somewhere ERROR [schedule] daily failed (1ms): DISK ON FIRE"); // folded, not cut
+    expect(logs.filter((l) => /^ERROR \[schedule\] daily/.test(l))).toEqual([]); // nothing became its own record
   });
 
   it("skips a duplicate slot delivery (at-least-once external clock → at-most-once fire)", async () => {

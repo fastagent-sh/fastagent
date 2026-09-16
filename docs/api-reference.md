@@ -438,7 +438,6 @@ interface Schedule {
   cron: string; // 5-field cron expression
   tz?: string; // IANA timezone (default "UTC")
   prompt: string; // the turn's text = the job's instruction (a builder is resolved at load)
-  logReply?: boolean; // log this schedule's reply with its `completed` line (default true)
   secrets?: readonly string[]; // env vars this file needs, typed into the prompt builder
 }
 // what an author writes: `prompt` may be built FROM the declared secrets, keys typed from `secrets`
@@ -446,7 +445,6 @@ function defineSchedule<const S extends readonly string[]>(schedule: {
   cron: string;
   tz?: string;
   prompt: string | ((secrets: Record<S[number], string>) => string);
-  logReply?: boolean;
   secrets?: S;
 }): Schedule;
 ```
@@ -480,12 +478,10 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   value. It derives a stable per-schedule session (`schedule:<name>`), so a
   schedule's turns share one continuing conversation persisted by the core session store (zero-touch on
   storage, like the telegram channel deriving a session from `chat.id`);
-- **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome. The
-  turn's reply rides along on that `completed` line (capped at 2000 characters), because an unattended turn's
-  answer is otherwise seen by nobody. A log stream has a wider audience than the state volume, so a schedule whose
-  answer IS the sensitive part sets `logReply: false` and keeps its `firing`/`completed`/`failed` lines —
-  `FASTAGENT_LOG_LEVEL` cannot make that distinction. A self-scheduled wake-up never logs its reply: it answers in
-  the conversation that scheduled it;
+- **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome (and the
+  failure detail when there is one). What the turn SAID is not logged and not copied into the fire's record: it is
+  already in the session above, persisted under `<stateRoot>/sessions/` and readable with `fastagent attach
+  schedule:<name>`;
 - **catches up an overdue run once** — each fired slot leaves a claim under `<stateRoot>/schedule/claims/<name>/`,
   created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
   several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock
