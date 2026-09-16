@@ -136,16 +136,24 @@ const isOutcome = (s: unknown): s is FireOutcome => s === "completed" || s === "
  */
 function parseClaim(raw: string, dir: string, name: string): Fire {
   const fire: Fire = { slot: slotInstant(name), firedAt: slotInstant(name) };
-  let record: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    record = JSON.parse(raw) as Record<string, unknown>;
+    parsed = JSON.parse(raw);
   } catch {
-    // Empty is ordinary: the process died between `openSync` creating the claim and the stamp being written.
-    if (raw.trim() !== "")
-      log.warn(`[schedule] claim ${join(dir, name)} is not readable JSON — using the slot instant`);
+    parsed = undefined;
+  }
+  // `null` and a bare `12` parse FINE and are not records — destructuring them throws, and this runs on the
+  // synchronous boot path, so the throw would be a service that does not start over one unreadable file. Empty is
+  // ordinary (the process died between `openSync` creating the claim and the stamp being written), and so is an
+  // earlier format's bare timestamp, which is why the rest is debug: the consequence is already visible as a fire
+  // that reads `unreported`.
+  if (parsed === null || typeof parsed !== "object") {
+    if (raw.trim() !== "") {
+      log.debug(`[schedule] claim ${join(dir, name)} is not a claim record (torn write, or an earlier format)`);
+    }
     return fire;
   }
-  const { firedAt, outcome, ms } = record;
+  const { firedAt, outcome, ms } = parsed as Record<string, unknown>;
   if (typeof firedAt === "string" && !Number.isNaN(Date.parse(firedAt))) fire.firedAt = firedAt;
   else log.warn(`[schedule] claim ${join(dir, name)} carries an unreadable stamp — using the slot instant`);
   if (isOutcome(outcome)) {
@@ -259,8 +267,7 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
 /**
  * Every fire this state root still keeps for `name`, oldest first — bounded by `KEEP_CLAIMS` because the claims ARE
  * the history. Nothing here grows: the pruning that keeps the claim gate cheap keeps the history's size fixed too,
- * which is why there is no separate audit file to rotate (the turn's own narrative is a log line, and rotating logs
- * is the platform's job — 12-factor XI).
+ * which is why there is no separate audit file to rotate (what the turn SAID is in its session, not here).
  *
  * THE HISTORY read, and its only caller is the read-only `schedule history` — which translates a read fault into a
  * one-line refusal. The serving boot reads `latestFire` instead: it asks about ONE claim, and a window of files kept
@@ -268,8 +275,8 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
  */
 export function readFires(stateRoot: string, name: string): Fire[] {
   const dir = claimDir(stateRoot, name);
-  // A claim pruned between the listing and the read is not a fire this state root still keeps — dropping it is what
-  // keeps the reconciler from settling (and so re-creating) a slot that is already gone.
+  // A claim pruned between the listing and the read is not a fire this state root still keeps, so it is dropped
+  // rather than reported as an unsettled one — which is what `unreported` would claim about a run nobody skipped.
   return listClaims(dir).flatMap((slot) => readClaim(dir, slot) ?? []);
 }
 

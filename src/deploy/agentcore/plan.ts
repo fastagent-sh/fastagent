@@ -710,8 +710,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       : []),
     ``,
     `# 6. Set a log retention period on EVERY group this stack writes to. Each is created by the service that`,
-    `#    writes it, not by this template, and CloudWatch keeps log data indefinitely by default — a schedule`,
-    `#    logs what each turn replied, so that storage is billed forever unless you say otherwise. Logs are the`,
+    `#    writes it, not by this template, and CloudWatch keeps log data indefinitely by default — which is`,
+    `#    forever-billed storage, and the logs are where WHY a scheduled turn failed is recorded. Logs are the`,
     `#    ONE state path this host does not reclaim on its own.`,
     `aws logs put-retention-policy --log-group-name <the group \`fastagent logs agentcore\` resolves> --retention-in-days 14`,
     ...(needsForwarder

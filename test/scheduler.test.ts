@@ -207,21 +207,43 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(logs).toEqual([]);
   });
 
-  it("a half-written claim reads as UNSETTLED, not as a record with a plausible field", async () => {
-    // The write is deliberately not atomic, so a torn claim is a real state. JSON is what makes it detectable as a
-    // whole: half an object does not parse, where a half-written positional line could still hand back a duration.
+  it.each([
+    [
+      "torn mid-write",
+      JSON.stringify({ firedAt: "2026-07-07T10:00:00.000Z", outcome: "completed", ms: 12345 }).slice(0, -8),
+    ],
+    ["an earlier format's bare timestamp", "2026-07-07T10:00:00.000Z"],
+    ["JSON that is not a record", "null"],
+    ["JSON that is a number", "12"],
+  ])("content that is not a claim record (%s) reads as UNSETTLED, and never throws", async (_kind, content) => {
+    // The write is deliberately not atomic, so a torn claim is a real state — and `null` parses FINE, so reading it
+    // as a record would throw on the synchronous boot path: a service that does not start, over one unreadable file.
+    // Every one of these degrades the same way, to the slot instant in the file NAME.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const dir = join(root, "schedule", "claims", "job");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), content);
+    const fire = readFires(root, "job")[0];
+    expect(fire).toMatchObject({ firedAt: "2026-07-07T10:00:00.000Z" });
+    expect(fire).not.toHaveProperty("outcome"); // so the next boot settles it as interrupted, which is true
+    expect(fire).not.toHaveProperty("ms");
+  });
+
+  it("a state root full of an earlier format's claims does not shout at the operator", async () => {
+    // There is no migration, so every one of the 512 retained claims can be the old bare timestamp. The consequence
+    // is already visible — every row reads `unreported` — so the per-file detail belongs at debug, not in a wall of
+    // warnings that reads like corruption.
     const root = await freshRoot();
     const warns: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
     const dir = join(root, "schedule", "claims", "job");
     mkdirSync(dir, { recursive: true });
-    const whole = JSON.stringify({ firedAt: "2026-07-07T10:00:00.000Z", outcome: "completed", ms: 12345 });
-    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), whole.slice(0, whole.length - 8)); // the disk filled here
-    const fire = readFires(root, "job")[0];
-    expect(fire).toMatchObject({ firedAt: "2026-07-07T10:00:00.000Z" }); // the slot instant, from the file NAME
-    expect(fire).not.toHaveProperty("outcome"); // so the next boot settles it as interrupted, which is true
-    expect(fire).not.toHaveProperty("ms");
-    expect(warns.some((w) => /is not readable JSON/.test(w))).toBe(true);
+    for (const hour of ["08", "09", "10"]) {
+      writeFileSync(join(dir, `2026-07-07T${hour}-00-00-000Z`), `2026-07-07T${hour}:00:00.000Z`);
+    }
+    expect(readFires(root, "job").map((f) => f.outcome)).toEqual([undefined, undefined, undefined]);
+    expect(warns).toEqual([]);
   });
 
   it("a duration that is not a number reads as NO duration, never as 0ms", async () => {

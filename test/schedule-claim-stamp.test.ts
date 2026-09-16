@@ -61,10 +61,9 @@ it("a failed stamp takes the claim back down, so the slot is not eaten by a full
 });
 
 it("a claim pruned between the listing and the read is DROPPED, not read as an unsettled fire", () => {
-  // A concurrent claim prunes while this one is reading. Two things must hold: `readFires` runs inside a
-  // synchronous boot path whose throws stop the serve, so it must not throw — and the vanished claim must not come
-  // back as an `outcome`-less fire, because the boot reconciler settles exactly those, and `settleClaim` CREATES
-  // the file it writes. That would resurrect a pruned slot and invent an `interrupted` run that never happened.
+  // A concurrent claim prunes while this one is reading. Two things must hold: `readFires` must not throw (the
+  // history is read by a CLI command that should refuse in one line, not crash), and the vanished claim must not
+  // come back as an `outcome`-less fire — `unreported` is a claim about a run, and this one no longer exists.
   const root = fresh();
   const slot = new Date("2026-07-07T10:00:00Z");
   expect(claimSlot(root, "job", slot, new Date("2026-07-07T10:00:03Z"))).toEqual({ taken: true });

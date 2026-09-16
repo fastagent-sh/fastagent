@@ -547,9 +547,11 @@ occurrence after downtime (not every missed slot), writes the outcome back into 
 delivery to agent tools.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
-one short line — `<firedAt> <outcome>` plus the duration when something timed it — pruned to the newest
-512, which is what makes `fastagent schedule history` bounded by construction rather than by a retention
-policy. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
+one JSON object — `{"firedAt"}` at claim time, gaining `outcome` and `ms` when the turn reports — pruned
+to the newest 512, which is what makes `fastagent schedule history` bounded by construction rather than
+by a retention policy. JSON rather than a line this module splits itself, because `settleClaim` may not
+write atomically (see below): half an object does not parse, so a torn claim reads as unsettled instead
+of as a record whose third field happened to look like a number. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
 before its turn starts) and a stale slot (refused before a claim is taken; it is a WARN line where a
 duplicate delivery is INFO).
 

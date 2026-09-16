@@ -131,8 +131,9 @@ services:
       FASTAGENT_AUTH_SEED: "${composeInterpolation("FASTAGENT_AUTH_SEED")}"
     volumes:
       - state:${MOUNT}
-    # The agent's log IS its record of what a turn said (a completed schedule fire logs its reply), and Docker's
-    # default json-file driver never rotates — so on this host the bound has to be written down. Fly and Railway
+    # The agent's log is where a failure's reason is recorded (a scheduled fire logs the detail; what the turn SAID
+    # is in its session, not here), and Docker's default json-file driver never rotates — so on this host the bound
+    # has to be written down. Fly and Railway
     # bound their own log retention; AgentCore does NOT (CloudWatch keeps data indefinitely until an operator sets
     # a retention policy — its runbook says so).
     logging:

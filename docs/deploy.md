@@ -194,7 +194,7 @@ fastagent logs agentcore --source forwarder --follow
 
 AWS creates each log group on first use. Before the first Runtime invocation or forwarder event, the command says which trigger is missing instead of sending `aws logs tail` to a nonexistent group. Pass the same `[dir]` used for deploy when running from somewhere else.
 
-**Set a retention period on those groups.** CloudWatch keeps log data indefinitely by default, nothing in the stack creates the groups (each service creates its own), and a schedule logs what each turn replied — so this is the one state path this host does not reclaim on its own. Both the runbook and `--run` print the command; it is one call per group:
+**Set a retention period on those groups.** CloudWatch keeps log data indefinitely by default and nothing in the stack creates the groups (each service creates its own) — so this is the one state path this host does not reclaim on its own, and it is also where WHY a scheduled turn failed is recorded. Both the runbook and `--run` print the command; it is one call per group:
 
 ```bash
 aws logs put-retention-policy --log-group-name <the group the command above resolves> --retention-in-days 14

@@ -199,8 +199,8 @@ async function runDeployAgentcore(
       console.error(`[fastagent] forwarder logs → fastagent logs agentcore ${logsDir} --source forwarder --follow`);
     }
     // `--run` never prints the runbook, and this is the ONE step in it that nothing else will remind anyone of: a
-    // log group is created by whatever writes it, CloudWatch keeps log data indefinitely, and a schedule logs what
-    // each turn replied. The runtime's group name is only known after discovery, so it is named by the command that
+    // log group is created by whatever writes it, CloudWatch keeps log data indefinitely, and these logs are where
+    // a failed turn's reason lives. The runtime's group name is only known after discovery, so it is named by the command that
     // resolves it — spelled out, because the line above it may be the forwarder's.
     console.error(
       `[fastagent] logs are kept FOREVER until you say otherwise: aws logs put-retention-policy ` +
