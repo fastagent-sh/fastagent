@@ -14,7 +14,7 @@ import * as Exit from "effect/Exit";
 import { portJoin } from "../../effect-port.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { mountStateHome } from "../kit/state.ts";
+import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
@@ -252,7 +252,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const label = "[slack]";
     const formatError = onError ?? defaultErrorMessage;
     const stateHome = join(stateRoot, "channels", "slack");
-    mountStateHome(stateHome);
+    ensureStateHome(stateHome);
     const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
     registerSlackApi(stateRoot, api); // the send tool delivers through this one (shared-api.ts)
     const auth = createSlackAuthentication(api, label);

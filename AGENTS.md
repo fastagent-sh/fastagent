@@ -107,7 +107,7 @@ src/
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
-│   │   ├── state.ts, seen.ts # atomic channel state (+ files/ is scratch: cleared at mount) + delivery dedup
+│   │   ├── state.ts, seen.ts # atomic channel state + bounded durable delivery dedup
 │   │   ├── signature.ts    # replay window for a signed webhook ingress
 │   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
 │   │   ├── text.ts         # Unicode-safe code-point slicing

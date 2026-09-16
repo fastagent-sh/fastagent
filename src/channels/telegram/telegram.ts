@@ -28,7 +28,7 @@ import {
 } from "./parse.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { mountStateHome } from "../kit/state.ts";
+import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
@@ -121,7 +121,7 @@ export function telegramChannel({
       throw new Error(`telegramChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", "telegram");
-    mountStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
+    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const buffer = createContextBuffer(join(stateHome, "buffers.json"));
     // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
     // replay on the next start.

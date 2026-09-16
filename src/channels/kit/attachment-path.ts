@@ -2,10 +2,9 @@
 import { join, resolve, sep } from "node:path";
 
 /**
- * THE inbound-attachment root inside a channel's state home. One spelling because two parties must agree on it and
- * cannot check each other: the channels that WRITE here, and `mountStateHome`, which EMPTIES it at mount (that is
- * what keeps it bounded). Spelled `join(stateHome, "files")` in both places, the clearing would silently become a
- * no-op the day a channel picked another name, with nothing failing.
+ * THE inbound-attachment root inside a channel's state home. One spelling because three channels write here and a
+ * conversation id becomes a directory under it; nothing else reads it, and nothing removes it — an attachment is
+ * durable conversation data, and this directory grows with the agent's inbound traffic (docs/design/core.md §9).
  */
 export const attachmentsDir = (stateHome: string): string => join(stateHome, "files");
 

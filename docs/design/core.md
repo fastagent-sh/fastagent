@@ -604,21 +604,18 @@ would silently miss clock events.
 ```txt
 <stateRoot>/                # <agent dir>/.state (FASTAGENT_STATE_DIR overrides)
 ├── sessions/
-├── channels/telegram/  channels/slack/  channels/feishu/   # …/files/ is scratch: cleared at mount
+├── channels/telegram/  channels/slack/  channels/feishu/   # …/files/ holds inbound attachments
 └── schedule/
 ```
 
-Nothing under this root grows without a ceiling, and each part gets the cheapest ceiling that fits what
-it is. Fired-slot claims are pruned by count (§8). A channel's `files/` holds inbound attachments, which
-nothing ever asks for back — so it is `/tmp`, emptied when the channel mounts, needing no ager, no TTL
-and no reference tracking; the cost is that a session pointing at an attachment from before the current
-process reads ENOENT, exactly as a `/tmp` path from the last boot does. The clearing reaches one channel
-KIND's directory, so it stays inside the same boundary the multi-process list below draws: two processes
-serving DIFFERENT channels never touch the same directory, and the one topology it can damage — a second
-process mounting the SAME channel, which clears the running one's attachments before it even binds — is
-the one that list already rules out for a different reason. Two more processes never reach a channel
-factory at all, so they cannot clear anything: `invoke`/`chat`/`tool` do not mount channels, and `dev`'s
-supervisor respawns its worker only after the old one has exited (`src/dev-supervisor.ts`).
+Two kinds of thing live here, and only one of them is FastAgent's to bound. **Bookkeeping** — fired-slot
+claims, delivery dedup rings, turn intent — is written by this project for its own machinery, so it is
+bounded by construction (claims are pruned by count, §8; the seen ring is capped). **Conversation data**
+— `sessions/` and a channel's `files/` — is what the agent was told and sent, and nothing here deletes
+it: an inbound attachment is part of the conversation exactly as the session entry naming it is, and its
+path stays readable for as long as that conversation can refer back to it. Both grow with use, which is
+an operator's capacity decision (size the volume, prune deliberately), not a retention policy this
+project may impose on someone's data.
 
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the

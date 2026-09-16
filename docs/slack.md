@@ -325,13 +325,12 @@ Slack state lives under:
 ├── seen.json
 ├── thread-participants.json
 ├── buffers.json
-└── files/            # scratch: emptied at every channel mount, unlike everything above it
+└── files/
 ```
 
-`files/` is the one entry here that does not survive a restart: it is emptied when the channel mounts
-(every `start`, every `dev` restart), which is what keeps it bounded without an ager or a TTL. A file is
-re-downloaded per turn from its Slack file id, so a replayed turn is unaffected; a path handed out by a
-previous process reads ENOENT.
+`files/` holds downloaded inbound files, one directory per channel. They are kept — the path the agent
+was given stays readable for as long as the conversation can refer back to it — and FastAgent never
+prunes them, so a workspace that receives a lot of files wants a volume sized for that.
 
 `thread-participants.json` records what the Agent HEARD in each group thread — the humans it saw speak
 (capped at two, since the rule only asks whether a second one exists) and whether it has answered
