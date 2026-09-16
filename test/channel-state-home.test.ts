@@ -45,12 +45,17 @@ it("nothing under src/ spells the attachments directory for itself", async () =>
     }
     return out;
   };
+  // BUILDING A PATH that ends in `files`, in either spelling drift takes — `join(x, "files")` and `${x}/files`.
+  // A bare `"files"` string is not the subject: a multipart field name or a `body["files"]` key would be reported
+  // under a message telling its author to call `attachmentsDir()`, which is the wrong instruction.
+  const spellings = [/\bjoin\([^)]*["']files["']\s*\)/, /\$\{[^}]*\}\/files\b/];
   const offenders: string[] = [];
   for (const file of await walk("")) {
     if (file === owner) continue;
-    if (/["']files["']/.test(await readFile(join(root, file), "utf8"))) offenders.push(file);
+    const source = await readFile(join(root, file), "utf8");
+    if (spellings.some((p) => p.test(source))) offenders.push(file);
   }
-  expect(offenders, `these spell the attachments directory themselves instead of calling attachmentsDir()`).toEqual([]);
+  expect(offenders, `these build the attachments directory themselves instead of calling attachmentsDir()`).toEqual([]);
 });
 
 it("creates a state home that does not exist yet, with nothing to clear", () => {
