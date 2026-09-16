@@ -101,15 +101,15 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
       try: async () => {
         let failed: string | undefined;
         let busy = false;
-        let reply = "";
+        // The text deltas are iterated and dropped. Accumulating them would be a second copy of what the session
+        // already holds, and no caller here reads it — the outcome is the whole record (docs/design/core.md §8).
         for await (const e of agent.invoke({ session }, { text: prompt })) {
-          if (e.type === "text") reply += e.delta;
           if (e.type === "failed") {
             failed = e.details;
             busy = e.code === SESSION_BUSY_CODE;
           }
         }
-        return { busy: failed !== undefined && busy, failed, reply };
+        return { busy: failed !== undefined && busy, failed };
       },
       catch: (cause) => new PortFailure(cause),
     }).pipe(
@@ -122,7 +122,7 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
         onFailure: (error) => {
           // An iterator throw violates SPEC MUST 2 and is never a replay-safe busy rejection.
           log.error(`[schedule] ${label} errored (${elapsed()}ms)${oneLine(String(error.cause))}`);
-          return { busy: false, failed: String(error.cause), reply: "", ms: elapsed() };
+          return { busy: false, failed: String(error.cause), ms: elapsed() };
         },
       }),
     );

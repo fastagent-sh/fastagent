@@ -26,7 +26,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
 | `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
-| `schedule history <name> [dir]` | Print a schedule's recent fires (what they said is in the logs). |
+| `schedule history <name> [dir]` | Print a schedule's recent fires (what they said is in the session). |
 | `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
@@ -243,8 +243,10 @@ nothing that grows. Text output tails the most recent 20; `--json` prints the wh
 Read-only.
 
 **WHAT a run said is not here.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
-under `<state root>/sessions/` like any other conversation, so the turn's text is stored once and
-`fastagent attach schedule:<name>` reads it. **WHY a failed one failed is a log line** — and that window is
+under `<state root>/sessions/` like any other conversation, so the turn's text is stored exactly once — in
+that session's journal, which today is read by opening the `.jsonl` file. No command prints a past
+scheduled turn: `fastagent attach schedule:<name>` needs `sessionControl: true` and a running serve, and it
+tails NEW events rather than backfilling the ones already there. **WHY a failed one failed is a log line** — and that window is
 the host's, not this one's: claims can reach ~3 weeks while Fly's and Railway's log retention is typically
 days, so a `failed` row can outlive its own explanation ([Deploy](deploy.md) covers per-host retention).
 

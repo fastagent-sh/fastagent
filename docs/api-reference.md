@@ -480,8 +480,8 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   storage, like the telegram channel deriving a session from `chat.id`);
 - **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome (and the
   failure detail when there is one). What the turn SAID is not logged and not copied into the fire's record: it is
-  already in the session above, persisted under `<stateRoot>/sessions/` and readable with `fastagent attach
-  schedule:<name>`;
+  in the session above, persisted under `<stateRoot>/sessions/` as a journal file. Reading a PAST scheduled turn
+  means reading that file — `attach` tails a live session rather than backfilling one;
 - **catches up an overdue run once** — each fired slot leaves a claim under `<stateRoot>/schedule/claims/<name>/`,
   created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
   several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock
