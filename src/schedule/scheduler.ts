@@ -39,8 +39,9 @@ function markInterruptedFires(stateRoot: string, name: string, fires: Fire[]): v
         `and that slot stays skipped (see \`fastagent schedule history ${name}\`)`,
     );
     // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
-    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from.
-    settleClaim(stateRoot, name, new Date(fire.slot), "interrupted", 0);
+    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
+    // turn was never timed, and the process that could have timed it is gone.
+    settleClaim(stateRoot, name, new Date(fire.slot), "interrupted");
   }
 }
 
@@ -70,6 +71,9 @@ const WAKEUP_POLL_MS = 30_000;
  * echoes a file it read is hundreds of kilobytes — and the rotation window it now lives in is finite, so an
  * uncapped line would evict the diagnostics around it: exactly what moving the reply into the log was for.
  * The full text is not promised anywhere; the length is, so a truncated line says what it dropped.
+ *
+ * This also decides WHO reads a scheduled turn's answer: the log's audience, which on a deployment is wider than the
+ * state volume's was (docs/design/core.md §8 states the trade and the only lever, `FASTAGENT_LOG_LEVEL`).
  */
 const REPLY_LOG_LIMIT = 2000;
 

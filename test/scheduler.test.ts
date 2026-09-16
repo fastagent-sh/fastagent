@@ -97,9 +97,9 @@ describe("schedule/scheduler: fire algorithm", () => {
     };
     const s = createScheduler(options);
     s.start();
-    expect(readFires(root, "job")).toMatchObject([
-      { outcome: "interrupted", firedAt: "2026-07-07T10:00:00.000Z", ms: 0 },
-    ]);
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00.000Z" }]);
+    // No duration at all: nobody timed this turn, and `0ms` in the history would read as one that took no time.
+    expect(readFires(root, "job")[0]).not.toHaveProperty("ms");
     expect(warns.some((w) => /never finished/.test(w))).toBe(true);
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toHaveLength(0); // accounted for, not replayed

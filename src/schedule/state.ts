@@ -134,7 +134,9 @@ function readClaim(dir: string, name: string): Fire | undefined {
   else if (stamp) log.warn(`[schedule] claim ${join(dir, name)} carries an unreadable stamp — using the slot instant`);
   if (isOutcome(outcome)) {
     fire.outcome = outcome;
-    fire.ms = Number(ms) || 0;
+    // A settled fire may still carry NO duration: an `interrupted` one was never timed by anybody (see
+    // `settleClaim`). Absent stays absent — `0` here would be a value a fast turn really produces.
+    if (ms !== undefined && ms !== "") fire.ms = Number(ms) || 0;
   } else if (outcome) {
     // A word we do not know is not an outcome: the fire reads as unsettled, which the next boot reports.
     log.warn(`[schedule] claim ${join(dir, name)} carries an unknown outcome — reading it as unsettled: ${outcome}`);
@@ -253,7 +255,7 @@ export function readFires(stateRoot: string, name: string): Fire[] {
  * gain). A torn write degrades the way an unusable stamp already does (`readClaim`) — the slot is re-read as
  * unsettled, which is visible, not lost.
  */
-export function settleClaim(stateRoot: string, name: string, slot: Date, outcome: FireOutcome, ms: number): void {
+export function settleClaim(stateRoot: string, name: string, slot: Date, outcome: FireOutcome, ms?: number): void {
   const dir = claimDir(stateRoot, name);
   const file = claimName(slot);
   let claimed: Fire | undefined;
@@ -272,8 +274,11 @@ export function settleClaim(stateRoot: string, name: string, slot: Date, outcome
   // catch: a bug here must surface as a throw, not as a warn that looks exactly like a full disk.
   if (claimed === undefined) return;
   try {
-    // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from.
-    writeFileSync(join(dir, file), `${claimed.firedAt} ${outcome} ${Math.round(ms)}`);
+    // The stamp is preserved, not rewritten: `firedAt` is what catch-up resumes from. A duration is written only
+    // when one was measured: nobody timed an `interrupted` fire, and writing `0` for it would print as a turn that
+    // took no time — the same false value the history deliberately leaves blank.
+    const took = ms === undefined ? "" : ` ${Math.round(ms)}`;
+    writeFileSync(join(dir, file), `${claimed.firedAt} ${outcome}${took}`);
   } catch (e) {
     // Housekeeping, like the pruning below: the turn itself already happened, and the worst case is that the next
     // boot reports this fire as interrupted.

@@ -226,18 +226,33 @@ fastagent schedule history <name> [dir] [--json]
 ```
 
 Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`,
-or `unreported` for a fire still running), and how long it took. `interrupted` means the process stopped
-between claiming that slot and finishing its turn — a restart or rolling deploy landing mid-run. The slot
-stays skipped (it is not replayed), and the next start records it.
+or `unreported` for a fire still running), and how long it took (blank when nothing timed it — an
+`interrupted` fire was never timed by anybody). `interrupted` means the process stopped between claiming
+that slot and finishing its turn — a restart or rolling deploy landing mid-run. The slot stays skipped (it
+is not replayed), and the next start records it.
 
 The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
-nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window. It carries no turn text: **what a run
-said is a log line** (`fastagent logs`, `docker logs`, journald), which is the layer that bounds and rotates
-it: Fly and Railway retain a bounded window of their own, the generated Compose file pins `json-file` to
-`max-size: 10m` / `max-file: 3` because Docker's default does not, and on AgentCore the retention period is
-yours to set (CloudWatch keeps log data indefinitely; the deploy runbook prints the `put-retention-policy`
-command). Read-only; `--json` prints the same records as JSON.
+nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
+Read-only.
+
+**WHAT a run said and WHY a failed one failed are not here — they are log lines** (`fastagent logs`,
+`docker logs`, journald), and two consequences follow that this command cannot fix for you:
+
+- **Its readers are the log's readers.** A completed fire logs up to 2000 characters of the turn's reply at
+  `info`, which is `start`'s default level — so whatever a scheduled turn read (an inbox, a customer
+  record, a token in some API response) is visible to everyone with access to that log stream, including a
+  platform's aggregator. If that is not acceptable for a given agent, keep its scheduled turns from
+  answering with the sensitive part; `FASTAGENT_LOG_LEVEL=warn` silences it but takes every other `info`
+  line with it.
+- **The two retention windows are independent, and the log's is usually the shorter one.** This history can
+  reach ~3 weeks for an hourly schedule, while Fly's built-in log search covers a short recent window and
+  Railway's depends on the plan (often under a week). A `failed` row whose explaining log line has aged out
+  leaves you re-running the schedule to see the error again. Ship logs somewhere durable, or read
+  `KEEP_CLAIMS` as "as far back as your log retention", not further. On Docker the compose file pins
+  `json-file` to `max-size: 10m` / `max-file: 3` (Docker's default never rotates); on AgentCore the
+  retention period is yours to set entirely (CloudWatch keeps log data indefinitely — the deploy runbook and
+  `--run` both print the `put-retention-policy` command).
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

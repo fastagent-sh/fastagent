@@ -19,11 +19,17 @@ import { log } from "../../log.ts";
  * machine comes up — which needs no ager, no TTL, and no reference tracking. The cost is named: a session that still
  * points at an attachment from before this process reads ENOENT, exactly as a `/tmp` path from the last boot does.
  *
- * Mount time is also what keeps it safe, on ONE premise: one serving process per state root. `invoke`/`chat`/`tool`
- * never reach a channel factory, and `dev`'s supervisor respawns only after the old worker has exited — but a second
- * `fastagent start` on the same state root DOES clear a live process's attachments, and it does so before binding
- * (so even a start that then dies on EADDRINUSE has already deleted them). Nothing local enforces that premise;
- * it is the same one `docs/design/core.md` states for channel state generally.
+ * WHAT IT CAN REACH is one channel KIND's directory, which is what keeps mount-time clearing safe under the
+ * topologies this project supports (docs/design/core.md §9): `invoke`/`chat`/`tool` never reach a channel factory,
+ * `dev`'s supervisor respawns only after the old worker has exited, and two processes serving DIFFERENT channels
+ * touch different directories. What it does destroy is a live process's in-flight attachments when a second process
+ * mounts THE SAME channel — which is the one topology already ruled out there, because it also means one ingress
+ * credential in two places and no local guard can see that. Concretely: a second `fastagent start` on the same
+ * definition clears the running one's files before it ever binds, so even the run that then dies on EADDRINUSE has
+ * already deleted them, and the turn downloading right then fails with ENOENT.
+ *
+ * A lease would make that impossible and is deliberately absent for the reason core.md gives: it would also forbid
+ * the harmless topologies above. This is a documented cost of an operator error, not a supported case.
  */
 export function mountStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });

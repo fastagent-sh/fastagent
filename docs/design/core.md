@@ -547,18 +547,36 @@ occurrence after downtime (not every missed slot), writes the outcome back into 
 delivery to agent tools.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
-one fixed-size line — `<firedAt> <outcome> <ms>` — pruned to the newest 512, which is what makes
-`fastagent schedule history` bounded by construction rather than by a retention policy. The turn's
-narrative (its reply, its error) is a log line instead of a stored field: rotating a narrative is the
-job of the layer that carries it (12-factor XI), and the reply is capped per line so one huge turn
-cannot evict the diagnostics around it. Where that layer's bound comes from differs by host and is
-stated per host: Fly and Railway retain logs for a bounded window of their own, `deploy docker` writes
-the bound into the compose file (`logging: json-file` with `max-size`, since Docker's default has
-none), and AgentCore is the one host with NO default bound — CloudWatch keeps log data indefinitely,
-so its runbook ends with the `put-retention-policy` call that closes it. An append-only file of model
-replies on a minute cron has no such layer at all, which is how a volume fills. Two events have no claim and
-therefore no stored record at all: a wake-up (removed from the store before its turn starts) and a
-stale slot (refused before a claim is taken; it is a WARN line where a duplicate delivery is INFO).
+one fixed-size line — `<firedAt> <outcome>` plus the duration when something timed it — pruned to the
+newest 512, which is what makes `fastagent schedule history` bounded by construction rather than by a
+retention policy. The turn's narrative (its reply, its error) is a log line instead of a stored field:
+rotating a narrative is the job of the layer that carries it (12-factor XI), and the reply is capped
+per line so one huge turn cannot evict the diagnostics around it. Where that layer's bound comes from
+differs by host and is stated per host: Fly and Railway retain logs for a bounded window of their own,
+`deploy docker` writes the bound into the compose file (`logging: json-file` with `max-size`, since
+Docker's default has none), and AgentCore is the one host with NO default bound — CloudWatch keeps log
+data indefinitely, so its runbook and its `--run` summary both end with the `put-retention-policy` call
+that closes it. An append-only file of model replies on a minute cron has no such layer at all, which
+is how a volume fills. Two events have no claim and therefore no stored record at all: a wake-up
+(removed from the store before its turn starts) and a stale slot (refused before a claim is taken; it
+is a WARN line where a duplicate delivery is INFO).
+
+Moving the narrative into the log moved two things with it, and both are properties of the design
+rather than accidents of it:
+
+- **Its readership.** A reply written to `<stateRoot>` was readable by whoever could read the agent's
+  volume; a reply written to stdout at `info` is readable by whoever can read the deployment's logs —
+  `docker logs`, journald, a platform aggregator, CloudWatch under a retention policy an operator was
+  just told to set. A scheduled turn can say anything the agent read, so this widens who sees that.
+  There is no separate switch: the level (`FASTAGENT_LOG_LEVEL`) is the only lever, and it is all-or-
+  nothing for `info`. The trade is deliberate — an unattended turn that fails silently is the failure
+  this whole area exists to prevent, and a record only the volume holds is one nobody reads until
+  after the fact.
+- **Its retention, which is now independent of the outcome's.** The claims answer "did last night's run
+  fail?" for as far back as 512 fires reach (~3 weeks hourly); the log answers "why" for as long as
+  that host keeps logs, which on Fly and Railway is typically shorter. A `failed` row can therefore
+  outlive its own explanation. Aligning them is an operator decision (ship logs somewhere durable, or
+  read the claim window as bounded by log retention), not something the scheduler can do from inside.
 
 The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use the
 captured Effect clock; Croner computes calendar instants, with capped waits rechecking wall time. Cron
@@ -598,7 +616,11 @@ Nothing under this root grows without a ceiling, and each part gets the cheapest
 it is. Fired-slot claims are pruned by count (§8). A channel's `files/` holds inbound attachments, which
 nothing ever asks for back — so it is `/tmp`, emptied when the channel mounts, needing no ager, no TTL
 and no reference tracking; the cost is that a session pointing at an attachment from before the current
-process reads ENOENT, exactly as a `/tmp` path from the last boot does.
+process reads ENOENT, exactly as a `/tmp` path from the last boot does. The clearing reaches one channel
+KIND's directory, so it stays inside the same boundary the rest of this section draws: the topologies
+listed above are untouched, and the one it can damage — a second process mounting the SAME channel, which
+clears the running one's attachments before it even binds — is the one already ruled out here for a
+different reason.
 
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the

@@ -70,6 +70,9 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain(`NO_PROXY: "agent,localhost,127.0.0.1,\${NO_PROXY:-}"`);
     expect(yaml).toContain(`no_proxy: "agent,localhost,127.0.0.1,\${no_proxy:-}"`);
     expect(yaml).toContain('restart: "no"');
+    // BOTH services: "every log has a layer that bounds it" is the whole argument, and Docker's default bounds
+    // neither of them.
+    expect(yaml.match(/max-size: "10m"/g)).toHaveLength(2);
     const dockerfile = plan.artifacts.find((artifact) => artifact.path.endsWith("Dockerfile"))!.content;
     expect(dockerfile).not.toContain("cloudflared");
     expect(runbook(plan)).toContain("locally onboarded Slack auto-register");

@@ -88,6 +88,12 @@ function composeYaml(input: DockerPlanInput): string {
       # bypass it; preserve any operator NO_PROXY entries after the required service/loopback names.
       NO_PROXY: "agent,localhost,127.0.0.1,${composeInterpolation("NO_PROXY")}"
       no_proxy: "agent,localhost,127.0.0.1,${composeInterpolation("no_proxy")}"
+    # Quieter than the agent, but bounded for the same reason: nothing else on this host bounds it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: "no"
 `
     : "";
