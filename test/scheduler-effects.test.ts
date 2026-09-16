@@ -36,7 +36,8 @@ function seedFiredSlots(stateRoot: string, names: string[], firedAt: string, slo
     const dir = join(stateRoot, "schedule", "claims", name);
     mkdirSync(dir, { recursive: true });
     // Through `toISOString` first: a claim file name is the shape `claimSlot` writes, and nothing else is read as one.
-    writeFileSync(join(dir, new Date(slot).toISOString().replace(/[:.]/g, "-")), `${firedAt} completed 1`);
+    const record = JSON.stringify({ firedAt, outcome: "completed", ms: 1 });
+    writeFileSync(join(dir, new Date(slot).toISOString().replace(/[:.]/g, "-")), record);
   }
 }
 /** How this state root says each fire of `name` ended — `undefined` = claimed, never settled. */

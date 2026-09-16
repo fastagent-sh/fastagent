@@ -118,35 +118,42 @@ export interface Fire {
   ms?: number;
 }
 
-const isOutcome = (s: string | undefined): s is FireOutcome =>
-  s === "completed" || s === "failed" || s === "interrupted";
+const isOutcome = (s: unknown): s is FireOutcome => s === "completed" || s === "failed" || s === "interrupted";
 
 /**
- * Read one claim file: `<firedAt>`, or `<firedAt> <outcome> <ms>` once the turn has reported. `undefined` means the
- * file is GONE — a concurrent claim pruned it between the listing and this read.
+ * Read one claim file: `{"firedAt":"…"}`, plus `outcome` and `ms` once the turn has reported.
  *
- * That case is distinct from "exists but unsettled" and must stay distinct: the reconciler settles what it finds
- * unsettled, so treating a pruned claim as unsettled would invent an `interrupted` fire for a run that finished long
- * ago.
+ * JSON, and not a line this module splits itself, because the write is deliberately not atomic (`settleClaim` may
+ * not leave a temp file in the directory `claimSlot` lists). A torn write must therefore be DETECTABLE, and that is
+ * exactly what JSON gives for free: half an object does not parse, so a partially written claim reads as unsettled
+ * — the safe state this design already handles — instead of as a record whose third field happened to look like a
+ * number. The positional form cost two shipped bugs of that shape (a torn duration read as `0ms`, an absent one
+ * coerced to the same), and the next field anyone adds would inherit them.
  *
- * An unusable stamp — empty because the process died between the create and the write, or not a date at all — falls
- * back to the slot instant in the file name. That is the earliest moment the fire can have happened, so the only
- * degradation is catching up one run that already ran: too many rather than too few.
+ * Anything unusable — a torn write, a missing stamp, a date that is not one — falls back to the slot instant in the
+ * file name. That is the earliest moment the fire can have happened, so the only degradation is catching up one run
+ * that already ran: too many rather than too few.
  */
 function parseClaim(raw: string, dir: string, name: string): Fire {
-  const slot = slotInstant(name);
-  const [stamp, outcome, ms] = raw.trim().split(/\s+/);
-  const fire: Fire = { slot, firedAt: slot };
-  if (stamp && !Number.isNaN(Date.parse(stamp))) fire.firedAt = stamp;
-  else if (stamp) log.warn(`[schedule] claim ${join(dir, name)} carries an unreadable stamp — using the slot instant`);
+  const fire: Fire = { slot: slotInstant(name), firedAt: slotInstant(name) };
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // Empty is ordinary: the process died between `openSync` creating the claim and the stamp being written.
+    if (raw.trim() !== "")
+      log.warn(`[schedule] claim ${join(dir, name)} is not readable JSON — using the slot instant`);
+    return fire;
+  }
+  const { firedAt, outcome, ms } = record;
+  if (typeof firedAt === "string" && !Number.isNaN(Date.parse(firedAt))) fire.firedAt = firedAt;
+  else log.warn(`[schedule] claim ${join(dir, name)} carries an unreadable stamp — using the slot instant`);
   if (isOutcome(outcome)) {
     fire.outcome = outcome;
-    // A settled fire may carry NO duration: an `interrupted` one was never timed by anybody (see `settleClaim`), and
-    // a torn write can leave a third field that is not a number. Both stay ABSENT — coercing to `0` would print as a
-    // turn that really did finish instantly, which is the one value this format refuses to invent.
-    const took = Number(ms);
-    if (ms !== undefined && ms !== "" && Number.isFinite(took)) fire.ms = took;
-  } else if (outcome) {
+    // A settled fire may carry NO duration: nobody timed an `interrupted` one (see `settleClaim`). Absent stays
+    // absent — `0` would print as a turn that really did finish instantly, the one value this record will not invent.
+    if (typeof ms === "number" && Number.isFinite(ms)) fire.ms = ms;
+  } else if (outcome !== undefined) {
     // A word we do not know is not an outcome: the fire reads as unsettled, which the next boot reports.
     log.warn(`[schedule] claim ${join(dir, name)} carries an unknown outcome — reading it as unsettled: ${outcome}`);
   }
@@ -209,8 +216,9 @@ export type SlotClaimOutcome =
  * already been claimed — a delivery older than the newest claim is a stale replay (AWS keeps retrying an event for up
  * to 24h), and firing it would bill a turn for an instant the schedule has already moved past.
  *
- * The claim carries the wall-clock instant it was taken, so the next boot can tell a fire that never reported from
- * one that did (`markInterruptedFire`) without depending on a second file being written after it.
+ * The claim carries the wall-clock instant it was taken (as `{"firedAt":"…"}`, the shape `settleClaim` writes the
+ * outcome back into), so the next boot can tell a fire that never reported from one that did
+ * (`markInterruptedFire`) without depending on a second file being written after it.
  */
 export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: Date): SlotClaimOutcome {
   const dir = claimDir(stateRoot, name);
@@ -227,7 +235,7 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
     throw e; // a real IO fault: the caller reports it and leaves the schedule armed
   }
   try {
-    writeFileSync(fd, firedAt.toISOString());
+    writeFileSync(fd, JSON.stringify({ firedAt: firedAt.toISOString() }));
   } catch (e) {
     // The claim exists from `openSync` on, so a failed stamp (ENOSPC, EIO) would leave a slot that can only ever be
     // read as `duplicate` — taken, never run, never reported. Remove it so the failure this rethrows costs a retry
@@ -324,12 +332,11 @@ export function settleClaim(stateRoot: string, name: string, slot: Date, outcome
     // when one was measured: nobody timed an `interrupted` fire, and writing `0` for it would print as a turn that
     // took no time — the same false value the history deliberately leaves blank.
     const claimed = parseClaim(readFileSync(fd, "utf8"), dir, file);
-    const took = ms === undefined ? "" : ` ${Math.round(ms)}`;
-    const line = `${claimed.firedAt} ${outcome}${took}`;
-    // Truncate first: settling `completed 12345` as the shorter `interrupted` would otherwise leave the old tail
-    // behind, and the next reader would parse those bytes as this claim's third field.
+    const record = { firedAt: claimed.firedAt, outcome, ...(ms === undefined ? {} : { ms: Math.round(ms) }) };
+    // Truncate first: a shorter record would otherwise leave the old tail behind. With JSON that tail can only
+    // produce a parse failure rather than a plausible field, but a file that says one thing is still worth having.
     ftruncateSync(fd, 0);
-    writeSync(fd, line, 0);
+    writeSync(fd, JSON.stringify(record), 0);
   } catch (e) {
     // Housekeeping: the turn itself already happened. The outcome is lost the same way the open failure above
     // loses it — `unreported` in the history, settled as `interrupted` by the next boot only while it is still the

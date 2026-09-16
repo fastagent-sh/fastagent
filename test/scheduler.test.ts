@@ -44,7 +44,7 @@ const seedClaim = (root: string, name: string, firedAt: string, slot = firedAt, 
   mkdirSync(dir, { recursive: true });
   // Through `toISOString` first: a claim file name is the shape `claimSlot` writes, and nothing else is read as one.
   const file = new Date(slot).toISOString().replace(/[:.]/g, "-");
-  writeFileSync(join(dir, file), settled ? `${firedAt} completed 1` : firedAt);
+  writeFileSync(join(dir, file), JSON.stringify(settled ? { firedAt, outcome: "completed", ms: 1 } : { firedAt }));
 };
 /** How this state root says the fires for `name` ended. */
 const outcomes = (root: string, name: string): (string | undefined)[] => readFires(root, name).map((f) => f.outcome);
@@ -120,7 +120,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     // outcome, turning runs that actually succeeded into `interrupted`.
     const root = await freshRoot();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    seedClaim(root, "job", "2026-07-07T08:00:00.000Z", undefined, false); // what the previous format wrote
+    seedClaim(root, "job", "2026-07-07T08:00:00.000Z", undefined, false); // claimed, never settled
     seedClaim(root, "job", "2026-07-07T09:00:00.000Z", undefined, false);
     seedClaim(root, "job", "2026-07-07T10:00:00.000Z", undefined, false); // the fire that was actually killed
     const { agent } = recordingAgent();
@@ -207,20 +207,38 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(logs).toEqual([]);
   });
 
+  it("a half-written claim reads as UNSETTLED, not as a record with a plausible field", async () => {
+    // The write is deliberately not atomic, so a torn claim is a real state. JSON is what makes it detectable as a
+    // whole: half an object does not parse, where a half-written positional line could still hand back a duration.
+    const root = await freshRoot();
+    const warns: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void warns.push(a.join(" ")));
+    const dir = join(root, "schedule", "claims", "job");
+    mkdirSync(dir, { recursive: true });
+    const whole = JSON.stringify({ firedAt: "2026-07-07T10:00:00.000Z", outcome: "completed", ms: 12345 });
+    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), whole.slice(0, whole.length - 8)); // the disk filled here
+    const fire = readFires(root, "job")[0];
+    expect(fire).toMatchObject({ firedAt: "2026-07-07T10:00:00.000Z" }); // the slot instant, from the file NAME
+    expect(fire).not.toHaveProperty("outcome"); // so the next boot settles it as interrupted, which is true
+    expect(fire).not.toHaveProperty("ms");
+    expect(warns.some((w) => /is not readable JSON/.test(w))).toBe(true);
+  });
+
   it("a duration that is not a number reads as NO duration, never as 0ms", async () => {
-    // The third field can be torn by a half-written settle. `0` would print as a turn that really did finish
-    // instantly, which is the one value this format refuses to invent — the same rule an untimed fire follows.
+    // `0` would print as a turn that really did finish instantly, which is the one value this record will not
+    // invent — the same rule an untimed fire follows.
     const root = await freshRoot();
     const dir = join(root, "schedule", "claims", "job");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), "2026-07-07T10:00:00.000Z completed 12x45");
+    const raw = JSON.stringify({ firedAt: "2026-07-07T10:00:00.000Z", outcome: "completed", ms: "12x45" });
+    writeFileSync(join(dir, "2026-07-07T10-00-00-000Z"), raw);
     expect(readFires(root, "job")[0]).toMatchObject({ outcome: "completed" });
     expect(readFires(root, "job")[0]).not.toHaveProperty("ms");
   });
 
-  it("re-settling a claim leaves no tail of the longer line it replaced", async () => {
-    // `completed 12345` settled again as the shorter `interrupted` would otherwise leave `45` behind, and the next
-    // reader parses whatever follows the outcome as this claim's duration — inventing a turn that took 45ms.
+  it("re-settling a claim leaves no tail of the longer record it replaced", async () => {
+    // A shorter record written over a longer one would otherwise leave the old tail behind; with JSON that tail can
+    // only break the parse, but a file that says one thing is still worth having.
     const root = await freshRoot();
     const slot = new Date("2026-07-07T10:00:00.000Z");
     seedClaim(root, "job", slot.toISOString(), undefined, false);

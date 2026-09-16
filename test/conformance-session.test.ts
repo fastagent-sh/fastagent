@@ -365,7 +365,8 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and re
       // The claim a previous, completed fire left: where catch-up resumes from.
       const claims = join(stateRoot, "schedule", "claims", "job");
       mkdirSync(claims, { recursive: true });
-      writeFileSync(join(claims, "2026-07-07T08-00-00-000Z"), "2026-07-07T08:00:00.000Z completed 1");
+      const record = JSON.stringify({ firedAt: "2026-07-07T08:00:00.000Z", outcome: "completed", ms: 1 });
+      writeFileSync(join(claims, "2026-07-07T08-00-00-000Z"), record);
     } else
       writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
         { id: "first", session: sessionId, prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
