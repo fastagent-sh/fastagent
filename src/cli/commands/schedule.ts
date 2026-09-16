@@ -3,39 +3,58 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { readRuns } from "../../schedule/audit.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
+import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 /**
- * `fastagent schedule history <name> [dir]`: print the run audit for one schedule (or "wake") — fired time, outcome,
- * duration, reply/error.
+ * `fastagent schedule history <name> [dir]`: print this schedule's fired slots — when each fired, how it ended, how
+ * long it took.
+ *
+ * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
+ * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's.
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
-  const runs = readRuns(resolveStateRoot(target), name);
+  const stateRoot = resolveStateRoot(target);
+  // A name that cannot be a schedule is a MISTYPED ARGUMENT, and it must not look like an empty history: exit 1 the
+  // way every other user-input refusal does, so `--json` printing nothing is never read as "the command succeeded".
+  if (!isSafeScheduleName(name)) {
+    failStartup(new Error(`"${name}" cannot be a schedule name (no path separators, "." or "..")`));
+  }
+  // `readFires` throws a raw fs error on unreadable state, because its other caller is the serving boot, which must
+  // fail rather than arm a schedule it cannot read. This caller is a read-only CLI command: the same fact is an
+  // operator's to fix, so it exits the way every other refusal in this file does instead of printing a Node stack.
+  let fires: Fire[];
+  try {
+    fires = readFires(stateRoot, name);
+  } catch (e) {
+    failStartup(new Error(`the fired-slot claims for "${name}" are unreadable (state: ${stateRoot}): ${String(e)}`));
+  }
   if (json) {
-    console.log(JSON.stringify(runs, null, 2));
+    console.log(JSON.stringify(fires, null, 2));
     return;
   }
-  if (runs.length === 0) {
-    console.error(`no recorded runs for "${name}" (state: ${resolveStateRoot(target)})`);
+  if (fires.length === 0) {
+    // No special case for "wake": it is an ordinary schedule name now (`discover.ts` stopped reserving it).
+    console.error(`no recorded fires for "${name}" (state: ${stateRoot})`);
     return;
   }
-  // The question is "did LAST NIGHT's run fail?" — so text mode tails the most recent runs (chronological within the
-  // tail); --json above returns the full history.
+  // The question is "did LAST NIGHT's run fail?", so text mode tails the most recent fires; --json above is the
+  // whole retained window.
   const TAIL = 20;
-  const shown = runs.slice(-TAIL);
-  if (runs.length > shown.length) {
-    console.error(`(showing the last ${shown.length} of ${runs.length} runs — --json for all)`);
+  const shown = fires.slice(-TAIL);
+  for (const f of shown) {
+    // An unreported fire has no duration to print, and `0ms` would be a value a fast turn really produces — the
+    // column stays empty rather than claiming the turn took no time.
+    const took = f.ms === undefined ? "" : `${f.ms}ms`;
+    console.log(`${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}`);
   }
-  for (const r of shown) {
-    const detail = r.error ?? r.reply ?? "";
-    const preview = detail.replace(/\s+/g, " ").slice(0, 100);
-    console.log(`${r.firedAt}  ${r.outcome.padEnd(11)} ${String(r.ms).padStart(6)}ms  ${preview}`);
+  if (fires.length > shown.length) {
+    console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
   }
 }
 

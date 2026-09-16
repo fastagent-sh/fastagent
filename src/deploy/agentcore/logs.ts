@@ -1,5 +1,6 @@
 /** AgentCore log discovery + tailing. */
 import type { CliRunner } from "../runner.ts";
+import { forwarderLogGroup } from "./plan.ts";
 import { parseStackOutputs } from "./run.ts";
 
 export type AgentcoreLogSource = "runtime" | "forwarder";
@@ -67,7 +68,7 @@ export async function tailAgentcoreLogs(
     prefix = `/aws/bedrock-agentcore/runtimes/${runtimeId}-`;
   } else {
     // `ForwarderUrl` is the stack's INGRESS URL, NOT proof that a forwarder Lambda exists.
-    exact = `/aws/lambda/fastagent-${plan.name}-forwarder`;
+    exact = forwarderLogGroup(plan.name);
     prefix = exact;
   }
 

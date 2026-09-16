@@ -212,7 +212,7 @@ Telegram media are handled by the channel before the agent turn runs.
 - Documents, voice, video, and audio are downloaded to `<state root>/channels/telegram/files/c-<chat>/` (`c-` plus the URL-encoded chat id). Their local paths are appended to the prompt so the agent can read them with tools.
 - Download failures become `failed` events, never silent drops.
 
-Downloaded files persist until the operator cleans them up. Treat `<state root>/channels/telegram/` like session state: git-ignored machine state that may need a volume or cleanup policy for long-running bots.
+Downloaded files are kept: the path the agent was given stays readable for as long as the conversation can refer back to it, and nothing removes them. Treat `<state root>/channels/telegram/` like session state — git-ignored machine state that wants a volume, and a cleanup policy you choose, on a long-running bot that receives a lot of files.
 
 ## State & restarts
 
@@ -220,7 +220,7 @@ The channel persists its state under `<state root>/channels/telegram/` (the stat
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run.
-- `files/c-<chat>/` — downloaded inbound files, one directory per chat.
+- `files/c-<chat>/` — downloaded inbound files, one directory per chat. Kept across restarts, and never pruned by FastAgent (see above).
 
 The per-session turn queue is **in-memory** (one turn at a time per session; a second summon waits instead of colliding on the engine lease), with a durable **intent** layer on top (`turns.json`). Turn durability is layered:
 

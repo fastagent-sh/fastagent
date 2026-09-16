@@ -451,23 +451,18 @@ const deploy: CommandSpec = {
 
 const schedule: CommandSpec = {
   name: "schedule",
-  summary: "inspect and control time triggers: run audit, pending fires, cancel a wake-up",
+  summary: "inspect and control time triggers: fire history, pending fires, cancel a wake-up",
   subcommands: [
     {
       name: "history",
-      summary: 'print the run audit for a schedule (or "wake" for self-scheduled wake-ups)',
+      summary: "print the recent fires of a schedule",
       description:
-        "Print the run audit for a schedule: when each run fired, completed/failed/deferred, duration, and " +
-        'the reply/error — the answer to "did last night\'s run silently fail?". Read-only.',
-      args: [
-        { name: "<name>", description: 'the schedule name, or "wake" for the agent\'s self-scheduled wake-ups' },
-        DIR_ARG,
-      ],
-      flags: [{ flags: "--json", description: "the full records (complete reply text)" }],
-      examples: [
-        { cmd: "fastagent schedule history daily-digest" },
-        { cmd: "fastagent schedule history wake --json", note: "the agent's own wake-ups" },
-      ],
+        "Print a schedule's recent fires: when each fired, completed/failed/interrupted, and how long it took " +
+        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session journal ' +
+        "under <state root>/sessions/, not here and not in the logs. Read-only.",
+      args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
+      flags: [{ flags: "--json", description: "the full records" }],
+      examples: [{ cmd: "fastagent schedule history daily-digest" }],
       run: async (args, flags) =>
         (await import("./commands/schedule.ts")).runScheduleHistory(
           args[0] as string,

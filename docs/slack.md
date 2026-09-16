@@ -328,6 +328,10 @@ Slack state lives under:
 └── files/
 ```
 
+`files/` holds downloaded inbound files, one directory per channel. They are kept — the path the agent
+was given stays readable for as long as the conversation can refer back to it — and FastAgent never
+prunes them, so a workspace that receives a lot of files wants a volume sized for that.
+
 `thread-participants.json` records what the Agent HEARD in each group thread — the humans it saw speak
 (capped at two, since the rule only asks whether a second one exists) and whether it has answered
 there. It is written for **every group thread the channel can see**, including behind a custom route,

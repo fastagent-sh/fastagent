@@ -38,10 +38,6 @@ export async function loadSchedules(dir: string): Promise<{
       if (declaration.error !== undefined) throw new Error(declaration.error);
       const err = cronError(s.cron, s.tz);
       if (err) throw new Error(`${label}: invalid cron/tz — ${err}`);
-      // "wake" is reserved: the run audit records self-scheduled wake-ups under that name, so a schedule named wake
-      // would make `schedule history wake` an unreadable mix of two different things.
-      if (name === "wake")
-        throw new Error(`${label}: "wake" is a reserved schedule name (the self-scheduling audit uses it)`);
       // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`), so anything that could
       // leave that directory is refused here — where the author sees which file is wrong — rather than deeper.
       if (!isSafeScheduleName(name)) {

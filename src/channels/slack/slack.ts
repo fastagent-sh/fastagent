@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { portJoin } from "../../effect-port.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
+import { attachmentsDir } from "../kit/attachment-path.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
@@ -382,7 +383,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                   agent,
                   turn.session,
                   `${discussionBlock(discussion.text)}${turn.baseText}`,
-                  { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label },
+                  { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
                   {
                     primaryFileIds: turn.fileIds,
                     buffered: collectSlackBufferedFiles(discussion.consumed, new Set(turn.fileIds)),

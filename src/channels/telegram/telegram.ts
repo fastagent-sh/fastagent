@@ -27,6 +27,7 @@ import {
   telegramStop,
 } from "./parse.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
+import { attachmentsDir } from "../kit/attachment-path.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
@@ -185,7 +186,7 @@ export function telegramChannel({
             agent,
             rec.session,
             `${discussionBlock(discussion.text)}${rec.baseText}`,
-            { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: join(stateHome, "files") },
+            { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
             {
               primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
               buffered: collectAttachments(discussion.consumed, {

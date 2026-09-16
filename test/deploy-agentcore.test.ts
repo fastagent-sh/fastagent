@@ -141,6 +141,9 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("fastagent deploy agentcore");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --follow");
     expect(plan.runbook.join("\n")).not.toContain("--source forwarder");
+    // The only state this host does not reclaim: a turn's reply is a log line, and CloudWatch keeps log data
+    // indefinitely until someone sets a retention policy. The runbook has to say so — nothing else will.
+    expect(plan.runbook.join("\n")).toContain("aws logs put-retention-policy");
   });
 
   it("keeps state and credentials as independent siblings on EFS", () => {
@@ -174,6 +177,11 @@ describe("deploy agentcore: the plan", () => {
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --source forwarder --follow");
+    // A second log source is a second unbounded group: the Lambda's own, which defaults to never expiring just
+    // like the runtime's. "Every log has a layer that bounds it" is false here unless BOTH are named.
+    expect(plan.runbook.join("\n")).toContain(
+      "aws logs put-retention-policy --log-group-name /aws/lambda/fastagent-my-agent-forwarder --retention-in-days 14",
+    );
     // The shipped artifact IS the forwarder source (it becomes the Lambda package verbatim).
     const forwarder = plan.artifacts.find((a) => a.path === `fastagent/${FORWARDER_FILE}`)!;
     expect(forwarder.content).toBe(forwarderSource());

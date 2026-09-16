@@ -1,5 +1,12 @@
-/** Where an inbound attachment lands: `<filesDir>/<conversation>/<file>`. */
-import { resolve, sep } from "node:path";
+/** Where an inbound attachment lands: `<stateHome>/files/<conversation>/<file>`. */
+import { join, resolve, sep } from "node:path";
+
+/**
+ * THE inbound-attachment root inside a channel's state home. One spelling because three channels write here and a
+ * conversation id becomes a directory under it; nothing else reads it, and nothing removes it — an attachment is
+ * durable conversation data, and this directory grows with the agent's inbound traffic (docs/design/core.md §9).
+ */
+export const attachmentsDir = (stateHome: string): string => join(stateHome, "files");
 
 export function attachmentPath(
   filesDir: string,

@@ -48,6 +48,9 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain('FASTAGENT_SECRETS_DIR: "/data/.secrets"');
     expect(yaml).toContain("- state:/data");
     expect(yaml).toContain("restart: unless-stopped");
+    // Docker's default json-file driver never rotates, and this agent's log is where a failed turn's reason is
+    // recorded — so the topology carries the bound the host does not.
+    expect(yaml).toMatch(/logging:\n\s+driver: json-file\n\s+options:\n\s+max-size: "10m"\n\s+max-file: "3"/);
     expect(yaml).not.toContain("cloudflared");
     expect(yaml).not.toContain("trycloudflare");
     expect(yaml).not.toContain("TUNNEL_TOKEN");
@@ -67,6 +70,9 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain(`NO_PROXY: "agent,localhost,127.0.0.1,\${NO_PROXY:-}"`);
     expect(yaml).toContain(`no_proxy: "agent,localhost,127.0.0.1,\${no_proxy:-}"`);
     expect(yaml).toContain('restart: "no"');
+    // BOTH services: "every log has a layer that bounds it" is the whole argument, and Docker's default bounds
+    // neither of them.
+    expect(yaml.match(/max-size: "10m"/g)).toHaveLength(2);
     const dockerfile = plan.artifacts.find((artifact) => artifact.path.endsWith("Dockerfile"))!.content;
     expect(dockerfile).not.toContain("cloudflared");
     expect(runbook(plan)).toContain("locally onboarded Slack auto-register");

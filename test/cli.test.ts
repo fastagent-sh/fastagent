@@ -295,6 +295,30 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/looked in .*fastagent\/schedules/);
   });
 
+  it("schedule history refuses an impossible name with exit 1, not an empty history", async () => {
+    // The difference that matters to a script: a mistyped argument and "this schedule has never fired" must not
+    // both look like success with no output — which is exactly what `--json` printing nothing would say.
+    const dir = await agentWorkspace("fa-history-");
+    const bad = await run(["schedule", "history", "../escape", dir, "--json"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toMatch(/cannot be a schedule name/);
+    // A real name that simply has no claims is the other case, and it succeeds with an empty history.
+    const empty = await run(["schedule", "history", "daily", dir, "--json"]);
+    expect(empty.code).toBe(0);
+    expect(JSON.parse(empty.stdout)).toEqual([]);
+
+    // Unreadable state is a THIRD case, and it is the operator's to fix: a read-only command says so in one line
+    // rather than printing the Node stack `readFires` throws for the serving boot's benefit.
+    await mkdir(join(dir, "fastagent", ".state", "schedule", "claims"), { recursive: true });
+    await writeFile(join(dir, "fastagent", ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
+    const broken = await run(["schedule", "history", "daily", dir, "--json"]);
+    expect(broken.code).toBe(1);
+    expect(broken.stdout).toBe("");
+    expect(broken.stderr).toMatch(/fired-slot claims for "daily" are unreadable/);
+    expect(broken.stderr).not.toMatch(/at listClaims/); // no stack
+  });
+
   it("an unknown name still reports the file that failed to load — that IS why the name is missing", async () => {
     // A broken file is absent from the available list, so "unknown tool/schedule" is exactly the case
     // where the author needs to hear about the import error rather than doubt their spelling.

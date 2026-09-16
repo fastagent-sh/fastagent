@@ -88,6 +88,12 @@ function composeYaml(input: DockerPlanInput): string {
       # bypass it; preserve any operator NO_PROXY entries after the required service/loopback names.
       NO_PROXY: "agent,localhost,127.0.0.1,${composeInterpolation("NO_PROXY")}"
       no_proxy: "agent,localhost,127.0.0.1,${composeInterpolation("no_proxy")}"
+    # Quieter than the agent, but bounded for the same reason: nothing else on this host bounds it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: "no"
 `
     : "";
@@ -125,6 +131,15 @@ services:
       FASTAGENT_AUTH_SEED: "${composeInterpolation("FASTAGENT_AUTH_SEED")}"
     volumes:
       - state:${MOUNT}
+    # The agent's log is where a failure's reason is recorded (a scheduled fire logs the detail; what the turn
+    # SAID is in its session, not here), and Docker's default json-file driver never rotates — so on this host
+    # the bound has to be written down. Fly and Railway bound their own log retention; AgentCore does NOT
+    # (CloudWatch keeps data indefinitely until an operator sets a retention policy — its runbook says so).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 ${tunnelService}
 volumes:

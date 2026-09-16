@@ -194,6 +194,12 @@ fastagent logs agentcore --source forwarder --follow
 
 AWS creates each log group on first use. Before the first Runtime invocation or forwarder event, the command says which trigger is missing instead of sending `aws logs tail` to a nonexistent group. Pass the same `[dir]` used for deploy when running from somewhere else.
 
+**Set a retention period on those groups.** CloudWatch keeps log data indefinitely by default and nothing in the stack creates the groups (each service creates its own) — so this is the one state path this host does not reclaim on its own, and it is also where WHY a scheduled turn failed is recorded. Both the runbook and `--run` print the command; it is one call per group:
+
+```bash
+aws logs put-retention-policy --log-group-name <the group the command above resolves> --retention-in-days 14
+```
+
 AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed after the configured idle timeout — 3 minutes by default). The second half is a hard constraint on the agent, not just on the host: a turn here cannot require the previous turn's process, which is SPEC MUST 6 — see [conformance levels](design/conformance-levels.md). The stack therefore carries:
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);

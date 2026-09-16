@@ -231,7 +231,12 @@ Telegram documents/audio/video and Slack files are downloaded under:
 
 The directory is `c-` followed by the URL-encoded conversation id, so an id carrying `/` or `:`
 (a Feishu thread, a custom route's own id) still names one directory: `oc_x:thread/1` is stored as
-`c-oc_x%3Athread%2F1`. The full path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.
+`c-oc_x%3Athread%2F1`. The full path is appended to the prompt. Make sure the agent has filesystem tools enabled.
+
+These files are kept across restarts and never pruned by FastAgent, so an ENOENT here means the state
+root moved (check `FASTAGENT_STATE_DIR` and, on a deployed box, that the volume is mounted) or something
+outside FastAgent removed them. The flip side is that the directory grows with every inbound file: it is
+yours to size and prune.
 
 ## Feishu URL verification fails
 

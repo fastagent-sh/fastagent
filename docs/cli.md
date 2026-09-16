@@ -26,7 +26,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
 | `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
-| `schedule history <name> [dir]` | Print the run audit for a schedule (or `wake`). |
+| `schedule history <name> [dir]` | Print a schedule's recent fires (what they said is in the session). |
 | `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
@@ -225,16 +225,35 @@ only fires and logs. See the [API reference](./api-reference.md#schedule-authori
 fastagent schedule history <name> [dir] [--json]
 ```
 
-Prints the run audit for one schedule — or `wake` for the agent's self-scheduled wake-ups: when each run
-fired, its outcome (`completed` / `failed` / `deferred` / `interrupted` / `stale`), duration, and a preview of the reply
-or error. `interrupted` means the process stopped between claiming that slot and finishing its turn — a restart
-or rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start records it.
-That reconciliation covers `schedules/` cron fires only: a wake-up is taken out of the store before its turn
-starts, so one whose process was killed leaves no claim behind and no `interrupted` line under `wake`. `stale` means
-a slot arrived after the schedule had already claimed a later one — that instant will never run, which a clock that
-moved backwards (a VM resume, a host correction) can produce in a row.
-The answer to "did last night's run silently fail?". Read-only (reads `<state root>/schedule/runs.jsonl`,
-written by the serving scheduler); `--json` prints the full records, including the complete reply text.
+Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`, or
+`unreported` for a fire nothing settled), and how long it took (blank when nothing timed it — an
+`interrupted` fire was never timed by anybody).
+
+`interrupted` means the process stopped between claiming that slot and finishing its turn — a restart or
+rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start of a
+**resident** scheduler (`start`, `dev`, `deploy docker|fly|railway`) records it.
+
+A fire reads `unreported` when nothing settled it: one still running, or one nothing will ever settle. The
+second case is AgentCore: it delivers slots from an external clock, so no boot of it runs the reconciler,
+on the host that reclaims its container most often.
+
+The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
+construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
+nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
+Read-only.
+
+**WHAT a run said is not here.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
+under `<state root>/sessions/` like any other conversation, so the turn's text is stored exactly once — in
+that session's journal, which today is read by opening the `.jsonl` file. No command prints a past
+scheduled turn: `fastagent attach schedule:<name>` needs `sessionControl: true` and a running serve, and it
+tails NEW events rather than backfilling the ones already there. **WHY a failed one failed is a log line** — and that window is
+the host's, not this one's: claims can reach ~3 weeks while Fly's and Railway's log retention is typically
+days, so a `failed` row can outlive its own explanation ([Deploy](deploy.md) covers per-host retention).
+
+Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
+(taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had
+already claimed a later one — that instant will never run, which a clock that moved backwards can produce in
+a row; it is logged as a warning, where an ordinary duplicate delivery is an info line).
 
 `fastagent schedule list [dir]` shows everything that will fire, from BOTH producers: the static
 `schedules/` files (name + next cron instant) and the agent's pending self-scheduled wake-ups (id, next

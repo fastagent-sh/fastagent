@@ -371,15 +371,14 @@ Create `fastagent/schedules/` only when needed. Inspect and test from the worksp
 fastagent schedule list
 fastagent fire daily-review
 fastagent schedule history daily-review
-fastagent schedule history wake
 ```
 
 These commands read the selected local state root, not a deployed host's state.
 
 `fire` runs one real turn immediately and prints its reply without advancing the cron fire state.
 It can still perform real tool side effects and update conversation history; it is not a dry run.
-Serving-time runs are recorded in the schedule audit. `invoke` and `fire` do not mount the serving-time
-`wake` tool or prove that a future timer fires.
+A serving-time fire records its outcome in the slot it claimed; what it said is in its session, like any other turn.
+`invoke` and `fire` do not mount the serving-time `wake` tool or prove that a future timer fires.
 
 Enable `selfSchedule: true` in the existing config only when autonomous follow-ups are wanted. Then test
 an actual `wake` while serving, including its eventual action and delivery. Use `fastagent schedule list`
@@ -439,7 +438,7 @@ host. AgentCore's public webhook URL belongs to its forwarder; direct runtime in
 | Data | What must survive, and how |
 |---|---|
 | Persona, skills, tools, config, and package lockfile | The image seeds the local workspace and installs only the agent package's dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
-| Runtime session journals, channel state, pending work, schedule audit | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
+| Runtime session journals, channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
 | Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. AgentCore clears them on deploy and re-seeds model auth from the deployer. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
 | Business notes, approvals, generated artifacts | Write ongoing work under the volume's `base/`, outside the release-managed definition. Docker, Fly, and Railway preserve it across deploys; AgentCore resets it. Use an external store when the host's retention is insufficient. |
 

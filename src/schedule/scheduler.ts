@@ -7,10 +7,9 @@ import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
-import { appendRun, latestFiredAt } from "./audit.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
-import { claimSlot, latestFire } from "./state.ts";
+import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /** A schedule shares one continuing conversation without depending on engine session storage. */
@@ -20,59 +19,33 @@ export function scheduleSession(name: string): string {
 
 /**
  * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
- * for that turn (see `AgentService.close`), so a restart landing mid-fire leaves a claim that the next boot skips
- * with nothing in `runs.jsonl` — the exact silence that audit exists to prevent. Recorded once, at the next boot.
+ * for that turn (see `AgentService.close`), so a restart landing mid-fire leaves a claim that the next boot skips —
+ * the exact silence the history exists to prevent. Settled once, at the next boot, which also makes it idempotent.
  *
- * The claim is the ONE record here: it IS the decision, and `start()` reads it once for this and for catch-up.
+ * The claim is the ONE record here: it IS the decision, and the outcome is written back into it.
  *
- * NOT re-fired: a turn that kills its own process would then replay on every boot. Resident path only — a host
- * without a persistent volume loses `runs.jsonl` between runs, where every claim would look interrupted. Cron only:
- * a killed wake-up leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
+ * NOT re-fired: a turn that kills its own process would then replay on every boot. Cron only: a killed wake-up
+ * leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
  *
- * KNOWN FALSE POSITIVE: a second scheduler booting while the first is mid-turn sees a claim no record accounts for
- * YET, and reports it. The audit then carries both lines for that instant (`interrupted`, then the real outcome).
- * Telling them apart needs the claimer's liveness, which is a lease, not a claim — and the whole point of the claim
- * is that it needs no liveness.
+ * THE NEWEST CLAIM ONLY. A schedule's loop runs one turn at a time, so a killed process leaves exactly one claim
+ * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can
+ * produce, and would instead rewrite every claim an OLDER FORMAT left without an outcome, turning a window of runs
+ * that actually succeeded into `interrupted`.
+ *
+ * KNOWN FALSE POSITIVE: a second scheduler booting while the first is mid-turn sees a claim nothing accounts for
+ * YET, and reports it; the first process then overwrites the outcome when its turn settles. Telling them apart needs
+ * the claimer's liveness, which is a lease, not a claim — and the whole point of the claim is that it needs none.
  */
-function recordInterruptedFires(stateRoot: string, schedules: LoadedSchedule[], lastFires: Map<string, string>): void {
-  // A wake-up-only agent still starts a scheduler, and its audit is the fastest-growing kind (one line per wake,
-  // reply text included) — with no cron schedule there is nothing to reconcile, so do not read the file at all.
-  if (schedules.length === 0) return;
-  let reported: Map<string, string>;
-  try {
-    reported = latestFiredAt(
-      stateRoot,
-      schedules.map((s) => s.name),
-    );
-  } catch (e) {
-    // An unreadable audit (EACCES, EIO, a directory where the file should be) is a lost diagnostic, not a lost
-    // schedule: `appendRun` already treats a failed write that way, and the claims — what correctness depends on —
-    // are read separately and still fatal.
-    log.warn(`[schedule] could not read the run audit — skipping the interrupted-fire check: ${String(e)}`);
-    return;
-  }
-  for (const s of schedules) {
-    const claimed = lastFires.get(s.name);
-    if (!claimed) continue;
-    // Compared as INSTANTS, not strings: an ISO timestamp only sorts lexicographically when both sides carry the
-    // same precision, and these two come from different writers. The claim's stamp is taken before the turn, so any
-    // record at or after it accounts for that claim — including the one appended below, which makes this idempotent
-    // across boots.
-    const lastReported = Date.parse(reported.get(s.name) ?? "");
-    if (!Number.isNaN(lastReported) && lastReported >= Date.parse(claimed)) continue;
-    log.warn(
-      `[schedule] ${s.name}: the fire claimed at ${claimed} never finished — the process stopped mid-turn and that ` +
-        `slot stays skipped (see \`fastagent schedule history ${s.name}\`)`,
-    );
-    appendRun(stateRoot, {
-      name: s.name,
-      session: scheduleSession(s.name),
-      firedAt: claimed,
-      ms: 0,
-      outcome: "interrupted",
-      error: "the process stopped before the turn finished",
-    });
-  }
+function markInterruptedFire(stateRoot: string, name: string, fire: Fire | undefined): void {
+  if (fire === undefined || fire.outcome !== undefined) return;
+  log.warn(
+    `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
+      `and that slot stays skipped (see \`fastagent schedule history ${name}\`)`,
+  );
+  // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
+  // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
+  // turn was never timed, and the process that could have timed it is gone.
+  settleClaim(stateRoot, name, new Date(fire.slot), "interrupted");
 }
 
 export interface Scheduler {
@@ -96,7 +69,28 @@ export interface SchedulerOptions {
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
 
-/** The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup. */
+/**
+ * ONE LINE, ALWAYS: the tail a failure contributes to its log line, as `: <text>`, or nothing when there is none.
+ *
+ * `log.ts` prefixes only the first line, so a newline anywhere in here emits a second line that is byte-for-byte a
+ * real record (`ERROR [schedule] daily failed (1ms): DISK ON FIRE`) — and a failure detail can carry model or
+ * provider text. Folding also keeps the line-oriented consumers — `docker logs`, journald, CloudWatch — reading one
+ * fire as one event.
+ */
+function oneLine(text: string): string {
+  const folded = text.replace(/\s+/g, " ").trim();
+  return folded === "" ? "" : `: ${folded}`;
+}
+
+/**
+ * The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup.
+ *
+ * WHAT THE TURN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
+ * (`schedule:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
+ * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
+ * unstructured, in a stream with a wider audience and a bound that differs per host — which is the growth #546 asked
+ * us to stop, relocated rather than removed.
+ */
 function runTurn(agent: Agent, label: string, session: string, prompt: string) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -107,28 +101,28 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
       try: async () => {
         let failed: string | undefined;
         let busy = false;
-        let reply = "";
+        // The text deltas are iterated and dropped. Accumulating them would be a second copy of what the session
+        // already holds, and no caller here reads it — the outcome is the whole record (docs/design/core.md §8).
         for await (const e of agent.invoke({ session }, { text: prompt })) {
-          if (e.type === "text") reply += e.delta;
           if (e.type === "failed") {
             failed = e.details;
             busy = e.code === SESSION_BUSY_CODE;
           }
         }
-        return { busy: failed !== undefined && busy, failed, reply };
+        return { busy: failed !== undefined && busy, failed };
       },
       catch: (cause) => new PortFailure(cause),
     }).pipe(
       Effect.match({
         onSuccess: (result) => {
-          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms): ${result.failed}`);
+          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${oneLine(result.failed)}`);
           else log.info(`[schedule] ${label} completed (${elapsed()}ms)`);
           return { ...result, ms: elapsed() };
         },
         onFailure: (error) => {
           // An iterator throw violates SPEC MUST 2 and is never a replay-safe busy rejection.
-          log.error(`[schedule] ${label} errored (${elapsed()}ms): ${String(error.cause)}`);
-          return { busy: false, failed: String(error.cause), reply: "", ms: elapsed() };
+          log.error(`[schedule] ${label} errored (${elapsed()}ms)${oneLine(String(error.cause))}`);
+          return { busy: false, failed: String(error.cause), ms: elapsed() };
         },
       }),
     );
@@ -143,7 +137,7 @@ export interface ScheduleFireOutcome {
   ms: number;
 }
 
-/** Shared resident/external claim → run → audit. */
+/** Shared resident/external claim → run → settle. */
 export function fireScheduleOnce(opts: {
   agent: Agent;
   stateRoot: string;
@@ -171,33 +165,17 @@ export function fireScheduleOnce(opts: {
           return reason;
         }
         // Not ordinary: this instant will never run. The common way in is a wall clock that moved backwards (a VM
-        // resume, a host clock correction), which keeps producing slots behind the newest claim — so it must be
-        // visible in `schedule history`, not only in a log line that looks like the benign case.
+        // resume, a host clock correction), which keeps producing slots behind the newest claim. No claim was taken,
+        // so there is nothing to record: it is a WARN where the benign duplicate is an info line.
         const reason = `slot ${slot.toISOString()} is stale: ${claim.newest} was already claimed, so this instant is skipped`;
         log.warn(`[schedule] ${s.name}: skipping — ${reason}`);
-        appendRun(stateRoot, {
-          name: s.name,
-          session: scheduleSession(s.name),
-          firedAt: firedAt.toISOString(),
-          ms: 0,
-          outcome: "stale",
-          error: reason,
-        });
         return reason;
       },
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
     const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
-    appendRun(stateRoot, {
-      name: s.name,
-      session: scheduleSession(s.name),
-      firedAt: firedAt.toISOString(),
-      ms: r.ms,
-      outcome: r.failed ? "failed" : "completed",
-      reply: r.failed ? undefined : r.reply,
-      error: r.failed,
-    });
+    settleClaim(stateRoot, s.name, slot, r.failed ? "failed" : "completed", r.ms);
     return { fired: true, failed: r.failed, ms: r.ms };
   }).pipe(Effect.uninterruptible);
 }
@@ -257,17 +235,11 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           yield* fireScheduleOnce({ agent, stateRoot, schedule: s, slot: due, now }).pipe(
             Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() => {
+                // Nothing to record: this fault happens BEFORE the claim exists (that is what keeps the slot
+                // unburned), so there is no claim to write an outcome into.
                 log.error(
                   `[schedule] ${s.name}: fire failed (skipping this run, schedule stays armed): ${String(error.cause)}`,
                 );
-                appendRun(stateRoot, {
-                  name: s.name,
-                  session: scheduleSession(s.name),
-                  firedAt: now().toISOString(),
-                  ms: 0,
-                  outcome: "failed",
-                  error: `run skipped — fire failed: ${String(error.cause)}`,
-                });
               }),
             ),
             Effect.uninterruptible,
@@ -287,7 +259,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         () =>
           Effect.gen(function* () {
             const label = `wake ${w.id.slice(0, 8)}`;
-            const firedAt = now().toISOString();
             const r = yield* runTurn(agent, label, w.session, wakeEnvelope(w));
             let kept = false;
             if (r.busy && !w.cron) {
@@ -300,22 +271,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             } else if (r.busy && w.cron) {
               log.error(`[schedule] ${label}: occurrence skipped (session busy); next fires per cron`);
             }
-            // The recurrence was advanced by the claim; only a retained one-shot is audited deferred.
-            appendRun(stateRoot, {
-              name: "wake",
-              session: w.session,
-              firedAt,
-              ms: r.ms,
-              outcome: r.busy ? (kept ? "deferred" : "failed") : r.failed ? "failed" : "completed",
-              reply: r.failed || r.busy ? undefined : r.reply,
-              error: r.busy
-                ? kept
-                  ? undefined
-                  : w.cron
-                    ? "occurrence skipped (session busy); the recurrence continues"
-                    : "dropped after too many busy retries"
-                : r.failed,
-            });
+            // A wake-up has no claim to settle (it is removed from the store before the turn starts), so its whole
+            // record is the log lines above and `runTurn`'s — deferred, dropped, failed, completed.
           }),
         (done) => Effect.sync(done),
       );
@@ -342,16 +299,18 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     return {
       start() {
         stopped = false;
-        // ONE read of the claims, for the two planes that must agree on when this schedule last fired: the
-        // reconciler (was that fire ever reported?) and catch-up (where does the next run resume?). A boot-time read
-        // fault stays synchronous, before any timers or turns are started.
+        // ONE claim read per schedule — the newest — for the two planes that must agree about it: the reconciler
+        // (was that fire ever reported?) and catch-up (where does the next run resume?). A read fault on it stays
+        // synchronous, before any timers or turns are started: a schedule whose newest claim cannot be read is not
+        // one to run blind, it is a boot failure. The rest of the window is history, and history does not gate a
+        // boot (`latestFire`).
         const lastFires = new Map<string, string>();
         if (!externalClock) {
           for (const s of schedules) {
-            const fired = latestFire(stateRoot, s.name);
-            if (fired !== undefined) lastFires.set(s.name, fired);
+            const fire = latestFire(stateRoot, s.name);
+            if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
+            markInterruptedFire(stateRoot, s.name, fire);
           }
-          recordInterruptedFires(stateRoot, schedules, lastFires);
         }
         const current = now();
         for (const s of externalClock ? [] : schedules) {

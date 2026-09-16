@@ -44,7 +44,7 @@ removes must match what the fixture's branch actually creates.
 | `model` | a real provider's stream and its errors |
 | `docker` | a real container build + boot + state volume |
 | `tunnel` | a real Quick Tunnel carrying a request home |
-| `schedule` | a cron on disk firing a real turn into the audit log |
+| `schedule` | a cron on disk firing a real turn, settling its claim, and logging what it said |
 | `telegram`, `feishu` | Telegram VERIFYING a webhook URL it was handed; Feishu CALLING one with a challenge. Registration only — delivery needs a human to type |
 | `slack` | Slack's Bot API answering our pipeline. OUTBOUND only: the inbound half needs a 12h App Configuration Token, which no nightly can hold |
 | `fly` | `flyctl` still prints what the Fly driver reads (read-only) |

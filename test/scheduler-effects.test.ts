@@ -12,7 +12,6 @@ import { join } from "node:path";
 import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import { activeWork } from "../src/channels/busy.ts";
-import { appendRun, readRuns } from "../src/schedule/audit.ts";
 import type { PortFailure } from "../src/effect-port.ts";
 import {
   createScheduler,
@@ -20,7 +19,7 @@ import {
   type ScheduleFireOutcome,
   type Scheduler,
 } from "../src/schedule/scheduler.ts";
-import { latestFire, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
+import { readFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { log } from "../src/log.ts";
 
@@ -29,25 +28,23 @@ const hourly = (name = "job") => ({ name, cron: "0 * * * *", tz: "UTC", prompt: 
 const freshRoot = () => mkdtemp(join(tmpdir(), "fa-scheduler-effects-"));
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 /**
- * Seed a HEALTHY prior fire: the slot's claim (stamped with when it was taken) and the run record that accounts for
- * it. Without the record the boot reconciler would report the claim as `interrupted`, which is a different test.
+ * Seed a HEALTHY prior fire: the slot's claim, stamped with when it was taken AND with the outcome the turn wrote
+ * back. Without the outcome the boot reconciler would report the claim as `interrupted`, which is a different test.
  */
 function seedFiredSlots(stateRoot: string, names: string[], firedAt: string, slot = firedAt): void {
   for (const name of names) {
     const dir = join(stateRoot, "schedule", "claims", name);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, slot.replace(/[:.]/g, "-")), firedAt);
-    appendRun(stateRoot, {
-      name,
-      session: `schedule:${name}`,
-      firedAt: new Date(Date.parse(firedAt) + 1).toISOString(),
-      ms: 1,
-      outcome: "completed",
-    });
+    // Through `toISOString` first: a claim file name is the shape `claimSlot` writes, and nothing else is read as one.
+    const record = JSON.stringify({ firedAt, outcome: "completed", ms: 1 });
+    writeFileSync(join(dir, new Date(slot).toISOString().replace(/[:.]/g, "-")), record);
   }
 }
+/** How this state root says each fire of `name` ended — `undefined` = claimed, never settled. */
+const outcomes = (stateRoot: string, name = "job"): (string | undefined)[] =>
+  readFires(stateRoot, name).map((f) => f.outcome);
 /** When a state root says this schedule last fired — the claim, read the way the scheduler reads it. */
-const lastFire = (stateRoot: string, name: string): string | undefined => latestFire(stateRoot, name);
+const lastFire = (stateRoot: string, name: string): string | undefined => readFires(stateRoot, name).at(-1)?.firedAt;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -84,10 +81,10 @@ it("two SCHEDULERS over one state root fire a cron slot exactly once", async () 
       child.on("exit", (code) => reject(new Error(`child exited without an outcome (${code})`)));
     });
 
-  const outcomes = await Promise.all([fire(), fire(), fire()]);
-  expect(outcomes.filter((o) => o === "fired")).toHaveLength(1);
-  expect(outcomes.filter((o) => o === "skipped")).toHaveLength(2);
-  expect(readRuns(stateRoot, "job")).toHaveLength(1); // one audited run, so one billed turn
+  const fired = await Promise.all([fire(), fire(), fire()]);
+  expect(fired.filter((o) => o === "fired")).toHaveLength(1);
+  expect(fired.filter((o) => o === "skipped")).toHaveLength(2);
+  expect(outcomes(stateRoot)).toEqual(["completed"]); // one settled claim, so one billed turn
 });
 
 it.each(["cron", "one-shot", "recurring"] as const)(
@@ -143,8 +140,8 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       child.kill("SIGTERM");
       await exited;
     }
-    // The killed turn wrote nothing itself; only the seeded prior fire is on record.
-    expect(readRuns(stateRoot).map((r) => r.outcome)).toEqual(kind === "cron" ? ["completed"] : []);
+    // The killed turn wrote no outcome; its claim is simply unsettled, next to the seeded prior fire.
+    expect(outcomes(stateRoot)).toEqual(kind === "cron" ? ["completed", undefined] : []);
     if (kind === "cron") expect(lastFire(stateRoot, "job")).toBe(NOW.toISOString());
     else {
       expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(kind === "recurring" ? ["first", "next"] : ["next"]);
@@ -171,9 +168,12 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       // The claim the killed process left is not replayed, and this boot puts it on the record. A wake-up has no
       // such claim to reconcile — it leaves the store before its turn starts, so the killed occurrence is simply
       // gone (`next` above is the SECOND wake-up, not a replay of the killed one).
-      expect(readRuns(stateRoot).filter((r) => r.outcome === "interrupted")).toHaveLength(kind === "cron" ? 1 : 0);
+      expect(outcomes(stateRoot)).toEqual(kind === "cron" ? ["completed", "interrupted"] : []);
       if (kind === "cron") {
-        expect(readRuns(stateRoot).at(-1)).toMatchObject({ outcome: "interrupted", firedAt: NOW.toISOString() });
+        expect(readFires(stateRoot, "job").at(-1)).toMatchObject({
+          outcome: "interrupted",
+          firedAt: NOW.toISOString(),
+        });
       }
     } finally {
       s.stop();
@@ -202,7 +202,7 @@ it("uses the provided clock across start and stop, without counting idle timers 
         expect(activeWork()).toBe(base);
         yield* TestClock.adjust(60_000);
         expect(calls).toEqual(["schedule:job"]);
-        expect(readRuns(stateRoot)[0]).toMatchObject({
+        expect(readFires(stateRoot, "job")[0]).toMatchObject({
           firedAt: "2026-07-07T11:00:00.000Z",
           outcome: "completed",
           ms: 0,
@@ -300,7 +300,7 @@ it("publishes the running loop before an invoke callback re-enters stop", async 
         yield* Effect.promise(tick);
         yield* TestClock.adjust(2 * 60 * 60_000);
         expect(invoke).toHaveBeenCalledOnce();
-        expect(readRuns(stateRoot, "a")).toHaveLength(2); // the seeded prior fire, then this one
+        expect(outcomes(stateRoot, "a")).toEqual(["completed", "completed"]); // the seeded prior fire, then this one
         expect(lastFire(stateRoot, "b")).toBe("2026-07-07T08:00:00Z");
       } finally {
         s.stop();
@@ -343,8 +343,8 @@ it("an iterator throw stays terminal, with or without a preceding busy event", a
     try {
       s.start();
       const label = `busy=${busy}`;
-      await vi.waitFor(() => expect(readRuns(stateRoot), label).toHaveLength(1));
-      expect(readRuns(stateRoot)[0], label).toMatchObject({ outcome: "failed", error: "Error: iterator failed" });
+      // A wake-up has no claim to settle, so the log line IS the record of the failure.
+      await vi.waitFor(() => expect(logged.mock.calls.flat().join(" "), label).toContain("Error: iterator failed"));
       expect(listWakeups(stateRoot), label).toEqual([]);
       expect(invoke, label).toHaveBeenCalledOnce();
       expect(logged.mock.calls.flat().join(" "), label).not.toContain("private-provider-data");
@@ -397,12 +397,10 @@ it.each([false, true])("reports a wake deferral write failure before restoring s
         expect(activeWork()).toBe(base);
         expect(calls).toEqual(["busy"]);
         expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);
-        expect(readRuns(stateRoot)).toEqual([]);
         yield* Effect.promise(() => rm(`${path}.tmp`, { recursive: true }));
         yield* TestClock.adjust(30_000);
         expect(calls).toEqual(stopped ? ["busy"] : ["busy", "next"]);
         expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(stopped ? ["next"] : []);
-        expect(readRuns(stateRoot)).toHaveLength(stopped ? 0 : 1);
         expect(errors.mock.calls.filter(([message]) => message.includes("wake-up poll failed"))).toHaveLength(1);
       } finally {
         s.stop();
@@ -429,7 +427,6 @@ it("keeps claim IO failures typed and never invokes, and never burns the slot", 
   if (Exit.isFailure(exit))
     expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "PortFailure", cause: expect.any(Error) });
   expect(invoke).not.toHaveBeenCalled();
-  expect(readRuns(stateRoot)).toEqual([]);
 
   // The fault is fixed and the SAME slot still fires: a failed state write must not consume it.
   await rm(join(stateRoot, "schedule", "claims", "job"));
@@ -446,6 +443,7 @@ it("keeps claim IO failures typed and never invokes, and never burns the slot", 
     }),
   );
   expect(retry).toMatchObject({ fired: true });
+  expect(outcomes(stateRoot)).toEqual(["completed"]); // the recovered slot is the only fire on record
 });
 
 it("a boot-time cron-state fault fails start synchronously before any loop runs", async () => {
@@ -460,7 +458,7 @@ it("a boot-time cron-state fault fails start synchronously before any loop runs"
   expect(invoke).not.toHaveBeenCalled();
 });
 
-it("an interrupted external fire joins its claimed turn and audit", async () => {
+it("an interrupted external fire joins its claimed turn and its settlement", async () => {
   const stateRoot = await freshRoot();
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
@@ -477,11 +475,11 @@ it("an interrupted external fire joins its claimed turn and audit", async () => 
   });
   await entered.promise;
   abort.abort();
-  expect(readRuns(stateRoot)).toEqual([]);
+  expect(outcomes(stateRoot)).toEqual([undefined]); // claimed, not yet settled
   finish.resolve();
   const exit = await done;
   expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-  expect(readRuns(stateRoot)[0]).toMatchObject({ outcome: "completed" });
+  expect(outcomes(stateRoot)).toEqual(["completed"]);
 });
 
 it("claims an external slot synchronously before a concurrent duplicate can invoke", async () => {
@@ -505,5 +503,5 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
     finish.resolve();
     await first;
   }
-  expect(readRuns(stateRoot)).toHaveLength(1);
+  expect(outcomes(stateRoot)).toEqual(["completed"]);
 });
