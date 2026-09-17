@@ -583,18 +583,6 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/\n\s+at /); // no stack frames — this is a user-fixable refusal, not a bug
   });
 
-  it("attach --url/--token needs no local agent — a laptop attaching to a deployed box", async () => {
-    // A remote attach reads nothing under the directory (no control.json, no assembly), so requiring
-    // one there would refuse the command's whole point. The connection then fails on its own terms.
-    const cwd = await mkdtemp(join(tmpdir(), "fa-attach-remote-"));
-    const { code, stderr } = await run(
-      ["attach", "s1", "--url", "http://127.0.0.1:1/", "--token", "t", "--timeout", "1"],
-      cwd,
-    );
-    expect(code).not.toBe(0);
-    expect(stderr).not.toMatch(/not a fastagent agent/); // the refusal that used to fire first
-  });
-
   it("login OUTSIDE an agent announces the global credential — the scope switch is never silent", async () => {
     // Every other command refuses a non-agent dir; login has the one legitimate fallback (there is no
     // project credential to write). It must SAY so: the global file is not what dev/start in a real

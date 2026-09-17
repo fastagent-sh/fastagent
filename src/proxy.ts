@@ -9,7 +9,7 @@ const isBun = typeof process.versions.bun === "string";
  * What is ALWAYS exempt from the proxy. `EnvHttpProxyAgent` proxies EVERYTHING while NO_PROXY is empty — loopback
  * included ("Always proxy if NO_PROXY is not set or empty") — so installing a proxy would otherwise send this process's
  * own local traffic through it: a Docker health probe on 127.0.0.1, a control-plane call to a local serve, an `ssh -L`
- * forward given to `attach --url`. None of those are what a proxy variable is asking for.
+ * forward given to a control-plane client's `url`. None of those are what a proxy variable is asking for.
  *
  * APPENDED to a declared NO_PROXY rather than used as its default, because `NO_PROXY=.corp.com` is the normal shape of
  * a corporate environment and it is not a statement about 127.0.0.1: replacing would hand exactly the users who have a

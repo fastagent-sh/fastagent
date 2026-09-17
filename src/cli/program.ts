@@ -95,28 +95,6 @@ const dev: CommandSpec = {
     }),
 };
 
-const attach: CommandSpec = {
-  name: "attach",
-  summary: "watch a session's live events from a running serve and steer it",
-  description:
-    "Attach to a session served by a running dev/start with `sessionControl: true` in the config: " +
-    "stream its live events (text, tools, run boundaries), steer the active run by typing — or, with " +
-    "no run active, start one (detaching cancels a run YOU started) — /abort to stop a run. Discovers " +
-    "the local endpoint from <stateRoot>/control.json; --url/--token reach a remote serve. The same " +
-    "wire protocol a Web panel or desktop app uses.",
-  args: [{ name: "<session>", description: "the session id to attach to" }, DIR_ARG],
-  flags: [
-    { flags: "--url <url>", description: "control endpoint (skip control.json discovery)" },
-    { flags: "--token <token>", description: "bearer token for --url" },
-  ],
-  examples: [{ cmd: "fastagent attach tg-chat-42" }],
-  run: async (args, f) =>
-    (await import("./commands/attach.ts")).runAttach(args[0] as string, args[1] as string | undefined, {
-      url: f.url as string | undefined,
-      token: f.token as string | undefined,
-    }),
-};
-
 const chat: CommandSpec = {
   name: "chat",
   summary: "open the SAME assembled agent in pi's interactive TUI",
@@ -125,7 +103,7 @@ const chat: CommandSpec = {
     "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
     "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file). " +
     "--session opens a SERVED session (a schedule's, a channel thread's) as a private copy — read what " +
-    "it said, continue from it, without touching the record the serve owns (that is `attach`).",
+    "it said, continue from it, without touching the record the serve owns.",
   args: [DIR_ARG],
   flags: [
     MODEL,
@@ -577,7 +555,6 @@ export const specs: readonly CommandSpec[] = [
   schedule,
   dev,
   chat,
-  attach,
   start,
   add,
   deploy,

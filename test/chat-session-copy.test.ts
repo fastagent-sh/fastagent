@@ -62,7 +62,7 @@ describe("chat --session opens a COPY", () => {
     copy.appendMessage({ role: "user", content: "why did you say that?", timestamp: 3 });
     copy.appendMessage(fauxAssistantMessage("because of X"));
 
-    // The record a serve owns is not opened for append: only `attach` writes it.
+    // The record a serve owns is not opened for append: the serving process is its only writer.
     expect(readFileSync(servedFile, "utf8")).toBe(before);
     expect(copy.getSessionFile()).not.toBe(servedFile);
     // And in the dir a PLAIN `fastagent chat` uses: pi encodes the cwd into that path, so a workspace reached

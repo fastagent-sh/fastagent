@@ -198,7 +198,7 @@ src/
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
     ├── open.ts             # shared opener: directory → agent for dev/start/invoke
     ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent; --session opens a
-    │                       # SERVED record as a copy (only attach writes one)
+    │                       # SERVED record as a copy (the serving process owns the original)
     ├── tool.ts             # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
     ├── tool-context.ts     # ToolContext.session + the tool-activation bridge (AsyncLocalStorage)
     ├── search-tools.ts     # built-in search_tools loader for deferred tools

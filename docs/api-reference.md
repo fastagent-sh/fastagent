@@ -762,7 +762,7 @@ channel's stop command aborts the running turn through it — that action needs 
 
 ### Remote (HTTP + SSE)
 
-The same contract over the wire — for a Web panel, a desktop app, or `fastagent attach`. Server
+The same contract over the wire — for a Web panel, a desktop app, or any other remote client. Server
 side, mount the bearer-authenticated routes (dev/start do this automatically when the config sets
 `sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json` — or using
 `FASTAGENT_CONTROL_TOKEN` when the environment sets it, which is how a deployed box gets a token its
@@ -788,7 +788,7 @@ The DATA plane travels the same wire: `connectAgent({ url, token })` returns an 
 paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
 same two contracts local code uses. Disconnecting the invoke stream cancels the run. Both streams refuse
 an endpoint that accepts the connection and never answers — the events stream after 10s (a reconnecting
-client waits on it, and `attach` counts that round against a budget), `invoke` after 60s, since a
+client waits on it), `invoke` after 60s, since a
 scale-to-zero host holds the POST open while a machine boots; once connected, either stream fails after
 90s without bytes, heartbeats included. The invoke wire is
 text-only for now (images fail visibly there); `steer`/`followUp` carry full Prompts, images

@@ -176,7 +176,7 @@ export async function preflightDeploy(input: {
       text:
         `sessionControl: true — the deployed box serves /control/* (steer, stop, rewrite or delete a session) at its public URL, ` +
         `protected only by a bearer token. Set ${CONTROL_TOKEN_ENV} (listed with the other secrets) and give the ` +
-        `same value to callers: attach --url <public-url> --token …. Unset, the box mints its own per boot — ` +
+        `same value to your control-plane client (\`connectSessionControl({ url, token })\`). Unset, the box mints its own per boot — ` +
         `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +
         `url field is container-loopback) and replaced on every restart. Front the endpoint with real auth for ` +
         `anything wider (docs/design/session-control.md §14)`,
