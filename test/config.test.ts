@@ -12,13 +12,12 @@ import {
   resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
-  resolveSessionsDir,
 } from "../src/engines/pi/config.ts";
-import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
+import { resolveSecretsDir, resolveSessionsDir, resolveStateRoot } from "../src/paths.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
-describe("config: resolveSessionsDir (where every reader of a record looks)", () => {
+describe("paths: resolveSessionsDir (where every reader of a record looks)", () => {
   it("follows the state root and nothing else — records move with the one knob that moves all machine state", () => {
     // the footgun this guards: a regression here silently drops sessions back to the in-tree default,
     // so a redeploy wipes conversations.

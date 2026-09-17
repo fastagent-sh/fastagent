@@ -319,6 +319,25 @@ describe("cli papercuts", () => {
     expect(broken.stderr).not.toMatch(/at listClaims/); // no stack
   });
 
+  it("schedule history points at the journal it does NOT print, by the sessions dir the serve writes", async () => {
+    // The rows say a fire happened; what it SAID is a session record this command never opens. The pointer is the
+    // only thing standing in for it, so it has to name the directory a serve actually writes (state root, not the
+    // agent dir) and enough of the file name to pick it out of that directory.
+    const dir = await agentWorkspace("fa-history-pointer-");
+    const claims = join(dir, "fastagent", ".state", "schedule", "claims", "daily");
+    await mkdir(claims, { recursive: true });
+    await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));
+
+    const { code, stdout, stderr } = await run(["schedule", "history", "daily", dir]);
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/2026-01-01T09:00:00.000Z/);
+    expect(stderr).toContain(`session schedule:daily`);
+    expect(stderr).toContain(join(dir, "fastagent", ".state", "sessions"));
+    // pi cannot name a record `schedule:daily`, so the id is NOT the file name — the schedule name is what survives
+    // the encoding, and it is what the line tells the reader to look for.
+    expect(stderr).toMatch(/name carries "daily"/);
+  });
+
   it("an unknown name still reports the file that failed to load — that IS why the name is missing", async () => {
     // A broken file is absent from the available list, so "unknown tool/schedule" is exactly the case
     // where the author needs to hear about the import error rather than doubt their spelling.

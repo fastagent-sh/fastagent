@@ -409,9 +409,9 @@ const RECORD_SUFFIX = ".jsonl";
 const PREVIEW_CHARS = 200;
 
 /**
- * Crash-safety reconciliation, run on every OPEN of an existing record that is about to be CONTINUED — and on every
- * copy of one (`chat --session`), for the same reason: a dangling `toolCall` with no `toolResult` is what a process
- * killed mid tool-execution leaves behind, and the provider rejects the very first request that carries it.
+ * Crash-safety reconciliation, run on every OPEN of an existing record that is about to be CONTINUED: a dangling
+ * `toolCall` with no `toolResult` is what a process killed mid tool-execution leaves behind, and the provider
+ * rejects the very first request that carries it.
  *
  * It APPENDS the missing result, so a caller must run it on the record it is allowed to write.
  */

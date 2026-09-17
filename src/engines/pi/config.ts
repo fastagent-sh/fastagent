@@ -14,7 +14,7 @@ import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
-import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir, resolveStateRoot } from "../../paths.ts";
+import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -293,15 +293,4 @@ export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessE
 export function resolveAuthFallback(flag?: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const explicit = resolveAuthPathOverride(flag, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
   return explicit === undefined ? GLOBAL_AUTH_PATH : undefined;
-}
-
-/**
- * WHERE an agent's session records live: `<state root>/sessions`, always. Records are machine state like channel
- * state and schedule claims, so they move with the ONE knob that moves all of it (`FASTAGENT_STATE_DIR`) rather than
- * with a second one that moves only them — a split every reader would then have to agree about, and which left
- * channel state behind anyway. An embedder that really wants the records elsewhere passes `sessionsDir` to
- * `createAgentService`; there is no env/flag spelling of it, for the reason {@link resolveAuthPathOverride} states.
- */
-export function resolveSessionsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveStateRoot(dir, env), "sessions");
 }

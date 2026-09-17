@@ -11,9 +11,8 @@ import {
   resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
-  resolveSessionsDir,
 } from "./config.ts";
-import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
 import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";

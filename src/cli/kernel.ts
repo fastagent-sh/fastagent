@@ -11,7 +11,7 @@ interface ArgSpec {
   choices?: string[];
 }
 
-/** One flag, in the flag DSL: `--json`, or `--sessions-dir <dir>` for a value-taking flag. */
+/** One flag, in the flag DSL: `--json`, or `--bind <addr>` for a value-taking flag. */
 export interface FlagSpec {
   flags: string;
   description: string;

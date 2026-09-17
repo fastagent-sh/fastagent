@@ -1,7 +1,7 @@
 /** `fastagent schedule history|list|cancel`. */
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
-import { resolveStateRoot } from "../../paths.ts";
+import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
@@ -65,10 +65,12 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
   }
   // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced. The
-  // session id comes from the ONE place that spells it, and the directory is resolved here, so the pointer names a
-  // file the reader can open from wherever they ran this.
+  // session id comes from the ONE place that spells it and the directory from the ONE place that resolves it. The
+  // record is one level further down and under a name pi accepts (`piSessionId` escapes the `:`), so the pointer
+  // says how to recognise the file rather than claiming a path the reader can paste.
   console.error(
-    `(what these runs said: session ${scheduleSession(name)} under ${join(resolveStateRoot(target), "sessions")})`,
+    `(what these runs said: session ${scheduleSession(name)} — a JSON-lines journal under ${resolveSessionsDir(target)}, ` +
+      `in the file whose name carries "${name}")`,
   );
 }
 

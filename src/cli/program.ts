@@ -425,8 +425,8 @@ const schedule: CommandSpec = {
       summary: "print the recent fires of a schedule",
       description:
         "Print a schedule's recent fires: when each fired, completed/failed/interrupted, and how long it took " +
-        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session; read it ' +
-        "with `fastagent chat --session schedule:<name>`, which this command points at. Read-only.",
+        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session, a JSON-lines ' +
+        "journal under the state root's sessions/ — which this command points at. Read-only.",
       args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
       flags: [{ flags: "--json", description: "the full records" }],
       examples: [{ cmd: "fastagent schedule history daily-digest" }],

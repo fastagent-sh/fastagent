@@ -8,10 +8,9 @@ import {
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
-  resolveSessionsDir,
 } from "../../engines/pi/config.ts";
 import { createPiModelRuntime } from "../../engines/pi/models.ts";
-import { resolveStateRoot, workspaceHint } from "../../paths.ts";
+import { resolveSessionsDir, resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
