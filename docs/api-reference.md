@@ -626,9 +626,17 @@ await watching;
 // only — the data plane takes prompts as text, so what typing `/triage` means is the client's.
 await control.commands(); // [{ name: "triage", description: "Sort an inbox", source: "skill" }]
 
-// After a disconnect, missed history comes from the durable plane, not the live stream:
+// After a disconnect, missed history comes from the durable plane, not the live stream — and the ORDER
+// is the contract (docs/design/session-control.md §7): resubscribe, await `ready`, THEN read, with the
+// reads running BESIDE a live iteration. Reading in front of one loses whatever is emitted meanwhile;
+// pausing the iteration to read buffers the subscriber server-side until its ceiling closes it.
 const s1 = control.sessions.get("s1"); // a pure binding: an id + the transport, nothing to dispose
-const { entries, leafEntryId } = await s1.entries({ since: cursor });
+const resumed = s1.events();
+const draining = (async () => {
+  for await (const ev of resumed) console.log(ev.type);
+})();
+await resumed.ready;
+const { entries, leafEntryId } = await s1.entries({ since: cursor }); // backfill, beside `draining`
 const state = await s1.state(); // { status, name?, activeRunId?, leafEntryId? }
 ```
 
