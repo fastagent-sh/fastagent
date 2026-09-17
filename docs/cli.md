@@ -33,7 +33,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [dir]` | Generate `fastagent.compose.yml` + the portable `Dockerfile`/`.dockerignore` for local Docker: one `agent` service, loopback port, `/data` state volume, and exact env-var names. `--tunnel --run` starts app+tunnel, reads the ephemeral URL, and auto-registers Telegram, locally onboarded Slack, and Feishu/Lark webhooks. Existing files stay authoritative unless `--force`; durable ingress/proxy/DNS/TLS remain operator-owned. |
-| `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
+| `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--force` overwrites artifacts; idle behavior (`auto_stop_machines`, `min_machines_running`) is edited in the generated `fly.toml`. |
 | `deploy railway [dir]` | Generate Railway artifacts (`railway.json` with `healthcheckPath=/health`, plus the shared `Dockerfile`/`.dockerignore`) and print a `railway` runbook: init a project, create a service (`railway add --service`), attach a `/data` volume, set the state root + secrets as variables (`railway variables set`, before the first deploy), `railway up`, then mint a domain (`railway domain`) and register the webhook. Scale-to-zero (App Sleeping) is a dashboard-only step the runbook states. `--run` drives the railway CLI to completion on an UNLINKED dir (auth → init/add/volume → variables → `railway up` → mint domain → telegram webhook; carries your local credential; needs the railway CLI); a dir already linked to a project is refused unless `--into-linked` (provision into it) — a routine redeploy is just `railway up`. `--force` overwrites artifacts. |
 | `deploy agentcore [dir]` | Generate `agentcore.template.yaml`, optional `lambda/index.js`, and shared image artifacts. The Runtime stack includes a forwarder for webhooks or scheduled work. State rides managed SessionStorage at `/mnt/data`: it survives compute stop/resume and the platform resets it on every deploy. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks and stops the fixed runtime session so the next invocation uses the new image. Long-connection channels require webhook mode. A stale generated template gates `--run` until `--force`. |
 | `logs agentcore [dir]` | Discover the deployed stack's CloudWatch log group and run `aws logs tail`. Defaults to the Runtime's application stdout/stderr; `--source forwarder` selects the separate Lambda ingress logs. `--since <duration>` sets the history window and `--follow` keeps polling. Read-only; does not change `FASTAGENT_LOG_LEVEL`. |
@@ -54,13 +54,6 @@ Creates a self-iterating agent — it can edit its own definition (persona.md an
 **A standalone agent repository is still a supported shape** — that repository is the WORKSPACE, and the definition lives in `./fastagent/` inside it. `init` will not write a definition INTO a directory that already holds other files, which is why `--agent-dir .` is refused: the agent would inherit that directory's `package.json`, and a `fastagent.config.ts` under a CommonJS manifest does not load at all. A scaffolded subdirectory carries its own `type: module`. (Placement still *resolves* an agent sitting at a directory, so an existing layout of that shape keeps serving.)
 
 What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup could never SELECT — an agent already resolving AT `dir`, which wins over anything inside it and would hide the new one. A second agent BESIDE an existing one is fine and supported: several agents can share one workspace (an engineer's, a PM's, a content owner's, all driving the same repository), and `FASTAGENT_AGENT=<name>` picks between them — the one named `fastagent` answers by default. `init` prints the note when a workspace crosses into that shape. The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
-
-Options:
-
-| Option | Meaning |
-|---|---|
-| `--no-install` | Scaffold everything but skip `npm install`. |
-| `--agent-dir <name>` | Name the agent directory (default `fastagent`). One directory name — not a path, and not `.`. |
 
 ## `fastagent info`
 
@@ -141,16 +134,6 @@ OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — the
 back to the config (same for `start` / `invoke` / `schedule fire` / `chat` / `deploy`). Pass `--model` or set
 `FASTAGENT_MODEL` to skip the prompt — `deploy` takes no `--model`, so there it is the config value or
 `FASTAGENT_MODEL` in `.secrets/.env`.
-
-Options:
-
-| Option | Meaning |
-|---|---|
-| `--port N` | Override `http.port` / default `8787`. |
-| `--model spec` | Override model selection. |
-| `--no-watch` | Serve once without the watch supervisor. |
-| `--tunnel` | Open a Cloudflare quick tunnel for webhook testing. |
-| `--no-input` | Never prompt (CI/scripts) — e.g. the first-run model pick becomes an actionable error instead of a question. |
 
 Model precedence:
 
@@ -290,6 +273,7 @@ fastagent add telegram [dir]
 fastagent add slack [dir]      # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [dir]   # 飞书 (open.feishu.cn) — also CREATES the app (scan-to-create; credentials → .secrets/.env)
 fastagent add lark [dir]     # Lark intl — opens console + collects/validates credentials
+                             # both take --ingress websocket|webhook (asked when omitted)
 ```
 
 Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.secrets/.env.example` when possible. The channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, github's `GITHUB_WEBHOOK_SECRET` — random strings the user contributes nothing to) are written to `.secrets/.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps — they are covered by the `.secrets/.gitignore` written at `init`. Everything (glue, companion tool, secrets) lands in the agent dir (`./fastagent/`) — the same place `dev`/`start` discover channels. The channel file is written once and is yours after that; a companion tool (`tools/slack-send.ts`, `tools/telegram-send.ts`, …) is the package's and is rewritten on every `add`, so after upgrading the package, re-run `add <kind>` (`--no-onboard` skips the app prompts) to refresh it.

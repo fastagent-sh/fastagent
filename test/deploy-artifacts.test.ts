@@ -185,19 +185,14 @@ describe("deploy: a flag only one host honours is reported the same way by every
     for (const host of ["docker", "agentcore", "fly"] as const) {
       expect(said(host, { intoLinked: true })).toContain("--into-linked: railway-only");
     }
-    for (const host of ["docker", "railway", "agentcore"] as const) {
-      expect(said(host, { stop: true })).toContain("--stop/--no-scale-to-zero: fly-only");
-    }
   });
 
   it("says what THAT host does instead — the sentence is the reason it is not a generic no-op notice", () => {
-    expect(said("railway", { scaleToZero: false })).toMatch(/App Sleeping is a dashboard toggle/);
-    expect(said("agentcore", { scaleToZero: false })).toMatch(/LifecycleConfiguration/);
     expect(said("fly", { intoLinked: true })).toMatch(/idempotent/);
+    expect(said("docker", { intoLinked: true })).toMatch(/ignored for local Docker/);
   });
 
   it("stays silent for the owner, and for a flag nobody passed", () => {
-    expect(said("fly", { stop: true, scaleToZero: false })).toBe("");
     expect(said("railway", { intoLinked: true })).toBe("");
     expect(said("docker", {})).toBe("");
   });

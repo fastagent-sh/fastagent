@@ -23,9 +23,6 @@ export interface DeployOptions {
   run?: boolean;
   tunnel?: boolean;
   force?: boolean;
-  stop?: boolean;
-  /** false ⇔ `--no-scale-to-zero`. */
-  scaleToZero?: boolean;
   intoLinked?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
