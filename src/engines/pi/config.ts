@@ -262,11 +262,6 @@ export function resolveModelSpec(
   return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
-/** `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined. Absent means "wherever the agent defaults to". */
-function sessionsDirOverride(flag: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
-  return resolveOverridePath(flag ?? env.FASTAGENT_SESSIONS_DIR);
-}
-
 /**
  * The auth-file override: the SDK's `authPath` option > `FASTAGENT_AUTH_PATH` env > undefined (the opener then falls
  * back to {@link defaultAuthPath} under the {@link resolveSecretsDir} dir). The CLI has no flag for it: a second
@@ -301,11 +296,12 @@ export function resolveAuthFallback(flag?: string, env: NodeJS.ProcessEnv = proc
 }
 
 /**
- * WHERE an agent's session records live, as ONE answer: `--sessions-dir` > `FASTAGENT_SESSIONS_DIR` >
- * `<state root>/sessions`. Everything that opens a record — the serving opener, `info`, `chat --session` — resolves
- * it through here, or a command reports on a directory the serve does not use. The footgun a regression here brings
- * back: sessions silently returning to the in-tree default, so a redeploy loses the conversations.
+ * WHERE an agent's session records live: `<state root>/sessions`, always. Records are machine state like channel
+ * state and schedule claims, so they move with the ONE knob that moves all of it (`FASTAGENT_STATE_DIR`) rather than
+ * with a second one that moves only them — a split every reader would then have to agree about, and which left
+ * channel state behind anyway. An embedder that really wants the records elsewhere passes `sessionsDir` to
+ * `createAgentService`; there is no env/flag spelling of it, for the reason {@link resolveAuthPathOverride} states.
  */
-export function resolveSessionsDir(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
-  return sessionsDirOverride(flag, env) ?? join(resolveStateRoot(dir, env), "sessions");
+export function resolveSessionsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(resolveStateRoot(dir, env), "sessions");
 }

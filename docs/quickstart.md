@@ -158,7 +158,7 @@ For deployments, point both machinery roots at durable storage: the state root (
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
-(`FASTAGENT_SESSIONS_DIR` / `--sessions-dir` override just the sessions path; they do not move channel state, and neither knob moves `auth.json`.)
+(Sessions have no knob of their own: they live under the state root, so the one variable moves them with the channel state they belong beside. Neither variable moves `auth.json` — that is `FASTAGENT_SECRETS_DIR`.)
 
 ## 7. Add channels
 

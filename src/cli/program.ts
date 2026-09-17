@@ -17,8 +17,6 @@ const MODEL: FlagSpec = {
   description: "model override (precedence: --model > FASTAGENT_MODEL > config)",
 };
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
-/** Where this agent's session records live. Every command that reads or writes one takes it, or they disagree. */
-const SESSIONS_DIR: FlagSpec = { flags: "--sessions-dir <dir>", description: "sessions directory override" };
 const NO_INPUT: FlagSpec = {
   flags: "--no-input",
   description: "never prompt (CI/scripts) — missing information becomes an error instead of a question",
@@ -101,30 +99,12 @@ const chat: CommandSpec = {
   description:
     "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
     "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
-    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file). " +
-    "--session opens a SERVED session (a schedule's, a channel thread's) as a private copy — read what " +
-    "it said, continue from it, without touching the record the serve owns.",
+    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
   args: [DIR_ARG],
-  flags: [
-    MODEL,
-    {
-      flags: "--session <id>",
-      description: 'open a served session as a copy (e.g. "schedule:daily-digest")',
-    },
-    // NOT the shared SESSIONS_DIR wording: chat's own sessions always live in pi's per-workspace dir, so this only
-    // says where the SERVED one is looked for.
-    { flags: "--sessions-dir <dir>", description: "where to look for the served session (--session)" },
-  ],
-  examples: [
-    { cmd: "fastagent chat" },
-    { cmd: "fastagent chat --session schedule:daily-digest", note: "last night's run" },
-  ],
+  flags: [MODEL],
+  examples: [{ cmd: "fastagent chat" }],
   run: async (args, f) =>
-    (await import("./commands/chat.ts")).runChat(args[0] as string, {
-      model: f.model as string | undefined,
-      session: f.session as string | undefined,
-      sessionsDir: f.sessionsDir as string | undefined,
-    }),
+    (await import("./commands/chat.ts")).runChat(args[0] as string, { model: f.model as string | undefined }),
 };
 
 const info: CommandSpec = {
@@ -136,13 +116,12 @@ const info: CommandSpec = {
     "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [DIR_ARG],
-  flags: [JSON_FLAG, MODEL, SESSIONS_DIR],
+  flags: [JSON_FLAG, MODEL],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
       json: f.json === true,
       model: f.model as string | undefined,
-      sessionsDir: f.sessionsDir as string | undefined,
     }),
 };
 
@@ -219,7 +198,7 @@ const start: CommandSpec = {
     "is the agent), just no file-watching. No build step: start reads the definition directly; " +
     "model/http come from fastagent.config.ts (frozen by git).",
   args: [DIR_ARG],
-  flags: [PORT, BIND, MODEL, SESSIONS_DIR, TUNNEL, NO_INPUT],
+  flags: [PORT, BIND, MODEL, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent start" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
@@ -232,7 +211,7 @@ const start: CommandSpec = {
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets — .env + auth.json\n" +
-    "  sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions\n" +
+    "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
     "            share one credential across projects)",
@@ -241,7 +220,6 @@ const start: CommandSpec = {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
-      sessionsDir: f.sessionsDir as string | undefined,
       tunnel: f.tunnel === true,
       input: f.input !== false,
     }),

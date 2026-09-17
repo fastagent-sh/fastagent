@@ -25,7 +25,6 @@ import { failStartup, placementOrExit } from "../fail.ts";
 export interface InfoOptions {
   json?: boolean;
   model?: string;
-  sessionsDir?: string;
 }
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
@@ -89,7 +88,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login create them,
   // info must not).
   const stateRoot = resolveStateRoot(agentDir);
-  const sessionsDir = resolveSessionsDir(agentDir, opts.sessionsDir);
+  const sessionsDir = resolveSessionsDir(agentDir);
   const authPath = resolveAuthPath(agentDir); // FASTAGENT_AUTH_PATH > default — the one owner
   // The second layer this agent reads through: "what is this agent's state" is the question `info` answers, and a
   // credential it runs on can live in a file the agent dir does not contain.

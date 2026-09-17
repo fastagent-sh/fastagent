@@ -97,8 +97,7 @@ container reads the other and starts with nothing declared.
 
 Two things follow from Compose's own behaviour and are worth knowing:
 
-- The machinery variables (`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_SESSIONS_DIR`,
-  `FASTAGENT_AUTH_PATH`) are pinned in `environment:`, which Compose applies **after** `env_file`. The scaffolded
+- The machinery variables (`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`) are pinned in `environment:`, which Compose applies **after** `env_file`. The scaffolded
   `.env.example` lists some of them as local overrides; pinning keeps a laptop path from sending the container's
   sessions or credentials outside the volume.
 - Compose expands `$VAR` **inside** `env_file` values (raw mode needs Compose 2.30, above our floor). A value

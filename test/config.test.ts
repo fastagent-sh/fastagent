@@ -19,17 +19,16 @@ import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 describe("config: resolveSessionsDir (where every reader of a record looks)", () => {
-  it("precedence --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions; a given value resolves to absolute", () => {
-    const env = { FASTAGENT_SESSIONS_DIR: "envdir" } as NodeJS.ProcessEnv;
+  it("follows the state root and nothing else — records move with the one knob that moves all machine state", () => {
     // the footgun this guards: a regression here silently drops sessions back to the in-tree default,
-    // so a redeploy wipes conversations. Distinct, non-tautological assertions per precedence tier:
-    expect(resolveSessionsDir("/app", "flagdir", env)).toBe(resolve("flagdir")); // flag beats env
-    expect(resolveSessionsDir("/app", undefined, env)).toBe(resolve("envdir")); // env when no flag
-    expect(resolveSessionsDir("/app", "/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
-    // neither → under the agent's state root, so ONE volume knob covers sessions too
-    expect(resolveSessionsDir("/app", undefined, {} as NodeJS.ProcessEnv)).toBe(join("/app", ".state", "sessions"));
-    expect(resolveSessionsDir("/app", undefined, { FASTAGENT_STATE_DIR: "/data/.state" } as NodeJS.ProcessEnv)).toBe(
+    // so a redeploy wipes conversations.
+    expect(resolveSessionsDir("/app", {} as NodeJS.ProcessEnv)).toBe(join("/app", ".state", "sessions"));
+    expect(resolveSessionsDir("/app", { FASTAGENT_STATE_DIR: "/data/.state" } as NodeJS.ProcessEnv)).toBe(
       join("/data", ".state", "sessions"),
+    );
+    // a sessions-only override is deliberately absent: it moved records off the volume channel state stayed on
+    expect(resolveSessionsDir("/app", { FASTAGENT_SESSIONS_DIR: "/elsewhere" } as NodeJS.ProcessEnv)).toBe(
+      join("/app", ".state", "sessions"),
     );
   });
 });
@@ -163,9 +162,9 @@ describe("config: resolveAuthPath (auth-file precedence)", () => {
     // the footgun this guards: a bare resolve("~/x") makes a literal `<cwd>/~` dir and the secret lands there
     expect(resolveAuthPath("/app", undefined, env)).toBe(join(homedir(), ".fastagent", "auth.json"));
     expect(resolveAuthPath("/app", "~", {} as NodeJS.ProcessEnv)).toBe(homedir());
-    expect(resolveSessionsDir("/app", undefined, { FASTAGENT_SESSIONS_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(
-      join(homedir(), "s"),
-    ); // symmetric: sessions had the same latent bug
+    expect(resolveSessionsDir("/app", { FASTAGENT_STATE_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(
+      join(homedir(), "s", "sessions"),
+    ); // symmetric: the state root had the same latent bug
   });
 });
 

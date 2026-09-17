@@ -122,7 +122,6 @@ services:
       # or credentials somewhere outside the volume — or at a host path that does not exist here at all.
       FASTAGENT_STATE_DIR: "${MOUNT}/.state"
       FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
-      FASTAGENT_SESSIONS_DIR: "${MOUNT}/.state/sessions"
       FASTAGENT_AUTH_PATH: "${MOUNT}/.secrets/auth.json"
       # The ONE value that is not in the value file: \`--run\` mints it from the local auth.json. Left as a seam in
       # the committed topology so a hand-run \`up\` can supply it the same way — from the ENVIRONMENT of that \`up\`.
