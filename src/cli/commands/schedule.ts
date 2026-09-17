@@ -58,6 +58,11 @@ export function turnsForFires(fires: Fire[], entries: SessionEntry[]): Map<strin
     // A claim whose stamp fell back to an unusable slot name cannot anchor a window.
     if (Number.isNaN(from)) continue;
     const nextFire = Date.parse(ordered[index + 1]?.firedAt ?? "");
+    // Only a LATER fire bounds this one. Two claims stamped at the same instant (a catch-up slot taken in the same
+    // millisecond as a due one) carry nothing to tell their turns apart, and an `at >= nextFire` test would then be
+    // true for EVERY turn: the earlier claim would own nothing and the later one would print its turn. Falling back
+    // to append order — first fire, first turn — is the only information there is.
+    const boundedByNext = !Number.isNaN(nextFire) && nextFire > from;
     const ended = fire.ms === undefined ? from : from + fire.ms;
     // Turns are scanned once across all fires: both lists are in time order, so a turn already passed cannot belong
     // to a later fire.
@@ -65,7 +70,7 @@ export function turnsForFires(fires: Fire[], entries: SessionEntry[]): Map<strin
     const turn = turns[next];
     if (!turn) continue;
     if (turn.at > ended) continue; // started after this fire finished — somebody else's turn
-    if (!Number.isNaN(nextFire) && turn.at >= nextFire) continue; // the next fire's
+    if (boundedByNext && turn.at >= nextFire) continue; // the next fire's
     if (turn.reply) matched.set(fire.slot, turn.reply);
     next++;
   }
@@ -77,9 +82,13 @@ const PREVIEW_CHARS = 100;
 /** One folded line of what a turn said — code-point safe, so a cut never lands inside an emoji. */
 export function preview(turn: FireTurn | undefined): string {
   const text = turn?.error ?? turn?.text ?? "";
-  // Cut to UTF-16 units FIRST (the same rule as `firstUserText` in session-store.ts): a megabyte reply would
-  // otherwise become a million-element array just to take the first 100 code points, once per printed row. Twice the
-  // budget is enough for any surrogate pairing, and folding whitespace after the cut cannot grow it.
+  // Cut to UTF-16 units FIRST: a megabyte reply would otherwise become a million-element array just to take the
+  // first 100 code points, once per printed row. Twice the budget is enough for any surrogate pairing, and folding
+  // whitespace after the cut cannot grow it. (`firstUserText` in session-store.ts cuts by the same two steps for the
+  // same reason. It needs no surrogate repair, because taking exactly N code points out of 2N units cannot keep a
+  // split half: a split at unit 2N leaves 2N-1 units before it, which cannot hold N-1 code points. THIS function
+  // can, because folding whitespace may bring the line under the budget and return it whole — hence the repair
+  // below. A shared helper would be the two-step cut alone, with flags for everything either caller does not want.)
   const head = text.slice(0, PREVIEW_CHARS * 2);
   const folded = head
     // Controls FIRST, then whitespace, so the spaces this leaves behind collapse with the rest. A model reply often
@@ -106,7 +115,11 @@ export function preview(turn: FireTurn | undefined): string {
  * What each run SAID is read back from the session it ran in (`schedule:<name>`), where it is stored once — directly
  * off disk, so this works with no serve running, which is the normal state when someone asks what last night did.
  */
-export async function runScheduleHistory(name: string, dirArg: string, json: boolean): Promise<void> {
+export async function runScheduleHistory(
+  name: string,
+  dirArg: string,
+  opts: { json: boolean; sessionsDir?: string },
+): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
@@ -130,7 +143,9 @@ export async function runScheduleHistory(name: string, dirArg: string, json: boo
   const { piSessionRecordStore } = await import("../../engines/pi/session-store.ts");
   const { scheduleSession } = await import("../../schedule/scheduler.ts");
   const session = scheduleSession(name);
-  const sessionsDir = resolveSessionsDir(target);
+  // The SAME precedence the serve reads through (--sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions), or a
+  // serve started with the flag is invisible to this command.
+  const sessionsDir = resolveSessionsDir(target, opts.sessionsDir);
   // The TEXT is the secondary answer; "did it run" is the primary one and must survive a record this command cannot
   // read. Expected failures: `SessionManager.open` throwing on a corrupt or unreadable file, and the journal read
   // faulting (it loads the whole record, which grows with every fire while claims stay capped at 512). Both are an
@@ -153,7 +168,7 @@ export async function runScheduleHistory(name: string, dirArg: string, json: boo
   if (missing && fires.length > 0) {
     console.error(`no session "${session}" under ${sessionsDir} — fired slots below, without their text`);
   }
-  if (json) {
+  if (opts.json) {
     console.log(
       JSON.stringify(
         fires.map((f) => ({ ...f, ...(turns.get(f.slot) ? { turn: turns.get(f.slot) } : {}) })),

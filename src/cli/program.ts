@@ -17,6 +17,8 @@ const MODEL: FlagSpec = {
   description: "model override (precedence: --model > FASTAGENT_MODEL > config)",
 };
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
+/** Where this agent's session records live. Every command that reads or writes one takes it, or they disagree. */
+const SESSIONS_DIR: FlagSpec = { flags: "--sessions-dir <dir>", description: "sessions directory override" };
 const NO_INPUT: FlagSpec = {
   flags: "--no-input",
   description: "never prompt (CI/scripts) — missing information becomes an error instead of a question",
@@ -131,6 +133,7 @@ const chat: CommandSpec = {
       flags: "--session <id>",
       description: 'open a served session as a copy (e.g. "schedule:daily-digest")',
     },
+    SESSIONS_DIR,
   ],
   examples: [
     { cmd: "fastagent chat" },
@@ -140,6 +143,7 @@ const chat: CommandSpec = {
     (await import("./commands/chat.ts")).runChat(args[0] as string, {
       model: f.model as string | undefined,
       session: f.session as string | undefined,
+      sessionsDir: f.sessionsDir as string | undefined,
     }),
 };
 
@@ -152,7 +156,7 @@ const info: CommandSpec = {
     "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [DIR_ARG],
-  flags: [JSON_FLAG, MODEL, { flags: "--sessions-dir <dir>", description: "sessions directory override" }],
+  flags: [JSON_FLAG, MODEL, SESSIONS_DIR],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
@@ -235,14 +239,7 @@ const start: CommandSpec = {
     "is the agent), just no file-watching. No build step: start reads the definition directly; " +
     "model/http come from fastagent.config.ts (frozen by git).",
   args: [DIR_ARG],
-  flags: [
-    PORT,
-    BIND,
-    MODEL,
-    { flags: "--sessions-dir <dir>", description: "sessions directory override" },
-    TUNNEL,
-    NO_INPUT,
-  ],
+  flags: [PORT, BIND, MODEL, SESSIONS_DIR, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent start" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
@@ -475,14 +472,13 @@ const schedule: CommandSpec = {
         "text is read from the schedule's session on disk, so no serve has to be running; --json carries it in " +
         "full. Read-only.",
       args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
-      flags: [{ flags: "--json", description: "the full records" }],
+      flags: [{ flags: "--json", description: "the full records" }, SESSIONS_DIR],
       examples: [{ cmd: "fastagent schedule history daily-digest" }],
       run: async (args, flags) =>
-        await (await import("./commands/schedule.ts")).runScheduleHistory(
-          args[0] as string,
-          args[1] as string,
-          flags.json === true,
-        ),
+        await (await import("./commands/schedule.ts")).runScheduleHistory(args[0] as string, args[1] as string, {
+          json: flags.json === true,
+          sessionsDir: flags.sessionsDir as string | undefined,
+        }),
     },
     {
       name: "list",

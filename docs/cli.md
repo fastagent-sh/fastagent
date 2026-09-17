@@ -184,8 +184,13 @@ Opens the same assembled agent in pi's interactive TUI. This is useful for tryin
 `--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
 **as a private copy**: pi renders that session's active path (the copy carries that one path, not the abandoned
 branches a control-plane fork or a leaf move may have left in the original), and `/fork` and `/export` work on it,
-while the served record is never opened for append. Continuing the copy therefore cannot reach the Telegram group
-the conversation belongs to, and cannot branch the record a running turn is writing.
+while the served record is never opened for append. Continuing the copy cannot branch the record a running turn is
+writing, and its replies are not delivered by the channel the conversation came from.
+
+**The isolation is the record and the delivery path, not the tools.** `chat` assembles the same tools the serve
+does, with the same credentials from the same `.env` — including the send tool every `add telegram|slack|feishu`
+scaffolds. Ask the copy a question and the agent may still call one, and that call really happens. Reading is
+safe; continuing is as live as any other `chat` turn.
 
 ```bash
 fastagent chat --session schedule:daily-digest   # what did last night's digest say?

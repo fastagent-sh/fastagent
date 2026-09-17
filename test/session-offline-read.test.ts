@@ -71,6 +71,28 @@ describe("turnsForFires", () => {
     expect(turns.get("2026-01-01T02:00:00.000Z")).toBeUndefined();
   });
 
+  it("two claims stamped at the SAME instant fall back to append order", () => {
+    // A catch-up slot taken in the same millisecond as a due one: the next fire's bound would then be true for every
+    // turn, so the earlier claim would own nothing and the later one would print the earlier one's turn.
+    const same = "2026-01-01T00:00:00.000Z";
+    const turns = turnsForFires(
+      [
+        { slot: "s1", firedAt: same, outcome: "completed", ms: 60_000 },
+        { slot: "s2", firedAt: same, outcome: "completed", ms: 60_000 },
+      ],
+      [
+        user("u1", "2026-01-01T00:00:00.010Z"),
+        assistant("a1", "2026-01-01T00:00:00.020Z", { text: "first reply" }),
+        user("u2", "2026-01-01T00:00:00.030Z"),
+        assistant("a2", "2026-01-01T00:00:00.040Z", { text: "second reply" }),
+      ],
+    );
+    expect([...turns]).toEqual([
+      ["s1", { text: "first reply" }],
+      ["s2", { text: "second reply" }],
+    ]);
+  });
+
   it("an UNSETTLED fire owns no turn — it cannot say when it ended", () => {
     // `interrupted` is written without a duration, so there is no right bound to test a later turn against. The
     // honest answer is nothing: a fire that never reported has no reply of its own to print anyway.
@@ -109,6 +131,14 @@ describe("preview", () => {
     expect(preview({ text: "a".repeat(300) })).toBe(`${"a".repeat(100)}\u2026`);
     expect(preview({ text: "\u{1F600}".repeat(150) })).toBe(`${"\u{1F600}".repeat(100)}\u2026`);
     expect(preview({ text: "short" })).toBe("short");
+  });
+
+  it("never leaves half a surrogate pair when folding brings the line under the budget", () => {
+    // The UTF-16 head cut can split an emoji; whitespace folding then shrinks the line below 100 code points, so it
+    // is returned as-is. Keeping the half prints U+FFFD. (`firstUserText` cannot reach this state: it does not fold.)
+    const line = preview({ text: `a${" ".repeat(198)}\u{1F600}rest` });
+    expect(line).toBe("a \u2026");
+    expect(line).not.toMatch(/[\uD800-\uDFFF]/);
   });
 
   it("never writes a control character to the terminal", () => {
