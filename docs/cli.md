@@ -184,8 +184,7 @@ Opens the same assembled agent in pi's interactive TUI. This is useful for tryin
 `--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
 **as a private copy**: pi renders the whole conversation, and `/tree`, `/fork` and `/export` work on it, while
 the served record is never opened for append. Continuing the copy therefore cannot reach the Telegram group
-the conversation belongs to, and cannot branch the record a running turn is writing. Steering the LIVE
-conversation is [`fastagent attach`](#fastagent-attach), the one command that writes a served session.
+the conversation belongs to, and cannot branch the record a running turn is writing.
 
 ```bash
 fastagent chat --session schedule:daily-digest   # what did last night's digest say?

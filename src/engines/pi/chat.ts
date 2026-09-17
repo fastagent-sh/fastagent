@@ -8,9 +8,9 @@ import { type BuildSessionRuntimeOptions, buildAgentSessionRuntime } from "./ses
  * Open a SERVED session (`schedule:digest`, a channel thread) as a private COPY.
  *
  * A copy rather than the record itself, because that record belongs to whoever is serving it: the running turn's
- * writer. Chat continuing it in place would append a second branch nothing reconciles — and steering the LIVE
- * conversation is `attach`, whose whole shape (one writer, the lease, the running run) exists for it. So chat reads
- * the served record and writes only into its own session dir; the served one is never opened for append.
+ * writer. Chat continuing it in place would append a second branch nothing reconciles, and a CLI that reads a
+ * conversation must not be able to speak into it. So chat reads the served record and writes only into its own
+ * session dir; the served one is never opened for append.
  */
 export async function openSessionCopy(
   workspace: string,
