@@ -24,9 +24,9 @@ import {
 const SSE_IDLE_LIMIT_MS = 3 * SSE_HEARTBEAT_MS;
 
 /**
- * Every request carries a TIMEOUT: attach's whole reliability model counts failed rounds against a budget
- * ("unreachable for ~Ns"), which a black-hole endpoint (firewall drop, half-dead tunnel) would silently defeat — a
- * hung state()/entries(), or a stream that never finishes connecting, ticks nothing.
+ * Every request carries a TIMEOUT: a client's reliability model counts failed rounds against a budget ("unreachable
+ * for ~Ns"), which a black-hole endpoint (firewall drop, half-dead tunnel) would silently defeat — a hung
+ * state()/entries(), or a stream that never finishes connecting, ticks nothing.
  */
 const REQUEST_TIMEOUT_MS = 10_000;
 /** The PAYLOAD-bearing calls get a longer budget than the black-hole detector's 10s. */
@@ -61,8 +61,8 @@ function endedBecause(signal: AbortSignal): StreamEnded | undefined {
  * ONE limit on a pending read, whose value depends on the phase — the only question either wire plane asks about
  * time. Before the stream is connected a read rides `connectMs`, the caller's answer to "how long may an endpoint
  * that accepted the socket take to answer": the events plane gives it the black-hole budget every other request
- * carries ({@link REQUEST_TIMEOUT_MS}), because a reconnecting client WAITS on that phase and attach counts those
- * rounds against a budget; the invoke plane gives it the payload one ({@link PAYLOAD_TIMEOUT_MS}), because a
+ * carries ({@link REQUEST_TIMEOUT_MS}), because a reconnecting client WAITS on that phase, so a black-hole endpoint
+ * has to be declared dead inside its retry budget; the invoke plane gives it the payload one ({@link PAYLOAD_TIMEOUT_MS}), because a
  * scale-to-zero host legitimately holds a POST open while a machine boots. Once connected the limit becomes the
  * heartbeat one for both, which is the right answer for a stream that is merely quiet.
  *

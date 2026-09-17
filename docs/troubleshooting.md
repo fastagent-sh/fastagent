@@ -320,9 +320,9 @@ Then retry `fastagent login`, `fastagent dev`, or `fastagent start`. The variabl
 app-creation flow and a skill download all follow the same proxy.
 
 Loopback (`localhost`, `127.0.0.1`, `::1`) always stays direct — it is added to whatever `NO_PROXY` you set, so a proxy
-variable does not break local health probes, `fastagent attach`, or an `ssh -L` forward. A LAN address is not loopback:
-if you run `fastagent dev --bind 192.168.1.5`, `fastagent attach` finds that address and sends it through the proxy —
-put it in `NO_PROXY` yourself.
+variable does not break local health probes, a control-plane client reading `<stateRoot>/control.json`, or an `ssh -L`
+forward. A LAN address is not loopback: if you run `fastagent dev --bind 192.168.1.5`, a client that dials that address
+sends it through the proxy — put it in `NO_PROXY` yourself.
 
 ## Need a machine-readable report
 

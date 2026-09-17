@@ -350,9 +350,8 @@ and reconnecting means calling `events()` again.
 **Keep pulling the stream while the backfill runs.** Events emitted during those two round trips are
 buffered by the SERVER, per subscriber and with a ceiling (10,000 events / 8 MiB in the pi hub); a
 subscriber past it is closed, which is exactly the loss the recipe exists to prevent. So the two reads
-belong on a task beside a live iteration, not in front of one — `attach` starts its drain first and
-buffers only the RENDERING of it (`src/cli/commands/attach.ts`), and the
-[api-reference example](../api-reference.md#session-control-observation-plane) has the same shape. The overlap that
+belong on a task beside a live iteration, not in front of one — the
+[api-reference example](../api-reference.md#session-control-observation-plane) has that shape. The overlap that
 follows is display-level: durable records may appear both in the replay and in the live stream, and
 live-only events have no entry id to deduplicate against. Live events are not the durable history API; a product that needs replayable run
 timelines persists normalized events above FastAgent.
@@ -564,9 +563,9 @@ The remote adapter consumes the envelope internally and re-exposes the same `Ses
 isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
 **Browser reachability.** The bearer token travels in `Authorization`, which is not CORS-safelisted,
-so a browser preflights EVERY call to the plane, including a plain `GET`. `fastagent attach` is
-unaffected (Node's fetch does not enforce CORS), which is why the gap stayed invisible while blocking
-every browser client.
+so a browser preflights EVERY call to the plane, including a plain `GET`. A Node client is unaffected
+(Node's fetch does not enforce CORS), which is why the gap stayed invisible while blocking every browser
+client.
 
 The plane is therefore mounted as ONE sub-application owning the `/control` prefix, not as a set of
 routes that happen to share it. That is a correctness property: CORS belongs to every reply that
@@ -603,8 +602,8 @@ transport turns into a non-2xx (the table above), `sessions_unavailable` + 503 h
 
 **Who mints the token.** By default the serve mints one per boot and writes it to
 `<stateRoot>/control.json` (0600) — a LOCAL discovery channel whose trust boundary is filesystem
-permissions, which holds because `fastagent attach` and a desktop app share a filesystem with the
-serving process. A deployment removes that premise: a token minted inside the container is unreadable
+permissions, which holds for a client that shares a filesystem with the serving process — a desktop app
+on the same machine. A deployment removes that premise: a token minted inside the container is unreadable
 from outside and replaced on every restart. There the deployer owns the secret —
 `FASTAGENT_CONTROL_TOKEN` is set as a deploy secret (`fastagent deploy` lists it whenever
 `sessionControl: true`), and the serve honours it instead of minting.

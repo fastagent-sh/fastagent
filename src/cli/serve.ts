@@ -106,7 +106,7 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
 }
 
 /**
- * Write `<stateRoot>/control.json` so a LOCAL client (`fastagent attach`) can find the control plane once the port is
+ * Write `<stateRoot>/control.json` so a LOCAL client (a desktop app on this machine) can find the control plane once the port is
  * known, and say what reaches it.
  */
 export function announceControl(
