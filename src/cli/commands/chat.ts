@@ -1,5 +1,5 @@
 /** `fastagent chat [dir]`: open the SAME assembled agent in pi's interactive TUI. */
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentCommand } from "../shared.ts";
 
 export async function runChat(
@@ -11,7 +11,7 @@ export async function runChat(
   // A plain `chat` keeps its own sessions in pi's per-workspace location, so this knob only decides where a SERVED
   // one is looked for. Alone it would change nothing at all — say so instead of accepting it silently.
   if (opts.sessionsDir !== undefined && opts.session === undefined) {
-    failStartup(new Error("--sessions-dir only applies with --session (it says where to look for a served session)"));
+    failUsage("--sessions-dir only applies with --session (it says where to look for a served session)");
   }
   const placement = await enterAgentCommand(dirArg, opts);
   // A served session is opened as a COPY (engines/pi/chat.ts): the record a serve owns is never opened for append.

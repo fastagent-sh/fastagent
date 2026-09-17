@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 import * as Effect from "effect/Effect";
-import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSession } from "../src/schedule/scheduler.ts";
+import { createScheduler as scheduler, fireScheduleOnce as fire } from "../src/schedule/scheduler.ts";
+import { scheduleSession } from "../src/schedule/schedule.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));

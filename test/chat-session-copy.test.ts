@@ -53,6 +53,8 @@ describe("chat --session opens a COPY", () => {
     expect(copy.getSessionFile()).not.toBe(servedFile);
     // And in the dir a PLAIN `fastagent chat` uses: pi encodes the cwd into that path, so a workspace reached
     // through a symlink (tmpdir() on macOS is one) would otherwise hide the copy from /resume.
+    // Named, so `/resume` can tell repeated copies of one served session apart (and from a plain chat's own rows).
+    expect(copy.getSessionName()).toBe("schedule:job");
     expect(dirname(copy.getSessionFile() as string)).toBe(
       SessionManager.create(canonicalPath(workspace)).getSessionDir(),
     );

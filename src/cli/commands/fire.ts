@@ -8,7 +8,7 @@ import { reportModuleLoadFailures } from "../../loader.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { scheduleSession } from "../../schedule/scheduler.ts";
+import { scheduleSession } from "../../schedule/schedule.ts";
 import { failStartup, gateSecretsOrExit } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 

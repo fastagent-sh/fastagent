@@ -30,6 +30,10 @@ export async function openSessionCopy(
   const copy = SessionManager.create(canonicalPath(workspace), undefined, {
     ...(served.getSessionFile() ? { parentSession: served.getSessionFile() as string } : {}),
   });
+  // METADATA FIRST, history last: pi has one leaf pointer and every append advances it. The name travels for the
+  // reason the store's `fork` states — a copy that lists as untitled is a row a user cannot place, and opening the
+  // same served session twice would otherwise pile up indistinguishable records in `/resume`.
+  copy.appendSessionInfo(served.getSessionName() ?? session);
   // The SAME branch copy inheritance uses, for the same reason it exists: it is the one that leaves the control
   // plane's own markers behind (`session-markers.ts`: never copied by a fork), which describe the served RECORD and
   // mean nothing in a private chat.

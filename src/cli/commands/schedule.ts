@@ -5,6 +5,7 @@ import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
+import { scheduleSession } from "../../schedule/schedule.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -63,8 +64,11 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   if (fires.length > shown.length) {
     console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
   }
-  // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced.
-  console.error(`(what these runs said: \`fastagent chat --session schedule:${name}\`)`);
+  // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced. The
+  // session id comes from the ONE place that spells it, and the directory travels — a pointer a reader can paste
+  // from wherever they ran this.
+  const where = dirArg === "." ? "" : ` ${dirArg}`;
+  console.error(`(what these runs said: \`fastagent chat --session ${scheduleSession(name)}${where}\`)`);
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */

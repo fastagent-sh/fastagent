@@ -176,7 +176,7 @@ Web panel or desktop app uses (`connectSessionControl`).
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId] [--session id]
+fastagent chat [dir] [--model provider/modelId] [--session id] [--sessions-dir dir]
 ```
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
@@ -257,11 +257,19 @@ construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-**WHAT a run said — and why a failed one failed — is in its session.** Every fire runs in a session
-(`schedule:<name>` for a cron) under `<state root>/sessions/`, where the text is stored exactly once. Read it
-with `fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)): off disk, no serve
+**WHAT a run said is in its session.** Every fire runs in a session (`schedule:<name>` for a cron) under
+`<state root>/sessions/`, where the text is stored exactly once. Read it with
+`fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)): off disk, no serve
 running, which is the normal state when someone asks what last night did. This command prints that pointer
 under the rows.
+
+**WHY a failed one failed is in the session only when the turn got that far.** A failure inside the turn
+lands on its assistant record (`stopReason: "error"` plus the message), so `chat --session` shows it. A
+failure BEFORE the model was reached — bad credentials, an unresolvable model, a secrets-gate refusal — and a
+fire that never reached a turn at all leave nothing in the session: their only record is the `failed` log
+line, **under the host's retention, not this one's**. Claims can reach ~3 weeks while Fly's and Railway's
+logs are typically days, so a `failed` row here can outlive its own explanation ([Deploy](deploy.md) covers
+per-host retention).
 
 These rows say WHEN each fire happened; the session is in time order. Matching them is left to you on
 purpose — a schedule's fires share one continuing conversation, nothing records which turn came from which
