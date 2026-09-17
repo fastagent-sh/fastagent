@@ -1,6 +1,7 @@
 /** Chat: open a workspace into pi's interactive TUI (`fastagent chat`). */
 import { InteractiveMode, SessionManager } from "@earendil-works/pi-coding-agent";
 import { canonicalPath } from "./definition.ts";
+import { copyBranchInto } from "./session-inheritance.ts";
 import { publishedLeaf } from "./session-markers.ts";
 import { piSessionRecordStore, reconcileInterruptedToolCalls } from "./session-store.ts";
 import { type BuildSessionRuntimeOptions, buildAgentSessionRuntime } from "./session-builder.ts";
@@ -23,17 +24,19 @@ export async function openSessionCopy(
   // The published head, not pi's last-line leaf: the store writes its own bookkeeping entries into the same journal.
   const leaf = publishedLeaf(served);
   if (!leaf) throw new Error(`session "${session}" has no turns yet — nothing to open`);
-  const file = served.getSessionFile();
-  if (!file) throw new Error(`session "${session}" has no file to copy (an in-memory record?)`);
-  // The second argument is where /new and /branch write, so the copy lands in chat's own dir, not the served one.
-  // CANONICAL, like the builder's default SessionManager: pi derives that dir by encoding the cwd, so a workspace
-  // reached through a symlink (`/tmp` on macOS) would otherwise put this copy where a plain `chat`'s /resume never
-  // looks.
-  const copy = SessionManager.open(file, SessionManager.create(canonicalPath(workspace)).getSessionDir());
-  copy.createBranchedSession(leaf);
-  // AFTER the branch, never before: the repair APPENDS a missing toolResult, and the served record is not ours to
-  // write. The session most worth opening this way is the one a fire was killed in the middle of — exactly the one
-  // carrying a dangling toolCall the provider would reject on this chat's first message.
+  // A NEW record in chat's own dir, never a handle on the served file. CANONICAL cwd, like the builder's default
+  // SessionManager: pi derives that dir by encoding the cwd, so a workspace reached through a symlink (`/tmp` on
+  // macOS) would otherwise put this copy where a plain `chat`'s /resume never looks.
+  const copy = SessionManager.create(canonicalPath(workspace), undefined, {
+    ...(served.getSessionFile() ? { parentSession: served.getSessionFile() as string } : {}),
+  });
+  // The SAME branch copy inheritance uses, for the same reason it exists: it is the one that leaves the control
+  // plane's own markers behind (`session-markers.ts`: never copied by a fork), which describe the served RECORD and
+  // mean nothing in a private chat.
+  copyBranchInto(served, copy, leaf);
+  // The repair APPENDS a missing toolResult, so it runs on the COPY. The session most worth opening this way is the
+  // one a fire was killed in the middle of — exactly the one carrying a dangling toolCall the provider would reject
+  // on this chat's first message.
   return reconcileInterruptedToolCalls(copy);
 }
 

@@ -12,6 +12,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { openSessionCopy } from "../src/engines/pi/chat.ts";
 import { canonicalPath } from "../src/engines/pi/definition.ts";
+import { LEAF_ANCHOR, isPlaneMarker, stampProvenance } from "../src/engines/pi/session-markers.ts";
 import { piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 
 /** The messages on a record's active path, in append order. */
@@ -61,6 +62,28 @@ describe("chat --session opens a COPY", () => {
       "why did you say that?",
       "because of X",
     ]);
+  });
+
+  it("leaves the control plane's own markers behind — they describe the served record, not the thread", async () => {
+    // `session-markers.ts` states the invariant: a plane marker is never published, never navigable, and never
+    // copied by a fork. This copy path is a fork too, and it goes through the same filtered branch copy.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-chat-markers-"));
+    const sessionsDir = join(workspace, "sessions");
+    const served = await piSessionRecordStore({ dir: sessionsDir, cwd: workspace }).openOrCreate("schedule:job");
+    served.appendMessage({ role: "user", content: "run 1", timestamp: 1 });
+    served.appendMessage(fauxAssistantMessage("the digest, in full"));
+    // The markers must be ANCESTORS of the published leaf, which is what a leaf move followed by another turn
+    // leaves behind — otherwise no copy of the active path would touch them anyway.
+    stampProvenance(served, "fork:from@entry");
+    served.appendCustomEntry(LEAF_ANCHOR, { entryId: "whatever" });
+    served.appendMessage({ role: "user", content: "run 2", timestamp: 2 });
+    served.appendMessage(fauxAssistantMessage("the second digest"));
+
+    const copy = await openSessionCopy(workspace, sessionsDir, "schedule:job");
+
+    const markers = (copy.getEntries() as { type?: string; customType?: string }[]).filter((e) => isPlaneMarker(e));
+    expect(markers).toEqual([]);
+    expect(messages(copy).map(textOf)).toEqual(["run 1", "the digest, in full", "run 2", "the second digest"]);
   });
 
   it("repairs the dangling toolCall a killed turn left, so the copy's first message is not rejected", async () => {
