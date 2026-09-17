@@ -8,14 +8,9 @@ import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
-import type { LoadedSchedule } from "./schedule.ts";
+import { type LoadedSchedule, scheduleSession } from "./schedule.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
-
-/** A schedule shares one continuing conversation without depending on engine session storage. */
-export function scheduleSession(name: string): string {
-  return `schedule:${name}`;
-}
 
 /**
  * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait

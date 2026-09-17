@@ -17,6 +17,8 @@ const MODEL: FlagSpec = {
   description: "model override (precedence: --model > FASTAGENT_MODEL > config)",
 };
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
+/** Where this agent's session records live. Every command that reads or writes one takes it, or they disagree. */
+const SESSIONS_DIR: FlagSpec = { flags: "--sessions-dir <dir>", description: "sessions directory override" };
 const NO_INPUT: FlagSpec = {
   flags: "--no-input",
   description: "never prompt (CI/scripts) — missing information becomes an error instead of a question",
@@ -121,13 +123,29 @@ const chat: CommandSpec = {
   description:
     "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
     "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
-    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
+    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file). " +
+    "--session opens a SERVED session (a schedule's, a channel thread's) as a private copy — read what " +
+    "it said, continue from it, without touching the record the serve owns (that is `attach`).",
   args: [DIR_ARG],
-  flags: [MODEL],
-  examples: [{ cmd: "fastagent chat" }],
+  flags: [
+    MODEL,
+    {
+      flags: "--session <id>",
+      description: 'open a served session as a copy (e.g. "schedule:daily-digest")',
+    },
+    // NOT the shared SESSIONS_DIR wording: chat's own sessions always live in pi's per-workspace dir, so this only
+    // says where the SERVED one is looked for.
+    { flags: "--sessions-dir <dir>", description: "where to look for the served session (--session)" },
+  ],
+  examples: [
+    { cmd: "fastagent chat" },
+    { cmd: "fastagent chat --session schedule:daily-digest", note: "last night's run" },
+  ],
   run: async (args, f) =>
     (await import("./commands/chat.ts")).runChat(args[0] as string, {
       model: f.model as string | undefined,
+      session: f.session as string | undefined,
+      sessionsDir: f.sessionsDir as string | undefined,
     }),
 };
 
@@ -140,7 +158,7 @@ const info: CommandSpec = {
     "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [DIR_ARG],
-  flags: [JSON_FLAG, MODEL, { flags: "--sessions-dir <dir>", description: "sessions directory override" }],
+  flags: [JSON_FLAG, MODEL, SESSIONS_DIR],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
@@ -223,14 +241,7 @@ const start: CommandSpec = {
     "is the agent), just no file-watching. No build step: start reads the definition directly; " +
     "model/http come from fastagent.config.ts (frozen by git).",
   args: [DIR_ARG],
-  flags: [
-    PORT,
-    BIND,
-    MODEL,
-    { flags: "--sessions-dir <dir>", description: "sessions directory override" },
-    TUNNEL,
-    NO_INPUT,
-  ],
+  flags: [PORT, BIND, MODEL, SESSIONS_DIR, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent start" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
@@ -458,8 +469,8 @@ const schedule: CommandSpec = {
       summary: "print the recent fires of a schedule",
       description:
         "Print a schedule's recent fires: when each fired, completed/failed/interrupted, and how long it took " +
-        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session journal ' +
-        "under <state root>/sessions/, not here and not in the logs. Read-only.",
+        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session; read it ' +
+        "with `fastagent chat --session schedule:<name>`, which this command points at. Read-only.",
       args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
       flags: [{ flags: "--json", description: "the full records" }],
       examples: [{ cmd: "fastagent schedule history daily-digest" }],

@@ -3,6 +3,15 @@
 import { secretValues } from "../declared-secrets.ts";
 
 /**
+ * WHICH conversation a schedule's turns belong to: all of them, so a schedule shares one continuing conversation —
+ * and without depending on engine session storage. The ONE spelling of it: the scheduler invokes through it,
+ * `fastagent fire` reproduces a fire with it, and `schedule history` prints the command that opens it.
+ */
+export function scheduleSession(name: string): string {
+  return `schedule:${name}`;
+}
+
+/**
  * A time-triggered invocation: at each `cron` instant (in `tz`, default UTC) the scheduler invokes the agent with
  * `prompt`.
  */

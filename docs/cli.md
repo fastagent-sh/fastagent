@@ -176,10 +176,33 @@ Web panel or desktop app uses (`connectSessionControl`).
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId]
+fastagent chat [dir] [--model provider/modelId] [--session id] [--sessions-dir dir]
 ```
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+
+`--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
+**as a private copy**: pi renders that session's active path (the copy carries that one path, not the abandoned
+branches a control-plane fork or a leaf move may have left in the original), and `/fork` and `/export` work on it,
+while the served record is never opened at all — only its bytes are copied, because pi's loader writes to the file it
+opens (a missing trailing newline, a version migration). Continuing the copy cannot branch the record a running turn
+is writing, and its replies are not delivered by the channel the conversation came from.
+
+**Where the copy goes, and that there is a new one each time.** It is a fresh record in pi's own per-workspace
+session directory (`~/.pi/agent/sessions/<encoded workspace>`, `PI_CODING_AGENT_DIR` moves it), NOT under the
+agent's state root — which is why `/resume` finds it beside your other chats, and why the served session's directory
+is untouched. Every `chat --session` makes another full copy of the history, and nothing prunes them: on a
+months-long daily digest, reading it once a day copies a growing journal once a day. Delete the ones you are done
+with from `/resume` (Ctrl+D).
+
+**The isolation is the record and the delivery path, not the tools.** `chat` assembles the same tools the serve
+does, with the same credentials from the same `.env` — including the send tool every `add telegram|slack|feishu`
+scaffolds. Ask the copy a question and the agent may still call one, and that call really happens. Reading is
+safe; continuing is as live as any other `chat` turn.
+
+```bash
+fastagent chat --session schedule:daily-digest   # what did last night's digest say?
+```
 
 Auth is fastagent's, same as every other command: `FASTAGENT_AUTH_PATH` > the
 agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
@@ -237,18 +260,28 @@ A fire reads `unreported` when nothing settled it: one still running, or one not
 second case is AgentCore: it delivers slots from an external clock, so no boot of it runs the reconciler,
 on the host that reclaims its container most often.
 
-The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
+The fired slots ARE the claims (`<state root>/schedule/claims/<name>/`), so that half is bounded by
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-**WHAT a run said is not here.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
-under `<state root>/sessions/` like any other conversation, so the turn's text is stored exactly once — in
-that session's journal, which today is read by opening the `.jsonl` file. No command prints a past
-scheduled turn: `fastagent attach schedule:<name>` needs `sessionControl: true` and a running serve, and it
-tails NEW events rather than backfilling the ones already there. **WHY a failed one failed is a log line** — and that window is
-the host's, not this one's: claims can reach ~3 weeks while Fly's and Railway's log retention is typically
-days, so a `failed` row can outlive its own explanation ([Deploy](deploy.md) covers per-host retention).
+**WHAT a run said is in its session.** Every fire runs in a session (`schedule:<name>` for a cron) under
+`<state root>/sessions/`, where the text is stored exactly once. Read it with
+`fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)): off disk, no serve
+running, which is the normal state when someone asks what last night did. This command prints that pointer
+under the rows.
+
+**WHY a failed one failed is in the session only when the turn got that far.** A failure inside the turn
+lands on its assistant record (`stopReason: "error"` plus the message), so `chat --session` shows it. A
+failure BEFORE the model was reached — bad credentials, an unresolvable model, a secrets-gate refusal — and a
+fire that never reached a turn at all leave nothing in the session: their only record is the `failed` log
+line, **under the host's retention, not this one's**. Claims can reach ~3 weeks while Fly's and Railway's
+logs are typically days, so a `failed` row here can outlive its own explanation ([Deploy](deploy.md) covers
+per-host retention).
+
+These rows say WHEN each fire happened; the session is in time order. Matching them is left to you on
+purpose — a schedule's fires share one continuing conversation, nothing records which turn came from which
+fire, and `fastagent fire`, a wake-up and the control plane append to the same session.
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

@@ -5,6 +5,7 @@ import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
+import { scheduleSession } from "../../schedule/schedule.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -14,7 +15,14 @@ import { failStartup, placementOrExit } from "../fail.ts";
  * long it took.
  *
  * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
- * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's.
+ * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's, and read with
+ * `fastagent chat --session`.
+ *
+ * This command does NOT try to say which turn belongs to which fire. Nothing links them: a schedule's fires share
+ * ONE continuing conversation, so the session id is the same for all of them, and the turn-level identifier would
+ * have to cross the engine-neutral contract (no `AgentEvent` carries an entry id) or cost the shared conversation.
+ * A claim's timestamp against a time-ordered journal is what an operator reads anyway — matching them HERE only
+ * moves a human's judgement into a heuristic that cannot be right about a session other writers also append to.
  */
 export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
@@ -56,6 +64,12 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   if (fires.length > shown.length) {
     console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
   }
+  // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced. The
+  // session id comes from the ONE place that spells it, and the directory travels — a pointer a reader can paste
+  // from wherever they ran this.
+  // Quoted: the line exists to be pasted, and a directory with a space in it would otherwise paste as two arguments.
+  const where = dirArg === "." ? "" : ` '${dirArg}'`;
+  console.error(`(what these runs said: \`fastagent chat --session ${scheduleSession(name)}${where}\`)`);
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */
