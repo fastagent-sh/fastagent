@@ -207,7 +207,7 @@ the same gate refuses a run while the name is unset. Then test it immediately (w
 the cron, and without touching the real fire state):
 
 ```bash
-fastagent fire daily-digest
+fastagent schedule fire daily-digest
 ```
 
 On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.

@@ -490,7 +490,7 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   claim is refused as a stale replay.
 
 The scheduler is started by
-the serve path (`dev`/`start`); `fastagent fire <name>` runs one schedule's turn immediately for authoring.
+the serve path (`dev`/`start`); `fastagent schedule fire <name>` runs one schedule's turn immediately for authoring.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
 capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the

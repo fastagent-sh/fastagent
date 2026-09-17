@@ -1,5 +1,5 @@
 /**
- * `fastagent fire <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for schedules (like `invoke`
+ * `fastagent schedule fire <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for schedules (like `invoke`
  * is for a prompt).
  */
 import { join } from "node:path";

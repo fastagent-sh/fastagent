@@ -285,7 +285,7 @@ Diagnose with commands that exit:
 ```bash
 fastagent schedule list             # everything that will fire, with the next instant
 fastagent schedule history <name>   # did last night's run silently fail?
-fastagent fire <name>               # run the schedule's turn now, without touching cron state
+fastagent schedule fire <name>      # run the schedule's turn now, without touching cron state
 ```
 
 A broken `schedules/<name>.ts` file is reported by `fastagent info` before it ever reaches `dev`.

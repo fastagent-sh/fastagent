@@ -369,7 +369,7 @@ Create `fastagent/schedules/` only when needed. Inspect and test from the worksp
 
 ```bash
 fastagent schedule list
-fastagent fire daily-review
+fastagent schedule fire daily-review
 fastagent schedule history daily-review
 ```
 

@@ -9,7 +9,7 @@ import { slackTransport } from "@fastagent-sh/fastagent/slack";
 // prompt must name the target channel id. tools/ is auto-discovered.
 //
 // Delivery rides the channel's own transport (slackTransport): its token, API base, Markdown splitting
-// and rate-limit handling. With no channel mounted (`fastagent fire` / `invoke`) it is built from
+// and rate-limit handling. With no channel mounted (`fastagent schedule fire` / `invoke`) it is built from
 // SLACK_BOT_TOKEN in .env.
 
 export default defineTool({

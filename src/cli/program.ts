@@ -161,22 +161,6 @@ const invoke: CommandSpec = {
     }),
 };
 
-const fire: CommandSpec = {
-  name: "fire",
-  summary: "run ONE schedule's turn immediately, without waiting for its cron",
-  description:
-    "Run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts now " +
-    "without waiting for its cron. Reply→stdout; does NOT advance the schedule's fire state.",
-  args: [{ name: "<name>", description: "the schedule name (schedules/<name>.ts)" }, DIR_ARG],
-  flags: [MODEL, NO_INPUT],
-  examples: [{ cmd: "fastagent fire daily-digest" }],
-  run: async (args, f) =>
-    (await import("./commands/fire.ts")).runFire(args[0] as string, args[1] as string, {
-      model: f.model as string | undefined,
-      input: f.input !== false,
-    }),
-};
-
 const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
@@ -418,8 +402,23 @@ const deploy: CommandSpec = {
 
 const schedule: CommandSpec = {
   name: "schedule",
-  summary: "inspect and control time triggers: fire history, pending fires, cancel a wake-up",
+  summary: "run, inspect and control time triggers: fire now, fire history, pending fires, cancel a wake-up",
   subcommands: [
+    {
+      name: "fire",
+      summary: "run ONE schedule's turn immediately, without waiting for its cron",
+      description:
+        "Run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts now " +
+        "without waiting for its cron. Reply→stdout; does NOT advance the schedule's fire state.",
+      args: [{ name: "<name>", description: "the schedule name (schedules/<name>.ts)" }, DIR_ARG],
+      flags: [MODEL, NO_INPUT],
+      examples: [{ cmd: "fastagent schedule fire daily-digest" }],
+      run: async (args, f) =>
+        (await import("./commands/fire.ts")).runFire(args[0] as string, args[1] as string, {
+          model: f.model as string | undefined,
+          input: f.input !== false,
+        }),
+    },
     {
       name: "history",
       summary: "print the recent fires of a schedule",
@@ -529,7 +528,6 @@ export const specs: readonly CommandSpec[] = [
   info,
   tool,
   invoke,
-  fire,
   schedule,
   dev,
   chat,

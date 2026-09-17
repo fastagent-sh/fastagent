@@ -286,7 +286,7 @@ describe("cli papercuts", () => {
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
     const env = { ...process.env };
     delete env.FASTAGENT_MODEL; // unknown-name exits before any model resolution
-    const { code, stderr } = await run(["fire", "nope", dir], undefined, env);
+    const { code, stderr } = await run(["schedule", "fire", "nope", dir], undefined, env);
     expect(code).toBe(1);
     expect(stderr).toMatch(/unknown schedule "nope"/);
     expect(stderr).toMatch(/available: daily/); // found in fastagent/schedules — the same set dev/start serve
@@ -350,7 +350,7 @@ describe("cli papercuts", () => {
     expect(tool.stderr).toMatch(/tools\/broken\.mjs failed to load/);
     expect(tool.stderr).toMatch(/unknown tool "nope"/);
 
-    const fired = await run(["fire", "nope", dir]);
+    const fired = await run(["schedule", "fire", "nope", dir]);
     expect(fired.code).toBe(1);
     expect(fired.stderr).toMatch(/schedules\/broken\.mjs failed to load/);
     expect(fired.stderr).toMatch(/unknown schedule "nope"/);
@@ -369,7 +369,7 @@ describe("cli papercuts", () => {
     });
     const env = { ...process.env };
     delete env.FA_TEST_FIRE_CHANNEL;
-    const { code, stderr } = await run(["fire", "digest", dir], undefined, env);
+    const { code, stderr } = await run(["schedule", "fire", "digest", dir], undefined, env);
     expect(code).toBe(1);
     expect(stderr).toMatch(/FA_TEST_FIRE_CHANNEL \(schedules\/digest\.ts\)/);
     // Through the CLI's failure boundary: the one line that names the file, never a Node stack that
@@ -436,7 +436,7 @@ describe("cli papercuts", () => {
     });
     const env = { ...process.env };
     delete env.FA_TEST_FIRE_CHANNEL;
-    const { stderr } = await run(["fire", "cleanup", dir], undefined, env);
+    const { stderr } = await run(["schedule", "fire", "cleanup", dir], undefined, env);
     expect(stderr).not.toMatch(/FA_TEST_FIRE_CHANNEL/); // got past the gate (it then needs a model/auth)
   });
 
