@@ -192,11 +192,9 @@ export async function createPiAgentFromDir(
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
   // opted into self-scheduling (config.selfSchedule).
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
-  // The one resolution every reader shares (config.ts): an embedder that only sets FASTAGENT_SESSIONS_DIR must not
-  // serve one directory while `schedule history` and `chat --session` read another.
   // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
-  // same resolution every reader shares (config.ts), so an embedder that only sets FASTAGENT_SESSIONS_DIR does not
-  // serve one directory while `schedule history` and `chat --session` read another.
+  // resolution every reader shares (config.ts), so an embedder that only sets FASTAGENT_SESSIONS_DIR does not serve
+  // one directory while `schedule history` and `chat --session` read another.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });

@@ -13,7 +13,7 @@ import { openSessionCopy } from "../src/engines/pi/chat.ts";
 import { canonicalPath } from "../src/engines/pi/definition.ts";
 import { readJournal } from "../src/engines/pi/session-journal.ts";
 import { piSessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { type FireTurn, turnsForFires } from "../src/cli/commands/schedule.ts";
+import { type FireTurn, preview, turnsForFires } from "../src/cli/commands/schedule.ts";
 import type { Fire } from "../src/schedule/state.ts";
 import type { SessionEntry } from "../src/session.ts";
 
@@ -99,6 +99,23 @@ describe("turnsForFires", () => {
       ],
     );
     expect(turns.get("2026-01-01T00:00:00.000Z")).toEqual({ text: "", error: "provider exploded" } satisfies FireTurn);
+  });
+});
+
+describe("preview", () => {
+  it("marks a cut line with an ellipsis whether it is ASCII or emoji", () => {
+    // 150 emoji fill the UTF-16 budget at exactly 100 code points, so judging truncation by what SURVIVED would
+    // print a cut line that reads as a reply which was that short.
+    expect(preview({ text: "a".repeat(300) })).toBe(`${"a".repeat(100)}\u2026`);
+    expect(preview({ text: "\u{1F600}".repeat(150) })).toBe(`${"\u{1F600}".repeat(100)}\u2026`);
+    expect(preview({ text: "short" })).toBe("short");
+  });
+
+  it("never writes a control character to the terminal", () => {
+    // A schedule's reply routinely carries a file a tool read; an ANSI escape would repaint this row and the next.
+    const line = preview({ text: "x\u001b[31mRED\u001b[0m\u0007" });
+    expect(line).not.toMatch(/\p{Cc}/u);
+    expect(line).toBe("x [31mRED [0m");
   });
 });
 

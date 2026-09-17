@@ -255,11 +255,17 @@ Read-only.
 **WHAT a run said comes from its session.** Every fire runs in a session (`schedule:<name>` for a cron),
 persisted under `<state root>/sessions/`, where the turn's text is stored exactly once. `schedule history`
 reads that journal directly — off disk, no control plane, no serve running, which is the normal state when
-someone asks what last night did — and prints one folded line per fire (`--json` carries the text in full,
-plus `errorMessage` for a turn that ended in an error, which is otherwise only a log line under the host's
-retention). Fires and turns have no shared id, so the match is by time and bounded on both sides: a fire
-owns the first turn at or after its instant and before the NEXT fire's. A fire with no turn in its window
-prints no text — which is what an `interrupted` one, and one that never reached a turn, look like.
+someone asks what last night did — and prints one folded line per fire. `--json` adds a `turn` object to each
+record instead: `{ text }`, plus `error` for a turn that ended badly (pi's `errorMessage`, which is otherwise
+only a log line under the host's retention).
+
+Fires and turns have no shared id, so the match is by time and bounded on BOTH sides: a fire owns the first
+turn at or after its own instant, before the next fire's, **and before its own fire ended** (`firedAt + ms`
+from the claim — a turn cannot start after the fire that would have started it finished). That second bound
+is what keeps the newest fire from owning whatever anyone writes into the session later, by hand (`fastagent
+fire`), from a wake-up, or over the control plane. An UNSETTLED claim states no end — `interrupted` is
+written without a duration — so it owns no turn at all, which is also correct: a fire that never reached an
+answer has no reply to print.
 
 To read a past turn in full, or to ask about it: `fastagent chat --session schedule:<name>` opens that
 session as a private copy (see [`fastagent chat`](#fastagent-chat)).

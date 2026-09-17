@@ -3,12 +3,9 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { resolveSessionsDir } from "../../engines/pi/config.ts";
 import { readJournal } from "../../engines/pi/session-journal.ts";
-import { piSessionRecordStore } from "../../engines/pi/session-store.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
-import { scheduleSession } from "../../schedule/scheduler.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
 import type { SessionEntry } from "../../session.ts";
@@ -78,20 +75,27 @@ export function turnsForFires(fires: Fire[], entries: SessionEntry[]): Map<strin
 const PREVIEW_CHARS = 100;
 
 /** One folded line of what a turn said — code-point safe, so a cut never lands inside an emoji. */
-function preview(turn: FireTurn | undefined): string {
+export function preview(turn: FireTurn | undefined): string {
   const text = turn?.error ?? turn?.text ?? "";
   // Cut to UTF-16 units FIRST (the same rule as `firstUserText` in session-store.ts): a megabyte reply would
   // otherwise become a million-element array just to take the first 100 code points, once per printed row. Twice the
   // budget is enough for any surrogate pairing, and folding whitespace after the cut cannot grow it.
-  const folded = text
-    .slice(0, PREVIEW_CHARS * 2)
+  const head = text.slice(0, PREVIEW_CHARS * 2);
+  const folded = head
+    // Controls FIRST, then whitespace, so the spaces this leaves behind collapse with the rest. A model reply often
+    // carries a file a tool read, ANSI escapes included; `\s` does not cover them, and writing one straight to a
+    // terminal repaints this row and everything after it.
+    .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
   // That UTF-16 cut can land between a surrogate pair; dropping a trailing high surrogate is what keeps BOTH returns
   // below code-point safe (folding whitespace can bring the text under the budget, and returning `folded` itself
   // would print the lone half as U+FFFD).
   const cut = Array.from(folded.replace(/[\uD800-\uDBFF]$/, ""));
-  return cut.length > PREVIEW_CHARS ? `${cut.slice(0, PREVIEW_CHARS).join("")}\u2026` : cut.join("");
+  // Truncation is judged on what was CUT AWAY, not on what survived: 150 emoji fill the UTF-16 budget at exactly 100
+  // code points, and without this a truncated line would be indistinguishable from a reply that short.
+  const truncated = text.length > head.length || cut.length > PREVIEW_CHARS;
+  return truncated ? `${cut.slice(0, PREVIEW_CHARS).join("")}\u2026` : cut.join("");
 }
 
 /**
@@ -120,17 +124,35 @@ export async function runScheduleHistory(name: string, dirArg: string, json: boo
   } catch (e) {
     failStartup(new Error(`the fired-slot claims for "${name}" are unreadable (state: ${stateRoot}): ${String(e)}`));
   }
-  // A session that was never created (nothing ever fired, or an older state root) is not an error: the fires are
-  // still the answer to "did it run", only without what it said.
+  // Loaded HERE, not at module top: `schedule list|cancel` are the same module and touch no session, and the engine's
+  // store costs most of a second to import (package-boundary.test.ts states the rule).
+  const { resolveSessionsDir } = await import("../../engines/pi/config.ts");
+  const { piSessionRecordStore } = await import("../../engines/pi/session-store.ts");
+  const { scheduleSession } = await import("../../schedule/scheduler.ts");
+  const session = scheduleSession(name);
   const sessionsDir = resolveSessionsDir(target);
-  const record = await piSessionRecordStore({ dir: sessionsDir, cwd: target }).openIfExists(scheduleSession(name));
-  // SAY it, rather than printing an empty text column: "this schedule has no session here" and "the turn produced no
-  // text" read identically otherwise, and one of the two ways to get here is a sessions dir that is not the one the
-  // serve wrote (FASTAGENT_SESSIONS_DIR set for only one of them).
-  if (!record && fires.length > 0) {
-    console.error(`no session "${scheduleSession(name)}" under ${sessionsDir} — fired slots below, without their text`);
+  // The TEXT is the secondary answer; "did it run" is the primary one and must survive a record this command cannot
+  // read. Expected failures: `SessionManager.open` throwing on a corrupt or unreadable file, and the journal read
+  // faulting (it loads the whole record, which grows with every fire while claims stay capped at 512). Both are an
+  // operator's to fix, so they are reported on stderr and the fires still print — never swallowed.
+  let turns = new Map<string, FireTurn>();
+  let missing = false;
+  try {
+    const record = await piSessionRecordStore({ dir: sessionsDir, cwd: target }).openIfExists(session);
+    if (record) turns = turnsForFires(fires, readJournal(record).entries);
+    else missing = true;
+  } catch (e) {
+    console.error(
+      `the session "${session}" under ${sessionsDir} is unreadable (${String(e)}) — fired slots below, without their text`,
+    );
   }
-  const turns = record ? turnsForFires(fires, readJournal(record).entries) : new Map<string, FireTurn>();
+  // A session that was never created (nothing ever fired, or an older state root) is not an error, but SAY it rather
+  // than printing an empty text column: "no session here" and "the turn produced no text" read identically otherwise,
+  // and one way to get here is a sessions dir that is not the one the serve wrote (FASTAGENT_SESSIONS_DIR set for
+  // only one of them).
+  if (missing && fires.length > 0) {
+    console.error(`no session "${session}" under ${sessionsDir} — fired slots below, without their text`);
+  }
   if (json) {
     console.log(
       JSON.stringify(
