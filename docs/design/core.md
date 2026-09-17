@@ -621,13 +621,20 @@ Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DI
 the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
 volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
 
-The shipped file-backed implementations are single-process, and the cost of ignoring that is specific
+The shipped file-backed implementations assume one machine, and the cost of ignoring that is specific
 rather than general — measured, not assumed:
 
-- **Two writers do not corrupt a session.** pi appends one whole transaction per line, so the file
-  stays parseable; the conversation *branches* (both writers' entries share a parent) and one branch
-  falls off the path the next turn reads. Within one process this cannot happen — the session lease
-  answers a concurrent turn with `session_busy` — so it is that rule not reaching across processes.
+- **Two writers do not corrupt a session — and are refused on one machine.** pi appends one whole
+  transaction per line, so a second writer would not break the file; the conversation would *branch*
+  (both writers' entries share a parent) and one branch would fall off the path the next turn reads —
+  silently. So the lease's persistence domain follows the store's: a file-backed store gets a
+  file-backed lease (`fileLease`, `src/engines/pi/session-store.ts`), which answers the second process
+  with the same `session_busy` the first one's in-memory `Set` answers a concurrent turn with. It is
+  record-scoped, not directory-scoped: a lock file per session id, so two processes serving *different*
+  sessions over one state root never contend, and the topologies a directory-level writer lock would
+  forbid (a one-shot `invoke` beside a serving `dev`, two channels in two processes, an embedder
+  mounting twice) stay allowed. Staleness is mtime-based, so this covers one machine; multiple
+  instances across machines still need the shared backend below.
 - **Channel state is keyed by channel kind**, so two processes serving different channels never touch
   the same files. Two processes serving the SAME channel means one ingress credential in two places,
   which no local guard can see: the same bot token in two different directories does it too.
@@ -651,10 +658,11 @@ rather than general — measured, not assumed:
   already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
   a killed process block its own replay, which is worse than the duplicate.
 
-Multiple instances still require shared session, lease, credential, and channel-state backends. What
-is deliberately absent is a directory-level writer lock: it would forbid harmless topologies (two
-channels in two processes, a one-shot `invoke` beside a serving `dev`, an embedder mounting twice)
-without preventing the dangerous one above.
+Multiple instances ACROSS MACHINES still require shared session, lease, credential, and channel-state
+backends. What is deliberately absent is a directory-level writer lock: it would forbid harmless
+topologies (two channels in two processes, a one-shot `invoke` beside a serving `dev`, an embedder
+mounting twice) while the dangerous one — two writers on one session — is already refused at the
+record.
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
 persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned

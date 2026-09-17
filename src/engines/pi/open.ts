@@ -22,7 +22,7 @@ import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
-import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
+import { type PiSessionRecordStore, fileLease, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
@@ -198,6 +198,9 @@ export async function createPiAgentFromDir(
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
+  // The lease's persistence domain follows the store's: these records outlive the process, so the single-writer rule
+  // has to reach the NEXT process (`fire` beside a running `dev` fires the same `schedule:<name>`).
+  const lease = fileLease({ dir: sessionsDir, cwd: workspace });
   const { assembly, definition } = await assemblePiFromDefinition(agentDir, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,
@@ -207,6 +210,7 @@ export async function createPiAgentFromDir(
     ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
+    lease,
   });
   // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
   // the store does).

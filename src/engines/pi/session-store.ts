@@ -3,8 +3,10 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync }
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import lockfile from "proper-lockfile";
 import { log } from "../../log.ts";
 import type { SessionSummary, SessionUpdateField } from "../../session.ts";
+import type { Lease, Release } from "./turn-kit.ts";
 import { LEAF_ANCHOR, publishedLeaf, stampProvenance } from "./session-markers.ts";
 import { type OverrideEntryLike, activePath } from "./session-settings.ts";
 import {
@@ -96,6 +98,57 @@ export function callerSessionId(recordId: string): string | undefined {
     i = start + width - 1;
   }
   return out;
+}
+
+/**
+ * The {@link Lease} whose persistence domain matches {@link piSessionRecordStore}'s: the records are files, so the
+ * single-writer rule has to be a file too. Without it `fastagent fire <name>` beside a running `dev` appends to
+ * `schedule:<name>` from a second process, each writer from its own snapshot — pi keeps the file parseable, so the
+ * conversation silently BRANCHES instead of erroring.
+ *
+ * Record-scoped, never directory-scoped: two processes serving different sessions over one state root never contend.
+ *
+ * Known limit: staleness is mtime-based, so this covers multiple processes on ONE machine. Multiple instances across
+ * machines need the shared lease backend docs/design/core.md names.
+ */
+export function fileLease(options: { dir: string; cwd?: string }): Lease {
+  // Beside the records, not among them: a lock must not land in the directory `list()` scans, and a record file only
+  // exists after the first turn — so the lock names a path rather than locking the record itself (`realpath: false`
+  // is what lets proper-lockfile lock a name that has no file).
+  const locks = join(resolve(options.cwd ?? process.cwd(), options.dir), LOCKS_DIR);
+  return {
+    tryAcquire(session: string): Release | null {
+      mkdirSync(locks, { recursive: true });
+      let release: () => void;
+      try {
+        release = lockfile.lockSync(join(locks, piSessionId(session)), {
+          realpath: false,
+          // The heartbeat (update, defaulted to stale/2) is what lets one lock be held for a whole model turn; a
+          // killed process's lock is reclaimed after `stale`.
+          stale: LOCK_STALE_MS,
+          // The default THROWS, from a timer, i.e. crashes the process. The turn is already running and there is no
+          // seam to abort it from here, so the honest thing is to say so.
+          onCompromised: (error) => log.warn(`session lock for ${session} was compromised mid-turn: ${error.message}`),
+        });
+      } catch (error) {
+        // ELOCKED is the ANSWER (it becomes SessionBusy, control flow). Anything else — a read-only filesystem, a
+        // permission fault — must throw: reporting it as "busy" would be a silent degradation.
+        if ((error as NodeJS.ErrnoException).code === "ELOCKED") return null;
+        throw error;
+      }
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        try {
+          release();
+        } catch (error) {
+          // Releasing a compromised lock throws. The turn's own outcome is the signal; unlock noise must not mask it.
+          log.warn(`releasing the session lock for ${session} failed: ${(error as Error).message}`);
+        }
+      };
+    },
+  };
 }
 
 /** Disk-backed store under `dir`: restart the process, conversations continue. */
@@ -486,6 +539,10 @@ export function reconcileInterruptedToolCalls(record: SessionManager): SessionMa
 
 /** Where the records live, under the sessions directory the store is pointed at. */
 const OWN_RECORDS_DIR = "agent-session";
+/** Sibling of {@link OWN_RECORDS_DIR}: see {@link fileLease}. */
+const LOCKS_DIR = ".locks";
+/** Matches the auth lock (auth.ts): long enough to survive a paused event loop, short enough to reclaim a kill. */
+const LOCK_STALE_MS = 30_000;
 
 /** Make a NEW record exist on disk before anyone can act on it. */
 function materialize(session: SessionManager, dir: string): SessionManager {

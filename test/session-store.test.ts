@@ -11,6 +11,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   callerSessionId,
+  fileLease,
   piInMemorySessionRecordStore,
   piSessionId,
   piSessionRecordStore,
@@ -683,5 +684,42 @@ describe("list rows are safe to render", () => {
     expect(preview).toHaveLength(201); // 199 + the pair, as ONE code point sliced whole
     expect(preview.endsWith("🌤")).toBe(true);
     expect(preview).not.toMatch(/[\uD800-\uDBFF]$/); // no dangling HIGH surrogate — a whole pair ends on a low one
+  });
+});
+
+describe("the lease reaches across processes", () => {
+  it("refuses a second holder of one session and admits a different one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-lease-"));
+    // proper-lockfile is mkdir-based, so a second lockSync on the same path IS the second process's answer — no
+    // subprocess needed. Swapping fileLease back to inProcessLease must turn this red: the two leases below are
+    // separate objects, exactly as two processes' Sets are.
+    const a = fileLease({ dir, cwd: dir });
+    const b = fileLease({ dir, cwd: dir });
+
+    const held = a.tryAcquire("schedule:digest");
+    expect(held).not.toBeNull();
+    expect(b.tryAcquire("schedule:digest")).toBeNull();
+    // Record-scoped, not directory-scoped: a different session over the same store never contends.
+    const other = b.tryAcquire("schedule:other");
+    expect(other).not.toBeNull();
+    other?.();
+
+    held?.();
+    const after = b.tryAcquire("schedule:digest");
+    expect(after).not.toBeNull();
+    held?.(); // idempotent: a double release must not free the lock the NEXT turn now holds
+    expect(a.tryAcquire("schedule:digest")).toBeNull();
+    after?.();
+  });
+
+  it("throws anything that is not contention", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-lease-ro-"));
+    await mkdir(join(dir, ".locks"));
+    await chmod(join(dir, ".locks"), 0o500); // a read-only lock directory is a fault, never "busy"
+    try {
+      expect(() => fileLease({ dir, cwd: dir }).tryAcquire("denied")).toThrow(/EACCES|EPERM/);
+    } finally {
+      await chmod(join(dir, ".locks"), 0o700);
+    }
   });
 });
