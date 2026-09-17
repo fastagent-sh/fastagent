@@ -27,9 +27,14 @@ export interface FireTurn {
  *
  * There is no shared id to join on: a claim records `firedAt`, and the turn records its own entry timestamps, so the
  * match is by TIME and is bounded on BOTH sides — a fire owns the first user entry at or after its own instant and
- * before the NEXT fire's. Unbounded "nearest user entry" would mis-attribute the turns other writers append to the
- * same session (`fastagent fire` by hand, an operator steering through `attach`). A fire with no user entry in its
- * window produced no turn at all, which is exactly what `interrupted` and a never-run slot look like.
+ * before the NEXT fire's — AND before its own fire ended. That second bound is what makes the newest fire safe:
+ * other writers append to the same session (a wake-up, `fastagent fire` by hand, an operator over the control
+ * plane), and with only a next-fire bound the last claim would own whatever anyone typed hours later.
+ *
+ * A claim states its own end only once it has SETTLED (`firedAt + ms`), and a turn cannot start after its own fire
+ * finished. An unsettled claim states nothing — `interrupted` is written without a duration, and a still-running fire
+ * has not reported one — so it owns no turn rather than a later writer's. It has nothing to show either way: a fire
+ * that never reached an answer has no reply to print.
  *
  * The reply is the LAST assistant entry before the next user entry, because a turn that called tools appends several.
  */
@@ -55,25 +60,35 @@ export function turnsForFires(fires: Fire[], entries: SessionEntry[]): Map<strin
     const from = Date.parse(fire.firedAt);
     // A claim whose stamp fell back to an unusable slot name cannot anchor a window.
     if (Number.isNaN(from)) continue;
-    const until = Date.parse(ordered[index + 1]?.firedAt ?? "");
+    const nextFire = Date.parse(ordered[index + 1]?.firedAt ?? "");
+    const ended = fire.ms === undefined ? from : from + fire.ms;
     // Turns are scanned once across all fires: both lists are in time order, so a turn already passed cannot belong
     // to a later fire.
     while (next < turns.length && (turns[next] as { at: number }).at < from) next++;
     const turn = turns[next];
     if (!turn) continue;
-    if (!Number.isNaN(until) && turn.at >= until) continue;
+    if (turn.at > ended) continue; // started after this fire finished — somebody else's turn
+    if (!Number.isNaN(nextFire) && turn.at >= nextFire) continue; // the next fire's
     if (turn.reply) matched.set(fire.slot, turn.reply);
     next++;
   }
   return matched;
 }
 
+const PREVIEW_CHARS = 100;
+
 /** One folded line of what a turn said — code-point safe, so a cut never lands inside an emoji. */
 function preview(turn: FireTurn | undefined): string {
   const text = turn?.error ?? turn?.text ?? "";
-  const folded = text.replace(/\s+/g, " ").trim();
+  // Cut to UTF-16 units FIRST (the same rule as `firstUserText` in session-store.ts): a megabyte reply would
+  // otherwise become a million-element array just to take the first 100 code points, once per printed row. Twice the
+  // budget is enough for any surrogate pairing, and folding whitespace after the cut cannot grow it.
+  const folded = text
+    .slice(0, PREVIEW_CHARS * 2)
+    .replace(/\s+/g, " ")
+    .trim();
   const cut = Array.from(folded);
-  return cut.length > 100 ? `${cut.slice(0, 100).join("")}\u2026` : folded;
+  return cut.length > PREVIEW_CHARS ? `${cut.slice(0, PREVIEW_CHARS).join("")}\u2026` : folded;
 }
 
 /**
@@ -104,8 +119,14 @@ export async function runScheduleHistory(name: string, dirArg: string, json: boo
   }
   // A session that was never created (nothing ever fired, or an older state root) is not an error: the fires are
   // still the answer to "did it run", only without what it said.
-  const store = piSessionRecordStore({ dir: resolveSessionsDir(target), cwd: target });
-  const record = await store.openIfExists(scheduleSession(name));
+  const sessionsDir = resolveSessionsDir(target);
+  const record = await piSessionRecordStore({ dir: sessionsDir, cwd: target }).openIfExists(scheduleSession(name));
+  // SAY it, rather than printing an empty text column: "this schedule has no session here" and "the turn produced no
+  // text" read identically otherwise, and one of the two ways to get here is a sessions dir that is not the one the
+  // serve wrote (FASTAGENT_SESSIONS_DIR set for only one of them).
+  if (!record && fires.length > 0) {
+    console.error(`no session "${scheduleSession(name)}" under ${sessionsDir} — fired slots below, without their text`);
+  }
   const turns = record ? turnsForFires(fires, readJournal(record).entries) : new Map<string, FireTurn>();
   if (json) {
     console.log(

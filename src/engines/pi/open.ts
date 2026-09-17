@@ -7,11 +7,11 @@ import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
   type LoadedConfig,
-  defaultSessionsDir,
   loadConfig,
   resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
+  resolveSessionsDir,
 } from "./config.ts";
 import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
@@ -192,7 +192,9 @@ export async function createPiAgentFromDir(
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
   // opted into self-scheduling (config.selfSchedule).
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
-  const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
+  // The one resolution every reader shares (config.ts): an embedder that only sets FASTAGENT_SESSIONS_DIR must not
+  // serve one directory while `schedule history` and `chat --session` read another.
+  const sessionsDir = resolveSessionsDir(agentDir, options.sessionsDir);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
   const { assembly, definition } = await assemblePiFromDefinition(agentDir, {

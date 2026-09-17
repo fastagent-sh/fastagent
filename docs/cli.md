@@ -182,8 +182,9 @@ fastagent chat [dir] [--model provider/modelId] [--session id]
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
 
 `--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
-**as a private copy**: pi renders the whole conversation, and `/tree`, `/fork` and `/export` work on it, while
-the served record is never opened for append. Continuing the copy therefore cannot reach the Telegram group
+**as a private copy**: pi renders that session's active path (the copy carries that one path, not the abandoned
+branches a control-plane fork or a leaf move may have left in the original), and `/fork` and `/export` work on it,
+while the served record is never opened for append. Continuing the copy therefore cannot reach the Telegram group
 the conversation belongs to, and cannot branch the record a running turn is writing.
 
 ```bash

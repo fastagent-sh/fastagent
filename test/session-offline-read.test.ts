@@ -5,10 +5,12 @@
 import { readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { openSessionCopy } from "../src/engines/pi/chat.ts";
+import { canonicalPath } from "../src/engines/pi/definition.ts";
 import { readJournal } from "../src/engines/pi/session-journal.ts";
 import { piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { type FireTurn, turnsForFires } from "../src/cli/commands/schedule.ts";
@@ -25,7 +27,16 @@ const assistant = (id: string, iso: string, data: SessionEntry["data"]): Session
   kind: "assistant",
   data,
 });
-const fire = (iso: string, outcome?: Fire["outcome"]): Fire => ({
+/** A SETTLED fire: `ms` is what a claim gets when the turn reported, and it is the fire's own right bound. */
+const fire = (iso: string, outcome: Fire["outcome"] = "completed", ms = 60_000): Fire => ({
+  slot: iso,
+  firedAt: iso,
+  outcome,
+  ms,
+});
+
+/** An UNSETTLED fire: interrupted, still running, or a settlement write that never landed — no duration. */
+const unsettled = (iso: string, outcome?: Fire["outcome"]): Fire => ({
   slot: iso,
   firedAt: iso,
   ...(outcome ? { outcome } : {}),
@@ -47,20 +58,34 @@ describe("turnsForFires", () => {
   });
 
   it("does not attribute another writer's turn to a fire — the window closes at the NEXT fire", () => {
-    // `fastagent fire` by hand and an operator steering through attach write into the same session. An unbounded
-    // "nearest user entry" would hand this turn to the 00:00 fire, which produced nothing at all.
+    // A wake-up, `fastagent fire` by hand and an operator over the control plane write into the same session. An
+    // unbounded "nearest user entry" would hand this turn to the 00:00 fire, which produced nothing at all.
     const fires = [fire("2026-01-01T00:00:00.000Z"), fire("2026-01-01T02:00:00.000Z")];
     const turns = turnsForFires(fires, [
       user("manual", "2026-01-01T03:00:00.000Z"),
       assistant("manual-a", "2026-01-01T03:00:01.000Z", { text: "typed by a human" }),
     ]);
     expect(turns.get("2026-01-01T00:00:00.000Z")).toBeUndefined();
-    // The last fire's window is open-ended, so a later turn IS its turn — the only writer after it is that fire.
-    expect(turns.get("2026-01-01T02:00:00.000Z")?.text).toBe("typed by a human");
+    // And the LAST fire is bounded too, by when it ended: it ran for a minute at 02:00, so a turn an hour later is
+    // somebody else's. Without this bound the newest claim owns whatever anyone types next, forever.
+    expect(turns.get("2026-01-01T02:00:00.000Z")).toBeUndefined();
+  });
+
+  it("an UNSETTLED fire owns no turn — it cannot say when it ended", () => {
+    // `interrupted` is written without a duration, so there is no right bound to test a later turn against. The
+    // honest answer is nothing: a fire that never reported has no reply of its own to print anyway.
+    const turns = turnsForFires(
+      [unsettled("2026-01-01T00:00:00.000Z", "interrupted")],
+      [
+        user("later", "2026-01-01T09:00:00.000Z"),
+        assistant("later-a", "2026-01-01T09:00:01.000Z", { text: "typed by a human, hours later" }),
+      ],
+    );
+    expect(turns.size).toBe(0);
   });
 
   it("reports nothing for a fire whose turn never got an answer (killed mid-turn)", () => {
-    const fires = [fire("2026-01-01T00:00:00.000Z", "interrupted")];
+    const fires = [unsettled("2026-01-01T00:00:00.000Z", "interrupted")];
     const turns = turnsForFires(fires, [user("u1", "2026-01-01T00:00:01.000Z")]);
     expect(turns.size).toBe(0);
   });
@@ -110,6 +135,11 @@ describe("chat --session opens a COPY", () => {
     // The record a serve owns is not opened for append: only `attach` writes it.
     expect(readFileSync(servedFile, "utf8")).toBe(before);
     expect(copy.getSessionFile()).not.toBe(servedFile);
+    // And in the dir a PLAIN `fastagent chat` uses: pi encodes the cwd into that path, so a workspace reached
+    // through a symlink (tmpdir() on macOS is one) would otherwise hide the copy from /resume.
+    expect(dirname(copy.getSessionFile() as string)).toBe(
+      SessionManager.create(canonicalPath(workspace)).getSessionDir(),
+    );
     const copied = readJournal(copy).entries.map((e) => (e.data as { text?: string }).text);
     expect(copied).toEqual(["run 1", "the digest, in full", "why did you say that?", "because of X"]);
   });

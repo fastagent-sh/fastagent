@@ -1,5 +1,6 @@
 /** Chat: open a workspace into pi's interactive TUI (`fastagent chat`). */
 import { InteractiveMode, SessionManager } from "@earendil-works/pi-coding-agent";
+import { canonicalPath } from "./definition.ts";
 import { publishedLeaf } from "./session-markers.ts";
 import { piSessionRecordStore } from "./session-store.ts";
 import { type BuildSessionRuntimeOptions, buildAgentSessionRuntime } from "./session-builder.ts";
@@ -24,7 +25,10 @@ export async function openSessionCopy(
   const leaf = publishedLeaf(served);
   if (!file || !leaf) throw new Error(`session "${session}" has no turns yet — nothing to open`);
   // The second argument is where /new and /branch write, so the copy lands in chat's own dir, not the served one.
-  const copy = SessionManager.open(file, SessionManager.create(workspace).getSessionDir());
+  // CANONICAL, like the builder's default SessionManager: pi derives that dir by encoding the cwd, so a workspace
+  // reached through a symlink (`/tmp` on macOS) would otherwise put this copy where a plain `chat`'s /resume never
+  // looks.
+  const copy = SessionManager.open(file, SessionManager.create(canonicalPath(workspace)).getSessionDir());
   copy.createBranchedSession(leaf);
   return copy;
 }
