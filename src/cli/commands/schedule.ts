@@ -67,7 +67,8 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced. The
   // session id comes from the ONE place that spells it, and the directory travels — a pointer a reader can paste
   // from wherever they ran this.
-  const where = dirArg === "." ? "" : ` ${dirArg}`;
+  // Quoted: the line exists to be pasted, and a directory with a space in it would otherwise paste as two arguments.
+  const where = dirArg === "." ? "" : ` '${dirArg}'`;
   console.error(`(what these runs said: \`fastagent chat --session ${scheduleSession(name)}${where}\`)`);
 }
 

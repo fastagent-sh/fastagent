@@ -2,14 +2,14 @@
  * `chat --session`: opening a session a serve owns, as a copy. The served record is never opened for append, the copy
  * lands where a plain `chat` would find it, and a turn killed mid tool-call is repaired on the way in.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, truncateSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openSessionCopy } from "../src/engines/pi/chat.ts";
 import { canonicalPath } from "../src/engines/pi/definition.ts";
 import { LEAF_ANCHOR, isPlaneMarker, stampProvenance } from "../src/engines/pi/session-markers.ts";
@@ -34,6 +34,20 @@ function textOf(message: AgentMessage): string {
 }
 
 describe("chat --session opens a COPY", () => {
+  // The copy lands in pi's per-workspace session dir, which defaults under getAgentDir() — the developer's real
+  // ~/.pi/agent. Point that at a temp dir for the whole file, or every run leaves session records behind there.
+  let piAgentDir: string;
+  let previousAgentDir: string | undefined;
+  beforeEach(async () => {
+    piAgentDir = await mkdtemp(join(tmpdir(), "fa-chat-pi-agent-"));
+    previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = piAgentDir;
+  });
+  afterEach(() => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  });
+
   it("leaves the served record byte-identical while the copy carries its history", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "fa-chat-copy-"));
     const sessionsDir = join(workspace, "sessions");
@@ -64,6 +78,25 @@ describe("chat --session opens a COPY", () => {
       "why did you say that?",
       "because of X",
     ]);
+  });
+
+  it("does not repair the served file pi's loader would repair — a torn last line stays torn", async () => {
+    // `loadEntriesFromFile` appends a newline when the last line has none, and that is exactly what a process killed
+    // mid-append leaves: the record this feature exists to open. Handing pi the served FILE would write to a record
+    // a serve may be appending to right now, so only its bytes are copied.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-chat-torn-"));
+    const sessionsDir = join(workspace, "sessions");
+    const served = await piSessionRecordStore({ dir: sessionsDir, cwd: workspace }).openOrCreate("schedule:job");
+    served.appendMessage({ role: "user", content: "run 1", timestamp: 1 });
+    served.appendMessage(fauxAssistantMessage("the digest, in full"));
+    const servedFile = served.getSessionFile() as string;
+    const torn = readFileSync(servedFile, "utf8").replace(/\n$/, "");
+    truncateSync(servedFile, Buffer.byteLength(torn));
+
+    const copy = await openSessionCopy(workspace, sessionsDir, "schedule:job");
+
+    expect(readFileSync(servedFile, "utf8")).toBe(torn); // no newline appended to somebody else's record
+    expect(messages(copy).map(textOf)).toEqual(["run 1", "the digest, in full"]);
   });
 
   it("leaves the control plane's own markers behind — they describe the served record, not the thread", async () => {

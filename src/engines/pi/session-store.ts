@@ -172,8 +172,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
    * rather than pi's cwd-filtered listing) cannot reach three of the four.
    */
   const locate = (sessionId: string): { path: string; dir: string } | undefined => {
-    const mine = recordFiles(own).find((f) => f.id === piSessionId(sessionId));
-    return mine ? { path: mine.path, dir: own } : undefined;
+    const path = recordPathIn(own, sessionId);
+    return path ? { path, dir: own } : undefined;
   };
   /** Open an existing record, or undefined. */
   const openExisting = async (sessionId: string): Promise<SessionManager | undefined> => {
@@ -333,6 +333,21 @@ async function applyProperties(
  * The record files in a directory, newest first — pi names them `<ISO timestamp>_<id>.jsonl`, so the name sorts by
  * time and carries the id without opening anything.
  */
+/** The lookup {@link locate} and {@link sessionRecordPath} share, so a record is found ONE way. */
+function recordPathIn(own: string, sessionId: string): string | undefined {
+  return recordFiles(own).find((f) => f.id === piSessionId(sessionId))?.path;
+}
+
+/**
+ * WHERE a session's record file is, WITHOUT opening it. pi's loader writes to the file it opens — it appends a
+ * newline when the last line has none, and rewrites the whole file on a version migration — so a caller that must
+ * not touch a record a serve owns (`chat --session`) asks for the path and copies the bytes itself.
+ */
+export function sessionRecordPath(options: { dir: string; cwd?: string }, sessionId: string): string | undefined {
+  const root = resolve(options.cwd ?? process.cwd(), options.dir);
+  return recordPathIn(join(root, OWN_RECORDS_DIR), sessionId);
+}
+
 function recordFiles(dir: string): { path: string; id: string }[] {
   let names: string[];
   try {

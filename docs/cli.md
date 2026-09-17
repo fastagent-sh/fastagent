@@ -184,8 +184,16 @@ Opens the same assembled agent in pi's interactive TUI. This is useful for tryin
 `--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
 **as a private copy**: pi renders that session's active path (the copy carries that one path, not the abandoned
 branches a control-plane fork or a leaf move may have left in the original), and `/fork` and `/export` work on it,
-while the served record is never opened for append. Continuing the copy cannot branch the record a running turn is
-writing, and its replies are not delivered by the channel the conversation came from.
+while the served record is never opened at all — only its bytes are copied, because pi's loader writes to the file it
+opens (a missing trailing newline, a version migration). Continuing the copy cannot branch the record a running turn
+is writing, and its replies are not delivered by the channel the conversation came from.
+
+**Where the copy goes, and that there is a new one each time.** It is a fresh record in pi's own per-workspace
+session directory (`~/.pi/agent/sessions/<encoded workspace>`, `PI_CODING_AGENT_DIR` moves it), NOT under the
+agent's state root — which is why `/resume` finds it beside your other chats, and why the served session's directory
+is untouched. Every `chat --session` makes another full copy of the history, and nothing prunes them: on a
+months-long daily digest, reading it once a day copies a growing journal once a day. Delete the ones you are done
+with from `/resume` (Ctrl+D).
 
 **The isolation is the record and the delivery path, not the tools.** `chat` assembles the same tools the serve
 does, with the same credentials from the same `.env` — including the send tool every `add telegram|slack|feishu`

@@ -133,7 +133,9 @@ const chat: CommandSpec = {
       flags: "--session <id>",
       description: 'open a served session as a copy (e.g. "schedule:daily-digest")',
     },
-    SESSIONS_DIR,
+    // NOT the shared SESSIONS_DIR wording: chat's own sessions always live in pi's per-workspace dir, so this only
+    // says where the SERVED one is looked for.
+    { flags: "--sessions-dir <dir>", description: "where to look for the served session (--session)" },
   ],
   examples: [
     { cmd: "fastagent chat" },
