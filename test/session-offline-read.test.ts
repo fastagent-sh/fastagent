@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { openSessionCopy } from "../src/engines/pi/chat.ts";
@@ -142,6 +142,28 @@ describe("chat --session opens a COPY", () => {
     );
     const copied = readJournal(copy).entries.map((e) => (e.data as { text?: string }).text);
     expect(copied).toEqual(["run 1", "the digest, in full", "why did you say that?", "because of X"]);
+  });
+
+  it("repairs the dangling toolCall a killed turn left, so the copy's first message is not rejected", async () => {
+    // The session most worth opening this way is the one a fire was KILLED in the middle of (`interrupted`), and
+    // `openIfExists` is the one open path that does not reconcile — so the copy would carry an unmatched tool_use
+    // and the provider would reject this chat's first request.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-chat-dangling-"));
+    const sessionsDir = join(workspace, "sessions");
+    const store = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
+    const served = await store.openOrCreate("schedule:job");
+    served.appendMessage({ role: "user", content: "run 1", timestamp: 1 });
+    served.appendMessage(fauxAssistantMessage([fauxToolCall("search", { q: "x" }, { id: "call-1" })]));
+    const servedFile = served.getSessionFile() as string;
+    const before = readFileSync(servedFile, "utf8");
+
+    const copy = await openSessionCopy(workspace, sessionsDir, "schedule:job");
+
+    const repaired = readJournal(copy).entries.filter((e) => e.kind === "tool");
+    expect(repaired.map((e) => (e.data as { toolCallId?: string }).toolCallId)).toEqual(["call-1"]);
+    expect((repaired[0] as SessionEntry).data as { isError?: boolean }).toMatchObject({ isError: true });
+    // The repair is an APPEND, and the served record is not chat's to write.
+    expect(readFileSync(servedFile, "utf8")).toBe(before);
   });
 
   it("refuses an id that has no record, naming the directory it looked in", async () => {

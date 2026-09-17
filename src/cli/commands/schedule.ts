@@ -87,8 +87,11 @@ function preview(turn: FireTurn | undefined): string {
     .slice(0, PREVIEW_CHARS * 2)
     .replace(/\s+/g, " ")
     .trim();
-  const cut = Array.from(folded);
-  return cut.length > PREVIEW_CHARS ? `${cut.slice(0, PREVIEW_CHARS).join("")}\u2026` : folded;
+  // That UTF-16 cut can land between a surrogate pair; dropping a trailing high surrogate is what keeps BOTH returns
+  // below code-point safe (folding whitespace can bring the text under the budget, and returning `folded` itself
+  // would print the lone half as U+FFFD).
+  const cut = Array.from(folded.replace(/[\uD800-\uDBFF]$/, ""));
+  return cut.length > PREVIEW_CHARS ? `${cut.slice(0, PREVIEW_CHARS).join("")}\u2026` : cut.join("");
 }
 
 /**

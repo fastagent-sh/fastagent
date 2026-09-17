@@ -403,8 +403,14 @@ const RECORD_SUFFIX = ".jsonl";
 /** How much of the first message a list row carries. */
 const PREVIEW_CHARS = 200;
 
-/** Crash-safety reconciliation, run on every OPEN of an existing record. */
-function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
+/**
+ * Crash-safety reconciliation, run on every OPEN of an existing record that is about to be CONTINUED — and on every
+ * copy of one (`chat --session`), for the same reason: a dangling `toolCall` with no `toolResult` is what a process
+ * killed mid tool-execution leaves behind, and the provider rejects the very first request that carries it.
+ *
+ * It APPENDS the missing result, so a caller must run it on the record it is allowed to write.
+ */
+export function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
   const messages = record.getBranch().flatMap((entry) => {
     const message = (entry as { type?: string; message?: AgentMessage }).message;
     return (entry as { type?: string }).type === "message" && message ? [message] : [];

@@ -2,7 +2,7 @@
 import { InteractiveMode, SessionManager } from "@earendil-works/pi-coding-agent";
 import { canonicalPath } from "./definition.ts";
 import { publishedLeaf } from "./session-markers.ts";
-import { piSessionRecordStore } from "./session-store.ts";
+import { piSessionRecordStore, reconcileInterruptedToolCalls } from "./session-store.ts";
 import { type BuildSessionRuntimeOptions, buildAgentSessionRuntime } from "./session-builder.ts";
 
 /**
@@ -30,7 +30,10 @@ export async function openSessionCopy(
   // looks.
   const copy = SessionManager.open(file, SessionManager.create(canonicalPath(workspace)).getSessionDir());
   copy.createBranchedSession(leaf);
-  return copy;
+  // AFTER the branch, never before: the repair APPENDS a missing toolResult, and the served record is not ours to
+  // write. The session most worth opening this way is the one a fire was killed in the middle of — exactly the one
+  // carrying a dangling toolCall the provider would reject on this chat's first message.
+  return reconcileInterruptedToolCalls(copy);
 }
 
 /** Open the workspace's agent in pi's interactive TUI and run until the user exits. */
