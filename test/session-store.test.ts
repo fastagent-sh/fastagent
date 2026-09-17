@@ -688,6 +688,37 @@ describe("list rows are safe to render", () => {
 });
 
 describe("the lease reaches across processes", () => {
+  it("is needed because append-only does not mean conflict-free: a second writer silently drops a turn", async () => {
+    // WHY fileLease exists, as the failure it prevents. pi appends whole lines, so nothing here is
+    // corrupted — but `parentId` comes from the writer's in-memory leaf, so two writers that each
+    // opened the record produce SIBLINGS, and the next turn's context walks back from one leaf only.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-branch-"));
+    const a = piSessionRecordStore({ dir, cwd: dir });
+    const b = piSessionRecordStore({ dir, cwd: dir });
+    const seed = await a.openOrCreate("schedule:digest");
+    seed.appendMessage({ role: "user", content: "turn one", timestamp: 1 });
+    seed.appendMessage(fauxAssistantMessage("answer one"));
+
+    // Two processes, each with its own snapshot of the same record.
+    const p1 = await a.openOrCreate("schedule:digest");
+    const p2 = await b.openOrCreate("schedule:digest");
+    p1.appendMessage({ role: "user", content: "P1 asks", timestamp: 2 });
+    p1.appendMessage(fauxAssistantMessage("P1 answer"));
+    p2.appendMessage({ role: "user", content: "P2 asks", timestamp: 3 });
+    p2.appendMessage(fauxAssistantMessage("P2 answer"));
+
+    // The file holds every line: header + 2 + 2 + 2. No corruption, no error, nothing to notice.
+    const file = seed.getSessionFile() as string;
+    expect((await readFile(file, "utf8")).trim().split("\n")).toHaveLength(7);
+
+    const next = await piSessionRecordStore({ dir, cwd: dir }).openOrCreate("schedule:digest");
+    const said = next
+      .buildContextEntries()
+      .flatMap((entry) => (entry.type === "message" ? [JSON.stringify(entry.message)] : []));
+    expect(said.some((text) => text.includes("P2"))).toBe(true);
+    expect(said.some((text) => text.includes("P1"))).toBe(false); // a whole turn, gone from the conversation
+  });
+
   it("refuses a second holder of one session and admits a different one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-store-lease-"));
     // proper-lockfile is mkdir-based, so a second lockSync on the same path IS the second process's answer — no
