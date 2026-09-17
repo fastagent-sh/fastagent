@@ -257,21 +257,15 @@ construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-**WHAT a run said is in its session.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
-under `<state root>/sessions/`, where the turn's text is stored exactly once. Read it with
-`fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)) — off disk, no control
-plane, no serve running, which is the normal state when someone asks what last night did. This command prints
-that pointer under the rows.
+**WHAT a run said — and why a failed one failed — is in its session.** Every fire runs in a session
+(`schedule:<name>` for a cron) under `<state root>/sessions/`, where the text is stored exactly once. Read it
+with `fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)): off disk, no serve
+running, which is the normal state when someone asks what last night did. This command prints that pointer
+under the rows.
 
-**It does not say which turn belongs to which fire, on purpose.** A schedule's fires share ONE continuing
-conversation, so the session id is the same for every claim, and nothing records the turn-level link: no
-`AgentEvent` carries an entry id, and giving each fire its own session would cost the shared conversation the
-design exists for. A claim's timestamp against a time-ordered journal is what an operator reads anyway —
-matching them here would only turn that judgement into a heuristic that cannot be right about a session
-`fastagent fire`, a wake-up, and the control plane also append to.
-
-**WHY a failed one failed** is in the same place: the turn's assistant record carries the error. The `failed`
-row here says only that it did.
+These rows say WHEN each fire happened; the session is in time order. Matching them is left to you on
+purpose — a schedule's fires share one continuing conversation, nothing records which turn came from which
+fire, and `fastagent fire`, a wake-up and the control plane append to the same session.
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

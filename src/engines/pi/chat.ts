@@ -20,10 +20,11 @@ export async function openSessionCopy(
 ): Promise<SessionManager> {
   const served = await piSessionRecordStore({ dir: sessionsDir, cwd: workspace }).openIfExists(session);
   if (!served) throw new Error(`no session "${session}" under ${sessionsDir} (\`fastagent info\` prints the dir)`);
-  const file = served.getSessionFile();
   // The published head, not pi's last-line leaf: the store writes its own bookkeeping entries into the same journal.
   const leaf = publishedLeaf(served);
-  if (!file || !leaf) throw new Error(`session "${session}" has no turns yet — nothing to open`);
+  if (!leaf) throw new Error(`session "${session}" has no turns yet — nothing to open`);
+  const file = served.getSessionFile();
+  if (!file) throw new Error(`session "${session}" has no file to copy (an in-memory record?)`);
   // The second argument is where /new and /branch write, so the copy lands in chat's own dir, not the served one.
   // CANONICAL, like the builder's default SessionManager: pi derives that dir by encoding the cwd, so a workspace
   // reached through a symlink (`/tmp` on macOS) would otherwise put this copy where a plain `chat`'s /resume never

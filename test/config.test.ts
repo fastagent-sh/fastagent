@@ -8,26 +8,29 @@ import { createPiAgentFromDir, createPiModels, listModels, probeAuthSource, reso
 import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import {
   defaultAuthPath,
-  defaultSessionsDir,
   loadConfig,
   resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
-  resolveSessionsDirOverride,
+  resolveSessionsDir,
 } from "../src/engines/pi/config.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
-describe("config: resolveSessionsDirOverride (start's sessions precedence)", () => {
-  it("precedence --sessions-dir > FASTAGENT_SESSIONS_DIR > none; a given value resolves to absolute", () => {
+describe("config: resolveSessionsDir (where every reader of a record looks)", () => {
+  it("precedence --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions; a given value resolves to absolute", () => {
     const env = { FASTAGENT_SESSIONS_DIR: "envdir" } as NodeJS.ProcessEnv;
     // the footgun this guards: a regression here silently drops sessions back to the in-tree default,
     // so a redeploy wipes conversations. Distinct, non-tautological assertions per precedence tier:
-    expect(resolveSessionsDirOverride("flagdir", env)).toBe(resolve("flagdir")); // flag beats env
-    expect(resolveSessionsDirOverride(undefined, env)).toBe(resolve("envdir")); // env when no flag
-    expect(resolveSessionsDirOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
-    expect(resolveSessionsDirOverride("/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+    expect(resolveSessionsDir("/app", "flagdir", env)).toBe(resolve("flagdir")); // flag beats env
+    expect(resolveSessionsDir("/app", undefined, env)).toBe(resolve("envdir")); // env when no flag
+    expect(resolveSessionsDir("/app", "/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+    // neither → under the agent's state root, so ONE volume knob covers sessions too
+    expect(resolveSessionsDir("/app", undefined, {} as NodeJS.ProcessEnv)).toBe(join("/app", ".state", "sessions"));
+    expect(resolveSessionsDir("/app", undefined, { FASTAGENT_STATE_DIR: "/data/.state" } as NodeJS.ProcessEnv)).toBe(
+      join("/data", ".state", "sessions"),
+    );
   });
 });
 
@@ -107,11 +110,6 @@ describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", ()
     expect(resolveStateRoot(global, {} as NodeJS.ProcessEnv)).toBe(join(global, ".state"));
     expect(resolveSecretsDir(global, {} as NodeJS.ProcessEnv)).toBe(join(global, ".secrets"));
   });
-
-  it("sessions default derives from the resolved state root (one volume covers everything)", () => {
-    const root = resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "/data/.state" } as NodeJS.ProcessEnv);
-    expect(defaultSessionsDir(root)).toBe("/data/.state/sessions");
-  });
 });
 
 describe("models: createPiModels honors authPath (the project-level credential seam)", () => {
@@ -165,7 +163,7 @@ describe("config: resolveAuthPath (auth-file precedence)", () => {
     // the footgun this guards: a bare resolve("~/x") makes a literal `<cwd>/~` dir and the secret lands there
     expect(resolveAuthPath("/app", undefined, env)).toBe(join(homedir(), ".fastagent", "auth.json"));
     expect(resolveAuthPath("/app", "~", {} as NodeJS.ProcessEnv)).toBe(homedir());
-    expect(resolveSessionsDirOverride(undefined, { FASTAGENT_SESSIONS_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(
+    expect(resolveSessionsDir("/app", undefined, { FASTAGENT_SESSIONS_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(
       join(homedir(), "s"),
     ); // symmetric: sessions had the same latent bug
   });
