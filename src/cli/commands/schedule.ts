@@ -3,20 +3,88 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
+import { resolveSessionsDir } from "../../engines/pi/config.ts";
+import { readJournal } from "../../engines/pi/session-journal.ts";
+import { piSessionRecordStore } from "../../engines/pi/session-store.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
+import { scheduleSession } from "../../schedule/scheduler.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
+import type { SessionEntry } from "../../session.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
+
+/** What the turn a fire produced ended up saying, or why it ended badly. */
+export interface FireTurn {
+  /** The last assistant message of that turn (empty for a turn that only failed). */
+  text: string;
+  /** pi's `errorMessage` for a turn that ended in an error — the reason no claim can carry. */
+  error?: string;
+}
+
+/**
+ * Join fired slots to the turns they produced, keyed by slot.
+ *
+ * There is no shared id to join on: a claim records `firedAt`, and the turn records its own entry timestamps, so the
+ * match is by TIME and is bounded on BOTH sides — a fire owns the first user entry at or after its own instant and
+ * before the NEXT fire's. Unbounded "nearest user entry" would mis-attribute the turns other writers append to the
+ * same session (`fastagent fire` by hand, an operator steering through `attach`). A fire with no user entry in its
+ * window produced no turn at all, which is exactly what `interrupted` and a never-run slot look like.
+ *
+ * The reply is the LAST assistant entry before the next user entry, because a turn that called tools appends several.
+ */
+export function turnsForFires(fires: Fire[], entries: SessionEntry[]): Map<string, FireTurn> {
+  const turns: { at: number; reply?: FireTurn }[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "user") {
+      turns.push({ at: entry.timestamp });
+      continue;
+    }
+    const current = turns.at(-1);
+    if (!current || entry.kind !== "assistant") continue;
+    const data = entry.data as { text?: unknown; errorMessage?: unknown };
+    current.reply = {
+      text: typeof data.text === "string" ? data.text : "",
+      ...(typeof data.errorMessage === "string" ? { error: data.errorMessage } : {}),
+    };
+  }
+  const ordered = [...fires].sort((a, b) => a.firedAt.localeCompare(b.firedAt));
+  const matched = new Map<string, FireTurn>();
+  let next = 0;
+  for (const [index, fire] of ordered.entries()) {
+    const from = Date.parse(fire.firedAt);
+    // A claim whose stamp fell back to an unusable slot name cannot anchor a window.
+    if (Number.isNaN(from)) continue;
+    const until = Date.parse(ordered[index + 1]?.firedAt ?? "");
+    // Turns are scanned once across all fires: both lists are in time order, so a turn already passed cannot belong
+    // to a later fire.
+    while (next < turns.length && (turns[next] as { at: number }).at < from) next++;
+    const turn = turns[next];
+    if (!turn) continue;
+    if (!Number.isNaN(until) && turn.at >= until) continue;
+    if (turn.reply) matched.set(fire.slot, turn.reply);
+    next++;
+  }
+  return matched;
+}
+
+/** One folded line of what a turn said — code-point safe, so a cut never lands inside an emoji. */
+function preview(turn: FireTurn | undefined): string {
+  const text = turn?.error ?? turn?.text ?? "";
+  const folded = text.replace(/\s+/g, " ").trim();
+  const cut = Array.from(folded);
+  return cut.length > 100 ? `${cut.slice(0, 100).join("")}\u2026` : folded;
+}
 
 /**
  * `fastagent schedule history <name> [dir]`: print this schedule's fired slots — when each fired, how it ended, how
  * long it took.
  *
- * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
- * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's.
+ * The fired slots ARE the claims (`schedule/claims/<name>/`), bounded by construction and carrying no turn text.
+ * What each run SAID is read back from the session it ran in (`schedule:<name>`), where it is stored once — directly
+ * off disk, so this works with no serve running, which is the normal state when someone asks what last night did.
  */
-export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
+export async function runScheduleHistory(name: string, dirArg: string, json: boolean): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
@@ -34,8 +102,19 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   } catch (e) {
     failStartup(new Error(`the fired-slot claims for "${name}" are unreadable (state: ${stateRoot}): ${String(e)}`));
   }
+  // A session that was never created (nothing ever fired, or an older state root) is not an error: the fires are
+  // still the answer to "did it run", only without what it said.
+  const store = piSessionRecordStore({ dir: resolveSessionsDir(target), cwd: target });
+  const record = await store.openIfExists(scheduleSession(name));
+  const turns = record ? turnsForFires(fires, readJournal(record).entries) : new Map<string, FireTurn>();
   if (json) {
-    console.log(JSON.stringify(fires, null, 2));
+    console.log(
+      JSON.stringify(
+        fires.map((f) => ({ ...f, ...(turns.get(f.slot) ? { turn: turns.get(f.slot) } : {}) })),
+        null,
+        2,
+      ),
+    );
     return;
   }
   if (fires.length === 0) {
@@ -51,7 +130,9 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     // An unreported fire has no duration to print, and `0ms` would be a value a fast turn really produces — the
     // column stays empty rather than claiming the turn took no time.
     const took = f.ms === undefined ? "" : `${f.ms}ms`;
-    console.log(`${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}`);
+    console.log(
+      `${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}  ${preview(turns.get(f.slot))}`,
+    );
   }
   if (fires.length > shown.length) {
     console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);

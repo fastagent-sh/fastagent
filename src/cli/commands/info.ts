@@ -3,13 +3,12 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
 import {
-  defaultSessionsDir,
   loadConfig,
   resolveAuthFallback,
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
-  resolveSessionsDirOverride,
+  resolveSessionsDir,
 } from "../../engines/pi/config.ts";
 import { createPiModelRuntime } from "../../engines/pi/models.ts";
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
@@ -90,7 +89,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login create them,
   // info must not).
   const stateRoot = resolveStateRoot(agentDir);
-  const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
+  const sessionsDir = resolveSessionsDir(agentDir, opts.sessionsDir);
   const authPath = resolveAuthPath(agentDir); // FASTAGENT_AUTH_PATH > default — the one owner
   // The second layer this agent reads through: "what is this agent's state" is the question `info` answers, and a
   // credential it runs on can live in a file the agent dir does not contain.

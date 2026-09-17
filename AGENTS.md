@@ -192,12 +192,15 @@ src/
     ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create, crash repair
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
     ├── session-control.ts  # the pi control hub: observation projections + dispatch
+    ├── session-journal.ts  # the ONE reading of a record's journal as neutral entries — the control plane's
+    │                       # entries() and every OFFLINE reader (chat --session, schedule history) share it
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
     ├── session-markers.ts  # which journal entries are POSITIONS and which are the plane's own bookkeeping
     ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
     ├── open.ts             # shared opener: directory → agent for dev/start/invoke
-    ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent
+    ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent; --session opens a
+    │                       # SERVED record as a copy (only attach writes one)
     ├── tool.ts             # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
     ├── tool-context.ts     # ToolContext.session + the tool-activation bridge (AsyncLocalStorage)
     ├── search-tools.ts     # built-in search_tools loader for deferred tools

@@ -176,10 +176,20 @@ Web panel or desktop app uses (`connectSessionControl`).
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId]
+fastagent chat [dir] [--model provider/modelId] [--session id]
 ```
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+
+`--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
+**as a private copy**: pi renders the whole conversation, and `/tree`, `/fork` and `/export` work on it, while
+the served record is never opened for append. Continuing the copy therefore cannot reach the Telegram group
+the conversation belongs to, and cannot branch the record a running turn is writing. Steering the LIVE
+conversation is [`fastagent attach`](#fastagent-attach), the one command that writes a served session.
+
+```bash
+fastagent chat --session schedule:daily-digest   # what did last night's digest say?
+```
 
 Auth is fastagent's, same as every other command: `FASTAGENT_AUTH_PATH` > the
 agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
@@ -237,18 +247,22 @@ A fire reads `unreported` when nothing settled it: one still running, or one not
 second case is AgentCore: it delivers slots from an external clock, so no boot of it runs the reconciler,
 on the host that reclaims its container most often.
 
-The history IS the fired-slot claims (`<state root>/schedule/claims/<name>/`), so it is bounded by
+The fired slots ARE the claims (`<state root>/schedule/claims/<name>/`), so that half is bounded by
 construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-**WHAT a run said is not here.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
-under `<state root>/sessions/` like any other conversation, so the turn's text is stored exactly once — in
-that session's journal, which today is read by opening the `.jsonl` file. No command prints a past
-scheduled turn: `fastagent attach schedule:<name>` needs `sessionControl: true` and a running serve, and it
-tails NEW events rather than backfilling the ones already there. **WHY a failed one failed is a log line** — and that window is
-the host's, not this one's: claims can reach ~3 weeks while Fly's and Railway's log retention is typically
-days, so a `failed` row can outlive its own explanation ([Deploy](deploy.md) covers per-host retention).
+**WHAT a run said comes from its session.** Every fire runs in a session (`schedule:<name>` for a cron),
+persisted under `<state root>/sessions/`, where the turn's text is stored exactly once. `schedule history`
+reads that journal directly — off disk, no control plane, no serve running, which is the normal state when
+someone asks what last night did — and prints one folded line per fire (`--json` carries the text in full,
+plus `errorMessage` for a turn that ended in an error, which is otherwise only a log line under the host's
+retention). Fires and turns have no shared id, so the match is by time and bounded on both sides: a fire
+owns the first turn at or after its instant and before the NEXT fire's. A fire with no turn in its window
+prints no text — which is what an `interrupted` one, and one that never reached a turn, look like.
+
+To read a past turn in full, or to ask about it: `fastagent chat --session schedule:<name>` opens that
+session as a private copy (see [`fastagent chat`](#fastagent-chat)).
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

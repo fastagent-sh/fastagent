@@ -121,13 +121,25 @@ const chat: CommandSpec = {
   description:
     "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
     "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
-    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
+    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file). " +
+    "--session opens a SERVED session (a schedule's, a channel thread's) as a private copy — read what " +
+    "it said, continue from it, without touching the record the serve owns (that is `attach`).",
   args: [DIR_ARG],
-  flags: [MODEL],
-  examples: [{ cmd: "fastagent chat" }],
+  flags: [
+    MODEL,
+    {
+      flags: "--session <id>",
+      description: 'open a served session as a copy (e.g. "schedule:daily-digest")',
+    },
+  ],
+  examples: [
+    { cmd: "fastagent chat" },
+    { cmd: "fastagent chat --session schedule:daily-digest", note: "last night's run" },
+  ],
   run: async (args, f) =>
     (await import("./commands/chat.ts")).runChat(args[0] as string, {
       model: f.model as string | undefined,
+      session: f.session as string | undefined,
     }),
 };
 
@@ -457,14 +469,16 @@ const schedule: CommandSpec = {
       name: "history",
       summary: "print the recent fires of a schedule",
       description:
-        "Print a schedule's recent fires: when each fired, completed/failed/interrupted, and how long it took " +
-        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session journal ' +
-        "under <state root>/sessions/, not here and not in the logs. Read-only.",
+        "Print a schedule's recent fires: when each fired, completed/failed/interrupted, how long it took, and " +
+        "one folded line of what the turn said — the answer to \"did last night's run silently fail, and did it " +
+        'do the right thing?". The ' +
+        "text is read from the schedule's session on disk, so no serve has to be running; --json carries it in " +
+        "full. Read-only.",
       args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
       flags: [{ flags: "--json", description: "the full records" }],
       examples: [{ cmd: "fastagent schedule history daily-digest" }],
       run: async (args, flags) =>
-        (await import("./commands/schedule.ts")).runScheduleHistory(
+        await (await import("./commands/schedule.ts")).runScheduleHistory(
           args[0] as string,
           args[1] as string,
           flags.json === true,

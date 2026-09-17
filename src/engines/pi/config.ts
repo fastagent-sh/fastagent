@@ -12,6 +12,7 @@ import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
 import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
@@ -309,4 +310,13 @@ export function resolveAuthFallback(flag?: string, env: NodeJS.ProcessEnv = proc
 /** The default sessions dir under a resolved state root ({@link resolveStateRoot}). */
 export function defaultSessionsDir(stateRoot: string): string {
   return join(stateRoot, "sessions");
+}
+
+/**
+ * The effective sessions dir for an agent: override if present, else `<state root>/sessions`. Every reader of a
+ * record — the serving opener, `info`, and the offline readers (`chat --session`, `schedule history`) — must resolve
+ * it the same way, or a command reports on a directory the serve does not use.
+ */
+export function resolveSessionsDir(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveSessionsDirOverride(flag, env) ?? defaultSessionsDir(resolveStateRoot(dir, env));
 }
