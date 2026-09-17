@@ -466,19 +466,18 @@ const schedule: CommandSpec = {
       name: "history",
       summary: "print the recent fires of a schedule",
       description:
-        "Print a schedule's recent fires: when each fired, completed/failed/interrupted, how long it took, and " +
-        "one folded line of what the turn said — the answer to \"did last night's run silently fail, and did it " +
-        'do the right thing?". The ' +
-        "text is read from the schedule's session on disk, so no serve has to be running; --json carries it in " +
-        "full. Read-only.",
+        "Print a schedule's recent fires: when each fired, completed/failed/interrupted, and how long it took " +
+        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session; read it ' +
+        "with `fastagent chat --session schedule:<name>`, which this command points at. Read-only.",
       args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
-      flags: [{ flags: "--json", description: "the full records" }, SESSIONS_DIR],
+      flags: [{ flags: "--json", description: "the full records" }],
       examples: [{ cmd: "fastagent schedule history daily-digest" }],
       run: async (args, flags) =>
-        await (await import("./commands/schedule.ts")).runScheduleHistory(args[0] as string, args[1] as string, {
-          json: flags.json === true,
-          sessionsDir: flags.sessionsDir as string | undefined,
-        }),
+        (await import("./commands/schedule.ts")).runScheduleHistory(
+          args[0] as string,
+          args[1] as string,
+          flags.json === true,
+        ),
     },
     {
       name: "list",

@@ -481,8 +481,8 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
 - **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome (and the
   failure detail when there is one). What the turn SAID is not logged and not copied into the fire's record: it is
   in the session above, persisted under `<stateRoot>/sessions/` as a journal file. Two commands read that file
-  directly, with no serve running: `fastagent schedule history <name>` (one folded line per fire; `--json` in full)
-  and `fastagent chat --session schedule:<name>` (the whole conversation, as a copy);
+  `fastagent chat --session schedule:<name>` reads it with no serve running, as a private copy;
+  `fastagent schedule history` prints the fired slots and points at it;
 - **catches up an overdue run once** — each fired slot leaves a claim under `<stateRoot>/schedule/claims/<name>/`,
   created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
   several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock

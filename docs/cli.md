@@ -257,23 +257,21 @@ construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-**WHAT a run said comes from its session.** Every fire runs in a session (`schedule:<name>` for a cron),
-persisted under `<state root>/sessions/`, where the turn's text is stored exactly once. `schedule history`
-reads that journal directly — off disk, no control plane, no serve running, which is the normal state when
-someone asks what last night did — and prints one folded line per fire. `--json` adds a `turn` object to each
-record instead: `{ text }`, plus `error` for a turn that ended badly (pi's `errorMessage`, which is otherwise
-only a log line under the host's retention).
+**WHAT a run said is in its session.** Every fire runs in a session (`schedule:<name>` for a cron), persisted
+under `<state root>/sessions/`, where the turn's text is stored exactly once. Read it with
+`fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)) — off disk, no control
+plane, no serve running, which is the normal state when someone asks what last night did. This command prints
+that pointer under the rows.
 
-Fires and turns have no shared id, so the match is by time and bounded on BOTH sides: a fire owns the first
-turn at or after its own instant, before the next fire's, **and before its own fire ended** (`firedAt + ms`
-from the claim — a turn cannot start after the fire that would have started it finished). That second bound
-is what keeps the newest fire from owning whatever anyone writes into the session later, by hand (`fastagent
-fire`), from a wake-up, or over the control plane. An UNSETTLED claim states no end — `interrupted` is
-written without a duration — so it owns no turn at all, which is also correct: a fire that never reached an
-answer has no reply to print.
+**It does not say which turn belongs to which fire, on purpose.** A schedule's fires share ONE continuing
+conversation, so the session id is the same for every claim, and nothing records the turn-level link: no
+`AgentEvent` carries an entry id, and giving each fire its own session would cost the shared conversation the
+design exists for. A claim's timestamp against a time-ordered journal is what an operator reads anyway —
+matching them here would only turn that judgement into a heuristic that cannot be right about a session
+`fastagent fire`, a wake-up, and the control plane also append to.
 
-To read a past turn in full, or to ask about it: `fastagent chat --session schedule:<name>` opens that
-session as a private copy (see [`fastagent chat`](#fastagent-chat)).
+**WHY a failed one failed** is in the same place: the turn's assistant record carries the error. The `failed`
+row here says only that it did.
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

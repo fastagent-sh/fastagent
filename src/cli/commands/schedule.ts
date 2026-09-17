@@ -3,123 +3,27 @@ import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { readJournal } from "../../engines/pi/session-journal.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
-import type { SessionEntry } from "../../session.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-
-/** What the turn a fire produced ended up saying, or why it ended badly. */
-export interface FireTurn {
-  /** The last assistant message of that turn (empty for a turn that only failed). */
-  text: string;
-  /** pi's `errorMessage` for a turn that ended in an error — the reason no claim can carry. */
-  error?: string;
-}
-
-/**
- * Join fired slots to the turns they produced, keyed by slot.
- *
- * There is no shared id to join on: a claim records `firedAt`, and the turn records its own entry timestamps, so the
- * match is by TIME and is bounded on BOTH sides — a fire owns the first user entry at or after its own instant and
- * before the NEXT fire's — AND before its own fire ended. That second bound is what makes the newest fire safe:
- * other writers append to the same session (a wake-up, `fastagent fire` by hand, an operator over the control
- * plane), and with only a next-fire bound the last claim would own whatever anyone typed hours later.
- *
- * A claim states its own end only once it has SETTLED (`firedAt + ms`), and a turn cannot start after its own fire
- * finished. An unsettled claim states nothing — `interrupted` is written without a duration, and a still-running fire
- * has not reported one — so it owns no turn rather than a later writer's. It has nothing to show either way: a fire
- * that never reached an answer has no reply to print.
- *
- * The reply is the LAST assistant entry before the next user entry, because a turn that called tools appends several.
- */
-export function turnsForFires(fires: Fire[], entries: SessionEntry[]): Map<string, FireTurn> {
-  const turns: { at: number; reply?: FireTurn }[] = [];
-  for (const entry of entries) {
-    if (entry.kind === "user") {
-      turns.push({ at: entry.timestamp });
-      continue;
-    }
-    const current = turns.at(-1);
-    if (!current || entry.kind !== "assistant") continue;
-    const data = entry.data as { text?: unknown; errorMessage?: unknown };
-    current.reply = {
-      text: typeof data.text === "string" ? data.text : "",
-      ...(typeof data.errorMessage === "string" ? { error: data.errorMessage } : {}),
-    };
-  }
-  const ordered = [...fires].sort((a, b) => a.firedAt.localeCompare(b.firedAt));
-  const matched = new Map<string, FireTurn>();
-  let next = 0;
-  for (const [index, fire] of ordered.entries()) {
-    const from = Date.parse(fire.firedAt);
-    // A claim whose stamp fell back to an unusable slot name cannot anchor a window.
-    if (Number.isNaN(from)) continue;
-    const nextFire = Date.parse(ordered[index + 1]?.firedAt ?? "");
-    // Only a LATER fire bounds this one. Two claims stamped at the same instant (a catch-up slot taken in the same
-    // millisecond as a due one) carry nothing to tell their turns apart, and an `at >= nextFire` test would then be
-    // true for EVERY turn: the earlier claim would own nothing and the later one would print its turn. Falling back
-    // to append order — first fire, first turn — is the only information there is.
-    const boundedByNext = !Number.isNaN(nextFire) && nextFire > from;
-    const ended = fire.ms === undefined ? from : from + fire.ms;
-    // Turns are scanned once across all fires: both lists are in time order, so a turn already passed cannot belong
-    // to a later fire.
-    while (next < turns.length && (turns[next] as { at: number }).at < from) next++;
-    const turn = turns[next];
-    if (!turn) continue;
-    if (turn.at > ended) continue; // started after this fire finished — somebody else's turn
-    if (boundedByNext && turn.at >= nextFire) continue; // the next fire's
-    if (turn.reply) matched.set(fire.slot, turn.reply);
-    next++;
-  }
-  return matched;
-}
-
-const PREVIEW_CHARS = 100;
-
-/** One folded line of what a turn said — code-point safe, so a cut never lands inside an emoji. */
-export function preview(turn: FireTurn | undefined): string {
-  const text = turn?.error ?? turn?.text ?? "";
-  // Cut to UTF-16 units FIRST: a megabyte reply would otherwise become a million-element array just to take the
-  // first 100 code points, once per printed row. Twice the budget is enough for any surrogate pairing, and folding
-  // whitespace after the cut cannot grow it. (`firstUserText` in session-store.ts cuts by the same two steps for the
-  // same reason. It needs no surrogate repair, because taking exactly N code points out of 2N units cannot keep a
-  // split half: a split at unit 2N leaves 2N-1 units before it, which cannot hold N-1 code points. THIS function
-  // can, because folding whitespace may bring the line under the budget and return it whole — hence the repair
-  // below. A shared helper would be the two-step cut alone, with flags for everything either caller does not want.)
-  const head = text.slice(0, PREVIEW_CHARS * 2);
-  const folded = head
-    // Controls FIRST, then whitespace, so the spaces this leaves behind collapse with the rest. A model reply often
-    // carries a file a tool read, ANSI escapes included; `\s` does not cover them, and writing one straight to a
-    // terminal repaints this row and everything after it.
-    .replace(/\p{Cc}/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  // That UTF-16 cut can land between a surrogate pair; dropping a trailing high surrogate is what keeps BOTH returns
-  // below code-point safe (folding whitespace can bring the text under the budget, and returning `folded` itself
-  // would print the lone half as U+FFFD).
-  const cut = Array.from(folded.replace(/[\uD800-\uDBFF]$/, ""));
-  // Truncation is judged on what was CUT AWAY, not on what survived: 150 emoji fill the UTF-16 budget at exactly 100
-  // code points, and without this a truncated line would be indistinguishable from a reply that short.
-  const truncated = text.length > head.length || cut.length > PREVIEW_CHARS;
-  return truncated ? `${cut.slice(0, PREVIEW_CHARS).join("")}\u2026` : cut.join("");
-}
 
 /**
  * `fastagent schedule history <name> [dir]`: print this schedule's fired slots — when each fired, how it ended, how
  * long it took.
  *
- * The fired slots ARE the claims (`schedule/claims/<name>/`), bounded by construction and carrying no turn text.
- * What each run SAID is read back from the session it ran in (`schedule:<name>`), where it is stored once — directly
- * off disk, so this works with no serve running, which is the normal state when someone asks what last night did.
+ * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
+ * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's, and read with
+ * `fastagent chat --session`.
+ *
+ * This command does NOT try to say which turn belongs to which fire. Nothing links them: a schedule's fires share
+ * ONE continuing conversation, so the session id is the same for all of them, and the turn-level identifier would
+ * have to cross the engine-neutral contract (no `AgentEvent` carries an entry id) or cost the shared conversation.
+ * A claim's timestamp against a time-ordered journal is what an operator reads anyway — matching them HERE only
+ * moves a human's judgement into a heuristic that cannot be right about a session other writers also append to.
  */
-export async function runScheduleHistory(
-  name: string,
-  dirArg: string,
-  opts: { json: boolean; sessionsDir?: string },
-): Promise<void> {
+export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
@@ -137,45 +41,8 @@ export async function runScheduleHistory(
   } catch (e) {
     failStartup(new Error(`the fired-slot claims for "${name}" are unreadable (state: ${stateRoot}): ${String(e)}`));
   }
-  // Loaded HERE, not at module top: `schedule list|cancel` are the same module and touch no session, and the engine's
-  // store costs most of a second to import (package-boundary.test.ts states the rule).
-  const { resolveSessionsDir } = await import("../../engines/pi/config.ts");
-  const { piSessionRecordStore } = await import("../../engines/pi/session-store.ts");
-  const { scheduleSession } = await import("../../schedule/scheduler.ts");
-  const session = scheduleSession(name);
-  // The SAME precedence the serve reads through (--sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions), or a
-  // serve started with the flag is invisible to this command.
-  const sessionsDir = resolveSessionsDir(target, opts.sessionsDir);
-  // The TEXT is the secondary answer; "did it run" is the primary one and must survive a record this command cannot
-  // read. Expected failures: `SessionManager.open` throwing on a corrupt or unreadable file, and the journal read
-  // faulting (it loads the whole record, which grows with every fire while claims stay capped at 512). Both are an
-  // operator's to fix, so they are reported on stderr and the fires still print — never swallowed.
-  let turns = new Map<string, FireTurn>();
-  let missing = false;
-  try {
-    const record = await piSessionRecordStore({ dir: sessionsDir, cwd: target }).openIfExists(session);
-    if (record) turns = turnsForFires(fires, readJournal(record).entries);
-    else missing = true;
-  } catch (e) {
-    console.error(
-      `the session "${session}" under ${sessionsDir} is unreadable (${String(e)}) — fired slots below, without their text`,
-    );
-  }
-  // A session that was never created (nothing ever fired, or an older state root) is not an error, but SAY it rather
-  // than printing an empty text column: "no session here" and "the turn produced no text" read identically otherwise,
-  // and one way to get here is a sessions dir that is not the one the serve wrote (FASTAGENT_SESSIONS_DIR set for
-  // only one of them).
-  if (missing && fires.length > 0) {
-    console.error(`no session "${session}" under ${sessionsDir} — fired slots below, without their text`);
-  }
-  if (opts.json) {
-    console.log(
-      JSON.stringify(
-        fires.map((f) => ({ ...f, ...(turns.get(f.slot) ? { turn: turns.get(f.slot) } : {}) })),
-        null,
-        2,
-      ),
-    );
+  if (json) {
+    console.log(JSON.stringify(fires, null, 2));
     return;
   }
   if (fires.length === 0) {
@@ -191,13 +58,13 @@ export async function runScheduleHistory(
     // An unreported fire has no duration to print, and `0ms` would be a value a fast turn really produces — the
     // column stays empty rather than claiming the turn took no time.
     const took = f.ms === undefined ? "" : `${f.ms}ms`;
-    console.log(
-      `${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}  ${preview(turns.get(f.slot))}`,
-    );
+    console.log(`${f.firedAt}  ${(f.outcome ?? "unreported").padEnd(11)} ${took.padStart(8)}`);
   }
   if (fires.length > shown.length) {
     console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
   }
+  // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced.
+  console.error(`(what these runs said: \`fastagent chat --session schedule:${name}\`)`);
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */

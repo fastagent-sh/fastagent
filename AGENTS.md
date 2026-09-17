@@ -192,8 +192,6 @@ src/
     ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create, crash repair
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
     ├── session-control.ts  # the pi control hub: observation projections + dispatch
-    ├── session-journal.ts  # the ONE reading of a record's journal as neutral entries — the control plane's
-    │                       # entries() and the offline reader (schedule history) share it
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
     ├── session-markers.ts  # which journal entries are POSITIONS and which are the plane's own bookkeeping
     ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
