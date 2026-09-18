@@ -175,18 +175,22 @@ export async function preflightDeploy(input: {
   }
   const modelSpec = model.spec;
 
-  // What the PUBLIC host URL answers with no authentication of ours in front of it. Not conditioned on
-  // `sessionControl`: `POST /invoke` is on every deployment whatever channels it declares, and leaving it out is how
-  // a telegram-only agent published "run a turn with my tools" in silence. Conditioned on there BEING such a URL —
-  // warning about a public endpoint on a host that has none teaches the operator to skim past every deploy warning.
-  if (publicUrl) {
+  // What the PUBLIC host URL answers with no authentication of ours in front of it — NAMED FROM WHAT WILL ACTUALLY
+  // MOUNT, never from the host alone. `POST /invoke` is on by default whatever channels a definition declares (so
+  // this is not conditioned on `sessionControl`, which is how a telegram-only agent used to publish "run a turn with
+  // my tools" in silence), but `http.invoke: false` withholds it. Listing an endpoint this deployment does not serve
+  // is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
+  const unauthenticated = [
+    ...(config.http?.invoke === false ? [] : ["POST /invoke (run a turn with this agent's tools)"]),
+    ...(config.sessionControl === true ? ["/control/* (read, steer or delete any session)"] : []),
+  ];
+  if (publicUrl && unauthenticated.length > 0) {
     messages.push({
       level: "warn",
       text:
-        `the deployed box answers POST /invoke (run a turn with this agent's tools)` +
-        `${config.sessionControl === true ? " and /control/* (read, steer or delete any session)" : ""} at its public ` +
-        `URL, UNAUTHENTICATED — fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private ` +
-        `network in front of that URL (docs/design/session-control.md §14)`,
+        `the deployed box answers ${unauthenticated.join(" and ")} at its public URL, UNAUTHENTICATED — ` +
+        `fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private network in front of that ` +
+        `URL (docs/design/session-control.md §14)`,
     });
   }
 

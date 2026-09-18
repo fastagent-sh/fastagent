@@ -62,9 +62,9 @@ describe("createAgentService", () => {
       expect(await (await service.handler(new Request("http://h/invoke", { method: "POST" }))).text()).toBe(
         "the channel's",
       );
-      // …and the startup report knows it is not ours. `routes` says `/invoke` answers; only `ours`
-      // says whether WE answer there, which is what the try-it curl and the "unauthenticated data
-      // plane" warning both need.
+      // …and the startup report knows it is not ours. `routes` says `/invoke` answers; only
+      // `unverifiedRoutes` says whether WE answer there, which is what the try-it curl and the
+      // "unauthenticated data plane" warning both need.
       expect(service.unverifiedRoutes).not.toContain("POST /invoke");
       expect(service.unverifiedRoutes).toContain("GET /health");
     } finally {

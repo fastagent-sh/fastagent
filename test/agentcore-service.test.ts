@@ -174,6 +174,23 @@ describe("mountAgentcoreService", () => {
     }
   });
 
+  it("the adapter's own paths are IAM-gated, not unverified — no JSON gate, nothing reported as open", async () => {
+    // `POST /invocations` and `GET /ping` are reached only through `InvokeAgentRuntime`, which AWS gates
+    // with IAM. Filing them as "authenticates nobody" did two things: it applied our JSON body gate to a
+    // request whose content type is AWS's to set (the runbook's copyable `invoke-agent-runtime` command
+    // passes no `--content-type`), and it reported two IAM-protected paths as open in `unverifiedRoutes`.
+    const service = await mountAgentcoreService(await open(await agentDir()));
+    try {
+      expect(service.unverifiedRoutes).toEqual([]);
+      const res = await service.handler(
+        new Request("http://h/invocations", { method: "POST", body: JSON.stringify({ kind: "probe" }) }),
+      );
+      expect(res.status).not.toBe(415);
+    } finally {
+      await service.close();
+    }
+  });
+
   it("names every config key that cannot mean anything here, not just sessionControl", async () => {
     // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
     // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.invoke`

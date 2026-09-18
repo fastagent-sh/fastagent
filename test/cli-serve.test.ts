@@ -177,7 +177,7 @@ describe("cli: the assembled serving surface", () => {
     const control = { capabilities: () => ({ commands: [], models: [] }) } as never;
     const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control);
     const surface = { ...withControl }; // exactly what dev/start spread into ServingSurface
-    const handle = router({}, surface.routes, surface.mounts);
+    const handle = router({ selfVerifying: surface.routes, mounts: surface.mounts });
     // 200 from the plane, 404 from its absence.
     expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(200);
     expect((await handle(new Request("http://h/health"))).status).toBe(200);

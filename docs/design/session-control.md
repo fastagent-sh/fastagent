@@ -678,9 +678,9 @@ walk straight through. `GET` has no side effect here and the browser blocks the 
 
 **2. CORS, and its default follows the topology** (`channels/serve.ts`):
 
-| the port is | the default | why |
+| the port is | the default | what that means |
 |---|---|---|
-| **published** — a wildcard or LAN bind, or `--tunnel` | `*` | Anyone can already curl it, so answering a browser hands an attacker nothing new. What is in front of a published port is the deployment's decision; guessing conservatively there is us doing the operator's job badly. |
+| **published** — the bind is not loopback, or `--tunnel` is on | `*` | The operator put this port on a network. Who may reach that network, and what sits in front of it, is their decision; a conservative guess here is us doing their job with less information than they have. **Be clear about what `*` grants:** any page the user visits can call this port from their browser and read the reply. On a public host that adds nothing an attacker could not already curl; on a LAN or VPC host it adds the victim's network position, which they could not. Narrow it with `http.cors`, or take the port off that network with `--bind 127.0.0.1`. |
 | **unpublished** — a loopback bind, no tunnel | loopback origins only, echoed exactly, `vary: origin` | The attacker cannot reach this port at all; the developer's own browser is their ONLY route to it. Note what this is: the browser already denies a cross-origin read by default, so we are not adding a lock, we are declining to REMOVE one. Vite shipped `*` in this posture and it became CVE-2025-24010, over source code rather than tool authority; its fix and Ollama's default are both this shape. |
 
 - **`http.cors` REPLACES that default**, in both directions — a front end's real origin for an

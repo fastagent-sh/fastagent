@@ -79,9 +79,10 @@ function isLoopbackOrigin(origin: string): boolean {
  *
  * THIS IS AN API, so the default is an API's: `*`. Origin is not access control — what makes a normal API safe to
  * call from any page is that it demands a credential the page does not have, which makes the caller's origin
- * irrelevant. On a PUBLISHED port the same reasoning holds for the opposite reason: anyone can already curl it, so
- * answering a browser hands an attacker nothing they did not have. What is in front of a published port is the
- * deployment's decision, and a conservative default there is us doing the operator's job badly.
+ * irrelevant. We have no credential, so once the port is PUBLISHED the question becomes which network it is on and
+ * what sits in front of it — the operator's decision, made with information this process does not have. On a public
+ * host `*` adds nothing an attacker could not already curl; on a LAN or VPC host it adds the victim's network
+ * position, which is why the docs state the grant plainly rather than calling the default safe.
  *
  * The ONE exception is a port whose only reachability is the developer's own browser — an unpublished loopback
  * serve. There the attacker cannot reach the port at all, so answering their page IS the whole attack path. Note
@@ -135,6 +136,22 @@ export function assertCorsOrigins(origins: unknown, where: string): asserts orig
   }
 }
 
+/**
+ * The tables a router composes, NAMED rather than ordered.
+ *
+ * Two same-typed positional arguments encoded which side of the trust axis a table was on, and getting them the
+ * wrong way round type-checked: the AgentCore adapter passed its IAM-gated routes as `unverified` and they were
+ * reported as unauthenticated for two commits. A caller now spells the axis at the call site.
+ */
+export interface RouterSurface {
+  /** Routes that authenticate NOBODY — the router applies the JSON body gate and the cross-origin policy to them. */
+  unverified?: Routes;
+  /** Routes that verify their own caller (a channel's platform signature, a host's IAM). Neither guard applies. */
+  selfVerifying?: Routes;
+  /** Prefix-owning handlers. Always treated as unverified — the control plane is the only one. */
+  mounts?: readonly PrefixMount[];
+}
+
 export interface RouterOptions {
   /** `http.cors` — exact origins, or `["*"]`. Widens an unpublished serve, narrows a published one. */
   corsOrigins?: readonly string[];
@@ -163,12 +180,8 @@ export interface RouterOptions {
  * anyway and gets neither guard. That is decision B (docs/design/session-control.md §14) and it belongs to the
  * channel's author, who owns the credential the platform issued — but it is an assumption here, not a property.
  */
-export function router(
-  unverified: Routes,
-  selfVerifying: Routes,
-  mounts: readonly PrefixMount[] = [],
-  options: RouterOptions = {},
-): ChannelHandler {
+export function router(surface: RouterSurface, options: RouterOptions = {}): ChannelHandler {
+  const { unverified = {}, selfVerifying = {}, mounts = [] } = surface;
   for (const [i, mount] of mounts.entries()) {
     assertRouteKey(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
     if (mount.prefix === "/") {

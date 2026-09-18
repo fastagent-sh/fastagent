@@ -81,7 +81,7 @@ function createActivation(deps: {
     Effect.cached(
       portJoin(async () => {
         const surface = await deps.channels();
-        return router({}, surface.routes);
+        return router({ selfVerifying: surface.routes });
       }).pipe(Effect.uninterruptible),
     ),
   );

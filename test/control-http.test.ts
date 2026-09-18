@@ -51,7 +51,9 @@ async function serveControl() {
   });
   const plane = createControlPlane(control);
   // BOTH planes, as a real serve has them: the DATA plane at the root, control under its prefix.
-  const server = serveNode(router({ "POST /invoke": createInvokeHandler(agent) }, {}, [plane]), { port: 0 });
+  const server = serveNode(router({ unverified: { "POST /invoke": createInvokeHandler(agent) }, mounts: [plane] }), {
+    port: 0,
+  });
   const port = await server.listening;
   return {
     agent,
@@ -386,7 +388,7 @@ describe("session control over HTTP", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router({}, {}, [createControlPlane(control)]), { port: 0 });
+    const server = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(control)] }), { port: 0 });
     const port = await server.listening;
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
@@ -414,7 +416,7 @@ describe("session control over HTTP", () => {
       }),
     });
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
-    const server = serveNode(router({}, {}, [createControlPlane(control)]), { port: 0 });
+    const server = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(control)] }), { port: 0 });
     try {
       const url = `http://127.0.0.1:${await server.listening}`;
       const res = await fetch(`${url}/control/sessions/s/events`, { headers: fromBrowser });
@@ -507,7 +509,7 @@ describe("session control over HTTP", () => {
     const withoutCommands = Object.fromEntries(
       Object.entries(controlPlaneRoutes(control)).filter(([key]) => !key.endsWith(" /control/commands")),
     );
-    const server = serveNode(router({}, {}, [mountControlPlane(withoutCommands)]), { port: 0 });
+    const server = serveNode(router({ selfVerifying: {}, mounts: [mountControlPlane(withoutCommands)] }), { port: 0 });
     const port = await server.listening;
     try {
       const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}` });
@@ -603,7 +605,7 @@ describe("session control over HTTP", () => {
         abort: async () => {},
       },
     );
-    const server = serveNode(router({}, {}, [createControlPlane(control)]), { port: 0 });
+    const server = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(control)] }), { port: 0 });
     const port = await server.listening;
     try {
       const post = (command: unknown) =>
@@ -651,7 +653,7 @@ describe("session control over HTTP", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router({}, {}, [createControlPlane(control)]), { port: 0 });
+    const server = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(control)] }), { port: 0 });
     const port = await server.listening;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {});
@@ -734,7 +736,7 @@ describe("session control over HTTP", () => {
 
   it("the control plane is PURE control: no invoke route lives under its prefix", async () => {
     const { control } = await fauxControlledAgent([], { boundary: false });
-    const server = serveNode(router({}, {}, [createControlPlane(control)]), { port: 0 });
+    const server = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(control)] }), { port: 0 });
     const port = await server.listening;
     try {
       // Running a turn belongs to the DATA plane (`POST /invoke`). This prefix used to carry a duplicate of it
@@ -1056,7 +1058,7 @@ describe("session control over HTTP", () => {
     // could not throw, which is what made it a regression.
     const { control } = await fauxControlledAgent([]);
     const plane = createControlPlane(control).handler;
-    const served = router({}, {}, [createControlPlane(control)]);
+    const served = router({ selfVerifying: {}, mounts: [createControlPlane(control)] });
     for (const path of ["/control/sessions/100%", "/control/sessions/%E0%A4%A/entries"]) {
       expect((await plane(new Request(`http://x${path}`))).status).toBe(404);
       // …and through the host router it is readable by a browser, like every other reply it owns.
@@ -1166,7 +1168,9 @@ describe("session control over HTTP", () => {
     const logged: string[] = [];
     const spy = vi.spyOn(log, "error").mockImplementation((line: string) => void logged.push(line));
     try {
-      const faulty = serveNode(router({}, {}, [createControlPlane(broken(ioError))]), { port: 0 });
+      const faulty = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(broken(ioError))] }), {
+        port: 0,
+      });
       const faultyPort = await faulty.listening;
       try {
         const res = await fetch(`http://127.0.0.1:${faultyPort}/control/sessions`, {});
@@ -1191,7 +1195,10 @@ describe("session control over HTTP", () => {
       // A TypeError from our own row building is a BUG: it goes back to the plane's boundary, which
       // logs it and answers 500 — never `retryable: true`, which would have a client poll forever.
       const buggy = serveNode(
-        router({}, {}, [createControlPlane(broken(new TypeError("rows.map is not a function")))]),
+        router({
+          selfVerifying: {},
+          mounts: [createControlPlane(broken(new TypeError("rows.map is not a function")))],
+        }),
         {
           port: 0,
         },
@@ -1210,7 +1217,9 @@ describe("session control over HTTP", () => {
       const nodeBug = Object.assign(new TypeError('The "path" argument must be of type string'), {
         code: "ERR_INVALID_ARG_TYPE",
       });
-      const misread = serveNode(router({}, {}, [createControlPlane(broken(nodeBug))]), { port: 0 });
+      const misread = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(broken(nodeBug))] }), {
+        port: 0,
+      });
       const misreadPort = await misread.listening;
       try {
         const res = await fetch(`http://127.0.0.1:${misreadPort}/control/sessions`, {});
@@ -1220,7 +1229,7 @@ describe("session control over HTTP", () => {
       }
 
       // And a thrown null reaches the boundary as ITSELF, not as a TypeError from reading `.code`.
-      const nothing = serveNode(router({}, {}, [createControlPlane(broken(null))]), { port: 0 });
+      const nothing = serveNode(router({ selfVerifying: {}, mounts: [createControlPlane(broken(null))] }), { port: 0 });
       const nothingPort = await nothing.listening;
       try {
         const res = await fetch(`http://127.0.0.1:${nothingPort}/control/sessions`, {});
@@ -1358,9 +1367,10 @@ async function serveRemoteAgent(opts: {
     ? createPiAgentFromSession({ observer, lease, sessionFactory: opts.sessionFactory })
     : fauxAgent(opts.responses ?? [], { sessions, lease, observer, tools: opts.tools ?? [] }).agent;
   // BOTH planes, because `connectAgent` drives the DATA plane (`POST /invoke`) and observes through control.
-  const server = serveNode(router({ "POST /invoke": createInvokeHandler(agent) }, {}, [createControlPlane(control)]), {
-    port: 0,
-  });
+  const server = serveNode(
+    router({ unverified: { "POST /invoke": createInvokeHandler(agent) }, mounts: [createControlPlane(control)] }),
+    { port: 0 },
+  );
   const port = await server.listening;
   conformanceServers.push(() => server.close());
   return connectAgent({ url: `http://127.0.0.1:${port}` });

@@ -328,10 +328,13 @@ export async function mountAgentService(
     );
   }
   // Composed BEFORE anything starts.
-  const handler = router(routed.unverified, withControl.routes, withControl.mounts, {
-    ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
-    ...(opened.published ? { published: true } : {}),
-  });
+  const handler = router(
+    { unverified: routed.unverified, selfVerifying: withControl.routes, mounts: withControl.mounts },
+    {
+      ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+      ...(opened.published ? { published: true } : {}),
+    },
+  );
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();

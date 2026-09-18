@@ -175,7 +175,10 @@ export async function mountAgentcoreService(
     onStateReady: options.onStateReady,
     channels: lazyChannels,
   });
-  const handler = router(adapterRoutes, {});
+  // SELF-VERIFYING, not unverified: both paths are reached only through `InvokeAgentRuntime`, which AWS gates with
+  // IAM. Putting them in the other table applied our JSON body gate to `POST /invocations` (whose content type is
+  // AWS's to set) and reported two IAM-protected paths as authenticating nobody.
+  const handler = router({ selfVerifying: adapterRoutes });
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   return {
@@ -187,8 +190,8 @@ export async function mountAgentcoreService(
     workspace,
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
-    // The adapter's own two paths are the whole surface here; the channels arrive lazily behind them.
-    unverifiedRoutes: Object.keys(adapterRoutes),
+    // NONE: the adapter's two paths are IAM-gated and the channels behind them verify their own platform.
+    unverifiedRoutes: [],
     // No `controlPrefix`: it is not served here, so nothing may report a prefix a caller could dial.
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections

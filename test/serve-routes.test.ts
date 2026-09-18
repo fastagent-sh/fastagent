@@ -36,7 +36,10 @@ describe("serve: who may call this from a browser", () => {
   };
   const build = (corsOrigins?: string[]) => {
     ran = [];
-    return router(ours, channels, [plane], { ...(corsOrigins ? { corsOrigins } : {}) });
+    return router(
+      { unverified: ours, selfVerifying: channels, mounts: [plane] },
+      { ...(corsOrigins ? { corsOrigins } : {}) },
+    );
   };
   const preflight = (handle: ReturnType<typeof router>, path: string, origin: string, method = "POST") =>
     handle(
@@ -84,17 +87,17 @@ describe("serve: who may call this from a browser", () => {
     // anyone can already curl it, so answering a browser hands an attacker nothing new. What is in
     // front of a published port is the deployment's decision, and guessing conservatively there is us
     // doing the operator's job badly.
-    const handle = router(ours, channels, [plane], { published: true });
+    const handle = router({ unverified: ours, selfVerifying: channels, mounts: [plane] }, { published: true });
     const res = await preflight(handle, "/invoke", "https://app.example.com");
     expect({ status: res.status, allowed: res.headers.get("access-control-allow-origin") }).toEqual({
       status: 204,
       allowed: "*",
     });
     // …and `http.cors` still NARROWS it, which is the other half of that knob.
-    const pinned = router(ours, channels, [plane], {
-      published: true,
-      corsOrigins: ["https://app.example.com"],
-    });
+    const pinned = router(
+      { unverified: ours, selfVerifying: channels, mounts: [plane] },
+      { published: true, corsOrigins: ["https://app.example.com"] },
+    );
     expect(
       (await preflight(pinned, "/invoke", "https://app.example.com")).headers.get("access-control-allow-origin"),
     ).toBe("https://app.example.com");
@@ -196,10 +199,10 @@ describe("serve: who may call this from a browser", () => {
     // alone that route would inherit the CORS headers — a channel route made browser-callable by a
     // rule that was never about it.
     ran = [];
-    const handle = router(
-      { "POST /invoke": () => new Response("ours") },
-      { "GET /invoke": () => new Response("a channel's") },
-    );
+    const handle = router({
+      unverified: { "POST /invoke": () => new Response("ours") },
+      selfVerifying: { "GET /invoke": () => new Response("a channel's") },
+    });
     const local = { origin: "http://localhost:5173" };
     const channelRoute = await handle(new Request("http://h/invoke", { headers: local }));
     expect(await channelRoute.text()).toBe("a channel's");
@@ -231,7 +234,7 @@ describe("serve: router", () => {
     "GET /health": () => new Response("ok"),
     "/any": () => new Response("any-method"),
   };
-  const handle = router({}, routes);
+  const handle = router({ selfVerifying: routes });
   const req = (method: string, path: string) => new Request(`http://h${path}`, { method });
 
   it("matches method + path, 405 on a known path with the wrong method, 404 otherwise", async () => {
@@ -275,10 +278,12 @@ describe("serve: the route path language", () => {
   it("a leading space is refused, not quietly read as 'any method'", async () => {
     // Normalising `" /x"` would define a spelling the contract does not have — and define it only
     // in the parser's head. The author meant `"/x"`, which is the documented way to say any method.
-    expect(() => router({}, { " /x": () => new Response("x") })).toThrow(/leading space is not a method/);
+    expect(() => router({ selfVerifying: { " /x": () => new Response("x") } })).toThrow(
+      /leading space is not a method/,
+    );
     expect(parseRouteKey("/x")).toEqual({ path: "/x" });
     expect(parseRouteKey("GET /x")).toEqual({ method: "GET", path: "/x" });
-    const handle = router({}, { "/any": () => new Response("any-method") });
+    const handle = router({ selfVerifying: { "/any": () => new Response("any-method") } });
     expect((await handle(new Request("http://h/any", { method: "DELETE" }))).status).toBe(200);
   });
 
@@ -288,7 +293,7 @@ describe("serve: the route path language", () => {
     // to describe someone else's limitation.
     const check = (key: string) => () => assertRouteKey(key, (problem) => `bad: ${problem}`);
     expect(check("PROPFIND /x")).not.toThrow(); // extension methods are ordinary
-    const handle = router({}, { "TRACE /x": () => new Response("traced") });
+    const handle = router({ selfVerifying: { "TRACE /x": () => new Response("traced") } });
     expect(await (await handle(new Request("http://h/x", { method: "GET" }))).status).toBe(405);
     const raw = new Request("http://h/x");
     Object.defineProperty(raw, "method", { value: "TRACE" });
@@ -298,19 +303,23 @@ describe("serve: the route path language", () => {
   it("a lower-case method is the same route, and reaches its handler", async () => {
     // The method is upper-cased when the key is parsed, so validation and conflict-checking already
     // agree that `"get /x"` is `GET /x`. Dispatch has to agree too, or the route starts and never runs.
-    const handle = router({}, { "get /x": () => new Response("hit") });
+    const handle = router({ selfVerifying: { "get /x": () => new Response("hit") } });
     expect(await (await handle(new Request("http://h/x"))).text()).toBe("hit");
-    expect(() => router({}, { "get /x": () => new Response("a"), "GET /x": () => new Response("b") })).toThrow(
-      /conflicts/,
-    );
+    expect(() =>
+      router({ selfVerifying: { "get /x": () => new Response("a"), "GET /x": () => new Response("b") } }),
+    ).toThrow(/conflicts/);
   });
 
   it("router() refuses two keys that name the same route", () => {
     // The object's own key uniqueness does not catch this: `"/x"` and `"GET /x"` are different keys
     // for the same request, and registration order would silently pick a winner.
-    expect(() => router({}, { "/x": () => new Response("a"), "GET /x": () => new Response("b") })).toThrow(/conflicts/);
+    expect(() =>
+      router({ selfVerifying: { "/x": () => new Response("a"), "GET /x": () => new Response("b") } }),
+    ).toThrow(/conflicts/);
     // Distinct methods on one path are the normal case and must stay legal.
-    expect(() => router({}, { "GET /x": () => new Response("a"), "POST /x": () => new Response("b") })).not.toThrow();
+    expect(() =>
+      router({ selfVerifying: { "GET /x": () => new Response("a"), "POST /x": () => new Response("b") } }),
+    ).not.toThrow();
   });
 
   it("routeKeysConflict compares, it does not predict", () => {
@@ -322,11 +331,17 @@ describe("serve: the route path language", () => {
 
   it("a route inside a mount is refused — the mount owns everything beneath it", async () => {
     const plane = { prefix: "/control", handler: () => new Response("plane") };
-    expect(() => router({}, { "GET /control/mine": () => new Response("x") }, [plane])).toThrow(/inside the mount/);
-    expect(() => router({}, { "GET /control": () => new Response("x") }, [plane])).toThrow(/inside the mount/);
-    expect(() => router({}, { "GET /controlled": () => new Response("x") }, [plane])).not.toThrow();
+    expect(() => router({ selfVerifying: { "GET /control/mine": () => new Response("x") }, mounts: [plane] })).toThrow(
+      /inside the mount/,
+    );
+    expect(() => router({ selfVerifying: { "GET /control": () => new Response("x") }, mounts: [plane] })).toThrow(
+      /inside the mount/,
+    );
+    expect(() =>
+      router({ selfVerifying: { "GET /controlled": () => new Response("x") }, mounts: [plane] }),
+    ).not.toThrow();
     // And the mount actually serves its prefix, including paths it does not itself route.
-    const handle = router({}, { "GET /telegram": () => new Response("tg") }, [plane]);
+    const handle = router({ selfVerifying: { "GET /telegram": () => new Response("tg") }, mounts: [plane] });
     expect(await (await handle(new Request("http://h/control/anything"))).text()).toBe("plane");
     expect(await (await handle(new Request("http://h/control"))).text()).toBe("plane");
     expect(await (await handle(new Request("http://h/telegram"))).text()).toBe("tg");
@@ -335,7 +350,8 @@ describe("serve: the route path language", () => {
   it("a mount prefix is held to the same path rule as a route key", () => {
     // A prefix IS a path. Unchecked, `/files/:id` would be resolved by the matcher its own way while
     // pathUnderPrefix compared it as a literal — the exact split this language exists to close.
-    const mount = (prefix: string) => () => router({}, {}, [{ prefix, handler: () => new Response("m") }]);
+    const mount = (prefix: string) => () =>
+      router({ selfVerifying: {}, mounts: [{ prefix, handler: () => new Response("m") }] });
     expect(mount("control")).toThrow(/must start/);
     expect(mount("/control/")).toThrow(/no trailing slash/);
     expect(mount("/")).toThrow(/owning every path IS that handler/); // the root is not a mount
@@ -345,7 +361,7 @@ describe("serve: the route path language", () => {
   it("even the router's own 404 and 405 carry no content for HEAD", async () => {
     // These are written by the router, not by a handler — the earlier version stripped only handler
     // replies, so the one function had two HEAD semantics depending on who answered.
-    const handle = router({}, { "POST /x": () => new Response("x") });
+    const handle = router({ selfVerifying: { "POST /x": () => new Response("x") } });
     const missing = await handle(new Request("http://h/nope", { method: "HEAD" }));
     expect(missing.status).toBe(404);
     expect(await missing.text()).toBe("");
@@ -357,7 +373,7 @@ describe("serve: the route path language", () => {
   it("a mount answers HEAD under the same rule as a route", async () => {
     // The mount branch returns before the route dispatch, so it needs the rule applied to it too —
     // otherwise the one handler has two HEAD semantics depending on which side answered.
-    const handle = router({}, {}, [{ prefix: "/p", handler: () => new Response("mount-body") }]);
+    const handle = router({ selfVerifying: {}, mounts: [{ prefix: "/p", handler: () => new Response("mount-body") }] });
     const head = await handle(new Request("http://h/p/x", { method: "HEAD" }));
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
@@ -366,34 +382,33 @@ describe("serve: the route path language", () => {
 
   it("two mounts may not claim the same ground", () => {
     const at = (prefix: string) => ({ prefix, handler: () => new Response(prefix) });
-    expect(() => router({}, {}, [at("/control"), at("/control/admin")])).toThrow(/overlaps/);
-    expect(() => router({}, {}, [at("/control"), at("/control")])).toThrow(/overlaps/);
-    expect(() => router({}, {}, [at("/control"), at("/controlled")])).not.toThrow();
-    expect(() => router({}, {}, [at("/a"), at("/b")])).not.toThrow();
+    expect(() => router({ selfVerifying: {}, mounts: [at("/control"), at("/control/admin")] })).toThrow(/overlaps/);
+    expect(() => router({ selfVerifying: {}, mounts: [at("/control"), at("/control")] })).toThrow(/overlaps/);
+    expect(() => router({ selfVerifying: {}, mounts: [at("/control"), at("/controlled")] })).not.toThrow();
+    expect(() => router({ selfVerifying: {}, mounts: [at("/a"), at("/b")] })).not.toThrow();
   });
 
   it("HEAD is answered from GET without the content, whichever route answers — and an explicit HEAD wins", async () => {
     // RFC 9110. Dropped here rather than left to the HTTP layer, because this handler is public
     // surface: a caller invoking it directly must get the same answer the socket would carry.
-    const fromGet = router({}, { "GET /x": () => new Response("body", { headers: { "x-mark": "1" } }) });
+    const fromGet = router({ selfVerifying: { "GET /x": () => new Response("body", { headers: { "x-mark": "1" } }) } });
     const head = await fromGet(new Request("http://h/x", { method: "HEAD" }));
     expect(head.status).toBe(200);
     expect(head.headers.get("x-mark")).toBe("1"); // headers survive; only the content goes
     expect(await head.text()).toBe("");
     // Not only the GET fallback: an explicit HEAD route and a method-less one are HEAD responses too.
-    const explicitOnly = router({}, { "HEAD /x": () => new Response("should not ship") });
+    const explicitOnly = router({ selfVerifying: { "HEAD /x": () => new Response("should not ship") } });
     expect(await (await explicitOnly(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
-    const anyMethod = router({}, { "/x": () => new Response("should not ship") });
+    const anyMethod = router({ selfVerifying: { "/x": () => new Response("should not ship") } });
     expect(await (await anyMethod(new Request("http://h/x", { method: "HEAD" }))).text()).toBe("");
     expect(await (await anyMethod(new Request("http://h/x"))).text()).toBe("should not ship"); // GET unaffected
     // Writing one explicitly is allowed, and takes precedence — nothing here is unreachable.
-    const explicit = router(
-      {},
-      {
+    const explicit = router({
+      selfVerifying: {
         "GET /x": () => new Response("get"),
         "HEAD /x": () => new Response("", { headers: { "x-who": "head" } }),
       },
-    );
+    });
     expect((await explicit(new Request("http://h/x", { method: "HEAD" }))).headers.get("x-who")).toBe("head");
   });
 
@@ -401,8 +416,8 @@ describe("serve: the route path language", () => {
     // Two doors lead to the matcher: channel files, and an embedder handing over `Routes`. A pattern
     // slipping through the second one would match at runtime while every collision check — which
     // reads paths as literals — quietly answers the wrong question about it.
-    expect(() => router({}, { "GET /x?y=1": () => new Response("x") })).toThrow(/arrives as/);
-    expect(() => router({}, { " /x": () => new Response("x") })).toThrow(/leading space/);
+    expect(() => router({ selfVerifying: { "GET /x?y=1": () => new Response("x") } })).toThrow(/arrives as/);
+    expect(() => router({ selfVerifying: { " /x": () => new Response("x") } })).toThrow(/leading space/);
   });
 });
 
