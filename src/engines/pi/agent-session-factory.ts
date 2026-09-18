@@ -203,6 +203,15 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
+/**
+ * Where pi reads ITS settings for a turn THIS definition owns — the artifact, not the machine it runs on. A retry
+ * budget or a compaction threshold saved on someone's laptop (`~/.pi/agent/settings.json`) must not change what a
+ * deployed turn does, so the serving assembly points pi at the definition instead.
+ */
+function definitionAgentDir(cwd: string): string {
+  return join(cwd, ".fastagent", "pi");
+}
+
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
@@ -250,7 +259,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> =>
     createAgentSessionServices({
       cwd,
-      agentDir: options.agentDir ?? join(cwd, ".fastagent", "pi"),
+      agentDir: options.agentDir ?? definitionAgentDir(cwd),
       modelRuntime,
       // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
       // question the two assemblies answer differently.
