@@ -59,7 +59,7 @@ describe("serve: who may call this from a browser", () => {
   });
 
   it("echoes the headers the preflight asked for — a fixed list is a 204 the browser refuses to act on", async () => {
-    // `connectSessionControl({ headers })` exists so a caller can satisfy whatever fronts this port.
+    // `connectSessionControl({ fetchFn })` exists so a caller can satisfy whatever fronts this port.
     // A fixed allow-list cannot know that header's name, so the preflight would pass and the real
     // request would never be sent.
     const res = await build()(
@@ -124,9 +124,8 @@ describe("serve: who may call this from a browser", () => {
 
   it("ownership is per route KEY: a channel beside us on the same path is still the channel's", async () => {
     // `routesFor` reserves `POST /invoke` only, so a channel may legally serve `GET /invoke`. By path
-    // alone that route would inherit both the CORS headers and the 403 — a channel route made
-    // browser-callable, and a foreign-origin caller of a channel route refused, both from a rule that
-    // was never about it.
+    // alone that route would inherit the CORS headers — a channel route made browser-callable by a
+    // rule that was never about it.
     ran = [];
     const handle = router(
       { "POST /invoke": () => new Response("ours") },

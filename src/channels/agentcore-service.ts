@@ -5,14 +5,7 @@ import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
-import {
-  type AgentService,
-  type MountableAgent,
-  assertNoControlPlaneCollision,
-  mountSessionControl,
-  routesFor,
-  startSchedules,
-} from "../service.ts";
+import { type AgentService, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import {
   type AgentcoreAdapterOptions,
   type RouteSurface,
@@ -117,9 +110,25 @@ export async function mountAgentcoreService(
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
-  // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the collision rule
-  // runs again then (below) against what they actually brought.
-  const withControl = mountSessionControl({}, opened.publishControl ? sessionControl : undefined);
+  // NO control plane on this host, and `sessionControl: true` cannot change that.
+  //
+  // The only public way in is the forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a
+  // webhook envelope (deploy/agentcore/forwarder.js) and attaches the ingress secret ITSELF — so every anonymous
+  // caller arrives as trusted ingress. A channel route survives that because the platform's signature is checked
+  // inside it; `/control/*` has no such check, and mounting it here made `GET /control/sessions` and
+  // `DELETE /control/sessions/{id}` answerable from the public URL with no credential at all.
+  //
+  // Not fixable by teaching the forwarder about the prefix (that hard-codes our path convention into a third
+  // place), nor by the ingress secret (the forwarder holds it). It needs an envelope kind the forwarder never
+  // sends — a protocol change, not a patch. Until then the plane is not served here, said out loud rather than
+  // quietly dropped.
+  if (opened.publishControl) {
+    log.warn(
+      "[fastagent] agentcore: sessionControl is ON but /control/* is NOT served here — this host's only public " +
+        "ingress relays anonymous traffic as trusted, so the plane would answer `delete this session` to anyone " +
+        "with the URL (docs/design/session-control.md §14)",
+    );
+  }
 
   // Started here, not deferred to an envelope.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
@@ -134,10 +143,9 @@ export async function mountAgentcoreService(
           `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
       );
     }
-    // The SAME rule mountSessionControl applies, through the same function: its check ran against an empty base at
-    // boot, so it has to run again once the channels are real.
-    for (const plane of withControl.mounts) assertNoControlPlaneCollision(lazy.channels, plane);
-    return { ours: lazy.ours, routes: lazy.channels, mounts: withControl.mounts };
+    // CHANNELS ONLY — nothing of ours rides the public relay. `lazy.ours` (here just `GET /health`) is dropped
+    // with the control plane, for the same reason: what arrives through that URL is anonymous.
+    return { routes: lazy.channels };
   };
 
   const adapterRoutes = mountAgentcore({
@@ -147,7 +155,7 @@ export async function mountAgentcoreService(
     onStateReady: options.onStateReady,
     channels: lazyChannels,
   });
-  const handler = router(adapterRoutes, {}, withControl.mounts);
+  const handler = router(adapterRoutes, {});
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   return {
@@ -161,9 +169,9 @@ export async function mountAgentcoreService(
     channels: { routes: [], longConnections: [] },
     // The adapter's own two paths are the whole surface here; the channels arrive lazily behind them.
     ours: Object.keys(adapterRoutes),
+    // No `controlPrefix`: it is not served here, so nothing may report a prefix a caller could dial.
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
-    ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
     async close() {
       scheduled.stop();
     },

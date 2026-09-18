@@ -6,7 +6,7 @@ import type { Agent } from "../agent.ts";
 import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
-import { type PrefixMount, router } from "../channels/serve.ts";
+import { router } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
@@ -17,17 +17,16 @@ import { secretEquals } from "./secret.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
 /**
- * What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control plane), so the adapter's
- * INNER dispatch is assembled exactly like a direct host's.
+ * What the lazy factory hands back: the CHANNELS' routes, and nothing else.
+ *
+ * Deliberately not "the whole inner surface". Every request that reaches this dispatcher arrived through the
+ * forwarder's public Function URL, which relays an arbitrary path verbatim and supplies the ingress secret itself
+ * — so an anonymous caller is indistinguishable from an IAM one here. A channel route survives that because it
+ * verifies the platform's signature inside itself; nothing fastagent serves does, which is why neither our own
+ * routes nor the control plane's mount may be assembled behind this.
  */
 export interface RouteSurface {
-  /**
-   * What fastagent itself answers on this surface. Optional, and absent means "none": this surface is reached only
-   * through the Runtime's forwarder, so the fail-safe default (nothing is browser-callable) is also the true one.
-   */
-  ours?: Routes;
   routes: Routes;
-  mounts?: readonly PrefixMount[];
 }
 
 export interface AgentcoreAdapterOptions {
@@ -79,7 +78,7 @@ function createActivation(deps: {
     Effect.cached(
       portJoin(async () => {
         const surface = await deps.channels();
-        return router(surface.ours ?? {}, surface.routes, surface.mounts);
+        return router({}, surface.routes);
       }).pipe(Effect.uninterruptible),
     ),
   );

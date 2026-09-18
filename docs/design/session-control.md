@@ -629,7 +629,12 @@ credential:
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`/control/*` appears only under `sessionControl: true`. `POST /invoke` is on by default on every
+`/control/*` appears only under `sessionControl: true`, and **not at all on AgentCore**: that host's only
+public ingress is the forwarder's Function URL (`AuthType: NONE`), which relays an arbitrary path
+verbatim and attaches the ingress secret itself — so every anonymous caller arrives as trusted ingress.
+A channel route survives that because it verifies its platform's signature inside itself; this plane
+has nothing to verify, so it is not assembled there (`channels/agentcore-service.ts`), and both `deploy
+agentcore` and the container's boot say so. `POST /invoke` is on by default on every
 serve — `http.invoke: false` is its off switch, for a public port whose channels' signature checks are
 meant to be the only way in. The startup and deploy warnings name what actually mounted, so turning
 either off removes it from them.

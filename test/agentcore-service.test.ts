@@ -6,6 +6,7 @@ import type { AgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
+import { log } from "../src/log.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -173,15 +174,49 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("mounts the control plane so a forwarder-relayed /control/* dispatches", async () => {
-    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", sessionControl: true }`);
+  it("does NOT serve /control/* here, whatever sessionControl says, and says so out loud", async () => {
+    // The hole this closes: the forwarder relays an arbitrary `rawPath` as a webhook envelope AND
+    // attaches the ingress secret itself, so an anonymous caller of the public Function URL arrives as
+    // trusted ingress. A channel route survives that (it verifies the platform's signature inside);
+    // `/control/*` does not, so mounting it here answered `GET /control/sessions` — and
+    // `DELETE /control/sessions/{id}` — to anyone holding the URL.
+    const dir = await agentDir(
+      { "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("channel") });` },
+      `{ model: "openai-codex/gpt-5.5", sessionControl: true }`,
+    );
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    process.env.FASTAGENT_INGRESS_SECRET = "s3cret";
     const service = await mountAgentcoreService(await open(dir));
     try {
-      expect(service.controlPrefix).toBe("/control");
-      const ok = await service.handler(new Request("http://h/control/sessions/s1"));
-      expect(ok.status).toBe(200);
-      expect(await ok.json()).toMatchObject({ status: "idle" });
+      expect(service.controlPrefix).toBeUndefined();
+      // …so the startup report has nothing of ours to warn about here either. The advice it would
+      // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
+      // host: the real ingress is the forwarder's Function URL.
+      expect(service.ours).not.toContain("POST /invoke");
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/sessionControl is ON but \/control\/\* is NOT served here/);
+
+      /** What the forwarder sends for ANY public request to the Function URL. */
+      const relay = (path: string, method = "GET") =>
+        service.handler(
+          new Request("http://h/invocations", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kind: "webhook", auth: "s3cret", method, path }),
+          }),
+        );
+      // The channel is reachable — that is what the relay is FOR.
+      const hook = (await (await relay("/hook", "POST")).json()) as { status: number };
+      expect(hook.status).toBe(200);
+      // The control plane is not, at any path under the prefix.
+      for (const path of ["/control/sessions", "/control/capabilities", "/control/sessions/s1"]) {
+        const relayed = (await (await relay(path)).json()) as { status: number; bodyB64: string };
+        expect({ path, status: relayed.status }).toEqual({ path, status: 404 });
+      }
+      // …and not on the outer surface either, which is what the Runtime itself dials.
+      expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
+      delete process.env.FASTAGENT_INGRESS_SECRET;
+      warn.mockRestore();
       await service.close();
     }
   });
@@ -190,6 +225,10 @@ describe("mountAgentcoreService", () => {
     const service = await mountAgentcoreService(await open(await agentDir()));
     try {
       expect(service.controlPrefix).toBeUndefined();
+      // …so the startup report has nothing of ours to warn about here either. The advice it would
+      // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
+      // host: the real ingress is the forwarder's Function URL.
+      expect(service.ours).not.toContain("POST /invoke");
       expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
       await service.close();

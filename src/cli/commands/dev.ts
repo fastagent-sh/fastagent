@@ -9,7 +9,7 @@ import { mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import type { ResolvedPlacement } from "../../paths.ts";
 import { failStartup } from "../fail.ts";
-import { assertTunnelBindable, cliMountOptions, resolveBindHost, serveService } from "../serve.ts";
+import { assertTunnelBindable, cliMountOptions, resolveBindHost, serveService, withRunOverrides } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 /**
@@ -33,6 +33,8 @@ export interface DevOptions {
   /** false ⇔ `--no-watch`. */
   watch?: boolean;
   tunnel?: boolean;
+  /** false ⇔ `--no-invoke`: withhold `POST /invoke` for THIS run (`http.invoke` is the persistent form). */
+  invoke?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
 }
@@ -66,7 +68,7 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   const host = devBindHost(bindFlag, a.config.http?.host, tunnel);
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
   // connections.
-  const service = await mountAgentService(a, cliMountOptions(logAgentLoop)).catch(failStartup);
+  const service = await mountAgentService(withRunOverrides(a, opts), cliMountOptions(logAgentLoop)).catch(failStartup);
   serveService(
     service,
     { port: portFlag ?? a.config.http?.port ?? 8787, host },

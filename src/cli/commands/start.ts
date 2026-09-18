@@ -20,7 +20,15 @@ import { mountAgentcoreService, deferAgentcoreService } from "../../channels/age
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup } from "../fail.ts";
-import { announceControl, bindLine, cliMountOptions, resolveBindHost, serveService, serve } from "../serve.ts";
+import {
+  announceControl,
+  bindLine,
+  cliMountOptions,
+  resolveBindHost,
+  serveService,
+  serve,
+  withRunOverrides,
+} from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -28,6 +36,8 @@ export interface StartOptions {
   bind?: string;
   model?: string;
   tunnel?: boolean;
+  /** false ⇔ `--no-invoke`: withhold `POST /invoke` for THIS run (`http.invoke` is the persistent form). */
+  invoke?: boolean;
   input?: boolean;
 }
 
@@ -189,10 +199,11 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   }
   const traced = logAgentLoop(agent);
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  const mountable = withRunOverrides(opened, opts);
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
+    ? mountAgentcoreService(mountable, { wrapAgent: () => traced, onStateReady })
     : mountAgentService(
-        opened,
+        mountable,
         cliMountOptions(() => traced),
       ));
   return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };

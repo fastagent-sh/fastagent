@@ -199,7 +199,7 @@ function createAgentService(
   agentDir: string;
   workspace: string;
   channels: { routes: string[]; longConnections: string[] };
-  browserRoutes: readonly string[];       // the route keys fastagent itself serves here
+  ours: readonly string[];                // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
                                           // took over or `http.invoke: false` withheld
   schedules: readonly LoadedSchedule[];

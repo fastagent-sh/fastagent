@@ -237,7 +237,7 @@ export function router(
       if (cors === undefined) return out;
       out.headers.set("access-control-allow-origin", cors);
       // Echoed for the same reason the methods are: what a caller needs is not ours to enumerate. A gateway in front
-      // of this port demands its own header (`connectSessionControl({ headers })` is how a client sends one), and a
+      // of this port demands its own header (`connectSessionControl({ fetchFn })` is how a client sends one), and a
       // fixed list turns that preflight into a 204 the browser then refuses to act on. The default names the two a
       // client of ours always needs, for a preflight that asked about nothing.
       out.headers.set(

@@ -112,9 +112,13 @@ export async function routesFor(
   if (collisions.length > 0) {
     throw new Error(`${collisions.length} channel route collision(s) — two channels cannot serve one route`);
   }
-  /** Does a channel already serve this path (for the method the built-in would answer)? */
-  const covered = (path: string, method: string): boolean =>
-    Object.keys(routes).some((key) => {
+  /**
+   * Which channel key already serves this path for the method a built-in would answer — the CHANNEL's spelling, not
+   * ours. A channel may write the method-less `"/invoke"`, and an error naming `"POST /invoke"` sends its author
+   * grepping their own file for a string that is not in it.
+   */
+  const covered = (path: string, method: string): string | undefined =>
+    Object.keys(routes).find((key) => {
       const entry = parseRouteKey(key);
       return entry.path === path && (entry.method === undefined || entry.method === method);
     });
@@ -127,11 +131,15 @@ export async function routesFor(
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.
-  const taken = Object.keys(ours).filter((key) => covered(parseRouteKey(key).path, parseRouteKey(key).method ?? ""));
+  const taken = Object.keys(ours).flatMap((key) => {
+    const entry = parseRouteKey(key);
+    const channelKey = covered(entry.path, entry.method ?? "");
+    return channelKey === undefined ? [] : [{ channelKey, key }];
+  });
   if (taken.length > 0) {
     throw new Error(
-      `channel route(s) ${taken.map((key) => `"${key}"`).join(", ")} take a path this serve answers on itself — ` +
-        `rename the channel route`,
+      `channel route(s) ${taken.map((t) => `"${t.channelKey}"`).join(", ")} take a path this serve answers on ` +
+        `itself (${taken.map((t) => `"${t.key}"`).join(", ")}) — rename the channel route`,
     );
   }
   return {

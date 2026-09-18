@@ -3,7 +3,7 @@ import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
-import type { AgentService, MountAgentServiceOptions } from "../service.ts";
+import type { AgentService, MountableAgent, MountAgentServiceOptions } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -39,6 +39,17 @@ export function resolveBindHost(
   const host = bindFlag ?? (configured === undefined ? fallback : bindAddress(configured));
   assertTunnelBindable(host, tunnel, bindFlag ? "flag" : "config");
   return host;
+}
+
+/**
+ * Apply the flags that override what the definition said, for THIS run only.
+ *
+ * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
+ * will not. The rule is `--bind` over `http.host`'s: a config value travels into a deployed image, so "do not
+ * publish a turn endpoint on this tunnel" has to be sayable without editing the definition.
+ */
+export function withRunOverrides<T extends MountableAgent>(opened: T, opts: { invoke?: boolean }): T {
+  return opts.invoke === false ? { ...opened, serveInvoke: false } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -93,7 +104,7 @@ export function bindLine(host: string | undefined, boundPort: number): string {
 /**
  * The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies.
  *
- * `servesInvoke` is `AgentService.browserRoutes`, never a guess from the route table: `http.invoke: false` leaves no
+ * `servesInvoke` is `AgentService.ours`, never a guess from the route table: `http.invoke: false` leaves no
  * `/invoke` to curl, and a channel may serve that path with a protocol of its own — both would turn this line into
  * a copyable request that fails.
  */
@@ -117,7 +128,7 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * does not matter (a loopback `dev`), so the warnings fire at a REACH the operator did not get by default: a bind
  * off this machine, and `--tunnel`'s public URL.
  *
- * WHAT IS EXPOSED is read off `AgentService.browserRoutes`, never assumed and never guessed from the route table.
+ * WHAT IS EXPOSED is read off `AgentService.ours`, never assumed and never guessed from the route table.
  * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,
  * `http.invoke: false` withholds it, and a channel may serve that path itself — in which case the caller it is
  * open to is the platform that signs its requests, not anyone at all. A warning naming an endpoint this process
@@ -130,7 +141,7 @@ export function announceControl(
 ): void {
   const { controlPrefix } = service;
   if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
-  // What an unauthenticated caller of this port can do, worst first. From `browserRoutes`, so a channel that serves
+  // What an unauthenticated caller of this port can do, worst first. From `ours`, so a channel that serves
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = [
     ...(service.ours.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),

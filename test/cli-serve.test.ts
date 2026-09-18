@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { announceControl, reportServing } from "../src/cli/serve.ts";
+import { announceControl, reportServing, withRunOverrides } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
-import { mountSessionControl, routesFor } from "../src/service.ts";
+import { type MountableAgent, mountSessionControl, routesFor } from "../src/service.ts";
 import { log } from "../src/log.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
@@ -47,7 +47,19 @@ describe("serving surface", () => {
       `export default () => ({ "POST /invoke": () => new Response("mine") });\n`,
     );
     await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {})).rejects.toThrow(
-      /channel route\(s\) "POST \/invoke" take a path this serve answers on itself/,
+      /channel route\(s\) "POST \/invoke" take a path this serve answers on itself \("POST \/invoke"\)/,
+    );
+
+    // The message names the CHANNEL's spelling. A channel may write the method-less "/invoke", and an
+    // error naming "POST /invoke" sends its author grepping their own file for a string not in it.
+    const anyMethod = await mkdtemp(join(tmpdir(), "fa-invoke-anymethod-"));
+    await mkdir(join(anyMethod, "channels"));
+    await writeFile(
+      join(anyMethod, "channels", "any.mjs"),
+      `export default () => ({ "/invoke": () => new Response("mine") });\n`,
+    );
+    await expect(routesFor(anyMethod, {} as Agent, join(anyMethod, ".state"), undefined, {})).rejects.toThrow(
+      /channel route\(s\) "\/invoke" take a path this serve answers on itself \("POST \/invoke"\)/,
     );
     // …but ONLY where this serve actually answers there: AgentCore serves the Runtime's `/invocations`
     // contract instead, so the same channel is legal on that posture and the refusal would be a lie.
@@ -173,6 +185,21 @@ describe("cli: the assembled serving surface", () => {
   const withInvoke = (controlPrefix: string | undefined) => ({
     ...(controlPrefix ? { controlPrefix } : {}),
     ours: ["POST /invoke", "GET /health"],
+  });
+
+  it("--no-invoke withholds the data plane for ONE run, without touching the definition", async () => {
+    // `http.invoke: false` is the persistent form and travels into a deployed image. The case this
+    // flag exists for is `dev --tunnel`: the standard way to register a chat channel's webhook, which
+    // publishes the port at a public quick-tunnel URL — and would publish an anonymous, fully-tooled
+    // `POST /invoke` alongside it. Same relationship `--bind` has to `http.host`.
+    const opened = { serveInvoke: undefined, agentDir: "/x" } as unknown as MountableAgent;
+    expect(withRunOverrides(opened, {})).toBe(opened); // no flag, nothing added
+    expect(withRunOverrides(opened, { invoke: false }).serveInvoke).toBe(false);
+    // Only `false` overrides: an absent flag must not turn into "serve it", which would beat a
+    // definition that said `http.invoke: false`.
+    const configuredOff = { ...opened, serveInvoke: false } as MountableAgent;
+    expect(withRunOverrides(configuredOff, {}).serveInvoke).toBe(false);
+    expect(withRunOverrides(configuredOff, { invoke: true }).serveInvoke).toBe(false);
   });
 
   it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {

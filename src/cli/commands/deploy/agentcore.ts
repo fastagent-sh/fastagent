@@ -45,6 +45,16 @@ export const agentcoreHost: HostDeploy = {
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }
+    // Host capability limit, stated before the image is built rather than left to a line in CloudWatch.
+    if (config.sessionControl === true) {
+      console.error(
+        `[fastagent] warn: sessionControl: true has no effect on AgentCore — /control/* is not served here. This ` +
+          `host's only public ingress relays anonymous traffic to the container as trusted (the forwarder holds the ` +
+          `ingress secret and attaches it), so the plane would answer "delete this session" to anyone with the ` +
+          `Function URL. Steer sessions from a host that serves the plane behind your own auth ` +
+          `(docs/design/session-control.md §14).`,
+      );
+    }
     // selfSchedule is fully supported: pending wake-ups are mirrored into one-shot EventBridge schedules via the
     // forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts).
     const loaded = await loadSchedules(agentDir).catch(failStartup);
