@@ -180,6 +180,11 @@ describe("mountAgentcoreService", () => {
     // trusted ingress. A channel route survives that (it verifies the platform's signature inside);
     // `/control/*` does not, so mounting it here answered `GET /control/sessions` — and
     // `DELETE /control/sessions/{id}` — to anyone holding the URL.
+    //
+    // Scoping the PUBLIC door is the fix; it is not a claim that the two callers cannot be told apart.
+    // `InvokeAgentRuntime` is IAM-gated and the forwarder emits only four kinds, which is how
+    // `kind: "invoke"` runs a turn here with no secret — see agentcore-service.ts for why the plane
+    // does not get the same treatment (nobody asks, and a buffered envelope cannot carry its SSE).
     const dir = await agentDir(
       { "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("channel") });` },
       `{ model: "openai-codex/gpt-5.5", sessionControl: true }`,

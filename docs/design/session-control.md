@@ -629,12 +629,24 @@ credential:
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`/control/*` appears only under `sessionControl: true`, and **not at all on AgentCore**: that host's only
-public ingress is the forwarder's Function URL (`AuthType: NONE`), which relays an arbitrary path
-verbatim and attaches the ingress secret itself — so every anonymous caller arrives as trusted ingress.
-A channel route survives that because it verifies its platform's signature inside itself; this plane
-has nothing to verify, so it is not assembled there (`channels/agentcore-service.ts`), and both `deploy
-agentcore` and the container's boot say so. `POST /invoke` is on by default on every
+`/control/*` appears only under `sessionControl: true`, and **not at all on AgentCore**. That host has
+two doors, and this plane fits neither:
+
+- The forwarder's Function URL is `AuthType: NONE` — it has to be, since a platform's webhook cannot
+  sign with SigV4 — and it relays an arbitrary path verbatim while attaching the ingress secret
+  itself, so every anonymous caller arrives as trusted ingress. A channel route survives that because
+  it verifies its platform's signature inside itself; this plane has nothing to verify. So the relay
+  reaches the channels' routes only.
+- The Runtime's own `InvokeAgentRuntime` is IAM-gated, and the forwarder emits only four envelope
+  kinds (`webhook`, `schedule-fire`, `wake-poke`, `probe`), so a kind it never sends can only come
+  from a direct IAM call. That is how `kind: "invoke"` runs a turn here with no ingress secret, and a
+  `kind: "control"` on the same footing is the recipe if this is ever wanted.
+
+It is not wanted yet: `connectSessionControl` has no caller in this repo, and that envelope is
+request/response with a buffered body, so `GET /control/sessions/{id}/events` — the one route a GUI
+renders from — could not ride it. Half a plane, for nobody, on a third transport. Both `deploy
+agentcore` and the container's boot say `sessionControl: true` is inert here rather than dropping it
+quietly. `POST /invoke` is on by default on every
 serve — `http.invoke: false` is its off switch, for a public port whose channels' signature checks are
 meant to be the only way in. The startup and deploy warnings name what actually mounted, so turning
 either off removes it from them.

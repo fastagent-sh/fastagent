@@ -50,9 +50,8 @@ export const agentcoreHost: HostDeploy = {
       console.error(
         `[fastagent] warn: sessionControl: true has no effect on AgentCore — /control/* is not served here. This ` +
           `host's only public ingress relays anonymous traffic to the container as trusted (the forwarder holds the ` +
-          `ingress secret and attaches it), so the plane would answer "delete this session" to anyone with the ` +
-          `Function URL. Steer sessions from a host that serves the plane behind your own auth ` +
-          `(docs/design/session-control.md §14).`,
+          `ingress secret and attaches it), and the plane has nothing of its own to verify. Steer sessions from a ` +
+          `host that serves it behind your own auth (docs/design/session-control.md §14).`,
       );
     }
     // selfSchedule is fully supported: pending wake-ups are mirrored into one-shot EventBridge schedules via the

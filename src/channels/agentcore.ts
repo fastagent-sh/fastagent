@@ -20,10 +20,14 @@ import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.t
  * What the lazy factory hands back: the CHANNELS' routes, and nothing else.
  *
  * Deliberately not "the whole inner surface". Every request that reaches this dispatcher arrived through the
- * forwarder's public Function URL, which relays an arbitrary path verbatim and supplies the ingress secret itself
- * — so an anonymous caller is indistinguishable from an IAM one here. A channel route survives that because it
- * verifies the platform's signature inside itself; nothing fastagent serves does, which is why neither our own
- * routes nor the control plane's mount may be assembled behind this.
+ * forwarder's public Function URL, which relays an arbitrary path verbatim and supplies the ingress secret itself —
+ * so behind THIS door an anonymous caller and an IAM one are the same thing. A channel route survives that because
+ * it verifies the platform's signature inside itself; nothing fastagent serves does.
+ *
+ * The other door is the Runtime's own, IAM-gated: the forwarder emits only `webhook`, `schedule-fire`, `wake-poke`
+ * and `probe`, so any other KIND can only come from a direct `InvokeAgentRuntime` call. That is what lets
+ * `kind: "invoke"` run a turn here with no ingress secret, and it is where anything else that needs a real caller
+ * identity belongs.
  */
 export interface RouteSurface {
   routes: Routes;

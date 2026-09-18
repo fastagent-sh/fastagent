@@ -118,15 +118,21 @@ export async function mountAgentcoreService(
   // inside it; `/control/*` has no such check, and mounting it here made `GET /control/sessions` and
   // `DELETE /control/sessions/{id}` answerable from the public URL with no credential at all.
   //
-  // Not fixable by teaching the forwarder about the prefix (that hard-codes our path convention into a third
-  // place), nor by the ingress secret (the forwarder holds it). It needs an envelope kind the forwarder never
-  // sends — a protocol change, not a patch. Until then the plane is not served here, said out loud rather than
-  // quietly dropped.
+  // It is NOT that the two callers cannot be told apart. AWS already separates them and we already use that:
+  // `InvokeAgentRuntime` is IAM-gated, the forwarder builds its own envelopes and emits exactly four kinds, so a
+  // kind it never sends can only have come from a direct IAM call — which is how `kind: "invoke"` runs a turn here
+  // without the ingress secret. Adding `kind: "control"` on the same footing is small, and is the recipe if this is
+  // ever wanted.
+  //
+  // It is not built because nothing asks for it: `connectSessionControl` has no caller in this repo, and the
+  // envelope is request/response with a buffered body (see the webhook reply), so the one route a GUI actually
+  // renders from — the long-lived `GET /control/sessions/{id}/events` stream — could not ride it anyway. Half a
+  // control plane, for nobody, on a third transport.
   if (opened.publishControl) {
     log.warn(
       "[fastagent] agentcore: sessionControl is ON but /control/* is NOT served here — this host's only public " +
-        "ingress relays anonymous traffic as trusted, so the plane would answer `delete this session` to anyone " +
-        "with the URL (docs/design/session-control.md §14)",
+        "ingress relays anonymous traffic as trusted, so the plane is not assembled behind it " +
+        "(docs/design/session-control.md §14)",
     );
   }
 
