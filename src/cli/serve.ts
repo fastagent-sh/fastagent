@@ -76,7 +76,9 @@ export function serveService(
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
-  for (const line of readyAddressLines(host, boundPort)) log.info(line);
+  for (const line of readyAddressLines(host, boundPort, service.browserRoutes.includes("POST /invoke"))) {
+    log.info(line);
+  }
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
@@ -88,12 +90,22 @@ export function bindLine(host: string | undefined, boundPort: number): string {
   return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
 }
 
-/** The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies. */
-export function readyAddressLines(host: string | undefined, boundPort: number): string[] {
+/**
+ * The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies.
+ *
+ * `servesInvoke` is `AgentService.browserRoutes`, never a guess from the route table: `http.invoke: false` leaves no
+ * `/invoke` to curl, and a channel may serve that path with a protocol of its own — both would turn this line into
+ * a copyable request that fails.
+ */
+export function readyAddressLines(host: string | undefined, boundPort: number, servesInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   return [
     bindLine(host, boundPort),
-    `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
+    ...(servesInvoke
+      ? [
+          `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
+        ]
+      : []),
   ];
 }
 
@@ -105,20 +117,23 @@ export function readyAddressLines(host: string | undefined, boundPort: number): 
  * does not matter (a loopback `dev`), so the warnings fire at a REACH the operator did not get by default: a bind
  * off this machine, and `--tunnel`'s public URL.
  *
- * WHAT IS EXPOSED is read off the surface that actually mounted, never assumed. `POST /invoke` is on most serves
- * but not all: AgentCore answers the Runtime's `/invocations` behind IAM, and `http.invoke: false` withholds it. A
- * warning naming an endpoint this process does not serve is how an operator learns to skim past all of them — the
- * same reason `preflightDeploy` takes `publicUrl`.
+ * WHAT IS EXPOSED is read off `AgentService.browserRoutes`, never assumed and never guessed from the route table.
+ * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,
+ * `http.invoke: false` withholds it, and a channel may serve that path itself — in which case the caller it is
+ * open to is the platform that signs its requests, not anyone at all. A warning naming an endpoint this process
+ * does not serve is how an operator learns to skim past all of them — the same reason `preflightDeploy` takes
+ * `publicUrl`.
  */
 export function announceControl(
-  service: Pick<AgentService, "controlPrefix" | "routes">,
+  service: Pick<AgentService, "controlPrefix" | "browserRoutes">,
   bind: { host?: string; tunnel: boolean },
 ): void {
   const { controlPrefix } = service;
   if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
-  // What an unauthenticated caller of this port can do, worst first.
+  // What an unauthenticated caller of this port can do, worst first. From `browserRoutes`, so a channel that serves
+  // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = [
-    ...("POST /invoke" in service.routes ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(service.browserRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
     ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
   ];
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)

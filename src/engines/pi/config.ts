@@ -12,6 +12,7 @@ import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
 import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
+import { assertCorsOrigins } from "../../channels/serve.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
@@ -182,29 +183,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
     throw new Error(`${path}: "http.invoke" must be a boolean`);
   }
-  if (c.http?.cors !== undefined) {
-    if (!Array.isArray(c.http.cors) || c.http.cors.some((o) => typeof o !== "string" || o === "")) {
-      throw new Error(`${path}: "http.cors" must be an array of origin strings (e.g. ["https://app.example.com"])`);
-    }
-    // An ORIGIN, not a URL with a path: `new URL(...).origin` is what a browser sends, and a trailing path would
-    // never match it — a rule that silently matches nothing is worse than one that refuses to load.
-    for (const origin of c.http.cors) {
-      if (origin === "*") continue;
-      let parsed: URL;
-      try {
-        parsed = new URL(origin);
-      } catch {
-        throw new Error(
-          `${path}: "http.cors" entry ${JSON.stringify(origin)} is not an origin ("https://host[:port]")`,
-        );
-      }
-      if (parsed.origin !== origin) {
-        throw new Error(
-          `${path}: "http.cors" entry ${JSON.stringify(origin)} is not the origin a browser sends — use ${JSON.stringify(parsed.origin)}`,
-        );
-      }
-    }
-  }
+  if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
     throw new Error(`${path}: "http.port" must be an integer 0-65535`);
   }

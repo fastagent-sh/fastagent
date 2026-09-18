@@ -12,6 +12,7 @@ import { getEventListeners } from "node:events";
 import { log } from "../src/log.ts";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentService } from "../src/engines/pi/service.ts";
+import { mountAgentService } from "../src/service.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
 async function agentDir(
@@ -61,9 +62,25 @@ describe("createAgentService", () => {
       expect(await (await service.handler(new Request("http://h/invoke", { method: "POST" }))).text()).toBe(
         "the channel's",
       );
+      // …and the startup report knows it is not ours. `routes` says `/invoke` answers; only
+      // `browserRoutes` says whether WE answer there, which is what the try-it curl and the
+      // "unauthenticated data plane" warning both need.
+      expect(service.browserRoutes).not.toContain("POST /invoke");
+      expect(service.browserRoutes).toContain("GET /health");
     } finally {
       await service.close();
     }
+  });
+
+  it("refuses an embedder's unusable cors origin, like the config file's", async () => {
+    // `allowedOrigin` compares exact strings, so one trailing slash is a rule that matches nothing —
+    // the front end gets 403 and nothing points at the list. `loadConfig` already refused this; the
+    // MountableAgent path is the other way in and had no check at all.
+    const dir = await agentDir();
+    const opened = await createPiAgentFromDir(dir, { serving: true });
+    await expect(mountAgentService({ ...opened, corsOrigins: ["https://app.example.com/"] })).rejects.toThrow(
+      /mountAgentService: corsOrigins entry "https:\/\/app\.example\.com\/" is not the origin a browser sends/,
+    );
   });
 
   it("publishes the control plane at its prefix, unauthenticated", async () => {

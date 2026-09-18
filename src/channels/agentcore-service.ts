@@ -159,6 +159,8 @@ export async function mountAgentcoreService(
     workspace,
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
+    // None: this posture serves the Runtime's `/invocations` contract, not our own routes.
+    browserRoutes: [],
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

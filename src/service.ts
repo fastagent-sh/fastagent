@@ -8,7 +8,7 @@ import type { Agent } from "./agent.ts";
 import { createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
-import { parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
+import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
@@ -204,10 +204,17 @@ export interface AgentService {
   agentDir: string;
   workspace: string;
   /**
-   * What actually mounted, for a startup line: channel files serving routes, long connections, and whether the
-   * built-in `POST /invoke` fallback is one of the routes.
+   * What actually mounted, for a startup line: channel files serving routes, and long connections.
    */
   channels: { routes: string[]; longConnections: string[] };
+  /**
+   * The route keys fastagent itself serves here — `POST /invoke` and `GET /health`, minus whatever a channel took
+   * over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
+   * `routes` instead answers a different question, since a channel may serve one of those paths with a protocol of
+   * its own. That mistake ran in both directions here — a try-it curl for a route that 404s, and a warning about an
+   * unauthenticated `/invoke` that was really a signature-checked channel.
+   */
+  browserRoutes: readonly string[];
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
@@ -279,6 +286,9 @@ export async function mountAgentService(
   // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
+  // The embedder's way in, checked like the config file's (`http.cors`): `allowedOrigin` compares exact strings, so
+  // a stray trailing slash would refuse the front end with nothing naming the rule.
+  if (opened.corsOrigins) assertCorsOrigins(opened.corsOrigins, "mountAgentService: corsOrigins");
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
     ...(opened.serveInvoke !== undefined ? { builtinInvoke: opened.serveInvoke } : {}),
@@ -431,6 +441,7 @@ export async function mountAgentService(
             routes: routed.routeChannels,
             longConnections: names,
           },
+          browserRoutes: routed.browserRoutes,
           schedules: scheduled.schedules,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

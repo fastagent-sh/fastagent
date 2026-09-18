@@ -106,6 +106,36 @@ function allowedOrigin(origin: string, allow: readonly string[], self: string): 
   }
 }
 
+/**
+ * Refuse a cross-origin allow-list that cannot match anything.
+ *
+ * ONE check for BOTH ways in: `http.cors` in a config file, and `corsOrigins` handed to `mountAgentService` by an
+ * embedder. `allowedOrigin` compares exact strings, so `"https://app.example.com/"` — one trailing slash — never
+ * matches and the front end is refused with nothing pointing at the rule. A rule that silently matches nothing is
+ * worse than one that refuses to load.
+ */
+export function assertCorsOrigins(origins: unknown, where: string): asserts origins is string[] {
+  if (!Array.isArray(origins) || origins.some((o) => typeof o !== "string" || o === "")) {
+    throw new Error(`${where} must be an array of origin strings (e.g. ["https://app.example.com"])`);
+  }
+  for (const origin of origins as string[]) {
+    if (origin === "*") continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      // `new URL` throwing IS the answer here ("not a URL at all"); rethrown as the rule that cannot load.
+      throw new Error(`${where} entry ${JSON.stringify(origin)} is not an origin ("https://host[:port]")`);
+    }
+    // An ORIGIN, not a URL with a path: `new URL(...).origin` is what a browser sends.
+    if (parsed.origin !== origin) {
+      throw new Error(
+        `${where} entry ${JSON.stringify(origin)} is not the origin a browser sends — use ${JSON.stringify(parsed.origin)}`,
+      );
+    }
+  }
+}
+
 export interface RouterOptions {
   /**
    * Route KEYS fastagent owns, which are therefore browser-callable: they answer CORS preflights and carry CORS

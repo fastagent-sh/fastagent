@@ -139,6 +139,7 @@ describe("cli: the serving report", () => {
         {
           routes: { "POST /telegram": () => new Response("x") },
           channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
+          browserRoutes: ["POST /invoke", "GET /health"],
         } as never,
         "127.0.0.1",
         8787,
@@ -168,7 +169,7 @@ describe("cli: the assembled serving surface", () => {
   /** A serve that mounts the data plane — what most postures look like. */
   const withInvoke = (controlPrefix: string | undefined) => ({
     ...(controlPrefix ? { controlPrefix } : {}),
-    routes: { "POST /invoke": () => new Response("x") },
+    browserRoutes: ["POST /invoke", "GET /health"],
   });
 
   it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {
@@ -199,17 +200,15 @@ describe("cli: the assembled serving surface", () => {
       expect(withoutPlane).toContain("POST /invoke");
       expect(withoutPlane).not.toContain("/control/*");
 
-      // …and it names only what THIS process serves. The AgentCore posture answers the Runtime's
-      // /invocations behind IAM and mounts no /invoke; `http.invoke: false` withholds it too. A
-      // warning about an endpoint that is not there teaches the operator to skim past all of them.
+      // …and it names only what THIS process serves, from `browserRoutes`. The AgentCore posture
+      // answers the Runtime's /invocations behind IAM and mounts no /invoke; `http.invoke: false`
+      // withholds it; a channel serving that path answers for itself, behind its own signature
+      // check. A warning about an endpoint that is not ours teaches the operator to skim past all.
       warn.mockClear();
-      announceControl({ routes: { "POST /invocations": () => new Response("x") } }, { tunnel: true });
+      announceControl({ browserRoutes: [] }, { tunnel: true });
       expect(warn).not.toHaveBeenCalled();
       // With the control plane still published, the warning stands — naming only that.
-      announceControl(
-        { controlPrefix: "/control", routes: { "POST /invocations": () => new Response("x") } },
-        { tunnel: true },
-      );
+      announceControl({ controlPrefix: "/control", browserRoutes: [] }, { tunnel: true });
       const controlOnly = warn.mock.calls.flat().join(" ");
       expect(controlOnly).toContain("/control/* (read, steer, delete any session) answers");
       expect(controlOnly).not.toContain("POST /invoke");
@@ -302,25 +301,27 @@ describe("cli: bind address policy", () => {
     // Only the first was updated when --bind landed, so `--bind 192.168.1.5` printed a curl to
     // localhost — the very address that bind stops answering. They come from one function now; this
     // pins the property that made splitting them a bug.
-    const { readyAddressLines } = await import("../src/cli/serve.ts");
+    const { readyAddressLines, bindLine } = await import("../src/cli/serve.ts");
     const { bindAddress } = await import("../src/bind.ts");
     // `localhost` is IN the list on purpose: it is the only accepted input that could put a NAME in
     // these lines, so leaving it out would make the `not.toContain("localhost")` below pass for the
     // reason that it was never tried. It cannot get here — `parseBind`/`http.host` resolve it to an
     // address first (bind.ts `bindAddress`) — and this is what says so.
     for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1", bindAddress("localhost")]) {
-      const [bindLine, tryLine] = readyAddressLines(host, 8899);
+      const [bound, tryLine] = readyAddressLines(host, 8899, true);
       const dial = tryLine!.match(/curl -s (\S+?)\/invoke/)![1]!;
       expect(dial, String(host)).toContain(":8899");
       expect(dial, String(host)).not.toContain("localhost"); // never a name the bind may not answer
       // A wildcard bind IS every interface, so the report says so rather than understating it as one
       // address — but the curl still has to dial something, and loopback is what a wildcard answers.
-      expect(bindLine, String(host)).toContain(
-        host === undefined || host === "0.0.0.0" ? ":8899 (all interfaces)" : dial,
-      );
+      expect(bound, String(host)).toContain(host === undefined || host === "0.0.0.0" ? ":8899 (all interfaces)" : dial);
       if (host === "::1") expect(dial).toBe("[::1]:8899"); // URL form, brackets and all
     }
-    // The data plane is always served, so the curl is always offered: bind line + try-it, nothing else.
-    expect(readyAddressLines("127.0.0.1", 1)).toHaveLength(2);
+    // Bind line + try-it, nothing else…
+    expect(readyAddressLines("127.0.0.1", 1, true)).toHaveLength(2);
+    // …and NO try-it when this serve has no `/invoke` of its own (`http.invoke: false`, or a channel
+    // holding that path with a protocol of its own). A copyable request that 404s, or that pushes the
+    // built-in body at a handler which does not accept it, is worse than no line.
+    expect(readyAddressLines("127.0.0.1", 1, false)).toEqual([bindLine("127.0.0.1", 1)]);
   });
 });
