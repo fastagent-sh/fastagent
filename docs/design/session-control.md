@@ -642,48 +642,48 @@ just the prefix — the warning used to be conditioned on `sessionControl`, so a
 Telegram published `POST /invoke` on a public URL and heard nothing. A deployment that needs
 per-principal policy — including per-principal `delete` — builds it in the facade below.
 
-**A browser is the one caller the framework does constrain.** The port being the boundary is a claim
-about the network, and a cross-origin request does not respect it: a page open in the developer's
-browser can reach `http://127.0.0.1:8787` however the serve is bound. With no authentication behind
-it, wildcard CORS would therefore turn every site the developer visits into a working client for the
-table above. Vite shipped that default and it became CVE-2025-24010, over source code rather than tool
-authority.
+**Two mechanisms keep a web page out.** The port being the boundary is a claim about the network, and
+a cross-origin request does not respect it: a page open in the developer's browser can reach
+`http://127.0.0.1:8787` however the serve is bound, and with no authentication behind it every
+endpoint in the table above is one HTTP request away.
 
-So `channels/serve.ts`'s router answers, for the paths fastagent OWNS only:
+**1. A body must declare itself JSON** (`channels/body.ts`). This is the one that actually stops a
+cross-origin write, and it is a protocol rule rather than a policy — no list, nothing to configure.
+A POST carrying `text/plain`, `multipart/form-data` or `application/x-www-form-urlencoded` is a CORS
+*simple request*: no preflight, sent regardless of what the server would have answered, so withholding
+the response headers only stops the page from READING a turn that has already run and been billed.
+Requiring `application/json` takes the request out of that class, so the browser must preflight it —
+and a preflight we do not answer is a request that is never sent. Asked of the ROUTE, never of "does
+this have a body": the control plane reads an empty body as `{}`, so a body-less POST would otherwise
+walk straight through. `DELETE`/`PATCH`/`PUT` are non-simple by method and were always preflighted;
+`GET` has no side effect and the browser blocks the read.
+
+**2. CORS headers for the origins we know** (`channels/serve.ts`), for the routes fastagent OWNS only:
 
 - **Loopback origins by default** — `localhost`, `127.0.0.0/8`, `[::1]`, any port — echoed back
-  exactly, never `*`, with `vary: origin`.
+  exactly, never `*`, with `vary: origin`. This is Ollama's default and Vite's post-CVE-2025-24010
+  default; a wildcard here would hand every site the developer visits a working client.
 - **`http.cors`** names additional exact origins for a real front end; `["*"]` restores the wildcard
   for a deployment that has decided the port is fronted.
 - **A channel's route is never tagged.** Its caller is a platform's server, and a webhook that answers
   cross-origin requests is one a page can drive.
-- **The serve's own host** is always allowed: a browser sends `Origin` on same-origin writes too, so a
-  web UI shipped from the deployment it talks to must not be refused by the rule aimed at third-party
-  pages. Compared by HOSTNAME, not by whole origin, and that is a deliberate loosening: a
-  TLS-terminating gateway — the posture this section recommends — rewrites both scheme and port, so an
-  exact-origin comparison would refuse it. The cost is that a page does choose its own scheme and
-  port, so the rebinding gap below gains a second route in (`http://x.evil.com` → `http://x.evil.com:8787`).
-  It gives nothing to an attacker who cannot make a hostname resolve here, which is every ordinary
-  cross-origin page.
-- **A disallowed page is REFUSED (403), not merely denied the reply.** Withholding the headers stops
-  the page from READING the answer, which is no protection at all for a write: a simple request
-  (`content-type: text/plain`, which nothing here rejects) skips the preflight, so the turn it asked
-  for would already have run and been billed. Only `DELETE`/`PATCH`/`PUT` were ever covered by the
-  weaker rule, and only because those force a preflight.
+- **An origin we do not know is simply not answered** — no headers, no refusal. Refusing would mean
+  policing same-origin writes too (a browser sends `Origin` on those), which costs a special case for
+  the serve's own host and buys nothing that mechanism 1 does not already cover.
 - **The router, not the handlers.** It is the only layer that can answer an `OPTIONS` preflight for a
   route registered under `POST` alone, and the only one that sees the 404/405 it writes itself — a
   reply a browser cannot read is an opaque network error instead of a diagnosable status.
 
-A non-browser client sends no `Origin` and none of this applies to it. `connectSessionControl` /
-`connectAgent` take `headers`, sent on every request including the streams, which is how a caller
-satisfies whatever is fronting the serve.
+A non-browser client sends no `Origin` and none of part 2 applies to it. `connectSessionControl` /
+`connectAgent` take `fetchFn`: wrap `fetch` there to add, refresh or sign whatever the thing in front
+of the serve demands.
 
-KNOWN GAP (and the hostname comparison above widens it slightly): DNS rebinding defeats an origin allowlist (the page rebinds its own hostname to 127.0.0.1
-and its requests become same-origin, carrying no `Origin` at all). The standard answer is to also
-require a loopback `Host` — which would break the two postures this design recommends, a same-host
-reverse proxy forwarding `Host: agent.example.com` and `--tunnel`, both of which legitimately send a
-foreign `Host` to a loopback bind. Closing it needs a host allowlist of its own; until then, a `dev`
-serve left running is worth treating as reachable by a determined attacker who controls DNS.
+KNOWN GAP: DNS rebinding defeats both mechanisms — the page rebinds its own hostname to 127.0.0.1, its
+requests become same-origin, and it can then send any content type. MCP's spec answers this by
+requiring `Host` validation alongside `Origin`; doing the same here needs a host allowlist of its own
+(`--tunnel` and a same-host reverse proxy both legitimately send a foreign `Host` to a loopback bind,
+so a fixed loopback-only rule would break the postures this section recommends). Until that exists, a
+`dev` serve left running is worth treating as reachable by an attacker who controls DNS.
 
 **The multi-tenant facade.** N users behind one deployment, each reaching only their own sessions: the
 facade authenticates its user, reads the session id out of the request, checks it against its OWN

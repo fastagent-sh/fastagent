@@ -76,7 +76,7 @@ export function serveService(
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
-  for (const line of readyAddressLines(host, boundPort, service.browserRoutes.includes("POST /invoke"))) {
+  for (const line of readyAddressLines(host, boundPort, service.ours.includes("POST /invoke"))) {
     log.info(line);
   }
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
@@ -125,7 +125,7 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * `publicUrl`.
  */
 export function announceControl(
-  service: Pick<AgentService, "controlPrefix" | "browserRoutes">,
+  service: Pick<AgentService, "controlPrefix" | "ours">,
   bind: { host?: string; tunnel: boolean },
 ): void {
   const { controlPrefix } = service;
@@ -133,7 +133,7 @@ export function announceControl(
   // What an unauthenticated caller of this port can do, worst first. From `browserRoutes`, so a channel that serves
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = [
-    ...(service.browserRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(service.ours.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
     ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
   ];
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)

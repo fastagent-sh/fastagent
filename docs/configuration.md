@@ -283,10 +283,11 @@ handler, or your host framework's middleware when you [embed](embedding.md) — 
 boundary lives. `POST /invoke` is served whatever channels a definition declares, so it is on every
 deployment; a channel may not take that path.
 
-A browser is the one caller fastagent constrains by default: only a page on the serving machine (a
-loopback `Origin`) gets CORS headers, so a site the developer merely visits cannot drive a local
-`dev`. Name a real front end's origin in `http.cors` to allow it — `["*"]` allows every site, which
-is a decision about a port you have already fronted.
+A browser is constrained on its own: our routes refuse a body that is not `application/json` (which
+forces a preflight), and only a page on the serving machine gets CORS headers to pass that preflight
+— so a site the developer merely visits cannot drive a local `dev`. Name a real front end's origin in
+`http.cors` to allow it; `["*"]` allows every site, which is a decision about a port you have already
+fronted.
 
 Two edges: `--tunnel` reaches the serve by dialing `localhost`, so a bind that name never resolves to
 (`--bind 192.168.1.5`, or even `--bind 127.0.0.2`) is refused with it; and `http.host` travels into a deployed image, where any non-wildcard bind

@@ -72,9 +72,9 @@ src/
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── serve.ts            # how a route table becomes a running server: literal-path dispatch, prefix mounts,
-│   │                       # WHO MAY CALL IT FROM A BROWSER (the one CORS decision: loopback origins by default,
-│   │                       # a foreign one refused outright), the totality boundary, the node:http binding
+│   ├── serve.ts            # how route tables become a running server: OURS vs the channels' (one table each, so
+│   │                       # ownership cannot drift), literal-path dispatch, prefix mounts, the one CORS decision
+│   │                       # (loopback origins by default), the totality boundary, the node:http binding
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │                           # host): channels discovered on trusted ingress, the whole definition opened
 │                           # on the first envelope, an external clock, no resident connections
@@ -91,7 +91,7 @@ src/
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), engine-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
 │   │                       # (the only way a CUSTOM channel's credentials can reach a deploy)
-│   ├── body.ts, respond.ts # channel-authoring kit (body cap, responses)
+│   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate, responses)
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop

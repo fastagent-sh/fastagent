@@ -4,7 +4,7 @@
  * and the body cap.
  */
 import type { Agent } from "../agent.ts";
-import { readBodyCapped } from "./body.ts";
+import { readBodyCapped, refuseNonJsonBody } from "./body.ts";
 import { text } from "./respond.ts";
 import { sseResponse } from "./sse.ts";
 
@@ -29,6 +29,9 @@ export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
 export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response> {
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
+    // Before the body is read: this is the gate that keeps a cross-origin page from running a turn (body.ts).
+    const wrongType = refuseNonJsonBody(req);
+    if (wrongType) return wrongType;
 
     const body = await readBodyCapped(req, MAX_BODY_BYTES);
     if ("tooLarge" in body) return text("body too large\n", 413);

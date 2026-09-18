@@ -62,17 +62,20 @@ function closeWithin(
 }
 
 export interface ServingSurface {
-  routes: Routes;
+  /**
+   * The routes fastagent itself serves — `POST /invoke` and `GET /health`, minus what a channel took over or
+   * `http.invoke: false` withheld. Kept APART from the channels' rather than merged with a list of which keys are
+   * ours: three separate decisions read this (browser reachability, the path a channel may not take, what the
+   * startup line calls unauthenticated), and while it was a derived list each of them could answer differently.
+   */
+  ours: Routes;
+  /** What the `channels/` files serve. Never browser-callable: their caller is a platform's server. */
+  channels: Routes;
   /** Prefix-owning handlers mounted beside the routes (the session control plane). */
   mounts?: readonly PrefixMount[];
   longConnections: LoadedLongConnectionChannel[];
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
-  /**
-   * The route KEYS fastagent itself serves here — what {@link router} may publish to a browser. A channel's route is
-   * deliberately absent: its caller is a platform's server (channels/serve.ts `RouterOptions`).
-   */
-  browserRoutes: string[];
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
@@ -119,20 +122,23 @@ export async function routesFor(
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
   // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
-  const builtin: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
-  if (options.builtinInvoke !== false) {
-    if (covered("/invoke", "POST")) {
-      throw new Error(
-        `a channel serves "POST /invoke" — this serve's own data plane answers there (rename the channel route)`,
-      );
-    }
-    builtin["POST /invoke"] = createInvokeHandler(agent);
+  const ours: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
+  if (options.builtinInvoke !== false) ours["POST /invoke"] = createInvokeHandler(agent);
+  // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
+  // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
+  // channel already serves it, because a probe is the deployment's to shape.
+  const taken = Object.keys(ours).filter((key) => covered(parseRouteKey(key).path, parseRouteKey(key).method ?? ""));
+  if (taken.length > 0) {
+    throw new Error(
+      `channel route(s) ${taken.map((key) => `"${key}"`).join(", ")} take a path this serve answers on itself — ` +
+        `rename the channel route`,
+    );
   }
   return {
-    routes: { ...builtin, ...routes },
+    ours,
+    channels: routes,
     longConnections,
     routeChannels,
-    browserRoutes: Object.keys(builtin),
     setReady(value: boolean) {
       ready = value;
     },
@@ -208,13 +214,13 @@ export interface AgentService {
    */
   channels: { routes: string[]; longConnections: string[] };
   /**
-   * The route keys fastagent itself serves here — `POST /invoke` and `GET /health`, minus whatever a channel took
+   * The route keys fastagent itself answers on here — `POST /invoke` and `GET /health`, minus what a channel took
    * over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
    * `routes` instead answers a different question, since a channel may serve one of those paths with a protocol of
    * its own. That mistake ran in both directions here — a try-it curl for a route that 404s, and a warning about an
    * unauthenticated `/invoke` that was really a signature-checked channel.
    */
-  browserRoutes: readonly string[];
+  ours: readonly string[];
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
@@ -293,7 +299,7 @@ export async function mountAgentService(
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
     ...(opened.serveInvoke !== undefined ? { builtinInvoke: opened.serveInvoke } : {}),
   });
-  const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined);
+  const withControl = mountSessionControl(routed.channels, opened.publishControl ? sessionControl : undefined);
   if (opened.corsOrigins?.includes("*")) {
     // Here rather than in the CLI's startup report, because an embedder sets this key too and the consequence is
     // theirs as well. It is exactly the posture a loopback bind is supposed to rule out: every route is
@@ -305,8 +311,7 @@ export async function mountAgentService(
     );
   }
   // Composed BEFORE anything starts.
-  const handler = router(withControl.routes, withControl.mounts, {
-    browserRoutes: routed.browserRoutes,
+  const handler = router(routed.ours, withControl.routes, withControl.mounts, {
     ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
   });
   return Effect.runPromise(
@@ -434,14 +439,14 @@ export async function mountAgentService(
         return {
           handler,
           agent,
-          routes: withControl.routes,
+          routes: { ...routed.ours, ...withControl.routes },
           agentDir,
           workspace,
           channels: {
             routes: routed.routeChannels,
             longConnections: names,
           },
-          browserRoutes: routed.browserRoutes,
+          ours: Object.keys(routed.ours),
           schedules: scheduled.schedules,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

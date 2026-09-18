@@ -43,8 +43,8 @@ describe("createAgentService", () => {
       expect(service.channels.routes).toEqual(["hook"]);
       // The DATA plane is there BESIDE the channel, not instead of it: `/invoke` is the framework's
       // interface, so whether a definition happens to declare a channel cannot decide if it exists.
-      // 400 rather than 404: the route is mounted and rejecting an empty body.
-      expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(400);
+      // 415 rather than 404: the route is mounted and refusing a body it was not told is JSON.
+      expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(415);
     } finally {
       await service.close();
     }
@@ -62,11 +62,11 @@ describe("createAgentService", () => {
       expect(await (await service.handler(new Request("http://h/invoke", { method: "POST" }))).text()).toBe(
         "the channel's",
       );
-      // …and the startup report knows it is not ours. `routes` says `/invoke` answers; only
-      // `browserRoutes` says whether WE answer there, which is what the try-it curl and the
-      // "unauthenticated data plane" warning both need.
-      expect(service.browserRoutes).not.toContain("POST /invoke");
-      expect(service.browserRoutes).toContain("GET /health");
+      // …and the startup report knows it is not ours. `routes` says `/invoke` answers; only `ours`
+      // says whether WE answer there, which is what the try-it curl and the "unauthenticated data
+      // plane" warning both need.
+      expect(service.ours).not.toContain("POST /invoke");
+      expect(service.ours).toContain("GET /health");
     } finally {
       await service.close();
     }

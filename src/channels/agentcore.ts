@@ -21,6 +21,11 @@ import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.t
  * INNER dispatch is assembled exactly like a direct host's.
  */
 export interface RouteSurface {
+  /**
+   * What fastagent itself answers on this surface. Optional, and absent means "none": this surface is reached only
+   * through the Runtime's forwarder, so the fail-safe default (nothing is browser-callable) is also the true one.
+   */
+  ours?: Routes;
   routes: Routes;
   mounts?: readonly PrefixMount[];
 }
@@ -74,7 +79,7 @@ function createActivation(deps: {
     Effect.cached(
       portJoin(async () => {
         const surface = await deps.channels();
-        return router(surface.routes, surface.mounts);
+        return router(surface.ours ?? {}, surface.routes, surface.mounts);
       }).pipe(Effect.uninterruptible),
     ),
   );

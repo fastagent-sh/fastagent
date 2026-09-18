@@ -180,21 +180,21 @@ export interface RemoteEndpointOptions {
    */
   url: string;
   /**
-   * Sent on every request this client makes, streams included — how a caller satisfies the thing fronting the serve
-   * (`{ authorization: "Bearer …" }` for an IdP proxy, a signed header for an API gateway). fastagent reads none of
-   * them; without this, the documented "put real auth in front of it" posture had no supported client at all.
+   * The transport seam. fastagent authenticates nothing, so whatever fronts the serve is what a caller has to
+   * satisfy: wrap `fetch` here to add a gateway credential, refresh it, sign the request, or pin a client
+   * certificate. A plain `headers` option was tried and removed — it covered only the static-token case that this
+   * already covers, and a deployment behind an IdP proxy needs the refresh it could not express. Tests inject a
+   * fake through the same seam.
    */
-  headers?: Record<string, string>;
-  /** Injectable for tests. */
   fetchFn?: typeof fetch;
 }
 
 export async function connectSessionControl(options: RemoteEndpointOptions): Promise<SessionControl> {
-  const { url, headers = {}, fetchFn = fetch } = options;
+  const { url, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
 
   const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
-    const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchFn(`${base}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw await controlError(res);
     return (await res.json()) as T;
   };
@@ -225,7 +225,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             body = await openStreamBody({
               fetchFn,
               url: `${base}/control/sessions/${encodeURIComponent(session)}/events`,
-              init: { headers },
+              init: {},
               abort,
               budget,
               what: "control events",
@@ -311,9 +311,11 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
    * not a transport failure), so a non-2xx here is a REAL transport fault.
    */
   const write = async (path: string, method: string, body?: unknown): Promise<SessionResult> => {
+    // Always declared, body or not: the plane refuses a write it was not told is JSON (channels/body.ts), and an
+    // empty `PATCH` is a legal no-op that still has to get through.
     const res = await fetchFn(`${base}${path}`, {
       method,
-      headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
+      headers: { "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
     });
@@ -394,7 +396,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
  * all become `failed` events.
  */
 export function connectAgent(options: RemoteEndpointOptions): Agent {
-  const { url, headers = {}, fetchFn = fetch } = options;
+  const { url, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
   const toFailed = (error: unknown): AgentEvent => {
     if (error instanceof ControlRequestError) {
@@ -437,7 +439,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
               url: `${base}/invoke`,
               init: {
                 method: "POST",
-                headers: { ...headers, "content-type": "application/json" },
+                headers: { "content-type": "application/json" },
                 body: JSON.stringify({
                   session: scope.session,
                   text: prompt.text,

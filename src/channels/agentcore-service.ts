@@ -136,8 +136,8 @@ export async function mountAgentcoreService(
     }
     // The SAME rule mountSessionControl applies, through the same function: its check ran against an empty base at
     // boot, so it has to run again once the channels are real.
-    for (const plane of withControl.mounts) assertNoControlPlaneCollision(lazy.routes, plane);
-    return { routes: lazy.routes, mounts: withControl.mounts };
+    for (const plane of withControl.mounts) assertNoControlPlaneCollision(lazy.channels, plane);
+    return { ours: lazy.ours, routes: lazy.channels, mounts: withControl.mounts };
   };
 
   const adapterRoutes = mountAgentcore({
@@ -147,7 +147,7 @@ export async function mountAgentcoreService(
     onStateReady: options.onStateReady,
     channels: lazyChannels,
   });
-  const handler = router(adapterRoutes, withControl.mounts);
+  const handler = router(adapterRoutes, {}, withControl.mounts);
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   return {
@@ -159,8 +159,8 @@ export async function mountAgentcoreService(
     workspace,
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
-    // None: this posture serves the Runtime's `/invocations` contract, not our own routes.
-    browserRoutes: [],
+    // The adapter's own two paths are the whole surface here; the channels arrive lazily behind them.
+    ours: Object.keys(adapterRoutes),
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

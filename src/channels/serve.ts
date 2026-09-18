@@ -83,27 +83,15 @@ function isLoopbackOrigin(origin: string): boolean {
  * `allow` is exact-match origins from `http.cors`; `"*"` in that list restores the wildcard for a deployment that
  * has decided the port is safely fronted.
  *
- * The SERVE'S OWN host is always allowed: a browser sends `Origin` on same-origin writes too, so a web UI shipped
- * from the deployment it talks to would otherwise be refused by the rule meant for third-party pages.
- *
- * HOSTNAME, not the whole origin, and that is a deliberate LOOSENING rather than an equivalence. A TLS-terminating
- * gateway is the posture §14 recommends, and it rewrites both the scheme (`https` outside, `http` to the container)
- * and the port, so `self.origin === origin` would refuse the very deployment shape being advised. What the
- * loosening costs: a page can choose its own scheme and port, so an attacker who already controls a hostname that
- * resolves here — i.e. the DNS-rebinding case §14 records as a known gap — gets a second way in, from
- * `http://x.evil.com` to `http://x.evil.com:8787`. It does not help an attacker who cannot control the hostname,
- * which is every ordinary cross-origin page, because the host is whatever the victim's browser dialled.
+ * A page that is not on the list is simply not ANSWERED — no headers, no refusal. That is the shape Ollama and
+ * Vite's post-CVE default both take, and it is safe here only because a route of ours refuses a body that is not
+ * `application/json` (channels/body.ts): without that, a cross-origin `text/plain` POST is a CORS simple request,
+ * sent with no preflight, and withholding the headers would stop the page from reading a turn that had already run.
  */
-function allowedOrigin(origin: string, allow: readonly string[], self: string): string | undefined {
+function allowedOrigin(origin: string, allow: readonly string[]): string | undefined {
   if (allow.includes("*")) return "*";
   if (allow.includes(origin)) return origin;
-  if (isLoopbackOrigin(origin)) return origin;
-  try {
-    return new URL(origin).hostname === self ? origin : undefined;
-  } catch {
-    // Not a URL (`null`, a bare hostname): no origin a browser could have produced, so nothing to allow.
-    return undefined;
-  }
+  return isLoopbackOrigin(origin) ? origin : undefined;
 }
 
 /**
@@ -137,21 +125,25 @@ export function assertCorsOrigins(origins: unknown, where: string): asserts orig
 }
 
 export interface RouterOptions {
-  /**
-   * Route KEYS fastagent owns, which are therefore browser-callable: they answer CORS preflights and carry CORS
-   * headers. A channel's route is never in here — its caller is a platform's server, and a webhook that answers
-   * cross-origin requests is one a page can drive. Keys, not paths: a channel may legally serve `GET /invoke`
-   * beside our `POST /invoke`, and by path alone that channel route would inherit both the headers and the 403.
-   * Mounted prefixes are always owned (the control plane is the only mount).
-   */
-  browserRoutes?: readonly string[];
   /** Extra origins beyond loopback, from `http.cors`. `["*"]` is the wildcard, and is a deployment's decision. */
   corsOrigins?: readonly string[];
 }
 
-/** Compose a {@link Routes} table and its {@link PrefixMount}s into one handler. */
+/**
+ * Compose the routes fastagent OWNS, the channels' routes, and the {@link PrefixMount}s into one handler.
+ *
+ * TWO TABLES, not one table plus a list of which keys are ours. Ownership decides three separate things — who may
+ * call a route from a browser, which path a channel may not take, and what the startup line calls an
+ * unauthenticated endpoint — and while it was a parallel array every one of those had its own chance to answer
+ * differently. It did: a channel serving `/invoke` was announced as our data plane, and the same fact was
+ * hand-written as `[]` in one place while being derived in another. Two tables cannot disagree with themselves.
+ *
+ * A channel's route is never ours: its caller is a platform's server, and a webhook that answers cross-origin
+ * requests is one a page can drive. Mounted prefixes always are (the control plane is the only mount).
+ */
 export function router(
-  routes: Routes,
+  ours: Routes,
+  channels: Routes,
   mounts: readonly PrefixMount[] = [],
   options: RouterOptions = {},
 ): ChannelHandler {
@@ -172,7 +164,8 @@ export function router(
   }
   const byKey = new Map<string, ChannelHandler>();
   const paths = new Set<string>();
-  for (const [key, handler] of Object.entries(routes)) {
+  const browserRoutes = new Set<string>();
+  for (const [key, handler] of [...Object.entries(ours), ...Object.entries(channels)]) {
     assertRouteKey(key, (problem) => `route "${key}" is not a valid route key — ${problem}`);
     const { path } = parseRouteKey(key);
     for (const mount of mounts) {
@@ -187,13 +180,14 @@ export function router(
     // Stored normalised: `parseRouteKey` upper-cases the method, so `"get /x"` validates under `GET` and would
     // otherwise be looked up under a name nothing stores.
     const { method } = parseRouteKey(key);
-    byKey.set(method ? `${method} ${path}` : path, handler);
+    const normalised = method ? `${method} ${path}` : path;
+    byKey.set(normalised, handler);
     paths.add(path);
+    if (key in ours) browserRoutes.add(normalised);
   }
 
-  const browserRoutes = new Set(options.browserRoutes ?? []);
   const corsOrigins = options.corsOrigins ?? [];
-  /** Ours to publish to a browser? Every mount is (the control plane), plus the routes the caller named. */
+  /** Ours to publish to a browser? Every mount is (the control plane), plus the routes we registered ourselves. */
   const ownedByUs = (method: string, path: string): boolean =>
     mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||
     browserRoutes.has(`${method} ${path}`) ||
@@ -203,8 +197,7 @@ export function router(
 
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
-    const self = new URL(req.url);
-    const path = self.pathname;
+    const path = new URL(req.url).pathname;
     const origin = req.headers.get("origin");
     // A preflight asks ABOUT a method; ownership is that method's, not `OPTIONS`'s (nothing registers OPTIONS).
     const asking =
@@ -217,13 +210,8 @@ export function router(
     const fromPage = origin !== null && owned;
     // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
     // that cannot read the 405 gets an opaque network error instead of the reason.
-    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins, self.hostname) : undefined;
+    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins) : undefined;
     const answer = (): Response | Promise<Response> => {
-      // REFUSED, not merely denied the reply. Withholding the headers only stops the page from READING the answer,
-      // and a simple request (`content-type: text/plain`, which neither invoke nor the control plane rejects) skips
-      // the preflight entirely — so the side effect it asked for, a turn with this agent's tools, would already have
-      // happened. Vite's fix for the same shape refuses too.
-      if (fromPage && cors === undefined) return text("forbidden origin\n", 403);
       // The preflight is the ROUTER's to answer: it names a method the route table does not register, so leaving it
       // to the routes below is a 405 with no CORS headers, which is a browser client that cannot call a route that
       // works.

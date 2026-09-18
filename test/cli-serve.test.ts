@@ -15,13 +15,13 @@ describe("serving surface", () => {
   it("can suppress the data plane for AgentCore's publicly forwarded surface", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-surface-"));
     const ordinary = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(ordinary.routes)).toContain("POST /invoke");
+    expect(Object.keys(ordinary.ours)).toContain("POST /invoke");
 
     // The ONE posture that opts out: AgentCore serves the Runtime's `/invocations` contract instead.
     const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
       builtinInvoke: false,
     });
-    expect(Object.keys(agentcore.routes)).toEqual(["GET /health"]);
+    expect(Object.keys(agentcore.ours)).toEqual(["GET /health"]);
   });
 
   it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
@@ -32,7 +32,10 @@ describe("serving surface", () => {
       `export default () => ({ "POST /hook": () => new Response("x") });\n`,
     );
     const beside = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(beside.routes).sort()).toEqual(["GET /health", "POST /hook", "POST /invoke"]);
+    // Two tables, never one table plus a list of which keys are ours: that list was a second answer
+    // to the same question, and the two answers drifted apart twice.
+    expect(Object.keys(beside.ours).sort()).toEqual(["GET /health", "POST /invoke"]);
+    expect(Object.keys(beside.channels)).toEqual(["POST /hook"]);
 
     // Reserved like /control/*: silently replacing the one route every client, every doc and the
     // startup line all name is worse than refusing to start. (A fresh dir: an ESM module already
@@ -44,14 +47,14 @@ describe("serving surface", () => {
       `export default () => ({ "POST /invoke": () => new Response("mine") });\n`,
     );
     await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {})).rejects.toThrow(
-      /this serve's own data plane answers there/,
+      /channel route\(s\) "POST \/invoke" take a path this serve answers on itself/,
     );
     // …but ONLY where this serve actually answers there: AgentCore serves the Runtime's `/invocations`
     // contract instead, so the same channel is legal on that posture and the refusal would be a lie.
     const onAgentcore = await routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {
       builtinInvoke: false,
     });
-    expect(await (await onAgentcore.routes["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe("mine");
+    expect(await (await onAgentcore.channels["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe("mine");
   });
 
   it("keeps health and the data plane for a long-connection channel", async () => {
@@ -62,10 +65,10 @@ describe("serving surface", () => {
       `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n`,
     );
     const surface = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(surface.routes).sort()).toEqual(["GET /health", "POST /invoke"]);
+    expect(Object.keys(surface.ours).sort()).toEqual(["GET /health", "POST /invoke"]);
     expect(surface.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
     expect(surface.routeChannels).toEqual([]);
-    const health = surface.routes["GET /health"]!;
+    const health = surface.ours["GET /health"]!;
     expect((await health(new Request("http://x/health"))).status).toBe(503);
     surface.setReady(true);
     expect((await health(new Request("http://x/health"))).status).toBe(200);
@@ -139,7 +142,7 @@ describe("cli: the serving report", () => {
         {
           routes: { "POST /telegram": () => new Response("x") },
           channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
-          browserRoutes: ["POST /invoke", "GET /health"],
+          ours: ["POST /invoke", "GET /health"],
         } as never,
         "127.0.0.1",
         8787,
@@ -160,7 +163,7 @@ describe("cli: the assembled serving surface", () => {
     const control = { capabilities: () => ({ commands: [], models: [] }) } as never;
     const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control);
     const surface = { ...withControl }; // exactly what dev/start spread into ServingSurface
-    const handle = router(surface.routes, surface.mounts);
+    const handle = router({}, surface.routes, surface.mounts);
     // 200 from the plane, 404 from its absence.
     expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(200);
     expect((await handle(new Request("http://h/health"))).status).toBe(200);
@@ -169,7 +172,7 @@ describe("cli: the assembled serving surface", () => {
   /** A serve that mounts the data plane — what most postures look like. */
   const withInvoke = (controlPrefix: string | undefined) => ({
     ...(controlPrefix ? { controlPrefix } : {}),
-    browserRoutes: ["POST /invoke", "GET /health"],
+    ours: ["POST /invoke", "GET /health"],
   });
 
   it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {
@@ -200,15 +203,15 @@ describe("cli: the assembled serving surface", () => {
       expect(withoutPlane).toContain("POST /invoke");
       expect(withoutPlane).not.toContain("/control/*");
 
-      // …and it names only what THIS process serves, from `browserRoutes`. The AgentCore posture
+      // …and it names only what THIS process serves, from `ours`. The AgentCore posture
       // answers the Runtime's /invocations behind IAM and mounts no /invoke; `http.invoke: false`
       // withholds it; a channel serving that path answers for itself, behind its own signature
       // check. A warning about an endpoint that is not ours teaches the operator to skim past all.
       warn.mockClear();
-      announceControl({ browserRoutes: [] }, { tunnel: true });
+      announceControl({ ours: [] }, { tunnel: true });
       expect(warn).not.toHaveBeenCalled();
       // With the control plane still published, the warning stands — naming only that.
-      announceControl({ controlPrefix: "/control", browserRoutes: [] }, { tunnel: true });
+      announceControl({ controlPrefix: "/control", ours: [] }, { tunnel: true });
       const controlOnly = warn.mock.calls.flat().join(" ");
       expect(controlOnly).toContain("/control/* (read, steer, delete any session) answers");
       expect(controlOnly).not.toContain("POST /invoke");

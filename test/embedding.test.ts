@@ -68,7 +68,7 @@ describe("embedding: Express", () => {
     });
     app.use(
       "/agent",
-      nodeListener(router({ "POST /telegram": echoRaw, "GET /health": async () => new Response("ok") })),
+      nodeListener(router({}, { "POST /telegram": echoRaw, "GET /health": async () => new Response("ok") })),
     );
 
     const base = await listen(app);
