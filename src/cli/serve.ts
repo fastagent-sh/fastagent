@@ -101,12 +101,13 @@ export function readyAddressLines(host: string | undefined, boundPort: number): 
  * Say what this port exposes and how far it reaches.
  *
  * NOTHING fastagent serves is authenticated — authentication belongs to the deployment (a gateway, a private
- * network, AgentCore's IAM, an embedder's middleware). So the only job here is to make the reach impossible to
- * misread: a control plane on a public tunnel URL is a public control plane.
+ * network, AgentCore's IAM, an embedder's middleware). Saying so on every boot would be noise on the path where it
+ * does not matter (a loopback `dev`), so the report NAMES what mounted and the warnings below carry the exposure,
+ * each at a reach the operator did not get by default: a bind off this machine, and `--tunnel`'s public URL.
  */
 export function announceControl(controlPrefix: string | undefined, bind: { host?: string; tunnel: boolean }): void {
   if (!controlPrefix) return;
-  log.info(`[fastagent] session control on ${controlPrefix}/* (unauthenticated — put your own auth in front)`);
+  log.info(`[fastagent] session control on ${controlPrefix}/*`);
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(
