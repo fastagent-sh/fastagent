@@ -17,8 +17,9 @@ import type { FastagentConfig } from "@fastagent-sh/fastagent";
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
+  // add `host: "127.0.0.1"` here to pin the bind address; default: `start` all interfaces (what containers
+  // need), `dev` loopback
   http: { port: 8787 },
-  // http: { host: "127.0.0.1" }, // bind address; default: `start` all interfaces (containers), `dev` loopback
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.
   // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)

@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { createPiAgentFromDir, createPiModels, listModels, probeAuthSource, resolveModel } from "../src/index.ts";
+import {
+  createPiAgentFromDir,
+  createPiModels,
+  type FastagentConfig,
+  listModels,
+  probeAuthSource,
+  resolveModel,
+} from "../src/index.ts";
 import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import {
   defaultAuthPath,
@@ -457,6 +464,18 @@ describe("rewriteConfigModel (first-run picker write-back)", async () => {
     // Deleting the model line is the natural "reset" gesture — the next pick must persist again.
     const src = "export default {\n  http: { port: 8787 },\n};\n";
     expect(rewriteConfigModel(src, "x/y")).toBe('export default {\n  model: "x/y",\n  http: { port: 8787 },\n};\n');
+  });
+
+  it("imports a type the package root still exports — the template's whole editor story", async () => {
+    // The scaffolded config is typed so an editor completes its keys, and that rests on ONE name resolving from the
+    // package root. Nothing else catches a rename: `import type` is erased before the file runs, so the load tests
+    // pass against a type that no longer exists, and tsconfig.json excludes src/scaffold/templates. The text match
+    // below pins the template to the name; the type position above it pins the name to the root export.
+    expectTypeOf<FastagentConfig>().toHaveProperty("model");
+    const { baseTemplate } = await import("../src/scaffold/templates.ts");
+    expect(baseTemplate("fastagent.config.ts")).toContain(
+      'import type { FastagentConfig } from "@fastagent-sh/fastagent";',
+    );
   });
 
   it("writes into the SCAFFOLDED file, which is the shape it was built for", async () => {
