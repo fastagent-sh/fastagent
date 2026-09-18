@@ -10,7 +10,7 @@ import { writeFileAtomic } from "../../atomic-write.ts";
 import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
-import { resolveAuthPath, resolveSessionsDir } from "../../engines/pi/config.ts";
+import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { SECRET_FILE_MODE, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
@@ -27,7 +27,6 @@ export interface StartOptions {
   port?: string;
   bind?: string;
   model?: string;
-  sessionsDir?: string;
   tunnel?: boolean;
   input?: boolean;
 }
@@ -172,7 +171,6 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   await maybeSeedAuth(resolveAuthPath(placement.agentDir));
   const opened = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
-    sessionsDir: resolveSessionsDir(placement.agentDir, opts.sessionsDir),
     serving: true,
   });
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;

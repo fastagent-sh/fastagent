@@ -14,7 +14,7 @@ import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
-import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir, resolveStateRoot } from "../../paths.ts";
+import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -262,11 +262,6 @@ export function resolveModelSpec(
   return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
-/** `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined. Absent means "wherever the agent defaults to". */
-function sessionsDirOverride(flag: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
-  return resolveOverridePath(flag ?? env.FASTAGENT_SESSIONS_DIR);
-}
-
 /**
  * The auth-file override: the SDK's `authPath` option > `FASTAGENT_AUTH_PATH` env > undefined (the opener then falls
  * back to {@link defaultAuthPath} under the {@link resolveSecretsDir} dir). The CLI has no flag for it: a second
@@ -298,14 +293,4 @@ export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessE
 export function resolveAuthFallback(flag?: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const explicit = resolveAuthPathOverride(flag, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
   return explicit === undefined ? GLOBAL_AUTH_PATH : undefined;
-}
-
-/**
- * WHERE an agent's session records live, as ONE answer: `--sessions-dir` > `FASTAGENT_SESSIONS_DIR` >
- * `<state root>/sessions`. Everything that opens a record — the serving opener, `info`, `chat --session` — resolves
- * it through here, or a command reports on a directory the serve does not use. The footgun a regression here brings
- * back: sessions silently returning to the in-tree default, so a redeploy loses the conversations.
- */
-export function resolveSessionsDir(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
-  return sessionsDirOverride(flag, env) ?? join(resolveStateRoot(dir, env), "sessions");
 }

@@ -119,7 +119,6 @@ describe("deploy/docker: planDockerDeploy", () => {
 
     // Machinery pinned AFTER env_file, so a local path in that file (the scaffold lists these) cannot send the
     // container's sessions or credentials to a host path that does not exist inside it.
-    expect(yaml).toContain('FASTAGENT_SESSIONS_DIR: "/data/.state/sessions"');
     expect(yaml).toContain('FASTAGENT_AUTH_PATH: "/data/.secrets/auth.json"');
   });
 

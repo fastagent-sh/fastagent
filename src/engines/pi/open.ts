@@ -11,9 +11,8 @@ import {
   resolveAuthFallback,
   resolveAuthPath,
   resolveModelSpec,
-  resolveSessionsDir,
 } from "./config.ts";
-import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
 import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
@@ -30,6 +29,11 @@ import { gateSecrets } from "../../secrets-gate.ts";
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). */
   model?: string;
+  /**
+   * Where conversations are stored, for an EMBEDDER that puts them somewhere the state root does not cover. There is
+   * no env or flag spelling of it: sessions are machine state, and the one knob that moves machine state is
+   * `FASTAGENT_STATE_DIR` (see {@link resolveSessionsDir}).
+   */
   sessionsDir?: string;
   /** Credentials file override. */
   authPath?: string;
@@ -193,8 +197,7 @@ export async function createPiAgentFromDir(
   // opted into self-scheduling (config.selfSchedule).
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
-  // resolution every reader shares (config.ts), so an embedder that only sets FASTAGENT_SESSIONS_DIR does not serve
-  // one directory while `schedule history` and `chat --session` read another.
+  // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });

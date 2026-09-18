@@ -197,8 +197,8 @@ src/
     ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
     ├── open.ts             # shared opener: directory → agent for dev/start/invoke
-    ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent; --session opens a
-    │                       # SERVED record as a copy (the serving process owns the original)
+    ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent (its own records,
+    │                       # in pi's per-workspace location — a SERVED record belongs to the process serving it)
     ├── tool.ts             # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
     ├── tool-context.ts     # ToolContext.session + the tool-activation bridge (AsyncLocalStorage)
     ├── search-tools.ts     # built-in search_tools loader for deferred tools

@@ -309,7 +309,7 @@ The finer knobs still override their specific path on top:
 ```txt
 state root: FASTAGENT_STATE_DIR                          > <agent dir>/.state
 secrets:    FASTAGENT_SECRETS_DIR                        > <agent dir>/.secrets
-sessions:   --sessions-dir > FASTAGENT_SESSIONS_DIR      > <state root>/sessions
+sessions:   <state root>/sessions (no separate knob)
 auth:       FASTAGENT_AUTH_PATH                          > <secrets>/auth.json
 ```
 

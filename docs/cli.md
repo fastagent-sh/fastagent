@@ -65,7 +65,7 @@ Options:
 ## `fastagent info`
 
 ```bash
-fastagent info [dir] [--json] [--model provider/modelId] [--sessions-dir dir]
+fastagent info [dir] [--json] [--model provider/modelId]
 ```
 
 Prints the assembled surface without starting a server:
@@ -161,33 +161,18 @@ Model precedence:
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId] [--session id] [--sessions-dir dir]
+fastagent chat [dir] [--model provider/modelId]
 ```
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
 
-`--session <id>` opens a session a serve owns — a schedule's (`schedule:daily-digest`), a channel thread's —
-**as a private copy**: pi renders that session's active path (the copy carries that one path, not the abandoned
-branches a control-plane fork or a leaf move may have left in the original), and `/fork` and `/export` work on it,
-while the served record is never opened at all — only its bytes are copied, because pi's loader writes to the file it
-opens (a missing trailing newline, a version migration). Continuing the copy cannot branch the record a running turn
-is writing, and its replies are not delivered by the channel the conversation came from.
+What it runs is **this agent**, not your pi: the definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and
+`extensions/` are loaded, while your machine-global pi skills, extensions, prompt templates and `APPEND_SYSTEM.md`
+stay out — the same rule serving follows, so what you try is what deploys.
 
-**Where the copy goes, and that there is a new one each time.** It is a fresh record in pi's own per-workspace
-session directory (`~/.pi/agent/sessions/<encoded workspace>`, `PI_CODING_AGENT_DIR` moves it), NOT under the
-agent's state root — which is why `/resume` finds it beside your other chats, and why the served session's directory
-is untouched. Every `chat --session` makes another full copy of the history, and nothing prunes them: on a
-months-long daily digest, reading it once a day copies a growing journal once a day. Delete the ones you are done
-with from `/resume` (Ctrl+D).
-
-**The isolation is the record and the delivery path, not the tools.** `chat` assembles the same tools the serve
-does, with the same credentials from the same `.env` — including the send tool every `add telegram|slack|feishu`
-scaffolds. Ask the copy a question and the agent may still call one, and that call really happens. Reading is
-safe; continuing is as live as any other `chat` turn.
-
-```bash
-fastagent chat --session schedule:daily-digest   # what did last night's digest say?
-```
+Sessions are pi's own per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), so `/resume` finds them
+beside your other chats. A served conversation — a schedule's, a channel thread's — is not opened here: it belongs to
+the process serving it, and `fastagent schedule history` is what reports on one.
 
 Auth is fastagent's, same as every other command: `FASTAGENT_AUTH_PATH` > the
 agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
@@ -251,13 +236,11 @@ nothing that grows. Text output tails the most recent 20; `--json` prints the wh
 Read-only.
 
 **WHAT a run said is in its session.** Every fire runs in a session (`schedule:<name>` for a cron) under
-`<state root>/sessions/`, where the text is stored exactly once. Read it with
-`fastagent chat --session schedule:<name>` (see [`fastagent chat`](#fastagent-chat)): off disk, no serve
-running, which is the normal state when someone asks what last night did. This command prints that pointer
-under the rows.
+`<state root>/sessions/`, where the text is stored exactly once, as a JSON-lines journal. This command
+prints that location under the rows.
 
 **WHY a failed one failed is in the session only when the turn got that far.** A failure inside the turn
-lands on its assistant record (`stopReason: "error"` plus the message), so `chat --session` shows it. A
+lands on its assistant record (`stopReason: "error"` plus the message), so the journal has it. A
 failure BEFORE the model was reached — bad credentials, an unresolvable model, a secrets-gate refusal — and a
 fire that never reached a turn at all leave nothing in the session: their only record is the `failed` log
 line, **under the host's retention, not this one's**. Claims can reach ~3 weeks while Fly's and Railway's
@@ -352,7 +335,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--sessions-dir dir] [--tunnel] [--no-input]
+fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
 ```
 
 Runs the agent in production posture: no watch, same assembly as `dev`.
@@ -376,7 +359,7 @@ Session directory precedence:
 ```txt
 FASTAGENT_STATE_DIR      > <agent dir>/.state       (mutable machine state)
 FASTAGENT_SECRETS_DIR    > <agent dir>/.secrets        (.env + auth.json)
---sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions
+<state root>/sessions   # no separate knob: move FASTAGENT_STATE_DIR
 ```
 
 **`FASTAGENT_AGENT` — which agent, when a workspace holds several.** Not a path knob: it is an input to

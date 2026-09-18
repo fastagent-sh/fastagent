@@ -122,9 +122,10 @@ deploy targets set both):
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
-Moving only sessions (`FASTAGENT_SESSIONS_DIR` / `--sessions-dir`) is not enough for channel-backed
-deployments — Telegram's durable turn state also lives under the state root. And moving only the
-state root still leaves a rotated `auth.json` in the agent dir — set `FASTAGENT_SECRETS_DIR` too.
+Sessions have no separate knob — moving them alone was never enough for a channel-backed deployment
+(Telegram's durable turn state lives under the same state root), so the state root moves all of it.
+Moving only the state root still leaves a rotated `auth.json` in the agent dir — set
+`FASTAGENT_SECRETS_DIR` too.
 
 ## `session busy`
 

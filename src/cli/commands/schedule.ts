@@ -1,7 +1,7 @@
 /** `fastagent schedule history|list|cancel`. */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
-import { resolveStateRoot } from "../../paths.ts";
+import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
@@ -15,8 +15,8 @@ import { failStartup, placementOrExit } from "../fail.ts";
  * long it took.
  *
  * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
- * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's, and read with
- * `fastagent chat --session`.
+ * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's, under the state
+ * root's `sessions/` — which is where this command points rather than copying any of it here.
  *
  * This command does NOT try to say which turn belongs to which fire. Nothing links them: a schedule's fires share
  * ONE continuing conversation, so the session id is the same for all of them, and the turn-level identifier would
@@ -65,11 +65,13 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
     console.error(`(the last ${shown.length} of ${fires.length} fires — --json for all)`);
   }
   // The other half of the answer, and where it lives: these rows say a fire happened, not what it produced. The
-  // session id comes from the ONE place that spells it, and the directory travels — a pointer a reader can paste
-  // from wherever they ran this.
-  // Quoted: the line exists to be pasted, and a directory with a space in it would otherwise paste as two arguments.
-  const where = dirArg === "." ? "" : ` '${dirArg}'`;
-  console.error(`(what these runs said: \`fastagent chat --session ${scheduleSession(name)}${where}\`)`);
+  // session id comes from the ONE place that spells it and the directory from the ONE place that resolves it. The
+  // record is one level further down and under a name pi accepts (`piSessionId` escapes the `:`), so the pointer
+  // says how to recognise the file rather than claiming a path the reader can paste.
+  console.error(
+    `(what these runs said: session ${scheduleSession(name)} — a JSON-lines journal under ${resolveSessionsDir(target)}, ` +
+      `in the file whose name carries "${name}")`,
+  );
 }
 
 /** `fastagent schedule list [dir]`: everything that will fire. */
