@@ -5,7 +5,7 @@
  */
 import type { Agent } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
-import { text, withCors } from "./respond.ts";
+import { text } from "./respond.ts";
 import { sseResponse } from "./sse.ts";
 
 /**
@@ -20,14 +20,14 @@ export const MAX_BODY_BYTES = 1 << 20;
  */
 export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
 
-/** The methods `POST /invoke` answers — the CORS preflight's allowance, and what a wrong method is told. */
-const INVOKE_METHODS = "POST, OPTIONS";
-
-/** Fetch-shaped invoke handler. */
+/**
+ * Fetch-shaped invoke handler.
+ *
+ * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/serve.ts`'s router
+ * — which is also the only layer that can answer the `OPTIONS` preflight, since this route registers only `POST`.
+ */
 export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response> {
-  const handle = async (req: Request): Promise<Response> => {
-    // A preflight is answered before anything else: it carries no body and names no session.
-    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+  return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
 
     const body = await readBodyCapped(req, MAX_BODY_BYTES);
@@ -67,6 +67,4 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
       ),
     );
   };
-  // THE single exit — every reply above leaves through it, the same shape the control plane's mount uses.
-  return async (req) => withCors(await handle(req), INVOKE_METHODS);
 }

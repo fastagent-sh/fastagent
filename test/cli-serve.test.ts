@@ -44,8 +44,14 @@ describe("serving surface", () => {
       `export default () => ({ "POST /invoke": () => new Response("mine") });\n`,
     );
     await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {})).rejects.toThrow(
-      /that path is the agent's own data plane/,
+      /this serve's own data plane answers there/,
     );
+    // …but ONLY where this serve actually answers there: AgentCore serves the Runtime's `/invocations`
+    // contract instead, so the same channel is legal on that posture and the refusal would be a lie.
+    const onAgentcore = await routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {
+      builtinInvoke: false,
+    });
+    expect(await (await onAgentcore.routes["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe("mine");
   });
 
   it("keeps health and the data plane for a long-connection channel", async () => {
@@ -173,14 +179,19 @@ describe("cli: the assembled serving surface", () => {
       expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
       expect(warn).toHaveBeenCalledTimes(2);
 
-      // The tunnel takes the plane PUBLIC, and nothing authenticates it — the word has to be there.
+      // The tunnel takes the port PUBLIC, and nothing authenticates it — the word has to be there.
       announceControl("/control", { host: "127.0.0.1", tunnel: true });
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/--tunnel publishes \/control\/\*.*NO authentication/s);
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/--tunnel publishes this port.*NO authentication/s);
 
-      // No plane published: nothing said at all.
+      // WITHOUT the control plane the exposure is still real: `POST /invoke` runs a turn on the
+      // agent's own tools, and it is on every serve. This used to say nothing at all.
       warn.mockClear();
-      announceControl(undefined, { tunnel: true });
-      expect(warn).not.toHaveBeenCalled();
+      announceControl(undefined, { host: "127.0.0.1", tunnel: true }); // the tunnel alone
+      announceControl(undefined, { tunnel: false }); // the wildcard bind alone
+      const withoutPlane = warn.mock.calls.flat().join(" ");
+      expect(warn).toHaveBeenCalledTimes(2); // the tunnel, and the wildcard bind
+      expect(withoutPlane).toContain("POST /invoke");
+      expect(withoutPlane).not.toContain("/control/*");
     } finally {
       warn.mockRestore();
     }

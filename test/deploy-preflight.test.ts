@@ -679,6 +679,13 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const dir = await workspace();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(off.ok && off.extraSecrets).toEqual([]);
+    // WITHOUT the control plane the warning still fires, naming `POST /invoke`: it is on every
+    // deployment whatever channels are declared, and conditioning this on `sessionControl` left a
+    // telegram-only agent publishing "run a turn with my tools" on a public URL in silence.
+    const anonymous = off.ok ? off.messages.filter((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text)) : [];
+    expect(anonymous).toHaveLength(1);
+    expect(anonymous[0]?.text).toContain("POST /invoke");
+    expect(anonymous[0]?.text).not.toContain("/control/*");
 
     const on = await call(dir, {
       model: "openai/gpt-4o-mini",

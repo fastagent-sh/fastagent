@@ -9,6 +9,97 @@ import {
   serveNode,
 } from "../src/channels/serve.ts";
 
+describe("serve: who may call this from a browser", () => {
+  // THE cross-origin policy, tested where it lives (channels/serve.ts). Every route this process
+  // serves is unauthenticated by design, so the allowance IS the access control: a wildcard would
+  // hand any page the developer has open a working client for `POST /invoke` and `/control/*`.
+  const plane = { prefix: "/control", handler: () => new Response("plane") };
+  const routes: Routes = {
+    "POST /invoke": () => new Response("ours"),
+    "POST /telegram": () => new Response("a platform's"),
+  };
+  const build = (corsOrigins?: string[]) =>
+    router(routes, [plane], { browserPaths: ["/invoke"], ...(corsOrigins ? { corsOrigins } : {}) });
+  const preflight = (handle: ReturnType<typeof router>, path: string, origin: string, method = "POST") =>
+    handle(
+      new Request(`http://h${path}`, {
+        method: "OPTIONS",
+        headers: { origin, "access-control-request-method": method },
+      }),
+    );
+
+  it("answers the preflight for a route registered under POST only — the router is the only layer that can", async () => {
+    // `routesFor` registers `"POST /invoke"`, so `OPTIONS /invoke` matches no key: left to the route
+    // table it is a 405 with no CORS headers, and a browser sending `content-type: application/json`
+    // never gets to make the real request. A handler's own OPTIONS branch cannot fix that — it is
+    // never reached.
+    const res = await preflight(build(), "/invoke", "http://127.0.0.1:5173");
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
+    expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+    expect(res.headers.get("access-control-allow-headers")).toContain("content-type");
+  });
+
+  it("allows loopback origins by default and refuses every other one", async () => {
+    const handle = build();
+    for (const origin of ["http://localhost:5173", "http://127.0.0.1:3000", "https://[::1]:8443"]) {
+      expect((await preflight(handle, "/invoke", origin)).headers.get("access-control-allow-origin")).toBe(origin);
+    }
+    for (const origin of ["https://evil.example.com", "http://192.168.1.5:5173", "null", "not-a-url"]) {
+      const res = await preflight(handle, "/invoke", origin);
+      expect({ origin, allowed: res.headers.get("access-control-allow-origin") }).toEqual({ origin, allowed: null });
+      // Not a 204 either: a refused preflight must not read as an allowance.
+      expect(res.status).not.toBe(204);
+    }
+  });
+
+  it("http.cors names the extra origins, and `*` is how a fronted deployment opts back in", async () => {
+    const named = build(["https://app.example.com"]);
+    expect(
+      (await preflight(named, "/invoke", "https://app.example.com")).headers.get("access-control-allow-origin"),
+    ).toBe("https://app.example.com");
+    expect(
+      (await preflight(named, "/invoke", "https://other.example.com")).headers.get("access-control-allow-origin"),
+    ).toBeNull();
+    const wild = build(["*"]);
+    expect(
+      (await preflight(wild, "/invoke", "https://evil.example.com")).headers.get("access-control-allow-origin"),
+    ).toBe("*");
+  });
+
+  it("a channel's route is never browser-callable, and the verdict rides every reply we own", async () => {
+    const handle = build();
+    const local = { origin: "http://localhost:5173" };
+    // A channel's caller is a platform's server. A webhook that answers a page is one a page can drive.
+    const hook = await handle(new Request("http://h/telegram", { method: "POST", headers: local }));
+    expect(hook.headers.get("access-control-allow-origin")).toBeNull();
+    expect((await preflight(handle, "/telegram", "http://localhost:5173")).status).not.toBe(204);
+    // Ours: the mounted prefix and the data plane, on the replies no handler produces too — a 405 a
+    // browser cannot read is an opaque network error instead of a diagnosable status.
+    for (const [path, init] of [
+      ["/control/anything", { headers: local }],
+      ["/invoke", { method: "POST", headers: local }],
+      ["/invoke", { method: "GET", headers: local }], // 405 from the router itself
+    ] as const) {
+      const res = await handle(new Request(`http://h${path}`, init));
+      expect({ path, method: init.method ?? "GET", allowed: res.headers.get("access-control-allow-origin") }).toEqual({
+        path,
+        method: init.method ?? "GET",
+        allowed: "http://localhost:5173",
+      });
+      // `vary: origin` on ours whatever the verdict — a cache must not serve one origin's answer to another.
+      expect(res.headers.get("vary")?.toLowerCase()).toContain("origin");
+    }
+  });
+
+  it("a request with no Origin is not a browser request: no CORS headers, nothing refused", async () => {
+    const handle = build();
+    const res = await handle(new Request("http://h/invoke", { method: "POST" }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
 describe("serve: router", () => {
   const routes: Routes = {
     "POST /webhook": () => new Response("hook", { status: 202 }),

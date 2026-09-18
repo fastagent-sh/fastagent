@@ -102,25 +102,32 @@ export function readyAddressLines(host: string | undefined, boundPort: number): 
  *
  * NOTHING fastagent serves is authenticated — authentication belongs to the deployment (a gateway, a private
  * network, AgentCore's IAM, an embedder's middleware). Saying so on every boot would be noise on the path where it
- * does not matter (a loopback `dev`), so the report NAMES what mounted and the warnings below carry the exposure,
- * each at a reach the operator did not get by default: a bind off this machine, and `--tunnel`'s public URL.
+ * does not matter (a loopback `dev`), so the warnings fire at a REACH the operator did not get by default: a bind
+ * off this machine, and `--tunnel`'s public URL.
+ *
+ * `POST /invoke` is named FIRST and unconditionally, because it is the one that is always there. The warning used
+ * to hang off `sessionControl`, so a definition serving only telegram published an unauthenticated "run a turn with
+ * this agent's full tool authority" endpoint and heard nothing at all.
  */
 export function announceControl(controlPrefix: string | undefined, bind: { host?: string; tunnel: boolean }): void {
-  if (!controlPrefix) return;
-  log.info(`[fastagent] session control on ${controlPrefix}/*`);
+  if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
+  // What an unauthenticated caller of this port can do, worst first.
+  const exposed = `POST /invoke (run a turn with this agent's tools)${
+    controlPrefix ? ` and ${controlPrefix}/* (read, steer, delete any session)` : ""
+  }`;
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(
       `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
-        `${controlPrefix}/* (steer, stop, rewrite or delete a session) is UNPROTECTED on your LAN — bind loopback ` +
-        "(--bind 127.0.0.1), firewall the port, or front it with a gateway (docs/design/session-control.md §14)",
+        `${exposed} answer UNAUTHENTICATED to anyone who can reach it — bind loopback (--bind 127.0.0.1), ` +
+        "firewall the port, or front it with a gateway (docs/design/session-control.md §14)",
     );
   }
   if (bind.tunnel) {
     log.warn(
-      `[fastagent] --tunnel publishes ${controlPrefix}/* (steer, stop, rewrite or delete a session) at the public ` +
-        "tunnel URL with NO authentication — anyone with that URL controls this agent; put real auth in front " +
-        "before sharing it (docs/design/session-control.md §14)",
+      `[fastagent] --tunnel publishes this port at a public URL with NO authentication: ${exposed}. ` +
+        "Anyone with that URL controls this agent — put real auth in front before sharing it " +
+        "(docs/design/session-control.md §14)",
     );
   }
 }

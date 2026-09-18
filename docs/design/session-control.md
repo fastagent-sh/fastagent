@@ -622,11 +622,53 @@ draws, and the reason is not minimalism — a scheme the framework owns is one i
 - It was security theatre at the only boundary that mattered: a public URL protected by one shared
   secret that every caller holds is a public URL.
 
+**Every unauthenticated endpoint, in one list.** Whoever reaches this port can do all of it, with no
+credential:
+
+| Endpoint | What an anonymous caller gets |
+|---|---|
+| `POST /invoke` | A turn with this agent's full tool authority, on any session id, billed to your model account. Always served. |
+| `GET /control/sessions` | Every conversation on the deployment |
+| `GET /control/sessions/{id}/entries`, `.../events` | The full contents of any one of them |
+| `POST /control/sessions/{id}/actions` | Steer, abort or compact a running turn |
+| `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
+| `GET /health` | Liveness |
+
+`/control/*` appears only under `sessionControl: true`. `POST /invoke` does not: it is on every serve.
+
 **What this obliges.** Everything below §14 assumes the port itself is the boundary. `dev` binds
 loopback; `start` binds all interfaces because a container needs that, and says so at startup;
-`--tunnel` publishes the whole port and warns in those words; `fastagent deploy` warns whenever
-`sessionControl: true` rides a public host URL. A deployment that needs per-principal policy —
-including per-principal `delete` — builds it in the facade below.
+`--tunnel` publishes the whole port; `fastagent deploy` warns on every deployment, naming `/invoke`
+and adding `/control/*` when it is on. Each of those warnings names what the table above lists, not
+just the prefix — the warning used to be conditioned on `sessionControl`, so a definition serving only
+Telegram published `POST /invoke` on a public URL and heard nothing. A deployment that needs
+per-principal policy — including per-principal `delete` — builds it in the facade below.
+
+**A browser is the one caller the framework does constrain.** The port being the boundary is a claim
+about the network, and a cross-origin request does not respect it: a page open in the developer's
+browser can reach `http://127.0.0.1:8787` however the serve is bound. With no authentication behind
+it, wildcard CORS would therefore turn every site the developer visits into a working client for the
+table above. Vite shipped that default and it became CVE-2025-24010, over source code rather than tool
+authority.
+
+So `channels/serve.ts`'s router answers, for the paths fastagent OWNS only:
+
+- **Loopback origins by default** — `localhost`, `127.0.0.0/8`, `[::1]`, any port — echoed back
+  exactly, never `*`, with `vary: origin`.
+- **`http.cors`** names additional exact origins for a real front end; `["*"]` restores the wildcard
+  for a deployment that has decided the port is fronted.
+- **A channel's route is never tagged.** Its caller is a platform's server, and a webhook that answers
+  cross-origin requests is one a page can drive.
+- **The router, not the handlers.** It is the only layer that can answer an `OPTIONS` preflight for a
+  route registered under `POST` alone, and the only one that sees the 404/405 it writes itself — a
+  reply a browser cannot read is an opaque network error instead of a diagnosable status.
+
+KNOWN GAP: DNS rebinding defeats an origin allowlist (the page rebinds its own hostname to 127.0.0.1
+and its requests become same-origin, carrying no `Origin` at all). The standard answer is to also
+require a loopback `Host` — which would break the two postures this design recommends, a same-host
+reverse proxy forwarding `Host: agent.example.com` and `--tunnel`, both of which legitimately send a
+foreign `Host` to a loopback bind. Closing it needs a host allowlist of its own; until then, a `dev`
+serve left running is worth treating as reachable by a determined attacker who controls DNS.
 
 **The multi-tenant facade.** N users behind one deployment, each reaching only their own sessions: the
 facade authenticates its user, reads the session id out of the request, checks it against its OWN

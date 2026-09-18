@@ -49,6 +49,7 @@ Every key is optional. Supported keys:
 | `tools` | `[]` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | `8787` | Default port for `dev` / `start`. |
 | `http.host` | per command | Bind address for `dev` / `start`. Unset leaves the default to the command: `start` binds all interfaces (what containers need), `dev` binds `127.0.0.1`. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
+| `http.cors` | loopback only | Origins a **browser** may call this serve from, beyond the ones on the serving machine (`http://localhost:*`, `http://127.0.0.1:*`, `[::1]`), which are allowed by default. Exact origins, no path: `["https://app.example.com"]`. Nothing fastagent serves is authenticated, so this list is the access control for browser callers — `["*"]` allows every site your visitors have open, and is a decision about a port you have already fronted with real auth. A channel's own route is never browser-callable whatever this says. |
 | `selfSchedule` | `false` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
 | `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. **It is unauthenticated, like every other route fastagent serves.** `start` binds all interfaces by default, so the routes are reachable by anyone who can reach the port — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or front it with a gateway (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, which is what the deploy warning is about. |
 | `deploy.secrets` | `[]` | Secret env-var names **no code declares** — a value read outside `tools/`/`schedules/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and, under `--run`, read from the agent's `.secrets/.env` — the file that declares the deployed environment — and set on the host; a missing value gates the run. Exporting the variable in your shell does not reach the deployment (in CI, write the file before running the command). |
@@ -277,8 +278,14 @@ authenticated — `POST /invoke` and `/control/*` alike; author-written `tools/`
 Socket-Mode channel dials OUT, so no bind address constrains who can message the agent. Whoever can
 reach an agent can use everything it mounts. A bind address decides who can reach the port by
 accident, nothing more. Authentication belongs where the request is still a request: a channel's own
-handler (declaring any channel also replaces the built-in `/invoke`), or your host framework's
-middleware when you [embed](embedding.md) — that is where the boundary lives.
+handler, or your host framework's middleware when you [embed](embedding.md) — that is where the
+boundary lives. `POST /invoke` is served whatever channels a definition declares, so it is on every
+deployment; a channel may not take that path.
+
+A browser is the one caller fastagent constrains by default: only a page on the serving machine (a
+loopback `Origin`) gets CORS headers, so a site the developer merely visits cannot drive a local
+`dev`. Name a real front end's origin in `http.cors` to allow it — `["*"]` allows every site, which
+is a decision about a port you have already fronted.
 
 Two edges: `--tunnel` reaches the serve by dialing `localhost`, so a bind that name never resolves to
 (`--bind 192.168.1.5`, or even `--bind 127.0.0.2`) is refused with it; and `http.host` travels into a deployed image, where any non-wildcard bind

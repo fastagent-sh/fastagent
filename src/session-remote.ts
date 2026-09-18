@@ -171,7 +171,7 @@ async function controlError(res: Response): Promise<ControlRequestError> {
 
 /**
  * Connection parameters shared by BOTH remote planes (`connectSessionControl` and `connectAgent`) — plane-neutral on
- * purpose: one endpoint, one token, two contracts.
+ * purpose: one endpoint, two contracts.
  */
 export interface RemoteEndpointOptions {
   /**

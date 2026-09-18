@@ -173,6 +173,8 @@ export async function createPiAgentFromDir(
    * not have to reach back into it (MountableAgent).
    */
   selfSchedule: boolean;
+  /** Origins beyond loopback a browser may call this serve from — `http.cors` (MountableAgent). */
+  corsOrigins?: readonly string[];
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
@@ -269,6 +271,7 @@ export async function createPiAgentFromDir(
     sessionControl: hub?.control,
     publishControl: publish,
     selfSchedule: config.selfSchedule ?? false,
+    ...(config.http?.cors ? { corsOrigins: config.http.cors } : {}),
     agentDir,
     workspace,
     config,

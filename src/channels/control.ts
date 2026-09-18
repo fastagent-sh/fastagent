@@ -24,7 +24,7 @@ import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES } from "./http.ts";
 import { sseResponse } from "./sse.ts";
-import { text, withCors } from "./respond.ts";
+import { text } from "./respond.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
 const CONTROL_PREFIX = "/control";
@@ -95,22 +95,11 @@ function planeApp(routes: PlaneRoutes): ChannelHandler {
     }
     return hits;
   };
-  // Per PATH, stating what it actually serves — omitting a method it does serve has the browser refuse a call that
-  // would have worked.
-  const allowMethods = (hits: ReturnType<typeof match>, requested: string | null) => {
-    const methods = new Set(hits.flatMap((h) => (h.route.method ? [h.route.method] : [])));
-    if (methods.has("GET")) methods.add("HEAD");
-    // The requested method is always allowed, even where this path does not serve it.
-    if (requested) methods.add(requested.toUpperCase());
-    return [...methods, "OPTIONS"].join(", ");
-  };
-
   return async (req) => {
     const url = new URL(req.url);
     const path = url.pathname;
     const hits = match(path);
     const answer = async (): Promise<Response> => {
-      if (req.method === "OPTIONS") return new Response(null, { status: 204 });
       const hit =
         hits.find((h) => h.route.method === req.method) ??
         (req.method === "HEAD" ? hits.find((h) => h.route.method === "GET") : undefined);
@@ -130,8 +119,9 @@ function planeApp(routes: PlaneRoutes): ChannelHandler {
       log.error(`[control] ${req.method} ${path} failed: ${String(error)}`);
       res = text("internal error\n", 500);
     }
-    // THE single exit. Every reply above — route, preflight, 404, 405, 500 — leaves through here.
-    return withCors(res, allowMethods(hits, req.headers.get("access-control-request-method")));
+    // CORS is NOT set here: the host router owns that verdict for every path it publishes, this prefix included
+    // (channels/serve.ts). A second writer of those headers is a second policy to keep in sync.
+    return res;
   };
 }
 

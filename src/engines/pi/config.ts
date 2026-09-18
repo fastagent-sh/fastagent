@@ -30,8 +30,12 @@ export interface FastagentConfig {
    * `host` is the bind address. Unset leaves the last rung to the command: `start` binds all interfaces (what
    * containers need), `dev` binds `127.0.0.1`. `0.0.0.0` is all interfaces either way; `127.0.0.1` keeps the serve
    * (including `/control/*`) off the LAN.
+   *
+   * `cors` names the origins a BROWSER may call this serve from, beyond the loopback ones allowed by default — a web
+   * front end's real domain. `["*"]` allows every site the visitor opens; every route here is unauthenticated, so
+   * that is a decision about a port you have already fronted, not a convenience.
    */
-  http?: { port?: number; host?: string };
+  http?: { port?: number; host?: string; cors?: string[] };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
   selfSchedule?: boolean;
   /**
@@ -165,8 +169,31 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http" must be an object`);
   }
   for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "host") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host)`);
+    if (key !== "port" && key !== "host" && key !== "cors") {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors)`);
+    }
+  }
+  if (c.http?.cors !== undefined) {
+    if (!Array.isArray(c.http.cors) || c.http.cors.some((o) => typeof o !== "string" || o === "")) {
+      throw new Error(`${path}: "http.cors" must be an array of origin strings (e.g. ["https://app.example.com"])`);
+    }
+    // An ORIGIN, not a URL with a path: `new URL(...).origin` is what a browser sends, and a trailing path would
+    // never match it — a rule that silently matches nothing is worse than one that refuses to load.
+    for (const origin of c.http.cors) {
+      if (origin === "*") continue;
+      let parsed: URL;
+      try {
+        parsed = new URL(origin);
+      } catch {
+        throw new Error(
+          `${path}: "http.cors" entry ${JSON.stringify(origin)} is not an origin ("https://host[:port]")`,
+        );
+      }
+      if (parsed.origin !== origin) {
+        throw new Error(
+          `${path}: "http.cors" entry ${JSON.stringify(origin)} is not the origin a browser sends — use ${JSON.stringify(parsed.origin)}`,
+        );
+      }
     }
   }
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {

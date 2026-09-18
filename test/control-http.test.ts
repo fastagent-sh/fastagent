@@ -51,7 +51,10 @@ async function serveControl() {
   });
   const plane = createControlPlane(control);
   // BOTH planes, as a real serve has them: the DATA plane at the root, control under its prefix.
-  const server = serveNode(router({ "POST /invoke": createInvokeHandler(agent) }, [plane]), { port: 0 });
+  const server = serveNode(
+    router({ "POST /invoke": createInvokeHandler(agent) }, [plane], { browserPaths: ["/invoke"] }),
+    { port: 0 },
+  );
   const port = await server.listening;
   return {
     agent,
@@ -138,6 +141,10 @@ function handleControl(session: Record<string, unknown>): never {
   } as never;
 }
 
+/** A browser on the SERVING machine — the only origin allowed without `http.cors` (channels/serve.ts). */
+const LOCAL_ORIGIN = "http://localhost:5173";
+const fromBrowser = { origin: LOCAL_ORIGIN };
+
 async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const out: AgentEvent[] = [];
   for await (const e of events) out.push(e);
@@ -185,7 +192,7 @@ describe("session control over HTTP", () => {
     ).rejects.toMatchObject({ status: 503, message: "control request failed: 503 null" });
   });
 
-  it("a browser can reach the plane: preflight without a token, CORS headers on every answer", async () => {
+  it("a browser on this machine can reach both planes: preflight, CORS headers on every answer", async () => {
     const served = await serveControl();
     const origin = (res: Response) => res.headers.get("access-control-allow-origin");
     /** The check a BROWSER performs, not a string compare: everything the preflight named must be
@@ -200,67 +207,47 @@ describe("session control over HTTP", () => {
       };
     };
     try {
-      // DERIVED from what the server MOUNTS, like the 401 sweep: a route added later cannot ship
-      // browser-unreachable, and a POST route is checked as a POST route.
+      // DERIVED from what the server MOUNTS: a route added later cannot ship browser-unreachable,
+      // and a POST route is checked as a POST route. `POST /invoke` is in the sweep because the
+      // preflight for it is what a route table registering only POST cannot answer by itself —
+      // the router has to, and that is the regression this pins.
       expect(served.routeKeys).toContain("POST /control/sessions/{session}/actions");
-      for (const key of served.routeKeys) {
+      for (const key of [...served.routeKeys, "POST /invoke"]) {
         const [method, path] = key.split(" ") as [string, string];
-        if (method === "OPTIONS") continue;
         // What the browser would actually name: a JSON body is NOT a safelisted content-type, so
-        // every POST preflight carries it alongside the token header.
+        // every POST preflight carries it, and a fronted deployment adds `authorization`.
         const requested = method === "POST" ? ["authorization", "content-type"] : ["authorization"];
-        // The methods advertised must be the ones this PATH serves. Advertising a method the path
-        // does not serve sends the browser into a host-generated 405 that carries no CORS headers.
-        const servedHere = served.routeKeys
-          .filter((k) => k.endsWith(` ${path}`))
-          .map((k) => k.split(" ")[0] as string)
-          .filter((m) => m !== "OPTIONS"); // OPTIONS is derived, and compared out of `advertised` too
-        // No token — a preflight cannot carry credentials, which is its entire purpose.
         const res = await fetch(`${served.url}${path.replace("{session}", "s")}`, {
           method: "OPTIONS",
           headers: {
-            origin: "http://localhost:5173",
+            ...fromBrowser,
             "access-control-request-method": method,
             "access-control-request-headers": requested.join(", "),
           },
         });
+        // The ORIGIN is echoed, never `*`: the allowance is for this browser, and `vary: origin`
+        // keeps a cache from handing the verdict to a different one.
         expect({ path: key, status: res.status, origin: origin(res) }).toEqual({
           path: key,
           status: 204,
-          origin: "*",
+          origin: LOCAL_ORIGIN,
         });
+        expect(res.headers.get("vary")?.toLowerCase()).toContain("origin");
         expect({ path: key, ...permits(res, method, requested) }).toEqual({
           path: key,
           method: true,
           headers: true,
         });
-        const advertised = (res.headers.get("access-control-allow-methods") ?? "")
-          .split(",")
-          .map((m) => m.trim())
-          .filter((m) => m !== "OPTIONS")
-          .sort();
-        // What the path serves — including the HEAD the router answers from every GET route, which
-        // the browser would otherwise refuse to send.
-        const expectedMethods = [...new Set(servedHere.flatMap((m) => (m === "GET" ? ["GET", "HEAD"] : [m])))].sort();
-        expect({ path, advertised }).toEqual({ path, advertised: expectedMethods });
       }
 
-      // A rejected call must stay READABLE: without the headers the browser hands the client an
-      // opaque network error instead of the 401 that says "your token is wrong".
-      expect(origin(await fetch(`${served.url}/control/capabilities`))).toBe("*");
-      // 400 (authenticated, missing param) and 200 alike.
-      expect(origin(await fetch(`${served.url}/control/sessions/s`))).toBe("*");
-      expect(origin(await fetch(`${served.url}/control/capabilities`))).toBe("*");
-      // SSE too — the long-lived route a GUI actually renders from. Asserted at the handler, not
-      // over the wire: a quiet session sends no chunk, and Node withholds response headers until
-      // one, so a fetch here would block for the full heartbeat interval.
-      const { control } = await fauxControlledAgent([]);
-      // Through the PLANE, not the bare handler: CORS is a property of the plane's exit now, so
-      // reaching past it would assert nothing about what a browser receives.
-      const plane = mountControlPlane(controlPlaneRoutes(control)).handler;
-      const sse = await plane(new Request("http://x/control/sessions/s/events"));
+      // A rejected or failing call must stay READABLE: without the headers the browser hands the
+      // client an opaque network error instead of the status that says what went wrong.
+      expect(origin(await fetch(`${served.url}/control/capabilities`, { headers: fromBrowser }))).toBe(LOCAL_ORIGIN);
+      expect(origin(await fetch(`${served.url}/control/sessions/s`, { headers: fromBrowser }))).toBe(LOCAL_ORIGIN);
+      // SSE too — the long-lived route a GUI actually renders from.
+      const sse = await fetch(`${served.url}/control/sessions/s/events`, { headers: fromBrowser });
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
-      expect(origin(sse)).toBe("*");
+      expect(origin(sse)).toBe(LOCAL_ORIGIN);
       await sse.body?.cancel();
     } finally {
       served.close();
@@ -277,20 +264,24 @@ describe("session control over HTTP", () => {
     const browserWouldSend = async (method: string, path: string) => {
       const pre = await fetch(`${served.url}${path}`, {
         method: "OPTIONS",
-        headers: { origin: "http://localhost:5173", "access-control-request-method": method },
+        headers: { ...fromBrowser, "access-control-request-method": method },
       });
       const allowed = (pre.headers.get("access-control-allow-methods") ?? "")
         .split(",")
         .map((m) => m.trim().toUpperCase());
-      return pre.status === 204 && pre.headers.get("access-control-allow-origin") === "*" && allowed.includes(method);
+      return (
+        pre.status === 204 &&
+        pre.headers.get("access-control-allow-origin") === LOCAL_ORIGIN &&
+        allowed.includes(method)
+      );
     };
     try {
       // An unknown path under the prefix, and a known path under a method it does not serve.
       expect(await browserWouldSend("GET", "/control/nonexistent")).toBe(true);
       expect(await browserWouldSend("GET", "/control/sessions/s/actions")).toBe(true);
       // ...and only because the gate opens do the plane's own answers become readable.
-      expect((await fetch(`${served.url}/control/nonexistent`)).status).toBe(404);
-      expect((await fetch(`${served.url}/control/sessions/sW/actions`)).status).toBe(405);
+      expect((await fetch(`${served.url}/control/nonexistent`, { headers: fromBrowser })).status).toBe(404);
+      expect((await fetch(`${served.url}/control/sessions/sW/actions`, { headers: fromBrowser })).status).toBe(405);
     } finally {
       served.close();
     }
@@ -305,11 +296,11 @@ describe("session control over HTTP", () => {
     try {
       // 1. A path under the prefix that no route serves. 404 (not 405) is load-bearing: a remote
       //    client reads it as "this serve predates the route", i.e. version skew, not a fault.
-      const unknown = await fetch(`${served.url}/control/nonexistent`);
-      expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: "*" });
+      const unknown = await fetch(`${served.url}/control/nonexistent`, { headers: fromBrowser });
+      expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: LOCAL_ORIGIN });
       // 2. A known path under a method it does not serve.
-      const wrongMethod = await fetch(`${served.url}/control/sessions/sW/actions`);
-      expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: "*" });
+      const wrongMethod = await fetch(`${served.url}/control/sessions/sW/actions`, { headers: fromBrowser });
+      expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: LOCAL_ORIGIN });
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
       expect((await fetch(`${served.url}/not-control`)).status).toBe(404);
@@ -324,8 +315,8 @@ describe("session control over HTTP", () => {
       //    and still readably. Paths are matched as they arrive: decoding them first would undo the
       //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client
       //    sends these (the remote client percent-encodes session ids into a path segment).
-      const encoded = await fetch(`${served.url}/control/%63apabilities`);
-      expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: "*" });
+      const encoded = await fetch(`${served.url}/control/%63apabilities`, { headers: fromBrowser });
+      expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: LOCAL_ORIGIN });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
       const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD" });
       const getable = await fetch(`${served.url}/control/capabilities`);
@@ -350,9 +341,9 @@ describe("session control over HTTP", () => {
     const port = await server.listening;
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {});
+      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, { headers: fromBrowser });
       expect(res.status).toBe(500);
-      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      expect(res.headers.get("access-control-allow-origin")).toBe(LOCAL_ORIGIN);
       // Failing visibly is not optional just because the client now gets a readable status.
       expect(errors.mock.calls.map(String).join("\n")).toMatch(/permission denied/);
       // ...and the internal message stays internal.
@@ -377,9 +368,9 @@ describe("session control over HTTP", () => {
     const server = serveNode(router({}, [createControlPlane(control)]), { port: 0 });
     try {
       const url = `http://127.0.0.1:${await server.listening}`;
-      const res = await fetch(`${url}/control/sessions/s/events`, {});
+      const res = await fetch(`${url}/control/sessions/s/events`, { headers: fromBrowser });
       expect(res.status).toBe(500);
-      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      expect(res.headers.get("access-control-allow-origin")).toBe(LOCAL_ORIGIN);
       expect(await res.text()).toBe("internal error\n");
       const remote = await connectSessionControl({ url });
       const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
@@ -1007,15 +998,18 @@ describe("session control over HTTP", () => {
 
   it("a malformed id segment is a 404 from the PLANE, not a throw past its boundary", async () => {
     // `decodeURIComponent` throws on a bad escape, and the match runs BEFORE the try that guards the
-    // handlers — so this used to leave the boundary entirely: no CORS headers, no log, and a
-    // rejected promise for an embedder mounting the handler directly. The query-parameter form this
-    // replaced decoded leniently and could not throw, which is what made it a regression.
+    // handlers — so this used to leave the boundary entirely: a rejected promise for an embedder
+    // mounting the handler directly. The query-parameter form this replaced decoded leniently and
+    // could not throw, which is what made it a regression.
     const { control } = await fauxControlledAgent([]);
     const plane = createControlPlane(control).handler;
+    const served = router({}, [createControlPlane(control)]);
     for (const path of ["/control/sessions/100%", "/control/sessions/%E0%A4%A/entries"]) {
-      const res = await plane(new Request(`http://x${path}`));
+      expect((await plane(new Request(`http://x${path}`))).status).toBe(404);
+      // …and through the host router it is readable by a browser, like every other reply it owns.
+      const res = await served(new Request(`http://x${path}`, { headers: fromBrowser }));
       expect(res.status).toBe(404);
-      expect(res.headers.get("access-control-allow-origin")).toBe("*"); // it left through the exit
+      expect(res.headers.get("access-control-allow-origin")).toBe(LOCAL_ORIGIN);
     }
   });
 

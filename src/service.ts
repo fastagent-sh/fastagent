@@ -68,6 +68,11 @@ export interface ServingSurface {
   longConnections: LoadedLongConnectionChannel[];
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
+  /**
+   * The paths fastagent itself serves here — what {@link router} may publish to a browser. A channel's route is
+   * deliberately absent: its caller is a platform's server (channels/serve.ts `RouterOptions`).
+   */
+  browserPaths: string[];
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
@@ -105,22 +110,24 @@ export async function routesFor(
       const entry = parseRouteKey(key);
       return entry.path === path && (entry.method === undefined || entry.method === method);
     });
-  if (covered("/invoke", "POST")) {
-    throw new Error(
-      `a channel serves "POST /invoke" — that path is the agent's own data plane (rename the channel route)`,
-    );
-  }
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
-  const builtin: Routes = {
-    ...(covered("/health", "GET") ? {} : { "GET /health": health }),
-    // AgentCore serves the data plane through its own `/invocations` contract, so the adapter opts out.
-    ...(options.builtinInvoke === false ? {} : { "POST /invoke": createInvokeHandler(agent) }),
-  };
+  // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
+  // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
+  const builtin: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
+  if (options.builtinInvoke !== false) {
+    if (covered("/invoke", "POST")) {
+      throw new Error(
+        `a channel serves "POST /invoke" — this serve's own data plane answers there (rename the channel route)`,
+      );
+    }
+    builtin["POST /invoke"] = createInvokeHandler(agent);
+  }
   return {
     routes: { ...builtin, ...routes },
     longConnections,
     routeChannels,
+    browserPaths: Object.keys(builtin).map((key) => parseRouteKey(key).path),
     setReady(value: boolean) {
       ready = value;
     },
@@ -241,6 +248,11 @@ export interface MountableAgent {
   publishControl: boolean;
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
+  /**
+   * Origins beyond loopback that a browser may call this serve from (`http.cors`). Empty is the default: a page on
+   * the serving machine, and nothing else — see `channels/serve.ts`, since every route here is unauthenticated.
+   */
+  corsOrigins?: readonly string[];
 }
 
 /**
@@ -260,7 +272,10 @@ export async function mountAgentService(
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl);
   const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
-  const handler = router(withControl.routes, withControl.mounts);
+  const handler = router(withControl.routes, withControl.mounts, {
+    browserPaths: routed.browserPaths,
+    ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+  });
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();

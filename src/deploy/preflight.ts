@@ -167,17 +167,17 @@ export async function preflightDeploy(input: {
   }
   const modelSpec = model.spec;
 
-  // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*` (steer, stop, rewrite
-  // or delete a session) rides the PUBLIC host URL with no authentication of ours in front of it.
-  if (config.sessionControl === true) {
-    messages.push({
-      level: "warn",
-      text:
-        `sessionControl: true — the deployed box serves /control/* (steer, stop, rewrite or delete a session) at its ` +
-        `public URL, UNAUTHENTICATED. fastagent authenticates nothing: put a gateway, an IdP-backed proxy or a ` +
-        `private network in front of that URL, or leave sessionControl off (docs/design/session-control.md §14)`,
-    });
-  }
+  // What the PUBLIC host URL answers with no authentication of ours in front of it. `POST /invoke` is on every
+  // deployment whatever channels it declares, so this warning is unconditional — it used to fire only under
+  // `sessionControl: true`, which left the endpoint that runs a turn on the agent's own tools unmentioned.
+  messages.push({
+    level: "warn",
+    text:
+      `the deployed box answers POST /invoke (run a turn with this agent's tools)` +
+      `${config.sessionControl === true ? " and /control/* (read, steer or delete any session)" : ""} at its public ` +
+      `URL, UNAUTHENTICATED — fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private ` +
+      `network in front of that URL (docs/design/session-control.md §14)`,
+  });
 
   // Known channel kinds only — a custom channel's webhook (and, unless it declared them, its secrets) are unknown to
   // us; note and let the author wire them.
