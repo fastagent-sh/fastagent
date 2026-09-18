@@ -363,14 +363,6 @@ const deploy: CommandSpec = {
     },
     { flags: "--force", description: "overwrite existing target config/Dockerfile/.dockerignore (else kept)" },
     {
-      flags: "--stop",
-      description: "(fly only) autostop by stopping (cold start) instead of suspending (fast resume)",
-    },
-    {
-      flags: "--no-scale-to-zero",
-      description: "(fly only) keep one machine running when idle (min_machines_running=1)",
-    },
-    {
       flags: "--into-linked",
       description:
         "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
@@ -393,8 +385,6 @@ const deploy: CommandSpec = {
       run: f.run === true,
       tunnel: f.tunnel === true,
       force: f.force === true,
-      stop: f.stop === true,
-      scaleToZero: f.scaleToZero !== false,
       intoLinked: f.intoLinked === true,
       input: f.input !== false,
     }),

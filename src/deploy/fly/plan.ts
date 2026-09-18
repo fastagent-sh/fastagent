@@ -21,10 +21,6 @@ export interface FlyPlanInput extends ContainerInput {
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
    *  attributed to the file that declared it. */
   extraSecrets?: readonly DeclaredSecret[];
-  /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). */
-  autostop: "suspend" | "stop";
-  /** Allow scaling to zero when idle (default true → `min_machines_running=0`). */
-  scaleToZero: boolean;
   /**
    * Time triggers present (schedules/ or selfSchedule) — forces one machine up: cron/wake has no external wake-up, so
    * a scaled-to-zero box would sleep through them.
@@ -43,26 +39,20 @@ function flyToml(
   appName: string,
   port: number,
   hasGithub: boolean,
-  autostop: "suspend" | "stop",
-  scaleToZero: boolean,
   hasTimeTriggers: boolean,
   hasLongConnectionChannel: boolean,
 ): string {
-  // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, OR the operator
-  // opted out of scale-to-zero.
+  // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, or a
+  // long connection does. Anything else is an edit to the generated file, which is the artifact's job.
   const min = hasGithub
     ? `  min_machines_running = 1         # github turns have no replay — don't scale to zero (an in-flight review would be lost)`
     : hasTimeTriggers
       ? `  min_machines_running = 1         # schedules/wake-ups need a running machine (no external wake-up for a cron instant)`
       : hasLongConnectionChannel
         ? `  min_machines_running = 1         # long-connection channel needs a running machine (cannot wake from zero)`
-        : !scaleToZero
-          ? `  min_machines_running = 1         # kept running (--no-scale-to-zero)`
-          : `  min_machines_running = 0         # scale to zero`;
-  const stopLine =
-    autostop === "stop"
-      ? `  auto_stop_machines = "stop"      # stop on idle (cold start on the next webhook)`
-      : `  auto_stop_machines = "suspend"   # suspend on idle (fast resume on the next webhook)`;
+        : `  min_machines_running = 0         # scale to zero`;
+  // Suspend, not stop: a resume is fast enough that a webhook does not time out. Edit the line to change it.
+  const stopLine = `  auto_stop_machines = "suspend"   # suspend on idle (fast resume on the next webhook)`;
   return `${GENERATED_FLY_TOML_MARKER}. Edit freely — it is not regenerated unless you pass --force.
 app = "${appName}"
 primary_region = "iad"  # set your region (list: \`fly platform regions\`)
@@ -112,8 +102,6 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
         appName,
         port,
         channels.some((channel) => channel.name === "github"),
-        input.autostop,
-        input.scaleToZero,
         input.hasTimeTriggers,
         channels.some((channel) => channel.ingress === "long-connection"),
       ),

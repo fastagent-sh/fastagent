@@ -140,7 +140,7 @@ Or let the CLI do all of it:
 fastagent deploy fly --run   # idempotent, resumable; carries .secrets/.env's values to Fly
 ```
 
-Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
+Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms) with `min_machines_running = 0`. Both lines are in the generated `fly.toml` and are yours to edit — the artifact is the knob, and `deploy` never regenerates it without `--force`. A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
 
 **Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 

@@ -9,7 +9,7 @@ const dockerfile = (p: ReturnType<typeof planFlyDeploy>) =>
   p.artifacts.find((a) => a.path === "fastagent/Dockerfile")!.content;
 const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
-/** Defaults for the fields a test doesn't care about (a code workspace with a lockfile, default autostop). */
+/** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
 const base = {
   releaseId: "release-one",
   agentPrefix: "fastagent/",
@@ -19,8 +19,6 @@ const base = {
   runtime: "node",
   hasLockfile: true,
   version: "9.9.9",
-  autostop: "suspend",
-  scaleToZero: true,
   hasTimeTriggers: false,
 } as const;
 
@@ -72,13 +70,8 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(flyToml(plan)).toContain("min_machines_running = 1");
   });
 
-  it("--stop and --no-scale-to-zero flags shape the generated autostop", () => {
-    const stopped = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], autostop: "stop" }));
-    expect(stopped).toContain('auto_stop_machines = "stop"');
-    const kept = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], scaleToZero: false }));
-    expect(kept).toContain("min_machines_running = 1");
-    expect(kept).toContain("--no-scale-to-zero"); // reason-tagged comment, not the github one
-    // default is suspend + scale-to-zero
+  it("suspends on idle and scales to zero when nothing in the definition needs a machine up", () => {
+    // The two lines an operator edits when they want otherwise: the artifact IS the knob.
     const def = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
     expect(def).toContain('auto_stop_machines = "suspend"');
     expect(def).toContain("min_machines_running = 0");

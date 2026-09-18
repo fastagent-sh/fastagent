@@ -37,16 +37,6 @@ const hostOnlyFlag = <Owner extends DeployHost>(rule: HostOnlyFlag<Owner>): Host
 /** ONE table for "this flag belongs to that host", because the fact is symmetric and was not stored that way. */
 export const HOST_ONLY_FLAGS = [
   hostOnlyFlag({
-    flag: "--stop/--no-scale-to-zero",
-    owner: "fly",
-    passed: (opts: DeployOptions) => opts.stop === true || opts.scaleToZero === false,
-    instead: {
-      docker: "local Compose stays running",
-      railway: "Railway's App Sleeping is a dashboard toggle (the runbook states the manual step)",
-      agentcore: "AgentCore's idle/lifetime policy lives in the template's LifecycleConfiguration",
-    },
-  }),
-  hostOnlyFlag({
     flag: "--into-linked",
     owner: "railway",
     passed: (opts: DeployOptions) => opts.intoLinked === true,

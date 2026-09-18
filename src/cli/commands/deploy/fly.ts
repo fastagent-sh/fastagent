@@ -34,7 +34,7 @@ export const flyHost: HostDeploy = {
     if (channels.some((channel) => channel.name === "github")) {
       console.error(
         `[fastagent] note: github turns have no replay — the generated fly.toml uses min_machines_running=1 ` +
-          `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 to accept that trade.`,
+          `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 in fly.toml to accept that trade.`,
       );
     }
     // Two consistent modes.
@@ -48,13 +48,6 @@ export const flyHost: HostDeploy = {
     if (flyToml !== undefined && !flyTomlKept) {
       console.error(
         `[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`,
-      );
-    }
-    // Autostop flags shape the GENERATED fly.toml only.
-    if (flyTomlKept && (opts.stop || opts.scaleToZero === false)) {
-      console.error(
-        `[fastagent] warn: --stop/--no-scale-to-zero only shape a freshly generated fly.toml — yours exists and ` +
-          `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
       );
     }
     // KEEP mode + time triggers: the kept fly.toml may still scale to zero — which would sleep through every cron
@@ -82,8 +75,6 @@ export const flyHost: HostDeploy = {
       extraSecrets,
       hasTimeTriggers,
       ...container,
-      autostop: opts.stop ? "stop" : "suspend",
-      scaleToZero: opts.scaleToZero !== false,
     });
     await write(plan.artifacts, { force: !!opts.force });
     if (opts.run) {
