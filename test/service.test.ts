@@ -40,18 +40,8 @@ describe("createAgentService", () => {
       );
       expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
       expect(service.channels.routes).toEqual(["hook"]);
-      // A declared channel replaces the built-in /invoke — the fallback exists only when there is none.
-      expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(404);
-      expect(service.channels.builtinInvoke).toBe(false);
-    } finally {
-      await service.close();
-    }
-  });
-
-  it("falls back to POST /invoke when the directory declares no channel", async () => {
-    const dir = await agentDir();
-    const service = await createAgentService(dir);
-    try {
+      // The DATA plane is there BESIDE the channel, not instead of it: `/invoke` is the framework's
+      // interface, so whether a definition happens to declare a channel cannot decide if it exists.
       // 400 rather than 404: the route is mounted and rejecting an empty body.
       expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(400);
     } finally {
@@ -59,100 +49,20 @@ describe("createAgentService", () => {
     }
   });
 
-  it("mounts the control plane when the config asks for it, reachable on the same handler", async () => {
-    // THE property composing by hand gets wrong: routes and mounts must both reach the router. This
-    // repo shipped a version where they did not — /control/* 404'd while control.json advertised it.
-    const dir = await mkdtemp(join(tmpdir(), "fa-surface-ctl-"));
+  it("publishes the control plane at its prefix, unauthenticated", async () => {
+    // An embedded surface has no port of its own to advertise, so the prefix is all a client needs.
+    // Nothing gates it: fastagent authenticates nothing, and the embedder's own middleware is what
+    // decides who may reach this handler at all.
+    const dir = await mkdtemp(join(tmpdir(), "fa-surface-control-"));
     await writeFile(
       join(dir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
     await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
     const service = await createAgentService(dir);
-    try {
-      // 401, not 404: the plane is mounted and asking for the token it minted.
-      expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(401);
-      // A path the plane does NOT serve still belongs to it — that is what owning the prefix means.
-      expect((await service.handler(new Request("http://h/control/anything"))).status).toBe(404);
-    } finally {
-      await service.close();
-    }
-  });
-
-  it("hands the embedder the plane's token", async () => {
-    // An embedded surface has no port of its own to advertise, so `control` is how a client gets
-    // access at all (the CLI's discovery file is `announceControl`'s, in cli/serve.ts).
-    const dir = await mkdtemp(join(tmpdir(), "fa-surface-token-"));
-    await writeFile(
-      join(dir, "fastagent.config.ts"),
-      `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
-    );
-    await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
-    const service = await createAgentService(dir);
-    expect(service.control?.prefix).toBe("/control");
-    expect(service.control?.token).toMatch(/[0-9a-f-]{36}/);
-    // The token actually opens the plane it came from.
-    const res = await service.handler(
-      new Request("http://h/control/capabilities", { headers: { authorization: `Bearer ${service.control?.token}` } }),
-    );
-    expect(res.status).toBe(200);
+    expect(service.controlPrefix).toBe("/control");
+    expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(200);
     await service.close();
-  });
-
-  it("honours an injected control token — the deployed case, where a minted one is unreadable", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-surface-injected-"));
-    await writeFile(
-      join(dir, "fastagent.config.ts"),
-      `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
-    );
-    await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
-    // Padded on purpose: a token pasted with a trailing newline must not become a token nobody else
-    // can spell — the caller holding the clean value would just get 401.
-    process.env.FASTAGENT_CONTROL_TOKEN = "  deployer-minted-0123456789\n";
-    try {
-      const service = await createAgentService(dir);
-      try {
-        expect(service.control?.token).toBe("deployer-minted-0123456789");
-        const res = await service.handler(
-          new Request("http://h/control/capabilities", {
-            headers: { authorization: "Bearer deployer-minted-0123456789" },
-          }),
-        );
-        expect(res.status).toBe(200);
-      } finally {
-        await service.close();
-      }
-      // SET BUT EMPTY is what a generated Compose file produces (`NAME: "${NAME:-}"`) for a secret the
-      // operator skipped. It must still serve — an empty token would throw at the plane — so it falls
-      // back to a mint, and the warning is the only thing telling the operator their token is not the
-      // box's. Without it the symptom is a bare 401 on every call.
-      process.env.FASTAGENT_CONTROL_TOKEN = "";
-      const logged: string[] = [];
-      const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-        logged.push(args.join(" "));
-      });
-      const blank = await createAgentService(dir);
-      try {
-        expect(blank.control?.token).toMatch(/[0-9a-f-]{36}/);
-        expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is set but empty/);
-      } finally {
-        await blank.close();
-      }
-      // A guessable token is ACCEPTED — the deployer owns the choice — but not silently: this plane
-      // steers and aborts runs, and the token is the whole of its auth.
-      logged.length = 0;
-      process.env.FASTAGENT_CONTROL_TOKEN = "changeme";
-      const weak = await createAgentService(dir);
-      try {
-        expect(weak.control?.token).toBe("changeme");
-        expect(logged.join("\n")).toMatch(/FASTAGENT_CONTROL_TOKEN is 8 characters/);
-      } finally {
-        spy.mockRestore();
-        await weak.close();
-      }
-    } finally {
-      delete process.env.FASTAGENT_CONTROL_TOKEN;
-    }
   });
 
   it("a connection that dies after coming up makes health say so again", async () => {
@@ -212,7 +122,7 @@ describe("createAgentService", () => {
     const service = await createAgentService(dir);
     try {
       expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(404);
-      expect(service.control).toBeUndefined();
+      expect(service.controlPrefix).toBeUndefined();
       // The half that is easy to lose silently: the channel still got the hub. Tightening `routesFor` to
       // `publishControl` would leave every assertion above green while `/stop` stopped working.
       expect(await (await service.handler(new Request("http://h/has-control"))).text()).toBe("true");

@@ -3,13 +3,14 @@
  * (`createControlPlane`) and the remote client (`connectSessionControl`) are exercised TOGETHER over a
  * real node:http server against a real hub + faux agent: local and remote `SessionControl` must be
  * isomorphic (same interface, same answers), the envelope must be consumed internally (epoch/seq
- * never reach the consumer), and auth must fail closed.
+ * never reach the consumer), and every route must answer WITHOUT a credential — fastagent authenticates
+ * nothing, by design (the deployment does).
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentEvent } from "../src/agent.ts";
+import type { AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
 import { createInvokeHandler } from "../src/channels/http.ts";
 import { log } from "../src/log.ts";
@@ -22,8 +23,6 @@ import { router, serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { SESSIONS_UNAVAILABLE_CODE, UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
-
-const TOKEN = "test-token";
 
 /** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
  *  thinking levels are per model, and the default faux supports only "off". */
@@ -50,14 +49,15 @@ async function serveControl() {
     // like capabilities (the definition it answers for is live).
     commands: async () => [...commandList],
   });
-  const plane = createControlPlane(control, { token: TOKEN, agent });
-  const server = serveNode(router({}, [plane]), { port: 0 });
+  const plane = createControlPlane(control);
+  // BOTH planes, as a real serve has them: the DATA plane at the root, control under its prefix.
+  const server = serveNode(router({ "POST /invoke": createInvokeHandler(agent) }, [plane]), { port: 0 });
   const port = await server.listening;
   return {
     agent,
     commandList,
     // The plane's OWN routes: the mount point is one wildcard key, so sweeps derive from here.
-    routeKeys: Object.keys(controlPlaneRoutes(control, { token: TOKEN, agent })),
+    routeKeys: Object.keys(controlPlaneRoutes(control)),
     localControl: control,
     url: `http://127.0.0.1:${port}`,
     close: () => server.close(),
@@ -145,31 +145,32 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 describe("session control over HTTP", () => {
-  it("fails closed: no/wrong token is 401 on every route, and connect() rejects", async () => {
+  it("serves every route unauthenticated — no credential is invented, and none is demanded", async () => {
     const served = await serveControl();
     try {
-      // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
-      // createControlPlane() call that could drift from it: "every control route requires the token" has
-      // to fail when a NEW route forgets `guard`, which a literal array cannot do.
+      // DERIVED from the routes this server actually MOUNTS, so a route added later is swept too. The
+      // claim is the deliberate one: fastagent authenticates nothing, so NOTHING here may answer 401.
+      // An `Authorization` header is carried on the second pass because a deployment that fronts this
+      // port with a gateway sends one, and a route that choked on it would break that deployment.
       expect(served.routeKeys).toContain("GET /control/commands"); // the sweep sees the whole table
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
-        // OPTIONS is the ONE unauthenticated method here, and deliberately so: a preflight cannot
-        // carry a token. Asserted below rather than skipped silently.
-        if (method === "OPTIONS") continue;
         const url = `${served.url}${path.replace("{session}", "s")}?session=s`;
-        expect((await fetch(url, { method, body: method === "POST" ? "{}" : undefined })).status).toBe(401);
-        expect(
-          (
-            await fetch(url, {
-              method,
-              body: method === "POST" ? "{}" : undefined,
-              headers: { authorization: "Bearer wrong" },
-            })
-          ).status,
-        ).toBe(401);
+        for (const headers of [undefined, { authorization: "Bearer anything" }]) {
+          const res = await fetch(url, { method, body: method === "POST" ? "{}" : undefined, headers });
+          expect({ key, status: res.status }).not.toEqual({ key, status: 401 });
+          expect({ key, status: res.status }).not.toEqual({ key, status: 403 });
+        }
       }
-      await expect(connectSessionControl({ url: served.url, token: "wrong" })).rejects.toThrow(/401/);
+      // The DATA plane answers the same way — it is the route the control plane's invoke used to hide behind.
+      const invoked = await fetch(`${served.url}/invoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ session: "unauth", text: "hi" }),
+      });
+      expect(invoked.status).toBe(200);
+      await invoked.body?.cancel();
+      await expect(connectSessionControl({ url: served.url })).resolves.toBeTruthy();
     } finally {
       served.close();
     }
@@ -179,7 +180,6 @@ describe("session control over HTTP", () => {
     await expect(
       connectSessionControl({
         url: "http://x",
-        token: TOKEN,
         fetchFn: async () => Response.json(null, { status: 503 }),
       }),
     ).rejects.toMatchObject({ status: 503, message: "control request failed: 503 null" });
@@ -249,17 +249,16 @@ describe("session control over HTTP", () => {
       // opaque network error instead of the 401 that says "your token is wrong".
       expect(origin(await fetch(`${served.url}/control/capabilities`))).toBe("*");
       // 400 (authenticated, missing param) and 200 alike.
-      const auth = { authorization: `Bearer ${TOKEN}` };
-      expect(origin(await fetch(`${served.url}/control/sessions/s`, { headers: auth }))).toBe("*");
-      expect(origin(await fetch(`${served.url}/control/capabilities`, { headers: auth }))).toBe("*");
+      expect(origin(await fetch(`${served.url}/control/sessions/s`))).toBe("*");
+      expect(origin(await fetch(`${served.url}/control/capabilities`))).toBe("*");
       // SSE too — the long-lived route a GUI actually renders from. Asserted at the handler, not
       // over the wire: a quiet session sends no chunk, and Node withholds response headers until
       // one, so a fetch here would block for the full heartbeat interval.
       const { control } = await fauxControlledAgent([]);
       // Through the PLANE, not the bare handler: CORS is a property of the plane's exit now, so
       // reaching past it would assert nothing about what a browser receives.
-      const plane = mountControlPlane(controlPlaneRoutes(control, { token: TOKEN })).handler;
-      const sse = await plane(new Request("http://x/control/sessions/s/events", { headers: auth }));
+      const plane = mountControlPlane(controlPlaneRoutes(control)).handler;
+      const sse = await plane(new Request("http://x/control/sessions/s/events"));
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
       expect(origin(sse)).toBe("*");
       await sse.body?.cancel();
@@ -290,9 +289,8 @@ describe("session control over HTTP", () => {
       expect(await browserWouldSend("GET", "/control/nonexistent")).toBe(true);
       expect(await browserWouldSend("GET", "/control/sessions/s/actions")).toBe(true);
       // ...and only because the gate opens do the plane's own answers become readable.
-      const auth = { authorization: `Bearer ${TOKEN}` };
-      expect((await fetch(`${served.url}/control/nonexistent`, { headers: auth })).status).toBe(404);
-      expect((await fetch(`${served.url}/control/sessions/sW/actions`, { headers: auth })).status).toBe(405);
+      expect((await fetch(`${served.url}/control/nonexistent`)).status).toBe(404);
+      expect((await fetch(`${served.url}/control/sessions/sW/actions`)).status).toBe(405);
     } finally {
       served.close();
     }
@@ -305,13 +303,12 @@ describe("session control over HTTP", () => {
     const served = await serveControl();
     const cors = (res: Response) => res.headers.get("access-control-allow-origin");
     try {
-      const auth = { authorization: `Bearer ${TOKEN}` };
       // 1. A path under the prefix that no route serves. 404 (not 405) is load-bearing: a remote
       //    client reads it as "this serve predates the route", i.e. version skew, not a fault.
-      const unknown = await fetch(`${served.url}/control/nonexistent`, { headers: auth });
+      const unknown = await fetch(`${served.url}/control/nonexistent`);
       expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: "*" });
       // 2. A known path under a method it does not serve.
-      const wrongMethod = await fetch(`${served.url}/control/sessions/sW/actions`, { headers: auth });
+      const wrongMethod = await fetch(`${served.url}/control/sessions/sW/actions`);
       expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: "*" });
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
@@ -319,19 +316,19 @@ describe("session control over HTTP", () => {
       // 3b. The plane's own 404 carries no content for HEAD. Asserted at the handler: over a socket
       //     Node suppresses a HEAD body itself, so going through fetch would prove nothing.
       const { control: quiet } = await fauxControlledAgent([]);
-      const plane = mountControlPlane(controlPlaneRoutes(quiet, { token: TOKEN })).handler;
-      const headMissing = await plane(new Request("http://x/control/nope", { headers: auth, method: "HEAD" }));
+      const plane = mountControlPlane(controlPlaneRoutes(quiet)).handler;
+      const headMissing = await plane(new Request("http://x/control/nope", { method: "HEAD" }));
       expect(headMissing.status).toBe(404);
       expect(await headMissing.text()).toBe("");
       // 4. A percent-encoded spelling is a DIFFERENT path, answered like any other unknown one —
       //    and still readably. Paths are matched as they arrive: decoding them first would undo the
       //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client
       //    sends these (the remote client percent-encodes session ids into a path segment).
-      const encoded = await fetch(`${served.url}/control/%63apabilities`, { headers: auth });
+      const encoded = await fetch(`${served.url}/control/%63apabilities`);
       expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: "*" });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
-      const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD", headers: auth });
-      const getable = await fetch(`${served.url}/control/capabilities`, { headers: auth });
+      const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD" });
+      const getable = await fetch(`${served.url}/control/capabilities`);
       expect(headable.status).toBe(getable.status);
       expect(await headable.text()).toBe(""); // HEAD carries no content (RFC 9110)...
       expect(headable.headers.get("content-type")).toBe(getable.headers.get("content-type")); // ...but keeps headers
@@ -349,13 +346,11 @@ describe("session control over HTTP", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control)]), { port: 0 });
     const port = await server.listening;
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
-        headers: { authorization: `Bearer ${TOKEN}` },
-      });
+      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {});
       expect(res.status).toBe(500);
       expect(res.headers.get("access-control-allow-origin")).toBe("*");
       // Failing visibly is not optional just because the client now gets a readable status.
@@ -379,16 +374,14 @@ describe("session control over HTTP", () => {
       }),
     });
     const errors = vi.spyOn(log, "error").mockImplementation(() => {});
-    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control)]), { port: 0 });
     try {
       const url = `http://127.0.0.1:${await server.listening}`;
-      const res = await fetch(`${url}/control/sessions/s/events`, {
-        headers: { authorization: `Bearer ${TOKEN}` },
-      });
+      const res = await fetch(`${url}/control/sessions/s/events`, {});
       expect(res.status).toBe(500);
       expect(res.headers.get("access-control-allow-origin")).toBe("*");
       expect(await res.text()).toBe("internal error\n");
-      const remote = await connectSessionControl({ url, token: TOKEN });
+      const remote = await connectSessionControl({ url });
       const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
       await expect(iterator.next()).rejects.toMatchObject({ status: 500 });
       expect(errors).toHaveBeenCalledWith(expect.stringContaining("subscription setup failed"));
@@ -422,9 +415,7 @@ describe("session control over HTTP", () => {
       "design/session-control.md \u00a713": documented(section("design/session-control.md", "## 13.", "## 14.")),
       "api-reference.md (curl)": documented(section("api-reference.md", "a `curl` away", "```\n\n")),
     };
-    // `agent` is what mounts the data-plane route, so the table must be built WITH one.
-    const agent: Agent = { invoke: () => (async function* () {})() };
-    const mounted = Object.keys(controlPlaneRoutes(handleControl({}), { token: TOKEN, agent }));
+    const mounted = Object.keys(controlPlaneRoutes(handleControl({})));
     for (const [where, listed] of Object.entries(tables))
       for (const key of mounted) expect(listed, `${key} is mounted but missing from ${where}`).toContain(key);
   });
@@ -433,7 +424,7 @@ describe("session control over HTTP", () => {
     const served = await serveControl();
     try {
       await drain(served.agent.invoke({ session: "sW" }, { text: "hi" }));
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
       expect(await remote.commands()).toEqual(await served.localControl.commands());
@@ -474,14 +465,12 @@ describe("session control over HTTP", () => {
     // method, so leaving the derived OPTIONS behind would make the path exist and answer 405 —
     // turning a diagnosable skew back into the uncoded failure this distinction exists to prevent.
     const withoutCommands = Object.fromEntries(
-      Object.entries(controlPlaneRoutes(control, { token: TOKEN })).filter(
-        ([key]) => !key.endsWith(" /control/commands"),
-      ),
+      Object.entries(controlPlaneRoutes(control)).filter(([key]) => !key.endsWith(" /control/commands")),
     );
     const server = serveNode(router({}, [mountControlPlane(withoutCommands)]), { port: 0 });
     const port = await server.listening;
     try {
-      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}` });
       await expect(remote.commands()).rejects.toThrow(/predates the route/);
     } finally {
       server.close();
@@ -493,7 +482,7 @@ describe("session control over HTTP", () => {
     // connect would advertise names the running agent has already left behind.
     const served = await serveControl();
     try {
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
       expect((await remote.commands()).map((c) => c.name)).toEqual(["triage"]);
       served.commandList.push({ name: "digest", source: "skill" });
       expect((await remote.commands()).map((c) => c.name)).toEqual(["triage", "digest"]);
@@ -505,7 +494,7 @@ describe("session control over HTTP", () => {
   it("events stream live over SSE; the envelope is consumed internally", async () => {
     const served = await serveControl();
     try {
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
       const seen: SessionEvent[] = [];
       const stream = remote.sessions.get("sE").events();
       const watching = (async () => {
@@ -543,7 +532,7 @@ describe("session control over HTTP", () => {
   it("detaching from a QUIET stream resolves promptly end to end (no hang, server survives)", async () => {
     const served = await serveControl();
     try {
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
       const iterator = remote.sessions.get("sL").events()[Symbol.asyncIterator]();
       const first = iterator.next(); // establishes the connection; the stream never produces
       await new Promise((r) => setTimeout(r, 100));
@@ -574,13 +563,13 @@ describe("session control over HTTP", () => {
         abort: async () => {},
       },
     );
-    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control)]), { port: 0 });
     const port = await server.listening;
     try {
       const post = (command: unknown) =>
         fetch(`http://127.0.0.1:${port}/control/sessions/sImg/actions`, {
           method: "POST",
-          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify(command),
         }).then((r) => r.json() as Promise<{ ok: boolean; error?: { code: string } }>);
       const result = await post({
@@ -622,16 +611,14 @@ describe("session control over HTTP", () => {
         throw new Error("skills/ unreadable: permission denied");
       },
     });
-    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control)]), { port: 0 });
     const port = await server.listening;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
-        headers: { authorization: `Bearer ${TOKEN}` },
-      });
+      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {});
       expect(res.ok).toBe(false);
       expect(res.status).toBeGreaterThanOrEqual(500);
       const { ControlRequestError } = await import("../src/session-remote.ts");
-      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}` });
       await expect(remote.commands()).rejects.toBeInstanceOf(ControlRequestError);
     } finally {
       server.close();
@@ -643,7 +630,7 @@ describe("session control over HTTP", () => {
     try {
       const res = await fetch(`${served.url}/control/sessions/sW/actions`, {
         method: "POST",
-        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         // An actual unknown TYPE, not a malformed envelope: the body moved to the action itself
         // when the route did, and sending the old wrapper tested the wrong branch — the runtime
         // default arm went uncovered while the name said otherwise.
@@ -658,11 +645,11 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("the remote data plane: connectAgent drives a run through /control/invoke, observed via events", async () => {
+  it("the remote data plane: connectAgent drives a run through /invoke, observed via events", async () => {
     const served = await serveControl();
     try {
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
-      const remoteAgent = connectAgent({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
+      const remoteAgent = connectAgent({ url: served.url });
       const seen: SessionEvent[] = [];
       const watching = (async () => {
         for await (const ev of remote.sessions.get("sRD").events()) {
@@ -677,11 +664,12 @@ describe("session control over HTTP", () => {
       await watching;
       expect(seen.map((e) => e.type)).toContain("run_started");
       // A REAL Agent: failures are terminal failed EVENTS, never iteration throws (SPEC MUST 2).
-      const wrong = connectAgent({ url: served.url, token: "wrong" });
-      const unauthorized = await drain(wrong.invoke({ session: "x" }, { text: "hi" }));
-      expect(unauthorized).toHaveLength(1);
-      expect(unauthorized[0]).toMatchObject({ type: "failed", retryable: false });
-      expect((unauthorized[0] as { details: string }).details).toContain("401");
+      // An endpoint with no data plane is the ordinary way to be pointed at the wrong thing.
+      const wrong = connectAgent({ url: `${served.url}/nope` });
+      const missing = await drain(wrong.invoke({ session: "x" }, { text: "hi" }));
+      expect(missing).toHaveLength(1);
+      expect(missing[0]).toMatchObject({ type: "failed", retryable: false });
+      expect((missing[0] as { details: string }).details).toContain("404");
       const withImages = await drain(
         remoteAgent.invoke({ session: "x" }, { text: "hi", images: [{ mimeType: "image/png", data: "x" }] }),
       );
@@ -699,27 +687,26 @@ describe("session control over HTTP", () => {
       const events = [{ type: "completed" }, { type: "text", delta: "too late" }, { type: "completed" }];
       return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
     };
-    const agent = connectAgent({ url: "http://x", token: TOKEN, fetchFn });
+    const agent = connectAgent({ url: "http://x", fetchFn });
     expect(await drain(agent.invoke({ session: "s" }, { text: "hi" }))).toEqual([{ type: "completed" }]);
     expect(signal?.aborted).toBe(true);
   });
 
-  it("without an agent, /control/invoke is not mounted", async () => {
+  it("the control plane is PURE control: no invoke route lives under its prefix", async () => {
     const { control } = await fauxControlledAgent([], { boundary: false });
-    const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN })]), { port: 0 });
+    const server = serveNode(router({}, [createControlPlane(control)]), { port: 0 });
     const port = await server.listening;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${TOKEN}` },
-        body: "{}",
-      });
+      // Running a turn belongs to the DATA plane (`POST /invoke`). This prefix used to carry a duplicate of it
+      // whose only difference was the bearer token that no longer exists.
+      expect(Object.keys(controlPlaneRoutes(control))).not.toContain("POST /control/invoke");
+      const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, { method: "POST", body: "{}" });
       expect(res.status).toBe(404);
       // A boundary-less hub still speaks the protocol on the wire: a boundary command answers
       // HTTP 200 + unsupported_capability, never a transport error.
       const dispatch = await fetch(`http://127.0.0.1:${port}/control/sessions/s/actions`, {
         method: "POST",
-        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ type: "compact" }),
       });
       expect(dispatch.status).toBe(200);
@@ -737,7 +724,7 @@ describe("session control over HTTP", () => {
     const fakeTimers = await import("vitest").then((m) => m.vi);
     fakeTimers.useFakeTimers();
     try {
-      const remote = await connectSessionControl({ url: "http://hole", token: "t", fetchFn: blackHole });
+      const remote = await connectSessionControl({ url: "http://hole", fetchFn: blackHole });
       // The rejection assertion attaches AT CREATION: the promise rejects while timers advance,
       // and a handler attached only afterwards would leave an unhandled-rejection window vitest
       // reports as a run-level error — noise that trains everyone to ignore the real ones.
@@ -751,7 +738,7 @@ describe("session control over HTTP", () => {
       // black-hole budget as any other request — the 90s heartbeat limit is for a connection that is merely quiet.
       const readyAttempt = expect(stream.ready).rejects.toThrow(/no usable response in 10s/);
       const agentAttempt = drain(
-        connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
+        connectAgent({ url: "http://hole", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
       );
       await fakeTimers.advanceTimersByTimeAsync(10_000);
       await eventsAttempt;
@@ -781,7 +768,7 @@ describe("session control over HTTP", () => {
     const timers = await import("vitest").then((m) => m.vi);
     timers.useFakeTimers();
     try {
-      const remote = await connectSessionControl({ url: "http://tunnel", token: "t", fetchFn: hangingBody });
+      const remote = await connectSessionControl({ url: "http://tunnel", fetchFn: hangingBody });
       const stream = remote.sessions.get("s").events();
       const iterating = expect(
         (async () => {
@@ -792,10 +779,7 @@ describe("session control over HTTP", () => {
       // The invoke plane opens through the SAME phase, so the tunnel cannot hold it open forever either — it used to
       // fall back to the 90s idle limit here, because the two planes were two copies of one sequence.
       const invoked = drain(
-        connectAgent({ url: "http://tunnel", token: "t", fetchFn: hangingBody }).invoke(
-          { session: "s" },
-          { text: "x" },
-        ),
+        connectAgent({ url: "http://tunnel", fetchFn: hangingBody }).invoke({ session: "s" }, { text: "x" }),
       );
       await timers.advanceTimersByTimeAsync(10_000);
       await iterating;
@@ -812,7 +796,7 @@ describe("session control over HTTP", () => {
     // has a promise it cannot keep — and it must say WHY it cannot keep it, not report an unreachable endpoint. The
     // two readers disagree on purpose, and they read the same stated reason to do it.
     const never = fakeUnreachable();
-    const remote = await connectSessionControl({ url: "http://quiet", token: "t", fetchFn: never });
+    const remote = await connectSessionControl({ url: "http://quiet", fetchFn: never });
     const stream = remote.sessions.get("s").events();
     const cancelled = expect(stream.ready).rejects.toThrow(/cancelled by the consumer/);
     const iterator = stream[Symbol.asyncIterator]();
@@ -837,7 +821,7 @@ describe("session control over HTTP", () => {
     timers.useFakeTimers();
     try {
       const { fetchFn: heartbeating, push } = fakeSse();
-      const remote = await connectSessionControl({ url: "http://slow", token: "t", fetchFn: heartbeating });
+      const remote = await connectSessionControl({ url: "http://slow", fetchFn: heartbeating });
       const stream = remote.sessions.get("s").events();
       const seen: SessionEvent[] = [];
       // The iterator is HELD: releasing the connection means returning the one that opened it, and a fresh
@@ -878,7 +862,7 @@ describe("session control over HTTP", () => {
       `data: ${JSON.stringify({ sessionId: "s", epoch: "e", seq, event })}\n\n`;
     fakeTimers.useFakeTimers();
     try {
-      const remote = await connectSessionControl({ url: "http://x", token: "t", fetchFn });
+      const remote = await connectSessionControl({ url: "http://x", fetchFn });
       const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
       push(wire(0, { type: "run_started", timestamp: 1, data: {} }));
       expect(((await iterator.next()).value as SessionEvent).type).toBe("run_started");
@@ -906,24 +890,30 @@ describe("session control over HTTP", () => {
     const quietAgent = {
       invoke: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
     } as never;
-    const routes = controlPlaneRoutes(quietControl, { token: TOKEN, agent: quietAgent });
-    const auth = { authorization: `Bearer ${TOKEN}` };
+    const routes = controlPlaneRoutes(quietControl);
+    // The two SSE surfaces of the two PLANES: control's events route and the data plane's own handler.
+    const invokeHandler = createInvokeHandler(quietAgent);
     fakeTimers.useFakeTimers();
     try {
       const eventsRoute = routes["GET /control/sessions/{session}/events"];
-      const invokeRoute = routes["POST /control/invoke"];
-      if (!eventsRoute || !invokeRoute) throw new Error("routes missing");
+      if (!eventsRoute) throw new Error("routes missing");
       for (const [name, res] of [
-        ["events", await eventsRoute(new Request("http://x/control/sessions/s/events", { headers: auth }), "s")],
+        [
+          "events",
+          await eventsRoute(
+            new Request("http://x/control/sessions/s/events"),
+            new URL("http://x/control/sessions/s/events"),
+            "s",
+          ),
+        ],
         [
           "invoke",
-          await invokeRoute(
-            new Request("http://x/control/invoke", {
+          await invokeHandler(
+            new Request("http://x/invoke", {
               method: "POST",
-              headers: { ...auth, "content-type": "application/json" },
+              headers: { "content-type": "application/json" },
               body: JSON.stringify({ session: "s", text: "hi" }),
             }),
-            "",
           ),
         ],
       ] as const) {
@@ -952,7 +942,7 @@ describe("session control over HTTP", () => {
       "data: null\n\n",
       'data: {"seq":0,"event":{}}\n\n',
     ]) {
-      const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn: makeFetch(body) });
+      const remote = await connectSessionControl({ url: "http://fake", fetchFn: makeFetch(body) });
       const iterate = async () => {
         for await (const _ of remote.sessions.get("s").events()) void _;
       };
@@ -967,7 +957,7 @@ describe("session control over HTTP", () => {
       `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 2, event: { type: "run_settled", timestamp: 2, runId: "r", data: { status: "completed" } } })}\n\n`,
     ];
     const { fetchFn } = fakeSse({ blocks: sse });
-    const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn });
+    const remote = await connectSessionControl({ url: "http://fake", fetchFn });
     const seen: string[] = [];
     // The gap THROWS (same discipline as protocol mismatch) after yielding everything before it:
     // the consumer's failure path owns the diagnostic and its budget ticks.
@@ -1007,11 +997,11 @@ describe("session control over HTTP", () => {
       expect(() =>
         assertNoControlPlaneCollision({ "POST /telegram": () => new Response("x") }, mounted.mounts[0]!),
       ).not.toThrow();
-      expect(mounted.control?.token).toBeTruthy();
-      // Without a hub: passthrough, no token.
+      expect(mounted.controlPrefix).toBe("/control");
+      // Without a hub: passthrough, nothing mounted.
       const off = mountSessionControl(base, undefined);
       expect(off.routes).toBe(base);
-      expect(off.control).toBeUndefined();
+      expect(off.controlPrefix).toBeUndefined();
     }
   });
 
@@ -1021,7 +1011,7 @@ describe("session control over HTTP", () => {
     // rejected promise for an embedder mounting the handler directly. The query-parameter form this
     // replaced decoded leniently and could not throw, which is what made it a regression.
     const { control } = await fauxControlledAgent([]);
-    const plane = createControlPlane(control, { token: TOKEN }).handler;
+    const plane = createControlPlane(control).handler;
     for (const path of ["/control/sessions/100%", "/control/sessions/%E0%A4%A/entries"]) {
       const res = await plane(new Request(`http://x${path}`));
       expect(res.status).toBe(404);
@@ -1031,8 +1021,8 @@ describe("session control over HTTP", () => {
 
   it("a malformed body is a 400, never a 500 — including the ones that are not objects", async () => {
     const { control } = await fauxControlledAgent([]);
-    const plane = createControlPlane(control, { token: TOKEN }).handler;
-    const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    const plane = createControlPlane(control).handler;
+    const auth = { "content-type": "application/json" };
     // `JSON.parse("null")` is null: reaching into it unguarded turned a malformed request into an
     // internal error the client cannot act on.
     for (const body of ["null", '"a string"', "42"]) {
@@ -1051,8 +1041,8 @@ describe("session control over HTTP", () => {
     // A client typo — or a newer client talking to an older serve — otherwise reads success for a
     // patch that set nothing. The action parser rejects an unknown `type` for the same reason.
     const { control } = await fauxControlledAgent([]);
-    const plane = createControlPlane(control, { token: TOKEN }).handler;
-    const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    const plane = createControlPlane(control).handler;
+    const auth = { "content-type": "application/json" };
     // The code is the SAME one the in-process path answers: the wire must not be where a client
     // loses the difference between "drop that field" and "fix that value".
     const unknownField = await plane(
@@ -1078,7 +1068,7 @@ describe("session control over HTTP", () => {
     // normal state for the same id. Two different ways to lie, so the transport refuses instead.
     const served = await serveControl();
     try {
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
       for (const id of ["", ".", ".."]) {
         // At the BINDING, not once per call: a caller sees it where it made the mistake.
         expect(() => remote.sessions.get(id)).toThrow(/cannot travel as a URL path segment/);
@@ -1099,16 +1089,11 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("createControlPlane refuses to mount without a token", async () => {
-    const { control } = await fauxControlledAgent([]);
-    expect(() => createControlPlane(control, { token: "" })).toThrow(/token is required/);
-  });
-
   it("sessions.list() travels: the deployment's list, isomorphic local and remote", async () => {
     const served = await serveControl();
     try {
       await drain(served.agent.invoke({ session: "sList" }, { text: "hi" }));
-      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remote = await connectSessionControl({ url: served.url });
       expect(await remote.sessions.list()).toEqual(await served.localControl.sessions.list());
       expect((await remote.sessions.list()).map((s) => s.session)).toEqual(["sList"]);
     } finally {
@@ -1134,18 +1119,16 @@ describe("session control over HTTP", () => {
     const logged: string[] = [];
     const spy = vi.spyOn(log, "error").mockImplementation((line: string) => void logged.push(line));
     try {
-      const faulty = serveNode(router({}, [createControlPlane(broken(ioError), { token: TOKEN })]), { port: 0 });
+      const faulty = serveNode(router({}, [createControlPlane(broken(ioError))]), { port: 0 });
       const faultyPort = await faulty.listening;
       try {
-        const res = await fetch(`http://127.0.0.1:${faultyPort}/control/sessions`, {
-          headers: { authorization: `Bearer ${TOKEN}` },
-        });
+        const res = await fetch(`http://127.0.0.1:${faultyPort}/control/sessions`, {});
         expect(res.status).toBe(503);
         expect(await res.json()).toMatchObject({ code: SESSIONS_UNAVAILABLE_CODE, retryable: true });
         expect(logged.join("\n")).toMatch(/EACCES/); // and the operator sees it, not just the client
 
         // And the client can READ that code — the whole point of carrying it on the wire.
-        const remote = await connectSessionControl({ url: `http://127.0.0.1:${faultyPort}`, token: TOKEN });
+        const remote = await connectSessionControl({ url: `http://127.0.0.1:${faultyPort}` });
         // `retryable` travels too: a THROWING read has no `SessionResult` to carry it, and the rule is that
         // `retryable` answers whether to re-send — leaving the caller to infer it from the status would make that
         // rule false on the one path that can reject.
@@ -1160,15 +1143,12 @@ describe("session control over HTTP", () => {
 
       // A TypeError from our own row building is a BUG: it goes back to the plane's boundary, which
       // logs it and answers 500 — never `retryable: true`, which would have a client poll forever.
-      const buggy = serveNode(
-        router({}, [createControlPlane(broken(new TypeError("rows.map is not a function")), { token: TOKEN })]),
-        { port: 0 },
-      );
+      const buggy = serveNode(router({}, [createControlPlane(broken(new TypeError("rows.map is not a function")))]), {
+        port: 0,
+      });
       const buggyPort = await buggy.listening;
       try {
-        const res = await fetch(`http://127.0.0.1:${buggyPort}/control/sessions`, {
-          headers: { authorization: `Bearer ${TOKEN}` },
-        });
+        const res = await fetch(`http://127.0.0.1:${buggyPort}/control/sessions`, {});
         expect(res.status).toBe(500);
         expect(logged.join("\n")).toMatch(/rows\.map is not a function/);
       } finally {
@@ -1180,24 +1160,20 @@ describe("session control over HTTP", () => {
       const nodeBug = Object.assign(new TypeError('The "path" argument must be of type string'), {
         code: "ERR_INVALID_ARG_TYPE",
       });
-      const misread = serveNode(router({}, [createControlPlane(broken(nodeBug), { token: TOKEN })]), { port: 0 });
+      const misread = serveNode(router({}, [createControlPlane(broken(nodeBug))]), { port: 0 });
       const misreadPort = await misread.listening;
       try {
-        const res = await fetch(`http://127.0.0.1:${misreadPort}/control/sessions`, {
-          headers: { authorization: `Bearer ${TOKEN}` },
-        });
+        const res = await fetch(`http://127.0.0.1:${misreadPort}/control/sessions`, {});
         expect(res.status).toBe(500);
       } finally {
         await misread.close();
       }
 
       // And a thrown null reaches the boundary as ITSELF, not as a TypeError from reading `.code`.
-      const nothing = serveNode(router({}, [createControlPlane(broken(null), { token: TOKEN })]), { port: 0 });
+      const nothing = serveNode(router({}, [createControlPlane(broken(null))]), { port: 0 });
       const nothingPort = await nothing.listening;
       try {
-        const res = await fetch(`http://127.0.0.1:${nothingPort}/control/sessions`, {
-          headers: { authorization: `Bearer ${TOKEN}` },
-        });
+        const res = await fetch(`http://127.0.0.1:${nothingPort}/control/sessions`, {});
         expect(res.status).toBe(500);
         expect(logged.join("\n")).not.toMatch(/Cannot read propert/);
       } finally {
@@ -1327,13 +1303,16 @@ async function serveRemoteAgent(opts: {
   const agent = opts.sessionFactory
     ? createPiAgentFromSession({ observer, lease, sessionFactory: opts.sessionFactory })
     : fauxAgent(opts.responses ?? [], { sessions, lease, observer, tools: opts.tools ?? [] }).agent;
-  const server = serveNode(router({}, [createControlPlane(control, { token: TOKEN, agent })]), { port: 0 });
+  // BOTH planes, because `connectAgent` drives the DATA plane (`POST /invoke`) and observes through control.
+  const server = serveNode(router({ "POST /invoke": createInvokeHandler(agent) }, [createControlPlane(control)]), {
+    port: 0,
+  });
   const port = await server.listening;
   conformanceServers.push(() => server.close());
-  return connectAgent({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+  return connectAgent({ url: `http://127.0.0.1:${port}` });
 }
 
-describeSpecConformance("remote agent over /control/invoke", {
+describeSpecConformance("remote agent over /invoke", {
   completing: () => serveRemoteAgent({ responses: [fauxAssistantMessage("spec ok")] }),
   failing: () =>
     serveRemoteAgent({

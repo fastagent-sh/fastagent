@@ -32,7 +32,6 @@ import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
-import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { isEnvKey } from "./secrets.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
@@ -169,17 +168,14 @@ export async function preflightDeploy(input: {
   const modelSpec = model.spec;
 
   // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*` (steer, stop, rewrite
-  // or delete a session) rides the PUBLIC host URL, protected only by the bearer token.
+  // or delete a session) rides the PUBLIC host URL with no authentication of ours in front of it.
   if (config.sessionControl === true) {
     messages.push({
       level: "warn",
       text:
-        `sessionControl: true — the deployed box serves /control/* (steer, stop, rewrite or delete a session) at its public URL, ` +
-        `protected only by a bearer token. Set ${CONTROL_TOKEN_ENV} (listed with the other secrets) and give the ` +
-        `same value to your control-plane client (\`connectSessionControl({ url, token })\`). Unset, the box mints its own per boot — ` +
-        `readable only by shelling in (\`docker compose exec\`/\`fly ssh console\`: <stateRoot>/control.json, whose ` +
-        `url field is container-loopback) and replaced on every restart. Front the endpoint with real auth for ` +
-        `anything wider (docs/design/session-control.md §14)`,
+        `sessionControl: true — the deployed box serves /control/* (steer, stop, rewrite or delete a session) at its ` +
+        `public URL, UNAUTHENTICATED. fastagent authenticates nothing: put a gateway, an IdP-backed proxy or a ` +
+        `private network in front of that URL, or leave sessionControl off (docs/design/session-control.md §14)`,
     });
   }
 
@@ -480,10 +476,6 @@ export async function preflightDeploy(input: {
     // ships, and guessing a custom one's variables is impossible.
     ...allSecrets(inspected.secrets),
   ];
-  // The plane's bearer token is the DEPLOYMENT's secret, not the container's.
-  if (config.sessionControl === true) {
-    extraSecrets.push({ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" });
-  }
   // What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
   // looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
   // FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives

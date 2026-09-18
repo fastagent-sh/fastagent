@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,24 +9,46 @@ import { mountSessionControl, routesFor } from "../src/service.ts";
 import { log } from "../src/log.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
-import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 
 describe("serving surface", () => {
-  it("can suppress the fallback /invoke for AgentCore's publicly forwarded surface", async () => {
+  it("can suppress the data plane for AgentCore's publicly forwarded surface", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-surface-"));
     const ordinary = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
     expect(Object.keys(ordinary.routes)).toContain("POST /invoke");
-    expect(ordinary.builtinInvoke).toBe(true);
 
+    // The ONE posture that opts out: AgentCore serves the Runtime's `/invocations` contract instead.
     const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
       builtinInvoke: false,
     });
     expect(Object.keys(agentcore.routes)).toEqual(["GET /health"]);
-    expect(agentcore.builtinInvoke).toBe(false);
   });
 
-  it("keeps health but does not add the fallback /invoke for a long-connection channel", async () => {
+  it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-invoke-surface-"));
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "hook.mjs"),
+      `export default () => ({ "POST /hook": () => new Response("x") });\n`,
+    );
+    const beside = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
+    expect(Object.keys(beside.routes).sort()).toEqual(["GET /health", "POST /hook", "POST /invoke"]);
+
+    // Reserved like /control/*: silently replacing the one route every client, every doc and the
+    // startup line all name is worse than refusing to start. (A fresh dir: an ESM module already
+    // imported from a path is cached under it, so rewriting hook.mjs would re-load the old one.)
+    const taken = await mkdtemp(join(tmpdir(), "fa-invoke-taken-"));
+    await mkdir(join(taken, "channels"));
+    await writeFile(
+      join(taken, "channels", "mine.mjs"),
+      `export default () => ({ "POST /invoke": () => new Response("mine") });\n`,
+    );
+    await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {})).rejects.toThrow(
+      /that path is the agent's own data plane/,
+    );
+  });
+
+  it("keeps health and the data plane for a long-connection channel", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-long-connection-surface-"));
     await mkdir(join(dir, "channels"));
     await writeFile(
@@ -34,8 +56,7 @@ describe("serving surface", () => {
       `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n`,
     );
     const surface = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(surface.routes)).toEqual(["GET /health"]);
-    expect(surface.builtinInvoke).toBe(false);
+    expect(Object.keys(surface.routes).sort()).toEqual(["GET /health", "POST /invoke"]);
     expect(surface.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
     expect(surface.routeChannels).toEqual([]);
     const health = surface.routes["GET /health"]!;
@@ -111,7 +132,7 @@ describe("cli: the serving report", () => {
       reportServing(
         {
           routes: { "POST /telegram": () => new Response("x") },
-          channels: { routes: ["telegram"], longConnections: ["feishu-ws"], builtinInvoke: false },
+          channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
         } as never,
         "127.0.0.1",
         8787,
@@ -121,91 +142,45 @@ describe("cli: the serving report", () => {
     }
     expect(sent).toEqual([{ type: "ready", port: 8787, routeChannels: ["telegram"] }]);
   });
-
-  it("does not advertise the built-in invoke example for a channel that owns that path", () => {
-    // `POST /invoke` in the table does NOT mean the built-in fallback: a channel may author it with
-    // a protocol of its own, and printing the built-in curl example would document a request that
-    // handler does not accept. The assembly knows which it is; inferring from the path does not.
-    const lines: string[] = [];
-    const original = process.send;
-    (process as { send?: unknown }).send = () => true;
-    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
-      lines.push(String(m));
-    });
-    try {
-      reportServing(
-        {
-          routes: { "POST /invoke": () => new Response("a channel's own protocol") },
-          channels: { routes: ["custom"], longConnections: [], builtinInvoke: false },
-        } as never,
-        "127.0.0.1",
-        8787,
-      );
-    } finally {
-      spy.mockRestore();
-      (process as { send?: unknown }).send = original;
-    }
-    expect(lines.join("\n")).not.toContain(INVOKE_EXAMPLE_BODY);
-  });
 });
 
 describe("cli: the assembled serving surface", () => {
   it("the control plane is reachable in the surface dev/start hand to serve", async () => {
     // The gap this closes: mountSessionControl returns routes AND mounts, and a caller forwarding
-    // only the routes gets a server where every /control/* request 404s — while control.json is
-    // still written, handing a client an address that answers nothing. Every other test builds the
+    // only the routes gets a server where every /control/* request 404s, while the startup line
+    // still announces the prefix — an address that answers nothing. Every other test builds the
     // router directly; this one assembles it the way `serve` does, from the CLI's own output.
     const control = { capabilities: () => ({ commands: [], models: [] }) } as never;
     const withControl = mountSessionControl({ "GET /health": () => text("ok\n", 200) }, control);
     const surface = { ...withControl }; // exactly what dev/start spread into ServingSurface
     const handle = router(surface.routes, surface.mounts);
-    // Unauthenticated is enough to prove REACHABILITY: 401 comes from the plane, 404 from its absence.
-    expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(401);
+    // 200 from the plane, 404 from its absence.
+    expect((await handle(new Request("http://h/control/capabilities"))).status).toBe(200);
     expect((await handle(new Request("http://h/health"))).status).toBe(200);
   });
 
-  it("announceControl writes the 0600 discovery file under a fresh state root and removes it on cleanup", async () => {
-    const root = await mkdtemp(join(tmpdir(), "fa-cli-announce-"));
-    const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
-    const cleanup = announceControl(
-      { token: "tok-1", prefix: "/control" },
-      stateRoot,
-      { host: "127.0.0.1", tunnel: false },
-      12345,
-    );
-    const path = join(stateRoot, "control.json");
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ url: "http://127.0.0.1:12345", token: "tok-1" });
-    // The file IS the credential: anything readable by other users on the box is a handover of the
-    // plane. `writeFileSync`'s mode is umask-masked, so this is what proves the explicit chmod ran.
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-    cleanup();
-    await expect(readFile(path, "utf8")).rejects.toThrow(/ENOENT/);
-    // No plane: nothing written, nothing to remove.
-    announceControl(undefined, stateRoot, { tunnel: false }, 1)();
-    await expect(readFile(path, "utf8")).rejects.toThrow(/ENOENT/);
-  });
-
-  it("a bind address lands in the discovery url and a loopback bind drops the LAN warning", async () => {
+  it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const root = await mkdtemp(join(tmpdir(), "fa-cli-bind-"));
-    const control = { token: "t", prefix: "/control" };
-    const url = async (host: string | undefined, stateRoot: string) => {
-      announceControl(control, stateRoot, { host, tunnel: false }, 9000);
-      return (JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as { url: string }).url;
-    };
     try {
-      expect(await url("127.0.0.1", join(root, "a"))).toBe("http://127.0.0.1:9000");
-      expect(warn).not.toHaveBeenCalled(); // loopback is not LAN-reachable — nothing to warn about
-      // A specific non-wildcard bind is only reachable as itself: the client must dial that address.
-      expect(await url("192.168.1.5", join(root, "b"))).toBe("http://192.168.1.5:9000");
-      // …and the warning NAMES that bind. Counting alone would stay green if the address rendered as
-      // `undefined`, which is the whole content of the claim "names the actual bind".
+      announceControl("/control", { host: "127.0.0.1", tunnel: false });
+      expect(warn).not.toHaveBeenCalled(); // loopback is not reachable off this machine
+
+      // A specific non-wildcard bind is reachable as itself, and the warning NAMES that bind —
+      // counting alone would stay green if the address rendered as `undefined`.
+      announceControl("/control", { host: "192.168.1.5", tunnel: false });
       expect(warn.mock.calls.flat().join(" ")).toContain("192.168.1.5 (off this machine)");
-      expect(await url(undefined, join(root, "c"))).toBe("http://127.0.0.1:9000"); // wildcard accepts loopback
+      announceControl("/control", { tunnel: false });
       expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
       expect(warn).toHaveBeenCalledTimes(2);
-      announceControl(control, join(root, "d"), { host: "127.0.0.1", tunnel: true }, 9000);
-      expect(warn.mock.calls.flat().join(" ")).toContain("--tunnel exposes /control/*");
+
+      // The tunnel takes the plane PUBLIC, and nothing authenticates it — the word has to be there.
+      announceControl("/control", { host: "127.0.0.1", tunnel: true });
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/--tunnel publishes \/control\/\*.*NO authentication/s);
+
+      // No plane published: nothing said at all.
+      warn.mockClear();
+      announceControl(undefined, { tunnel: true });
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }
@@ -302,7 +277,7 @@ describe("cli: bind address policy", () => {
     // reason that it was never tried. It cannot get here — `parseBind`/`http.host` resolve it to an
     // address first (bind.ts `bindAddress`) — and this is what says so.
     for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1", bindAddress("localhost")]) {
-      const [bindLine, tryLine] = readyAddressLines(host, 8899, true);
+      const [bindLine, tryLine] = readyAddressLines(host, 8899);
       const dial = tryLine!.match(/curl -s (\S+?)\/invoke/)![1]!;
       expect(dial, String(host)).toContain(":8899");
       expect(dial, String(host)).not.toContain("localhost"); // never a name the bind may not answer
@@ -313,7 +288,7 @@ describe("cli: bind address policy", () => {
       );
       if (host === "::1") expect(dial).toBe("[::1]:8899"); // URL form, brackets and all
     }
-    // No builtin invoke route, no curl to offer — and still exactly one line about the bind.
-    expect(readyAddressLines("127.0.0.1", 1, false)).toHaveLength(1);
+    // The data plane is always served, so the curl is always offered: bind line + try-it, nothing else.
+    expect(readyAddressLines("127.0.0.1", 1)).toHaveLength(2);
   });
 });

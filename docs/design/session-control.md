@@ -184,8 +184,8 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
   move. Cloning is this with the source's own `leafEntryId`. It is IDEMPOTENT: `into` is the Caller's
   id, the record is stamped with where it came from, and repeating a fork that already landed answers
   `ok: true` and writes nothing. The same id holding a DIFFERENT history is `invalid_command`.
-- `delete` destroys the record. It is the only IRREVERSIBLE call, guarded by the same bearer token as
-  everything else — [§14](#14-security-boundary) explains why that grain is the honest one.
+- `delete` destroys the record. It is the only IRREVERSIBLE call, and like every other one it is
+  ungated — [§14](#14-security-boundary) explains why the framework holds no key at all.
 - There are no `cycle_*` commands: cycling is a TUI input affordance.
 
 ### 5.1.1 Commands
@@ -488,7 +488,8 @@ DELETE /control/sessions/{id}
 GET    /control/sessions/{id}/entries          ?since=
 GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
-POST   /control/invoke                         the DATA plane
+
+POST   /invoke                                 the DATA plane (NOT this prefix — see below)
 ```
 
 - **PATCH for properties, POST …/actions for actions.** What a session HAS is a resource field; what
@@ -503,8 +504,12 @@ POST   /control/invoke                         the DATA plane
   sees them, and encoding does not help (the spec normalises `%2E` too). The transport refuses such an
   id at the binding, and the plane refuses to MINT one (`fork`). A session a channel already created
   under one keeps running and keeps appearing in `list()`; it simply cannot be addressed remotely.
-- **`POST /control/invoke` stays at the prefix**, not under a session: its body already carries the
-  scope, and two places to say one thing is a place for them to disagree.
+- **The data plane is NOT under this prefix.** `/control/*` is REST over session resources; running a
+  turn is a root verb endpoint, `POST /invoke`, the shape every LLM API of this class uses. The two
+  used to be one prefix apart, and the only difference between `POST /control/invoke` and
+  `POST /invoke` was the bearer token — a duplicate route standing in for an access rule. The session
+  stays in the BODY rather than the path: it already carries the scope, and a Caller-minted id may
+  contain `:` and `/`, which the control plane pays for in percent-encoding and this plane need not.
 - **Actions and patches ride plain HTTP request/response.** Bodies are parsed field by field at the
   boundary, never cast through. An unknown key is REJECTED there, not dropped: silently ignoring it
   answers `ok: true` for a patch that set nothing. It rejects with the same `unsupported_capability`
@@ -521,9 +526,9 @@ POST   /control/invoke                         the DATA plane
   | `state` / `entries` / `capabilities` / `commands` return a value | 200 |
   | `list()` throws a store fault (a coded one) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either; the remote client carries all three on the error it throws |
   | any other read throws — `commands()` on an unreadable definition, `list()` on something that is not a store fault | 500 from the plane's boundary |
-  | the request never reached the plane (token, JSON, body cap, route) | 401 / 400 / 413 / 404 / 405 |
+  | the request never reached the plane (JSON, body cap, route) | 400 / 413 / 404 / 405 |
 
-  `POST /control/invoke` is the exception, and for a contract reason rather than a transport one: an
+  `POST /invoke` is the exception, and for a contract reason rather than a transport one: an
   `Agent` may not throw out of its iteration (SPEC MUST 2), so `connectAgent` has no `throw` to map a
   status onto. Every non-2xx it meets — including the 400/413/405 its own handler emits — becomes a
   `failed` event whose `retryable` is derived from the status (429 and 5xx are worth re-sending).
@@ -562,10 +567,13 @@ The remote adapter consumes the envelope internally and re-exposes the same `Ses
 (and `connectAgent` does the same for the data plane's `Agent`). Local and remote consumers are
 isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
-**Browser reachability.** The bearer token travels in `Authorization`, which is not CORS-safelisted,
-so a browser preflights EVERY call to the plane, including a plain `GET`. A Node client is unaffected
-(Node's fetch does not enforce CORS), which is why the gap stayed invisible while blocking every browser
-client.
+**Browser reachability.** A JSON body is not a CORS-safelisted content type, and a deployment that
+fronts this port with its own auth has the browser sending `Authorization` too — either one makes the
+browser preflight. A Node client is unaffected (Node's fetch does not enforce CORS), which is why the
+gap stayed invisible while blocking every browser client. Both fastagent-owned surfaces answer the
+preflight through one function (`withCors`): the control plane at its mount's single exit, `POST
+/invoke` at its handler's. A channel route is deliberately NOT tagged — its caller is a platform's
+server, and a webhook that answers cross-origin requests is one a page can drive.
 
 The plane is therefore mounted as ONE sub-application owning the `/control` prefix, not as a set of
 routes that happen to share it. That is a correctness property: CORS belongs to every reply that
@@ -600,19 +608,25 @@ transport turns into a non-2xx (the table above), `sessions_unavailable` + 503 h
 
 ## 14. Security boundary
 
-**Who mints the token.** By default the serve mints one per boot and writes it to
-`<stateRoot>/control.json` (0600) — a LOCAL discovery channel whose trust boundary is filesystem
-permissions, which holds for a client that shares a filesystem with the serving process — a desktop app
-on the same machine. A deployment removes that premise: a token minted inside the container is unreadable
-from outside and replaced on every restart. There the deployer owns the secret —
-`FASTAGENT_CONTROL_TOKEN` is set as a deploy secret (`fastagent deploy` lists it whenever
-`sessionControl: true`), and the serve honours it instead of minting.
+**fastagent authenticates nothing, on purpose.** Not `/control/*`, not `POST /invoke`. Authentication
+belongs to the deployment: a gateway, an IdP-backed proxy, a private network, AgentCore's IAM, or an
+embedder's own middleware in front of the Fetch handler. This is the same line every server framework
+draws, and the reason is not minimalism — a scheme the framework owns is one it owns badly:
 
-**`delete` and the one key.** The bearer token is deployment-wide and all-or-nothing. A second gate in
-front of `delete` was considered and rejected: the framework owns exactly one key, so a second lock on
-the same door changes who can open it not at all. Whoever holds the token can already read every entry
-and abort every run; `delete` adds that the loss is permanent. A deployment that needs per-principal
-destructive policy owes it at the wrapping host.
+- The plane USED to mint a per-boot bearer token. It was deployment-wide and all-or-nothing, so it
+  could express no policy any real deployment needs, and it authenticated ONE prefix while the data
+  plane beside it was open — which produced `POST /control/invoke`, a duplicate of `POST /invoke`
+  whose only content was the token.
+- It was enforced per route, by hand, twelve times. A scheme that each new route must remember is one
+  some route will forget, and the failure is silent.
+- It was security theatre at the only boundary that mattered: a public URL protected by one shared
+  secret that every caller holds is a public URL.
+
+**What this obliges.** Everything below §14 assumes the port itself is the boundary. `dev` binds
+loopback; `start` binds all interfaces because a container needs that, and says so at startup;
+`--tunnel` publishes the whole port and warns in those words; `fastagent deploy` warns whenever
+`sessionControl: true` rides a public host URL. A deployment that needs per-principal policy —
+including per-principal `delete` — builds it in the facade below.
 
 **The multi-tenant facade.** N users behind one deployment, each reaching only their own sessions: the
 facade authenticates its user, reads the session id out of the request, checks it against its OWN
@@ -626,16 +640,16 @@ safe:
 - **`events` subscribes per session** rather than filtering a global stream, so a tenant cannot
   observe another's run by holding a connection open.
 - **The lease is per session** (§9), so a busy tenant answers `session_busy` to itself alone.
-- **Authentication and extraction are separate in the plane itself.** The bearer guard authenticates;
-  taking the id out of the path enforces nothing. There is no per-session permission inside to
-  half-configure and get wrong.
+- **Extraction is not authorisation.** Taking the id out of the path enforces nothing, and the plane
+  authenticates nothing. There is no per-session permission inside to half-configure and get wrong:
+  the facade holds all of it.
 
 **The trap: the path says where a call WRITES, the body says where it READS.** Two calls take a second
 session id, and neither is in the URL:
 
 | Call | Checked by a facade reading the path | Also needs checking |
 |---|---|---|
-| `POST /control/invoke` | — (the session is in the BODY, not the path) | `session` AND `parentSession` — the latter inherits the parent's history into the new session |
+| `POST /invoke` | — (the session is in the BODY, not the path) | `session` AND `parentSession` — the latter inherits the parent's history into the new session |
 | `PUT /control/sessions/{id}` | `{id}`, the fork's destination | `from` in the body — the history's SOURCE |
 
 A facade that authorises only what it finds in the path lets a user read any conversation on the
@@ -646,8 +660,8 @@ the one that WRITES.
 `capabilities` and `commands` are agent-level with no user data and pass through as-is.
 `GET /control/sessions` must NOT be exposed — it returns every session on the deployment (§5), and a
 facade already holds the per-user mapping a filtered list would return. The deployment's own port must
-not be reachable by end users: the bearer token is deployment-wide, so a user who can reach past the
-facade holds every session. A same-host facade wants `--bind 127.0.0.1`, with two consequences: the
+not be reachable by end users: nothing behind the facade authenticates anything, so a user who can
+reach past it holds every session. A same-host facade wants `--bind 127.0.0.1`, with two consequences: the
 plane and the channel webhooks share one server and one bind, so loopback takes Telegram/Feishu/Slack
 ingress off the network too; and `--tunnel` is ALLOWED with that bind (cloudflared dials the name
 `localhost`) but republishes the port on a public URL, which is what the loopback bind was for. A
@@ -690,11 +704,11 @@ tools safe for untrusted users; `ExecutionEnv` is still not a complete sandbox b
   PATH, not the flat journal. An unreadable chain never resolves silently to assembly defaults:
   `state()` stays total but leaves the settings pair absent, and the fault surfaces where an error
   code exists.
-- **Transport.** `createControlPlane` (engine-neutral, bearer token REQUIRED) serves §13's surface.
-  `connectSessionControl` re-exposes the SAME `SessionControl` and consumes the envelope internally.
-  The data plane travels too: `POST /control/invoke` + `connectAgent`. `config.sessionControl: true`
-  makes dev/start mount the routes, mint a per-boot token and write `<stateRoot>/control.json` (0600);
-  product runners own real authentication, idempotency, event persistence and routing (§14).
+- **Transport.** `createControlPlane` (engine-neutral, unauthenticated like every other route) serves
+  §13's surface. `connectSessionControl` re-exposes the SAME `SessionControl` and consumes the envelope
+  internally. The data plane is its own root route: `POST /invoke` + `connectAgent`.
+  `config.sessionControl: true` makes dev/start mount the plane; product runners own authentication,
+  idempotency, event persistence and routing (§14).
 - **Lifecycle.** `sessions.list()` is the deployment's conversation list in CALLER ids; `fork` is
   idempotent; `delete` ends the session's live streams rather than holding connections open on a
   record that is gone. No `create` and no `clone`. `GET /control/sessions` is the first read that MAY

@@ -32,7 +32,7 @@ describe("bind: one reading of a bind address", () => {
   it("a NAME never leaves the parser: localhost resolves to an address at the boundary", () => {
     // Accepting `localhost` and PASSING IT ON are different things. `server.listen` would hand the name
     // to dns.lookup, which picks one of 127.0.0.1/::1 by rules this module does not control — so what
-    // got bound would be unknown here, while control.json and the copyable curl carried a name for the
+    // got bound would be unknown here, while the copyable curl carried a name for the
     // client to resolve again, possibly to the other one. Resolving at the boundary removes both.
     expect(isBindAddress("localhost")).toBe(true); // still a legitimate thing to type
     expect(bindAddress("localhost")).toBe("127.0.0.1");

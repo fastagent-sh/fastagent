@@ -1,10 +1,6 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import { writeFileAtomic } from "../atomic-write.ts";
-import { SECRET_FILE_MODE } from "../paths.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
 import type { AgentService, MountAgentServiceOptions } from "../service.ts";
@@ -66,85 +62,66 @@ export function serveService(
 ): void {
   const { host } = bind;
   const { tunnel, agentDir, stateRoot } = posture;
-  let unannounce = (): void => {};
   serve(service.handler, bind, {
     ready: service.ready,
     onListening: (p) => {
       reportServing(service, host, p);
-      unannounce = announceControl(service.control, stateRoot, { host, tunnel }, p);
+      announceControl(service.controlPrefix, { host, tunnel });
       maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
     },
-    onShutdown: () => {
-      unannounce();
-      return service.close();
-    },
+    onShutdown: () => service.close(),
   });
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
-  for (const line of readyAddressLines(host, boundPort, service.channels.builtinInvoke)) log.info(line);
+  for (const line of readyAddressLines(host, boundPort)) log.info(line);
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
   }
 }
 
-/** The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies. */
-export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
+/** The line that names WHERE the serve is — every posture reports it, including AgentCore's own surface. */
+export function bindLine(host: string | undefined, boundPort: number): string {
+  return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
+}
+
+/** The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies. */
+export function readyAddressLines(host: string | undefined, boundPort: number): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
-  const lines = [
-    `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`,
+  return [
+    bindLine(host, boundPort),
+    `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
   ];
-  if (builtinInvoke) {
-    lines.push(
-      `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
-    );
-  }
-  return lines;
 }
 
 /**
- * Write `<stateRoot>/control.json` so a LOCAL client (a desktop app on this machine) can find the control plane once the port is
- * known, and say what reaches it.
+ * Say what this port exposes and how far it reaches.
+ *
+ * NOTHING fastagent serves is authenticated — authentication belongs to the deployment (a gateway, a private
+ * network, AgentCore's IAM, an embedder's middleware). So the only job here is to make the reach impossible to
+ * misread: a control plane on a public tunnel URL is a public control plane.
  */
-export function announceControl(
-  control: { token: string; prefix: string } | undefined,
-  stateRoot: string,
-  bind: { host?: string; tunnel: boolean },
-  boundPort: number,
-): () => void {
-  if (!control) return () => {};
-  mkdirSync(stateRoot, { recursive: true });
-  const path = join(stateRoot, "control.json");
-  const url = `http://${clientHost(bind.host)}:${boundPort}`;
-  // The token rides in a file, so the FILE carries the mode — the directory's is the operator's (paths.ts).
-  writeFileAtomic(path, `${JSON.stringify({ url, token: control.token })}\n`, SECRET_FILE_MODE);
-  log.info(`[fastagent] session control on ${control.prefix}/* (token in ${path})`);
-  // LAN-reachable with the bearer token as the only protection.
+export function announceControl(controlPrefix: string | undefined, bind: { host?: string; tunnel: boolean }): void {
+  if (!controlPrefix) return;
+  log.info(`[fastagent] session control on ${controlPrefix}/* (unauthenticated — put your own auth in front)`);
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(
       `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
-        "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
-        "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs/design/session-control.md §14)",
+        `${controlPrefix}/* (steer, stop, rewrite or delete a session) is UNPROTECTED on your LAN — bind loopback ` +
+        "(--bind 127.0.0.1), firewall the port, or front it with a gateway (docs/design/session-control.md §14)",
     );
   }
   if (bind.tunnel) {
-    // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
     log.warn(
-      "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
-        "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs/design/session-control.md §14)",
+      `[fastagent] --tunnel publishes ${controlPrefix}/* (steer, stop, rewrite or delete a session) at the public ` +
+        "tunnel URL with NO authentication — anyone with that URL controls this agent; put real auth in front " +
+        "before sharing it (docs/design/session-control.md §14)",
     );
   }
-  return () => {
-    try {
-      rmSync(path, { force: true });
-    } catch {
-      // the file is advisory — shutdown must not fail on it
-    }
-  };
 }
 
 /** What the CLI gives a service to stop in, and the hard exit that follows it. */

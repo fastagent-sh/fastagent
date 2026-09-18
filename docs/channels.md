@@ -76,11 +76,12 @@ contribute route tables to the HTTP server; object exports open long connections
 assembled agent and resolved state root. Long-connection adapters own reconnects, observe shutdown
 through `AbortSignal`, and report first readiness plus terminal closure through the two promises.
 
-With no enabled channel files, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
-A channel file is enabled by its importable extension (`.ts`, `.js`, or `.mjs`); rename it to, for
-example, `telegram.ts.disabled` to keep it in the agent without mounting it. A declared channel that
-fails to load, or overlaps another channel's route, makes `dev` / `start` fail — it never silently
-disappears or triggers the `/invoke` fallback.
+FastAgent always serves the HTTP/SSE data plane at `POST /invoke`, beside whatever channels mount.
+That path is RESERVED: a channel declaring it makes `dev` / `start` fail rather than silently
+replacing the one route every client and the startup line name. A channel file is enabled by its
+importable extension (`.ts`, `.js`, or `.mjs`); rename it to, for example, `telegram.ts.disabled` to
+keep it in the agent without mounting it. A declared channel that fails to load, or overlaps another
+channel's route, makes `dev` / `start` fail — it never silently disappears.
 
 ## Routes
 

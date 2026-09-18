@@ -2,14 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type FlyRunPlan, deployFlyRun } from "../src/deploy/fly/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
-import { CONTROL_TOKEN_ENV } from "../src/channels/control.ts";
-import {
-  assembleSecrets,
-  authSeedBytes,
-  collectAuthSeed,
-  deploymentSecrets,
-  missingValuesGate,
-} from "../src/deploy/secrets.ts";
+import { assembleSecrets, authSeedBytes, collectAuthSeed, missingValuesGate } from "../src/deploy/secrets.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
@@ -403,35 +396,6 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
       values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     });
     expect(dup.missingSecrets.filter((n) => n === "TELEGRAM_BOT_TOKEN")).toHaveLength(1);
-  });
-
-  it("the control token carries when set and NEVER gates — unset, the box mints one and still serves", () => {
-    const base = {
-      modelAuth: "OPENAI_API_KEY",
-      authFile: undefined,
-      channels: [] as const,
-      values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
-    };
-    const absent = assembleSecrets({
-      ...base,
-      channels: [],
-      extraSecrets: [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
-    });
-    expect(absent.missingSecrets).toEqual([]); // a deploy that worked before this existed still runs
-    const present = assembleSecrets({
-      ...base,
-      channels: [],
-      extraSecrets: [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
-      values: new Map(Object.entries({ OPENAI_API_KEY: "k", [CONTROL_TOKEN_ENV]: "t0ken" })),
-    });
-    expect(present.secrets[CONTROL_TOKEN_ENV]).toBe("t0ken");
-    // The runbook lists it as optional for the same reason — required would gate every host.
-    const listed = deploymentSecrets(
-      "OPENAI_API_KEY",
-      [],
-      [{ name: CONTROL_TOKEN_ENV, source: "fastagent.config sessionControl" }],
-    );
-    expect(listed.find((s) => s.name === CONTROL_TOKEN_ENV)?.required).toBe(false);
   });
 });
 

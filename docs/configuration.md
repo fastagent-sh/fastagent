@@ -50,7 +50,7 @@ Every key is optional. Supported keys:
 | `http.port` | `8787` | Default port for `dev` / `start`. |
 | `http.host` | per command | Bind address for `dev` / `start`. Unset leaves the default to the command: `start` binds all interfaces (what containers need), `dev` binds `127.0.0.1`. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
 | `selfSchedule` | `false` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
-| `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; `start` binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
+| `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. **It is unauthenticated, like every other route fastagent serves.** `start` binds all interfaces by default, so the routes are reachable by anyone who can reach the port — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or front it with a gateway (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, which is what the deploy warning is about. |
 | `deploy.secrets` | `[]` | Secret env-var names **no code declares** — a value read outside `tools/`/`schedules/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and, under `--run`, read from the agent's `.secrets/.env` — the file that declares the deployed environment — and set on the host; a missing value gates the run. Exporting the variable in your shell does not reach the deployment (in CI, write the file before running the command). |
 | `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM, 60–1209600 seconds. Default `180`. Memory bills for the whole idle tail and a session past it cold-starts, so the workload picks the trade — raise it for a chat agent talked to in bursts, lower it for a schedule-only one. Changing it changes the generated template, so an existing `agentcore.template.yaml` needs `--force` to pick it up — and `--run` refuses to deploy from the stale one. See [AgentCore](deploy.md#aws-bedrock-agentcore). |
 | `deploy.apt` | `[]` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
@@ -263,18 +263,17 @@ start: --bind > fastagent.config.ts http.host > all interfaces
 ```
 
 `localhost` is accepted and resolved to `127.0.0.1` as it is read, so what binds, what the startup
-lines print and what `control.json` records are the same address — a name would leave that to
+lines print are the same address — a name would leave that to
 `dns.lookup` on one side and to the client's resolver on the other, which can disagree.
 
 The chain is one; only its last rung differs, because the two commands sit in different places.
 `start` is the container/server posture, where all interfaces is what makes the port reachable at all.
 `dev` runs on a laptop, on networks its author does not own, and serves the agent's full tool
 authority — so it ends at loopback, and `--bind 0.0.0.0` gives back the reach a container, a phone on
-the LAN, or a colleague needs. `<stateRoot>/control.json` records the address a client should dial,
-so clients read it rather than assume one.
+the LAN, or a colleague needs.
 
-**FastAgent does not provide a security boundary, and a default cannot be one.** The built-in
-`POST /invoke` has no authentication; author-written `tools/` can import anything; a WebSocket or
+**FastAgent does not provide a security boundary, and a default cannot be one.** Nothing it serves is
+authenticated — `POST /invoke` and `/control/*` alike; author-written `tools/` can import anything; a WebSocket or
 Socket-Mode channel dials OUT, so no bind address constrains who can message the agent. Whoever can
 reach an agent can use everything it mounts. A bind address decides who can reach the port by
 accident, nothing more. Authentication belongs where the request is still a request: a channel's own

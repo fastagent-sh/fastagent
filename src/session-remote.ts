@@ -174,21 +174,21 @@ async function controlError(res: Response): Promise<ControlRequestError> {
  * purpose: one endpoint, one token, two contracts.
  */
 export interface RemoteEndpointOptions {
-  /** Base URL of the serving process (e.g. `http://127.0.0.1:8787`); `/control/*` is appended. */
+  /**
+   * Base URL of the serving process (e.g. `http://127.0.0.1:8787`). fastagent serves it unauthenticated — point this
+   * at whatever fronts it (a gateway, an SSH tunnel, a private network address), not at a public port.
+   */
   url: string;
-  /** The shared bearer secret (`<stateRoot>/control.json` on the serving machine). */
-  token: string;
   /** Injectable for tests. */
   fetchFn?: typeof fetch;
 }
 
 export async function connectSessionControl(options: RemoteEndpointOptions): Promise<SessionControl> {
-  const { url, token, fetchFn = fetch } = options;
+  const { url, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
-  const headers = { authorization: `Bearer ${token}` };
 
   const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
-    const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchFn(`${base}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw await controlError(res);
     return (await res.json()) as T;
   };
@@ -219,14 +219,14 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             body = await openStreamBody({
               fetchFn,
               url: `${base}/control/sessions/${encodeURIComponent(session)}/events`,
-              init: { headers },
+              init: {},
               abort,
               budget,
               what: "control events",
             });
           } catch (error) {
-            // The subscription was never established: the endpoint is unreachable or never completed a response, the
-            // token was refused, the consumer cancelled first. Whoever ended it said why, and `fetch` rejected with
+            // The subscription was never established: the endpoint is unreachable or never completed a response, a
+            // gateway in front refused it, the consumer cancelled first. Whoever ended it said why, and `fetch` rejected with
             // that very object. A waiter on `ready` must learn it instead of waiting out a stream that will never
             // carry anything — including the cancellation, which the ITERATION reports as a clean end (walking away
             // is not an error) while `ready` still has a promise it cannot keep.
@@ -302,12 +302,12 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
 
   /**
    * A write that answers a `SessionResult`: the result rides HTTP 200 either way (`ok: false` is a protocol answer,
-   * not a transport failure), so a non-2xx here is a REAL transport/auth fault.
+   * not a transport failure), so a non-2xx here is a REAL transport fault.
    */
   const write = async (path: string, method: string, body?: unknown): Promise<SessionResult> => {
     const res = await fetchFn(`${base}${path}`, {
       method,
-      headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
+      ...(body === undefined ? {} : { headers: { "content-type": "application/json" } }),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
     });
@@ -383,12 +383,12 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
 }
 
 /**
- * The remote DATA plane: an `Agent` whose `invoke` drives `POST /control/invoke` on a serving process. A real Agent,
+ * The remote DATA plane: an `Agent` whose `invoke` drives `POST /invoke` on a serving process. A real Agent,
  * failure discipline included — SPEC MUST 2 forbids iteration throws, so transport, protocol and precheck failures
  * all become `failed` events.
  */
 export function connectAgent(options: RemoteEndpointOptions): Agent {
-  const { url, token, fetchFn = fetch } = options;
+  const { url, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
   const toFailed = (error: unknown): AgentEvent => {
     if (error instanceof ControlRequestError) {
@@ -428,10 +428,10 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
           try {
             const body = await openStreamBody({
               fetchFn,
-              url: `${base}/control/invoke`,
+              url: `${base}/invoke`,
               init: {
                 method: "POST",
-                headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                headers: { "content-type": "application/json" },
                 body: JSON.stringify({
                   session: scope.session,
                   text: prompt.text,

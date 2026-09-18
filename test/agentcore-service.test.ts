@@ -166,7 +166,7 @@ describe("mountAgentcoreService", () => {
     const service = await mountAgentcoreService(await open(dir));
     try {
       // Channels are constructed only after trusted ingress arrives.
-      expect(service.channels).toEqual({ routes: [], longConnections: [], builtinInvoke: false });
+      expect(service.channels).toEqual({ routes: [], longConnections: [] });
       await expect(service.ready).resolves.toBeUndefined();
     } finally {
       await service.close();
@@ -177,14 +177,8 @@ describe("mountAgentcoreService", () => {
     const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", sessionControl: true }`);
     const service = await mountAgentcoreService(await open(dir));
     try {
-      expect(service.control?.token).toBeTruthy();
-      // Unauthenticated is 401, not 404: the plane owns the prefix and answers for it.
-      expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(401);
-      const ok = await service.handler(
-        new Request("http://h/control/sessions/s1", {
-          headers: { authorization: `Bearer ${service.control!.token}` },
-        }),
-      );
+      expect(service.controlPrefix).toBe("/control");
+      const ok = await service.handler(new Request("http://h/control/sessions/s1"));
       expect(ok.status).toBe(200);
       expect(await ok.json()).toMatchObject({ status: "idle" });
     } finally {
@@ -195,7 +189,7 @@ describe("mountAgentcoreService", () => {
   it("without sessionControl there is no plane to reach", async () => {
     const service = await mountAgentcoreService(await open(await agentDir()));
     try {
-      expect(service.control).toBeUndefined();
+      expect(service.controlPrefix).toBeUndefined();
       expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
       await service.close();

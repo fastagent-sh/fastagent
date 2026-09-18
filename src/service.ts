@@ -5,7 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { Agent } from "./agent.ts";
-import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
+import { createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
@@ -68,14 +68,17 @@ export interface ServingSurface {
   longConnections: LoadedLongConnectionChannel[];
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
-  builtinInvoke: boolean;
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
 
 /**
- * The surface this deployment serves: default `GET /health` plus discovered channels, or the default POST `/invoke`
- * only when neither a route nor a long-connection channel was declared.
+ * The surface this deployment serves: the DATA plane (`POST /invoke`), `GET /health`, and the discovered channels.
+ *
+ * `/invoke` is the framework's interface, so it is always there — it used to appear only when a definition declared
+ * NO channel, which made "can I curl this deployment" depend on whether someone had added telegram. It is RESERVED
+ * for the same reason `/control/*` is: a channel taking that path would silently replace the one route every client,
+ * every doc and the startup line all name. `/health` stays overridable — a probe is the deployment's to shape.
  */
 export async function routesFor(
   agentDir: string,
@@ -96,20 +99,28 @@ export async function routesFor(
   if (collisions.length > 0) {
     throw new Error(`${collisions.length} channel route collision(s) — two channels cannot serve one route`);
   }
-  const builtinInvoke =
-    options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
-  const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
-  const healthCovered = Object.keys(channels).some((key) => {
-    const entry = parseRouteKey(key);
-    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
-  });
+  /** Does a channel already serve this path (for the method the built-in would answer)? */
+  const covered = (path: string, method: string): boolean =>
+    Object.keys(routes).some((key) => {
+      const entry = parseRouteKey(key);
+      return entry.path === path && (entry.method === undefined || entry.method === method);
+    });
+  if (covered("/invoke", "POST")) {
+    throw new Error(
+      `a channel serves "POST /invoke" — that path is the agent's own data plane (rename the channel route)`,
+    );
+  }
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
+  const builtin: Routes = {
+    ...(covered("/health", "GET") ? {} : { "GET /health": health }),
+    // AgentCore serves the data plane through its own `/invocations` contract, so the adapter opts out.
+    ...(options.builtinInvoke === false ? {} : { "POST /invoke": createInvokeHandler(agent) }),
+  };
   return {
-    routes: healthCovered ? channels : { "GET /health": health, ...channels },
+    routes: { ...builtin, ...routes },
     longConnections,
     routeChannels,
-    builtinInvoke,
     setReady(value: boolean) {
       ready = value;
     },
@@ -130,36 +141,16 @@ export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: Pref
 export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
-  options: { agent?: Agent } = {},
 ): {
   routes: Routes;
   mounts: PrefixMount[];
-  /**
-   * The plane's bearer token and prefix — how a caller distributes access (the CLI writes it to
-   * `<stateRoot>/control.json` for local discovery; an embedder hands it out itself).
-   */
-  control?: { token: string; prefix: string };
+  /** The prefix the plane owns, when it is published — what a startup line names. */
+  controlPrefix?: string;
 } {
   if (!control) return { routes, mounts: [] };
-  // WHO OWNS the secret.
-  const injected = process.env[CONTROL_TOKEN_ENV]?.trim();
-  // SET BUT EMPTY is the deployed default, not an edge case.
-  if (injected === "") {
-    log.warn(
-      `[fastagent] ${CONTROL_TOKEN_ENV} is set but empty — minting a per-boot token instead; callers holding ` +
-        "the deploy-time value will get 401 (set it, or read the minted one from control.json on the box)",
-    );
-  } else if (injected !== undefined && injected.length < 16) {
-    // Length is a crude proxy for entropy — sixteen `a`s pass.
-    log.warn(
-      `[fastagent] ${CONTROL_TOKEN_ENV} is ${injected.length} characters — it is the ONLY thing between ` +
-        "/control/* (steer, stop, rewrite a session) and anyone who can reach the port; use a random value (uuidgen)",
-    );
-  }
-  const token = injected || crypto.randomUUID();
-  const plane = createControlPlane(control, { token, agent: options.agent });
+  const plane = createControlPlane(control);
   assertNoControlPlaneCollision(routes, plane);
-  return { routes, mounts: [plane], control: { token, prefix: plane.prefix } };
+  return { routes, mounts: [plane], controlPrefix: plane.prefix };
 }
 
 /** Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. */
@@ -204,14 +195,12 @@ export interface AgentService {
    * What actually mounted, for a startup line: channel files serving routes, long connections, and whether the
    * built-in `POST /invoke` fallback is one of the routes.
    */
-  channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
+  channels: { routes: string[]; longConnections: string[] };
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
-  /**
-   * The control plane's bearer token and prefix, when `sessionControl` is on — how a caller hands access to a client.
-   */
-  control?: { token: string; prefix: string };
+  /** The control plane's prefix, when `sessionControl` is on. */
+  controlPrefix?: string;
   /**
    * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
    * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
@@ -268,10 +257,8 @@ export async function mountAgentService(
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
-  const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined, {
-    agent,
-  });
+  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl);
+  const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
   const handler = router(withControl.routes, withControl.mounts);
   return Effect.runPromise(
@@ -405,11 +392,10 @@ export async function mountAgentService(
           channels: {
             routes: routed.routeChannels,
             longConnections: names,
-            builtinInvoke: routed.builtinInvoke,
           },
           schedules: scheduled.schedules,
           ready,
-          ...(withControl.control ? { control: withControl.control } : {}),
+          ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
           close,
         };
       }).pipe(

@@ -675,10 +675,10 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (!run.ok) expect(run.gate).toMatch(/tools\/broken\.mjs failed to load.*would refuse to start/);
   });
 
-  it("sessionControl carries the plane's token as a deploy secret — a minted one is unreadable off-box", async () => {
+  it("sessionControl needs no secret of ours — it warns that the deployed plane is unauthenticated", async () => {
     const dir = await workspace();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(off.ok && off.extraSecrets).toEqual([]); // no plane, no secret
+    expect(off.ok && off.extraSecrets).toEqual([]);
 
     const on = await call(dir, {
       model: "openai/gpt-4o-mini",
@@ -687,11 +687,10 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     });
     expect(on.ok).toBe(true);
     if (on.ok) {
-      expect(on.extraSecrets).toEqual([
-        { name: "GH_TOKEN", source: "fastagent.config deploy.secrets" },
-        { name: "FASTAGENT_CONTROL_TOKEN", source: "fastagent.config sessionControl" },
-      ]);
-      expect(on.messages.some((m) => m.level === "warn" && /FASTAGENT_CONTROL_TOKEN/.test(m.text))).toBe(true);
+      // Only what the DEFINITION declared: fastagent mints no credential of its own any more.
+      expect(on.extraSecrets).toEqual([{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }]);
+      // The operator still has to hear it, because the plane rides the PUBLIC host URL.
+      expect(on.messages.some((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text))).toBe(true);
     }
   });
 });
