@@ -109,7 +109,10 @@ bound, no signal handlers are installed, nothing calls `process.exit`. With `ses
 
 **Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the
 handler behind your own middleware; it is a Fetch handler, so your existing auth applies to it the
-same way it applies to any other route you mount.
+same way it applies to any other route you mount. One caller it does constrain is a browser: only a
+page on the serving machine (or an origin you name in `http.cors`, or one served from this
+deployment's own host) is answered — any other origin gets `403`, so a site your user merely visits
+cannot drive the agent.
 
 Composing the same thing by hand means assembling routes, mounts, schedules and long connections in
 the right order — and getting it wrong is silent (a control plane that 404s while the startup line

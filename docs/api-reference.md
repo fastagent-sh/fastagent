@@ -787,12 +787,16 @@ import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 const service = await createAgentService("./my-agent");
 
 // Client side — the SAME SessionControl interface, isomorphic to local. Point `url` at whatever
-// fronts the serve (a gateway, an ssh -L tunnel), not at a public port:
-const remote = await connectSessionControl({ url: "http://127.0.0.1:8787" });
+// fronts the serve (a gateway, an ssh -L tunnel), not at a public port; `headers` rides every
+// request this client makes, streams included, so a gateway's credential has a supported home:
+const remote = await connectSessionControl({
+  url: "https://agent.example.com",
+  headers: { authorization: `Bearer ${myGatewayToken}` },
+});
 for await (const ev of remote.sessions.get("s1").events()) console.log(ev.type);
 ```
 
-The DATA plane travels the same wire: `connectAgent({ url })` returns an `Agent` whose
+The DATA plane travels the same wire: `connectAgent({ url, headers })` returns an `Agent` whose
 `invoke` drives `POST /invoke` — paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
 same two contracts local code uses. Disconnecting the invoke stream cancels the run. Both streams refuse
 an endpoint that accepts the connection and never answers — the events stream after 10s (a reconnecting

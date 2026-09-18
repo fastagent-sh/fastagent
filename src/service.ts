@@ -271,6 +271,16 @@ export async function mountAgentService(
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl);
   const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined);
+  if (opened.corsOrigins?.includes("*")) {
+    // Here rather than in the CLI's startup report, because an embedder sets this key too and the consequence is
+    // theirs as well. It is exactly the posture a loopback bind is supposed to rule out: every route is
+    // unauthenticated, so any site the user has open can drive this agent and read the answer.
+    log.warn(
+      '[fastagent] http.cors includes "*" — ANY website a browser visits can call this serve (POST /invoke runs a ' +
+        "turn with this agent's tools) and read the reply, whatever address it binds; name the front end's origin " +
+        "instead (docs/design/session-control.md §14)",
+    );
+  }
   // Composed BEFORE anything starts.
   const handler = router(withControl.routes, withControl.mounts, {
     browserPaths: routed.browserPaths,

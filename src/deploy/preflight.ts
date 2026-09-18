@@ -105,6 +105,13 @@ export async function preflightDeploy(input: {
   force: boolean;
   /** The target delivers cron slots from an external clock and holds no resident process (AgentCore). */
   externalClock?: boolean;
+  /**
+   * Does this target publish the serve at a URL anyone can dial? True for every host that mints one (Fly, Railway,
+   * a Docker box); false for AgentCore, where the container is reachable only through the Runtime's IAM and the
+   * forwarder's shared secret. Kept apart from {@link externalClock} on purpose — they happen to agree on AgentCore
+   * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
+   */
+  publicUrl?: boolean;
 }): Promise<DeployPreflight> {
   const {
     placement: { agentDir, workspace },
@@ -112,6 +119,7 @@ export async function preflightDeploy(input: {
     run,
     force,
     externalClock,
+    publicUrl = true,
   } = input;
   // The ONE derived placement fact every host plan needs: where the agent's files sit relative to the build context
   // (the workspace).
@@ -167,17 +175,20 @@ export async function preflightDeploy(input: {
   }
   const modelSpec = model.spec;
 
-  // What the PUBLIC host URL answers with no authentication of ours in front of it. `POST /invoke` is on every
-  // deployment whatever channels it declares, so this warning is unconditional — it used to fire only under
-  // `sessionControl: true`, which left the endpoint that runs a turn on the agent's own tools unmentioned.
-  messages.push({
-    level: "warn",
-    text:
-      `the deployed box answers POST /invoke (run a turn with this agent's tools)` +
-      `${config.sessionControl === true ? " and /control/* (read, steer or delete any session)" : ""} at its public ` +
-      `URL, UNAUTHENTICATED — fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private ` +
-      `network in front of that URL (docs/design/session-control.md §14)`,
-  });
+  // What the PUBLIC host URL answers with no authentication of ours in front of it. Not conditioned on
+  // `sessionControl`: `POST /invoke` is on every deployment whatever channels it declares, and leaving it out is how
+  // a telegram-only agent published "run a turn with my tools" in silence. Conditioned on there BEING such a URL —
+  // warning about a public endpoint on a host that has none teaches the operator to skim past every deploy warning.
+  if (publicUrl) {
+    messages.push({
+      level: "warn",
+      text:
+        `the deployed box answers POST /invoke (run a turn with this agent's tools)` +
+        `${config.sessionControl === true ? " and /control/* (read, steer or delete any session)" : ""} at its public ` +
+        `URL, UNAUTHENTICATED — fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private ` +
+        `network in front of that URL (docs/design/session-control.md §14)`,
+    });
+  }
 
   // Known channel kinds only — a custom channel's webhook (and, unless it declared them, its secrets) are unknown to
   // us; note and let the author wire them.

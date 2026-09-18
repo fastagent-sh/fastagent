@@ -570,31 +570,26 @@ isomorphic; that is the entire payoff of keeping the envelope out of the API.
 **Browser reachability.** A JSON body is not a CORS-safelisted content type, and a deployment that
 fronts this port with its own auth has the browser sending `Authorization` too — either one makes the
 browser preflight. A Node client is unaffected (Node's fetch does not enforce CORS), which is why the
-gap stayed invisible while blocking every browser client. Both fastagent-owned surfaces answer the
-preflight through one function (`withCors`): the control plane at its mount's single exit, `POST
-/invoke` at its handler's. A channel route is deliberately NOT tagged — its caller is a platform's
-server, and a webhook that answers cross-origin requests is one a page can drive.
+gap stayed invisible while blocking every browser client.
 
-The plane is therefore mounted as ONE sub-application owning the `/control` prefix, not as a set of
-routes that happen to share it. That is a correctness property: CORS belongs to every reply that
-LEAVES the plane, and three of those are produced where no route runs — an unknown path under the
-prefix, a method a path does not serve, and a handler that throws. Owning the prefix makes them the
-plane's own answers, and the headers go on at the single exit they share.
+The policy itself is not this plane's — it belongs to the host router, for every path fastagent owns,
+and §14 states it. What belongs HERE is why the plane has to be a sub-application owning the `/control`
+prefix rather than a set of routes that happen to share it: three of its replies are produced where no
+route runs — an unknown path under the prefix, a method a path does not serve, and a handler that
+throws. Owning the prefix makes them the plane's own answers instead of the host's, which is what lets
+the router put the same CORS verdict and the same 404-vs-405 rule on all of them.
 
-It advertises `access-control-allow-origin: *`, `access-control-allow-headers: authorization,
-content-type`, and allowed METHODS per path. Each value is forced.
-
-- `*` is the answer rather than a concession — authorisation here is the token, never the origin and
-  never a cookie, and a deployment cannot know the origins of the GUIs that will manage it.
-- `content-type` because only three values are safelisted and `application/json` is not among them:
-  allowing just `authorization` leaves precisely the WRITE routes unreachable while every read works.
-- Per-path methods, PLUS whatever the preflight asks for. A preflight is a gate applied before the
-  request exists: refusing there means the real request is never sent and the client sees an opaque
-  network error. So every preflight under the prefix is answered `204`, and saying what the plane does
-  not serve is the real reply's job, as a `404`/`405` carrying these headers and an explanation.
-
-`OPTIONS` is answered before any auth — a preflight carries no token, which is its entire purpose —
-and 404 stays distinct from 405, because a remote client reads 404 as "this serve predates the route".
+- `content-type` is in the allowed headers because only three values are safelisted and
+  `application/json` is not among them: allowing just `authorization` leaves precisely the WRITE routes
+  unreachable while every read works.
+- The allowed METHODS are whatever the preflight asked for. A preflight is a gate applied before the
+  request exists, so refusing there means the real request is never sent and the client sees an opaque
+  network error; saying what the plane does not serve is the real reply's job, as a `404`/`405`
+  carrying the same headers and an explanation. A mount owns a prefix and does not publish which
+  methods each path under it serves, so a table lookup is not available here anyway.
+- `OPTIONS` is answered by the router, not by a route: a route table registering only `POST /invoke`
+  cannot match it, and 404 stays distinct from 405 because a remote client reads 404 as "this serve
+  predates the route".
 
 **When a read cannot be total.** `state`/`entries`/`events` are TOTAL: their absent fields are shapes
 a control-less deployment answers with too. `sessions.list()` is the first read where that is
@@ -659,9 +654,22 @@ So `channels/serve.ts`'s router answers, for the paths fastagent OWNS only:
   for a deployment that has decided the port is fronted.
 - **A channel's route is never tagged.** Its caller is a platform's server, and a webhook that answers
   cross-origin requests is one a page can drive.
+- **The serve's own host** is always allowed: a browser sends `Origin` on same-origin writes too, so a
+  web UI shipped from the deployment it talks to must not be refused by the rule aimed at third-party
+  pages. Compared by hostname, because a TLS-terminating gateway rewrites scheme and port and an
+  attacking page chooses neither.
+- **A disallowed page is REFUSED (403), not merely denied the reply.** Withholding the headers stops
+  the page from READING the answer, which is no protection at all for a write: a simple request
+  (`content-type: text/plain`, which nothing here rejects) skips the preflight, so the turn it asked
+  for would already have run and been billed. Only `DELETE`/`PATCH`/`PUT` were ever covered by the
+  weaker rule, and only because those force a preflight.
 - **The router, not the handlers.** It is the only layer that can answer an `OPTIONS` preflight for a
   route registered under `POST` alone, and the only one that sees the 404/405 it writes itself — a
   reply a browser cannot read is an opaque network error instead of a diagnosable status.
+
+A non-browser client sends no `Origin` and none of this applies to it. `connectSessionControl` /
+`connectAgent` take `headers`, sent on every request including the streams, which is how a caller
+satisfies whatever is fronting the serve.
 
 KNOWN GAP: DNS rebinding defeats an origin allowlist (the page rebinds its own hostname to 127.0.0.1
 and its requests become same-origin, carrying no `Origin` at all). The standard answer is to also

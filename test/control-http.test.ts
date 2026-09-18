@@ -183,6 +183,30 @@ describe("session control over HTTP", () => {
     }
   });
 
+  it("carries the caller's headers on every request, streams included — the gateway posture", async () => {
+    // fastagent authenticates nothing and the docs say to front the serve. Without this, satisfying
+    // that gateway meant abusing `fetchFn`, which is documented as a test seam.
+    const seen: (string | undefined)[] = [];
+    const fetchFn: typeof fetch = async (input, init) => {
+      seen.push(new Headers(init?.headers).get("authorization") ?? undefined);
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/events")) {
+        return new Response(
+          `data: ${JSON.stringify({ sessionId: "s", epoch: "e", seq: 0, event: { type: "idle" } })}\n\n`,
+        );
+      }
+      if (path === "/invoke") return new Response(`data: ${JSON.stringify({ type: "completed" })}\n\n`);
+      return Response.json(path === "/control/capabilities" ? { commands: [], models: [] } : { ok: true });
+    };
+    const headers = { authorization: "Bearer gateway-issued" };
+    const remote = await connectSessionControl({ url: "http://gw", headers, fetchFn });
+    await remote.sessions.get("s").abort();
+    await remote.sessions.get("s").events()[Symbol.asyncIterator]().next();
+    await drain(connectAgent({ url: "http://gw", headers, fetchFn }).invoke({ session: "s" }, { text: "hi" }));
+    expect(seen.length).toBeGreaterThanOrEqual(4); // capabilities, the write, the events stream, invoke
+    expect(seen.filter((h) => h !== "Bearer gateway-issued")).toEqual([]);
+  });
+
   it("preserves the HTTP failure when its JSON error body is null", async () => {
     await expect(
       connectSessionControl({

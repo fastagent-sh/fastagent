@@ -179,16 +179,22 @@ export interface RemoteEndpointOptions {
    * at whatever fronts it (a gateway, an SSH tunnel, a private network address), not at a public port.
    */
   url: string;
+  /**
+   * Sent on every request this client makes, streams included — how a caller satisfies the thing fronting the serve
+   * (`{ authorization: "Bearer …" }` for an IdP proxy, a signed header for an API gateway). fastagent reads none of
+   * them; without this, the documented "put real auth in front of it" posture had no supported client at all.
+   */
+  headers?: Record<string, string>;
   /** Injectable for tests. */
   fetchFn?: typeof fetch;
 }
 
 export async function connectSessionControl(options: RemoteEndpointOptions): Promise<SessionControl> {
-  const { url, fetchFn = fetch } = options;
+  const { url, headers = {}, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
 
   const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
-    const res = await fetchFn(`${base}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw await controlError(res);
     return (await res.json()) as T;
   };
@@ -219,7 +225,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             body = await openStreamBody({
               fetchFn,
               url: `${base}/control/sessions/${encodeURIComponent(session)}/events`,
-              init: {},
+              init: { headers },
               abort,
               budget,
               what: "control events",
@@ -307,7 +313,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
   const write = async (path: string, method: string, body?: unknown): Promise<SessionResult> => {
     const res = await fetchFn(`${base}${path}`, {
       method,
-      ...(body === undefined ? {} : { headers: { "content-type": "application/json" } }),
+      headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
     });
@@ -388,7 +394,7 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
  * all become `failed` events.
  */
 export function connectAgent(options: RemoteEndpointOptions): Agent {
-  const { url, fetchFn = fetch } = options;
+  const { url, headers = {}, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
   const toFailed = (error: unknown): AgentEvent => {
     if (error instanceof ControlRequestError) {
@@ -431,7 +437,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
               url: `${base}/invoke`,
               init: {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: { ...headers, "content-type": "application/json" },
                 body: JSON.stringify({
                   session: scope.session,
                   text: prompt.text,

@@ -87,6 +87,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     run: !!opts.run,
     force: !!opts.force,
     externalClock: host === "agentcore", // cron rides EventBridge there — the resident-host notes don't apply
+    publicUrl: host !== "agentcore", // the AgentCore container has no dialable URL: IAM + the forwarder's secret
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);

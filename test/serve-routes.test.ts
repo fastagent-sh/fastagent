@@ -13,13 +13,29 @@ describe("serve: who may call this from a browser", () => {
   // THE cross-origin policy, tested where it lives (channels/serve.ts). Every route this process
   // serves is unauthenticated by design, so the allowance IS the access control: a wildcard would
   // hand any page the developer has open a working client for `POST /invoke` and `/control/*`.
-  const plane = { prefix: "/control", handler: () => new Response("plane") };
-  const routes: Routes = {
-    "POST /invoke": () => new Response("ours"),
-    "POST /telegram": () => new Response("a platform's"),
+  /** What ran. The side effect is the finding: a refused page must not reach a handler at all. */
+  let ran: string[] = [];
+  const plane = {
+    prefix: "/control",
+    handler: () => {
+      ran.push("plane");
+      return new Response("plane");
+    },
   };
-  const build = (corsOrigins?: string[]) =>
-    router(routes, [plane], { browserPaths: ["/invoke"], ...(corsOrigins ? { corsOrigins } : {}) });
+  const routes: Routes = {
+    "POST /invoke": () => {
+      ran.push("invoke");
+      return new Response("ours");
+    },
+    "POST /telegram": () => {
+      ran.push("telegram");
+      return new Response("a platform's");
+    },
+  };
+  const build = (corsOrigins?: string[]) => {
+    ran = [];
+    return router(routes, [plane], { browserPaths: ["/invoke"], ...(corsOrigins ? { corsOrigins } : {}) });
+  };
   const preflight = (handle: ReturnType<typeof router>, path: string, origin: string, method = "POST") =>
     handle(
       new Request(`http://h${path}`, {
@@ -51,6 +67,40 @@ describe("serve: who may call this from a browser", () => {
       // Not a 204 either: a refused preflight must not read as an allowance.
       expect(res.status).not.toBe(204);
     }
+  });
+
+  it("REFUSES the disallowed page rather than only withholding the reply", async () => {
+    // The gap this closes: a simple request skips the preflight entirely, and neither `createInvokeHandler` nor the
+    // control plane rejects `content-type: text/plain`. Omitting the response headers stops the page from READING
+    // the answer — after a turn with this agent's full tool authority has already run and been billed.
+    const handle = build();
+    const simplePost = (path: string, origin: string) =>
+      handle(
+        new Request(`http://h${path}`, {
+          method: "POST",
+          headers: { origin, "content-type": "text/plain" },
+          body: JSON.stringify({ session: "s", text: "hi" }),
+        }),
+      );
+    const refused = await simplePost("/invoke", "https://evil.example.com");
+    expect(refused.status).toBe(403);
+    expect(ran).toEqual([]); // THE assertion: the handler never ran
+
+    // Same request from a page on this machine still works, so the refusal is about the origin and
+    // not about simple requests.
+    expect((await simplePost("/invoke", "http://localhost:5173")).status).toBe(200);
+    expect(ran).toEqual(["invoke"]);
+
+    // And a page served BY this deployment is not a third party: a browser sends `Origin` on
+    // same-origin writes too, so comparing it away would refuse a web UI shipped with the agent.
+    ran = [];
+    expect((await simplePost("/invoke", "https://h")).status).toBe(200);
+    expect(ran).toEqual(["invoke"]);
+
+    // A non-browser client sends no Origin and is untouched.
+    ran = [];
+    const curl = await handle(new Request("http://h/invoke", { method: "POST" }));
+    expect({ status: curl.status, ran }).toEqual({ status: 200, ran: ["invoke"] });
   });
 
   it("http.cors names the extra origins, and `*` is how a fronted deployment opts back in", async () => {

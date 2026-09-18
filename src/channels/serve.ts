@@ -82,11 +82,22 @@ function isLoopbackOrigin(origin: string): boolean {
  *
  * `allow` is exact-match origins from `http.cors`; `"*"` in that list restores the wildcard for a deployment that
  * has decided the port is safely fronted.
+ *
+ * The SERVE'S OWN host is always allowed: a browser sends `Origin` on same-origin writes too, so a web UI shipped
+ * from the deployment it talks to would otherwise be refused by the rule meant for third-party pages. Compared by
+ * hostname rather than whole origin because a TLS-terminating gateway rewrites scheme and port, and neither is a
+ * thing an attacking page can choose — the host is whatever the victim's browser dialled.
  */
-function allowedOrigin(origin: string, allow: readonly string[]): string | undefined {
+function allowedOrigin(origin: string, allow: readonly string[], self: string): string | undefined {
   if (allow.includes("*")) return "*";
   if (allow.includes(origin)) return origin;
-  return isLoopbackOrigin(origin) ? origin : undefined;
+  if (isLoopbackOrigin(origin)) return origin;
+  try {
+    return new URL(origin).hostname === self ? origin : undefined;
+  } catch {
+    // Not a URL (`null`, a bare hostname): no origin a browser could have produced, so nothing to allow.
+    return undefined;
+  }
 }
 
 export interface RouterOptions {
@@ -150,15 +161,24 @@ export function router(
 
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
-    const path = new URL(req.url).pathname;
+    const self = new URL(req.url);
+    const path = self.pathname;
     const origin = req.headers.get("origin");
+    // A BROWSER request against a path we publish. A non-browser client sends no `Origin` and is untouched by any
+    // of this.
+    const fromPage = origin !== null && ownedByUs(path);
     // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
     // that cannot read the 405 gets an opaque network error instead of the reason.
-    const cors = origin !== null && ownedByUs(path) ? allowedOrigin(origin, corsOrigins) : undefined;
+    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins, self.hostname) : undefined;
     const answer = (): Response | Promise<Response> => {
+      // REFUSED, not merely denied the reply. Withholding the headers only stops the page from READING the answer,
+      // and a simple request (`content-type: text/plain`, which neither invoke nor the control plane rejects) skips
+      // the preflight entirely — so the side effect it asked for, a turn with this agent's tools, would already have
+      // happened. Vite's fix for the same shape refuses too.
+      if (fromPage && cors === undefined) return text("forbidden origin\n", 403);
       // The preflight is the ROUTER's to answer: it names a method the route table does not register, so leaving it
       // to the routes below is a 405 with no CORS headers, which is a browser client that cannot call a route that
-      // works. Refused preflights (a foreign origin) fall through to the ordinary 405/404.
+      // works.
       if (req.method === "OPTIONS" && cors !== undefined) return new Response(null, { status: 204 });
       for (const mount of mounts) if (pathUnderPrefix(path, mount.prefix)) return mount.handler(req);
       const exact = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);

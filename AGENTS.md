@@ -73,7 +73,8 @@ src/
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
 │   ├── serve.ts            # how a route table becomes a running server: literal-path dispatch, prefix mounts,
-│   │                       # the totality boundary, the node:http binding. Shared ground, not a deploy target
+│   │                       # WHO MAY CALL IT FROM A BROWSER (the one CORS decision: loopback origins by default,
+│   │                       # a foreign one refused outright), the totality boundary, the node:http binding
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │                           # host): channels discovered on trusted ingress, the whole definition opened
 │                           # on the first envelope, an external clock, no resident connections
@@ -83,8 +84,9 @@ src/
 │   ├── agentcore-limits.ts # the host's body ceilings, computed once
 │   ├── busy.ts             # process-wide background work counter read by /ping (HealthyBusy): a webhook
 │                           # ACK does not mean the turn has finished
-│   ├── http.ts             # HTTP/SSE channel (consumes only the Agent contract)
-│   ├── control.ts          # session-control transport: bearer-token /control/* routes + SSE events + /control/invoke
+│   ├── http.ts             # the DATA plane: POST /invoke, HTTP/SSE (consumes only the Agent contract)
+│   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
+│   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), engine-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
