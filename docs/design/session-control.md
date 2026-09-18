@@ -661,8 +661,9 @@ walk straight through. `DELETE`/`PATCH`/`PUT` are non-simple by method and were 
 **2. CORS headers for the origins we know** (`channels/serve.ts`), for the routes fastagent OWNS only:
 
 - **Loopback origins by default** — `localhost`, `127.0.0.0/8`, `[::1]`, any port — echoed back
-  exactly, never `*`, with `vary: origin`. This is Ollama's default and Vite's post-CVE-2025-24010
-  default; a wildcard here would hand every site the developer visits a working client.
+  exactly, never `*`, with `vary: origin`. A wildcard would hand every site the developer visits a
+  working client for the table above. (Vite shipped that wildcard and it became CVE-2025-24010, over
+  source code rather than tool authority; its fix and Ollama's default are both this shape.)
 - **`http.cors`** names additional exact origins for a real front end; `["*"]` restores the wildcard
   for a deployment that has decided the port is fronted.
 - **A channel's route is never tagged.** Its caller is a platform's server, and a webhook that answers
@@ -678,12 +679,22 @@ A non-browser client sends no `Origin` and none of part 2 applies to it. `connec
 `connectAgent` take `fetchFn`: wrap `fetch` there to add, refresh or sign whatever the thing in front
 of the serve demands.
 
-KNOWN GAP: DNS rebinding defeats both mechanisms — the page rebinds its own hostname to 127.0.0.1, its
-requests become same-origin, and it can then send any content type. MCP's spec answers this by
-requiring `Host` validation alongside `Origin`; doing the same here needs a host allowlist of its own
-(`--tunnel` and a same-host reverse proxy both legitimately send a foreign `Host` to a loopback bind,
-so a fixed loopback-only rule would break the postures this section recommends). Until that exists, a
-`dev` serve left running is worth treating as reachable by an attacker who controls DNS.
+KNOWN GAP: DNS rebinding defeats both mechanisms. The page rebinds its own hostname to 127.0.0.1, so
+its requests become same-origin — no `Origin` to judge, and any content type it likes. The only thing
+left to check would be `Host`, and this is a deliberate decision not to:
+
+- It is reachable in exactly ONE posture, the one where this section's claim is that the port is the
+  boundary: a loopback bind, left running, while its author visits the attacker's page. `start` binds
+  all interfaces, where a foreign `Host` is the normal case and the check could not exist.
+- Closing it costs a config key. A loopback-only `Host` rule cannot be unconditional: `cloudflared`
+  forwards the original `Host` by default (`httpHostHeader` is empty), and so do Caddy and Traefik. We
+  know when `--tunnel` is on and could exempt it; we do not know about the operator's reverse proxy,
+  so a same-host facade — the deployment shape recommended below — would meet a 403 with no way to
+  answer it unless we also ship a host allowlist. (nginx happens to pass: its default is
+  `proxy_set_header Host $proxy_host`.)
+
+So a `dev` serve left running is worth treating as reachable by an attacker who controls DNS. If that
+matters for a deployment, bind it somewhere a browser cannot resolve to, or stop the serve.
 
 **The multi-tenant facade.** N users behind one deployment, each reaching only their own sessions: the
 facade authenticates its user, reads the session id out of the request, checks it against its OWN
