@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, dev, chat, invoke, tool, start, login, models, add, fire, schedule, and deploy commands with flags."
+description: "The fastagent CLI reference: init, info, dev, chat, invoke, tool, start, login, models, add, schedule, and deploy commands with flags."
 status: current
 ---
 
@@ -25,7 +25,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
-| `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
+| `schedule fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
 | `schedule history <name> [dir]` | Print a schedule's recent fires (what they said is in the session). |
 | `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
@@ -138,7 +138,7 @@ live next turn, no restart); a supervisor restarts the worker on edits to the co
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
 OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
-back to the config (same for `start` / `invoke` / `fire` / `chat` / `deploy`). Pass `--model` or set
+back to the config (same for `start` / `invoke` / `schedule fire` / `chat` / `deploy`). Pass `--model` or set
 `FASTAGENT_MODEL` to skip the prompt — `deploy` takes no `--model`, so there it is the config value or
 `FASTAGENT_MODEL` in `.secrets/.env`.
 
@@ -193,10 +193,10 @@ Runs one turn through the same agent assembly and exits:
 
 Use this for smoke tests and scripts.
 
-## `fastagent fire`
+## `fastagent schedule fire`
 
 ```bash
-fastagent fire <name> [dir] [--model provider/modelId] [--no-input]
+fastagent schedule fire <name> [dir] [--model provider/modelId] [--no-input]
 ```
 
 Runs ONE schedule's turn immediately — the authoring loop for schedules (like `invoke` is for a
@@ -249,7 +249,7 @@ per-host retention).
 
 These rows say WHEN each fire happened; the session is in time order. Matching them is left to you on
 purpose — a schedule's fires share one continuing conversation, nothing records which turn came from which
-fire, and `fastagent fire`, a wake-up and the control plane append to the same session.
+fire, and `fastagent schedule fire`, a wake-up and the control plane append to the same session.
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had

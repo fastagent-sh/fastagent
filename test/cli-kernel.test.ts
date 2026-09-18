@@ -80,7 +80,7 @@ describe("cli kernel: spec conformance", () => {
       [["init"], "never its NAME, so --agent-dir"],
       [["init"], "ALWAYS goes into a subdirectory"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
-      [["fire"], "does NOT advance the schedule's fire state"],
+      [["schedule", "fire"], "does NOT advance the schedule's fire state"],
       [["schedule", "history"], "did last night's run silently fail"],
       [["schedule", "cancel"], "the agent's own is the `unwake` tool"],
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
@@ -205,7 +205,7 @@ describe("cli kernel: the top-level surface", () => {
     expect(r.out).not.toMatch(/Author|Verify|Serve & ship|Operate:/);
     // …one flat section, in the original synopsis order.
     expect(r.out).toMatch(/^Commands:$/m);
-    const order = ["init", "models", "info", "tool", "invoke", "fire", "schedule", "dev", "chat", "start"];
+    const order = ["init", "models", "info", "tool", "invoke", "schedule", "dev", "chat", "start"];
     const at = (name: string) => r.out.search(new RegExp(`^  ${name}`, "m"));
     for (let i = 1; i < order.length; i++) {
       expect(at(order[i - 1] as string), `${order[i - 1]} before ${order[i]}`).toBeLessThan(at(order[i] as string));
@@ -259,7 +259,7 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   it("an empty required argument is a usage error on every command (the old falsy guards, kept)", async () => {
     const cases = [
       ["invoke", ""],
-      ["fire", ""],
+      ["schedule", "fire", ""],
       ["tool", ""],
       ["schedule", "history", ""],
       ["schedule", "cancel", ""],

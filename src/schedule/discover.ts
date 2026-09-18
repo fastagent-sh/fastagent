@@ -17,7 +17,7 @@ import type { LoadedSchedule, Schedule } from "./schedule.ts";
 export async function loadSchedules(dir: string): Promise<{
   schedules: LoadedSchedule[];
   /** What each loaded schedule declared it needs, BY SCHEDULE NAME and attributed to its file. Per
-   *  schedule because a caller that fires exactly ONE of them (`fastagent fire`) must not be stopped
+   *  schedule because a caller that fires exactly ONE of them (`fastagent schedule fire`) must not be stopped
    *  by a sibling's credential, and because two schedules declaring the same variable would
    *  otherwise blame whichever file was read first. The scheduler flattens it (it runs all of them).
    *  Data, not a check — only a serving path asserts it (src/declared-secrets.ts). */

@@ -1,7 +1,7 @@
 /**
  * The scaffolded send tool delivers through the mounted channel's transport (#458): the channel's
  * credential and `apiBaseUrl`, not a pipeline of its own over the environment. With no channel
- * mounted (`fastagent fire` / `invoke`) it builds one from the env.
+ * mounted (`fastagent schedule fire` / `invoke`) it builds one from the env.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
