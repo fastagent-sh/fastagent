@@ -659,42 +659,56 @@ just the prefix — the warning used to be conditioned on `sessionControl`, so a
 Telegram published `POST /invoke` on a public URL and heard nothing. A deployment that needs
 per-principal policy — including per-principal `delete` — builds it in the facade below.
 
-**Two mechanisms keep a web page out.** The port being the boundary is a claim about the network, and
-a cross-origin request does not respect it: a page open in the developer's browser can reach
-`http://127.0.0.1:8787` however the serve is bound, and with no authentication behind it every
-endpoint in the table above is one HTTP request away.
+**This is an API, and a browser is a caller like any other.** Origin is not access control: what makes
+a normal API safe to call cross-origin is that it demands a credential the page does not have, which
+makes the caller's origin irrelevant. We have no credential, so the only thing separating "the
+legitimate caller" from "any page the user visited" is NETWORK POSITION — the exact ambient authority
+the same-origin policy exists to protect. Two mechanisms follow from that, and only one of them is
+policy.
 
-**1. A body must declare itself JSON** (`channels/body.ts`). This is the one that actually stops a
-cross-origin write, and it is a protocol rule rather than a policy — no list, nothing to configure.
+**1. A route that authenticates nobody refuses a body that is not JSON** (`channels/body.ts`, applied
+by the router over the whole unverified surface). A protocol rule, not a list, nothing to configure.
 A POST carrying `text/plain`, `multipart/form-data` or `application/x-www-form-urlencoded` is a CORS
 *simple request*: no preflight, sent regardless of what the server would have answered, so withholding
 the response headers only stops the page from READING a turn that has already run and been billed.
 Requiring `application/json` takes the request out of that class, so the browser must preflight it —
 and a preflight we do not answer is a request that is never sent. Asked of the ROUTE, never of "does
 this have a body": the control plane reads an empty body as `{}`, so a body-less POST would otherwise
-walk straight through. `DELETE`/`PATCH`/`PUT` are non-simple by method and were always preflighted;
-`GET` has no side effect and the browser blocks the read.
+walk straight through. `GET` has no side effect here and the browser blocks the read anyway.
 
-**2. CORS headers for the origins we know** (`channels/serve.ts`), for the routes fastagent OWNS only:
+**2. CORS, and its default follows the topology** (`channels/serve.ts`):
 
-- **Loopback origins by default** — `localhost`, `127.0.0.0/8`, `[::1]`, any port — echoed back
-  exactly, never `*`, with `vary: origin`. A wildcard would hand every site the developer visits a
-  working client for the table above. (Vite shipped that wildcard and it became CVE-2025-24010, over
-  source code rather than tool authority; its fix and Ollama's default are both this shape.)
-- **`http.cors`** names additional exact origins for a real front end; `["*"]` restores the wildcard
-  for a deployment that has decided the port is fronted.
-- **A channel's route is never tagged.** Its caller is a platform's server, and a webhook that answers
-  cross-origin requests is one a page can drive.
-- **An origin we do not know is simply not answered** — no headers, no refusal. Refusing would mean
+| the port is | the default | why |
+|---|---|---|
+| **published** — a wildcard or LAN bind, or `--tunnel` | `*` | Anyone can already curl it, so answering a browser hands an attacker nothing new. What is in front of a published port is the deployment's decision; guessing conservatively there is us doing the operator's job badly. |
+| **unpublished** — a loopback bind, no tunnel | loopback origins only, echoed exactly, `vary: origin` | The attacker cannot reach this port at all; the developer's own browser is their ONLY route to it. Note what this is: the browser already denies a cross-origin read by default, so we are not adding a lock, we are declining to REMOVE one. Vite shipped `*` in this posture and it became CVE-2025-24010, over source code rather than tool authority; its fix and Ollama's default are both this shape. |
+
+- **`http.cors` REPLACES that default**, in both directions — a front end's real origin for an
+  unpublished dev serve, or one pinned origin instead of `*` for a published one. One value, one
+  meaning; a dev serve that also wants its own loopback page lists it. `*` cannot be combined with
+  cookie credentials (the browser refuses), so a gateway doing cookie auth needs the exact origin.
+- **A channel's route is exempt from both mechanisms**, because it verifies its platform's signature
+  inside itself — a Telegram webhook is public on purpose, and Slack posts urlencoded. For a CUSTOM
+  channel that is an assumption about its author, not a property we enforce: verifying the caller is
+  the channel's half of this boundary (decision B), and a channel that verifies nothing is as
+  reachable from a page as `POST /invoke` would be without mechanism 1.
+- **An origin we do not allow is simply not answered** — no headers, no refusal. Refusing would mean
   policing same-origin writes too (a browser sends `Origin` on those), which costs a special case for
-  the serve's own host and buys nothing that mechanism 1 does not already cover.
+  the serve's own host and buys nothing mechanism 1 does not already cover.
 - **The router, not the handlers.** It is the only layer that can answer an `OPTIONS` preflight for a
-  route registered under `POST` alone, and the only one that sees the 404/405 it writes itself — a
-  reply a browser cannot read is an opaque network error instead of a diagnosable status.
+  route registered under `POST` alone, the only one that sees the 404/405 it writes itself, and the
+  only one that covers a route added later. `createInvokeHandler` keeps its own copy of mechanism 1
+  because it is a public standalone artifact (`docs/overview.md` mounts it as one route in someone
+  else's app) — a handler you can mount anywhere has to be safe anywhere, and there is no router in
+  front of it. It gets no CORS that way; the host app's middleware owns that.
 
-A non-browser client sends no `Origin` and none of part 2 applies to it. `connectSessionControl` /
-`connectAgent` take `fetchFn`: wrap `fetch` there to add, refresh or sign whatever the thing in front
-of the serve demands.
+A non-browser client sends no `Origin`, so mechanism 2 never applies to it (mechanism 1 still does —
+it is about the route, not the caller). `connectSessionControl` / `connectAgent` take `fetchFn`: wrap
+`fetch` there to add, refresh or sign whatever the thing in front of the serve demands.
+
+One thing neither mechanism covers, recorded so it is not rediscovered: a cross-origin `GET` to
+`/control/sessions/{id}/events` is a simple request, so it is sent and the server subscribes, even
+though the page cannot read a byte of it. That costs a held connection, not a disclosure.
 
 KNOWN GAP: DNS rebinding defeats both mechanisms. The page rebinds its own hostname to 127.0.0.1, so
 its requests become same-origin — no `Origin` to judge, and any content type it likes. The only thing

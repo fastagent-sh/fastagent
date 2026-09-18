@@ -42,14 +42,31 @@ export function resolveBindHost(
 }
 
 /**
- * Apply the flags that override what the definition said, for THIS run only.
+ * What THIS run knows that the definition does not: the flags that override it, and the topology it is about to be
+ * served on.
  *
- * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
- * will not. The rule is `--bind` over `http.host`'s: a config value travels into a deployed image, so "do not
- * publish a turn endpoint on this tunnel" has to be sayable without editing the definition.
+ * ONE place, because `dev` and `start` both need it and a mapping two call sites must each remember is one a third
+ * will not.
+ *
+ * `published` is the CROSS-ORIGIN default's only input (`channels/serve.ts`). A wildcard or LAN bind, or a tunnel
+ * over a loopback one, means the port is reachable by someone other than the developer's own browser — and then
+ * this is an ordinary API whose cross-origin default is an API's. Only an unpublished loopback serve keeps the
+ * conservative default, because there the browser is the attacker's ONLY route to a port they cannot otherwise
+ * reach.
+ *
+ * `invoke` follows `--bind` over `http.host`: a config value travels into a deployed image, so "do not publish a
+ * turn endpoint on this tunnel" has to be sayable without editing the definition.
  */
-export function withRunOverrides<T extends MountableAgent>(opened: T, opts: { invoke?: boolean }): T {
-  return opts.invoke === false ? { ...opened, serveInvoke: false } : opened;
+export function withRunOverrides<T extends MountableAgent>(
+  opened: T,
+  run: { invoke?: boolean; host?: string; tunnel?: boolean },
+): T {
+  const published = run.tunnel === true || classifyBind(run.host) !== "loopback";
+  return {
+    ...opened,
+    ...(run.invoke === false ? { serveInvoke: false } : {}),
+    ...(published ? { published: true } : {}),
+  };
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -87,7 +104,7 @@ export function serveService(
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
-  for (const line of readyAddressLines(host, boundPort, service.ours.includes("POST /invoke"))) {
+  for (const line of readyAddressLines(host, boundPort, service.unverifiedRoutes.includes("POST /invoke"))) {
     log.info(line);
   }
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
@@ -104,7 +121,7 @@ export function bindLine(host: string | undefined, boundPort: number): string {
 /**
  * The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies.
  *
- * `servesInvoke` is `AgentService.ours`, never a guess from the route table: `http.invoke: false` leaves no
+ * `servesInvoke` is `AgentService.unverifiedRoutes`, never a guess from the route table: `http.invoke: false` leaves no
  * `/invoke` to curl, and a channel may serve that path with a protocol of its own — both would turn this line into
  * a copyable request that fails.
  */
@@ -128,7 +145,7 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * does not matter (a loopback `dev`), so the warnings fire at a REACH the operator did not get by default: a bind
  * off this machine, and `--tunnel`'s public URL.
  *
- * WHAT IS EXPOSED is read off `AgentService.ours`, never assumed and never guessed from the route table.
+ * WHAT IS EXPOSED is read off `AgentService.unverifiedRoutes`, never assumed and never guessed from the route table.
  * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,
  * `http.invoke: false` withholds it, and a channel may serve that path itself — in which case the caller it is
  * open to is the platform that signs its requests, not anyone at all. A warning naming an endpoint this process
@@ -136,15 +153,15 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * `publicUrl`.
  */
 export function announceControl(
-  service: Pick<AgentService, "controlPrefix" | "ours">,
+  service: Pick<AgentService, "controlPrefix" | "unverifiedRoutes">,
   bind: { host?: string; tunnel: boolean },
 ): void {
   const { controlPrefix } = service;
   if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
-  // What an unauthenticated caller of this port can do, worst first. From `ours`, so a channel that serves
+  // What an unauthenticated caller of this port can do, worst first. From `unverifiedRoutes`, so a channel that serves
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = [
-    ...(service.ours.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(service.unverifiedRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
     ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
   ];
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)

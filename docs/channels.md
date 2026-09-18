@@ -76,6 +76,15 @@ contribute route tables to the HTTP server; object exports open long connections
 assembled agent and resolved state root. Long-connection adapters own reconnects, observe shutdown
 through `AbortSignal`, and report first readiness plus terminal closure through the two promises.
 
+**A channel verifies its own caller.** Its route is public on purpose — Telegram has to be able to POST
+to it — so checking the platform's signature (`X-Telegram-Bot-Api-Secret-Token`, Feishu's signature,
+GitHub's HMAC) is the channel's half of the boundary, and fastagent does not add one. The two guards it
+puts on its own unauthenticated routes (a JSON content-type requirement, and a cross-origin policy) are
+deliberately NOT applied here, because they would break a platform that posts form-encoded and they are
+redundant against a caller that cannot forge a signature. A custom channel that verifies nothing is
+therefore as drivable from a web page as `POST /invoke` would be without those guards — that is yours
+to close ([design §14](design/session-control.md)).
+
 FastAgent always serves the HTTP/SSE data plane at `POST /invoke`, beside whatever channels mount.
 That path is RESERVED: a channel declaring it makes `dev` / `start` fail rather than silently
 replacing the one route every client and the startup line name. A channel file is enabled by its

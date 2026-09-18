@@ -19,7 +19,9 @@ export function refuseNonJsonBody(req: Request): Response | undefined {
   // Parameters are part of the header (`application/json; charset=utf-8`), so compare the media type alone.
   const mediaType = (req.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
   if (mediaType === "application/json") return undefined;
-  return text(`content-type must be application/json (got ${mediaType || "none"})\n`, 415);
+  // Says what is required, and does not echo what arrived: reflecting a request header into a response body is a
+  // habit worth not having, and the sender already knows what they sent.
+  return text("content-type must be application/json\n", 415);
 }
 
 /** Read a request body with a hard byte cap (real bytes). */

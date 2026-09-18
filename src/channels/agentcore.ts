@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
 import { PortFailure, portJoin } from "../effect-port.ts";
 import type { Agent } from "../agent.ts";
-import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
+import { type AgentcoreEnvelope, ENVELOPE_KINDS, fromForwarder, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { router } from "../channels/serve.ts";
@@ -13,7 +13,6 @@ import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
-import { secretEquals } from "./secret.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
 /**
@@ -120,8 +119,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
       return text(`need { "kind": ${ENVELOPE_KINDS.map((k) => `"${k}"`).join(" | ")}, ... }\n`, 400);
     }
-    // AUTHENTICATION BOUNDARY.
-    const trusted = secretEquals(envelope.auth, ingressSecret);
+    // The forwarder, or another IAM principal? See `fromForwarder` for what that actually decides.
+    const trusted = fromForwarder(envelope, ingressSecret);
     if (!trusted) {
       if (envelope.kind !== "invoke") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);

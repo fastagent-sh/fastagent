@@ -86,6 +86,8 @@ const { text } = await collect(agent.invoke({ session: "u1" }, { text: "hi" }));
 // (3) HTTP/SSE — createInvokeHandler is a Fetch handler: mount it in any host route
 import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
+// Standalone it checks the method, requires content-type: application/json, and caps the body. It sends
+// NO CORS headers — mounted in your app, who may call it cross-origin is your middleware's decision.
 ```
 
 ### The whole agent, as a service

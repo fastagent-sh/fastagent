@@ -78,7 +78,56 @@ describe("serve: who may call this from a browser", () => {
     expect(bare.headers.get("access-control-allow-headers")).toBe("authorization, content-type");
   });
 
-  it("allows loopback origins by default and refuses every other one", async () => {
+  it("a published port is an ordinary API: the cross-origin default is `*`", async () => {
+    // Origin is not access control. What makes a normal API safe to call from any page is a credential
+    // the page does not have; on a PUBLISHED port the same conclusion holds for the opposite reason —
+    // anyone can already curl it, so answering a browser hands an attacker nothing new. What is in
+    // front of a published port is the deployment's decision, and guessing conservatively there is us
+    // doing the operator's job badly.
+    const handle = router(ours, channels, [plane], { published: true });
+    const res = await preflight(handle, "/invoke", "https://app.example.com");
+    expect({ status: res.status, allowed: res.headers.get("access-control-allow-origin") }).toEqual({
+      status: 204,
+      allowed: "*",
+    });
+    // …and `http.cors` still NARROWS it, which is the other half of that knob.
+    const pinned = router(ours, channels, [plane], {
+      published: true,
+      corsOrigins: ["https://app.example.com"],
+    });
+    expect(
+      (await preflight(pinned, "/invoke", "https://app.example.com")).headers.get("access-control-allow-origin"),
+    ).toBe("https://app.example.com");
+    expect(
+      (await preflight(pinned, "/invoke", "https://other.example.com")).headers.get("access-control-allow-origin"),
+    ).toBeNull();
+  });
+
+  it("the JSON gate covers the whole unverified surface, and exempts the channels", async () => {
+    // Applied by the ROUTER, not by each handler: the next unverified route we add is covered by
+    // existing. A channel is exempt because it verifies its platform's signature inside itself —
+    // Slack posts `application/x-www-form-urlencoded`, and a page cannot forge that signature.
+    const handle = build();
+    const post = (path: string, contentType?: string) =>
+      handle(
+        new Request(`http://h${path}`, {
+          method: "POST",
+          ...(contentType ? { headers: { "content-type": contentType } } : {}),
+          body: "{}",
+        }),
+      );
+    expect((await post("/invoke", "text/plain")).status).toBe(415);
+    expect((await post("/invoke")).status).toBe(415);
+    expect((await post("/control/anything", "text/plain")).status).toBe(415); // the mount too
+    expect(ran).toEqual([]);
+    // The channel's own route is untouched, whatever it posts.
+    expect(await (await post("/telegram", "application/x-www-form-urlencoded")).text()).toBe("a platform's");
+  });
+
+  it("an UNPUBLISHED serve allows loopback origins only — the one port a browser is the sole route to", async () => {
+    // Not a lock we add: the browser already denies a cross-origin read by default, and `*` would be
+    // us REMOVING that on behalf of a port an attacker cannot otherwise reach at all. Vite shipped the
+    // wildcard in this exact posture (CVE-2025-24010), over source code rather than tool authority.
     const handle = build();
     for (const origin of ["http://localhost:5173", "http://127.0.0.1:3000", "https://[::1]:8443"]) {
       expect((await preflight(handle, "/invoke", origin)).headers.get("access-control-allow-origin")).toBe(origin);
@@ -89,6 +138,23 @@ describe("serve: who may call this from a browser", () => {
       // Not a 204 either: a refused preflight must not read as an allowance.
       expect(res.status).not.toBe(204);
     }
+  });
+
+  it("http.cors REPLACES the default rather than adding to it — one value, one meaning", async () => {
+    // The knob points both ways (widen an unpublished serve, narrow a published one), so it cannot
+    // also be conditional about what it starts from. A dev serve that still wants its own loopback
+    // page lists it.
+    const named = build(["https://app.example.com"]);
+    expect(
+      (await preflight(named, "/invoke", "https://app.example.com")).headers.get("access-control-allow-origin"),
+    ).toBe("https://app.example.com");
+    expect(
+      (await preflight(named, "/invoke", "http://localhost:5173")).headers.get("access-control-allow-origin"),
+    ).toBeNull();
+    // `*` is how a deployment that has fronted its port says so out loud.
+    expect(
+      (await preflight(build(["*"]), "/invoke", "https://evil.example.com")).headers.get("access-control-allow-origin"),
+    ).toBe("*");
   });
 
   it("a page we do not allow is simply not answered — no headers, and no refusal either", async () => {
@@ -116,9 +182,12 @@ describe("serve: who may call this from a browser", () => {
       "http://localhost:5173",
     );
     expect(ran).toEqual(["invoke"]);
-    // A non-browser client sends no Origin and is untouched by any of it.
+    // A non-browser client sends no Origin and is untouched by the ORIGIN rule — but the JSON gate is
+    // about the route, not the caller, so curl declares its body like everyone else.
     ran = [];
-    const curl = await handle(new Request("http://h/invoke", { method: "POST" }));
+    const curl = await handle(
+      new Request("http://h/invoke", { method: "POST", headers: { "content-type": "application/json" } }),
+    );
     expect({ status: curl.status, ran }).toEqual({ status: 200, ran: ["invoke"] });
   });
 
@@ -148,7 +217,9 @@ describe("serve: who may call this from a browser", () => {
 
   it("a request with no Origin is not a browser request: no CORS headers, nothing refused", async () => {
     const handle = build();
-    const res = await handle(new Request("http://h/invoke", { method: "POST" }));
+    const res = await handle(
+      new Request("http://h/invoke", { method: "POST", headers: { "content-type": "application/json" } }),
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });

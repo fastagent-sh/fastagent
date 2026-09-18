@@ -740,7 +740,11 @@ describe("session control over HTTP", () => {
       // Running a turn belongs to the DATA plane (`POST /invoke`). This prefix used to carry a duplicate of it
       // whose only difference was the bearer token that no longer exists.
       expect(Object.keys(controlPlaneRoutes(control))).not.toContain("POST /control/invoke");
-      const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, { method: "POST", body: "{}" });
+      const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
       expect(res.status).toBe(404);
       // A boundary-less hub still speaks the protocol on the wire: a boundary command answers
       // HTTP 200 + unsupported_capability, never a transport error.

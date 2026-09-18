@@ -15,13 +15,13 @@ describe("serving surface", () => {
   it("can suppress the data plane for AgentCore's publicly forwarded surface", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-surface-"));
     const ordinary = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(ordinary.ours)).toContain("POST /invoke");
+    expect(Object.keys(ordinary.unverified)).toContain("POST /invoke");
 
     // The ONE posture that opts out: AgentCore serves the Runtime's `/invocations` contract instead.
     const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
       builtinInvoke: false,
     });
-    expect(Object.keys(agentcore.ours)).toEqual(["GET /health"]);
+    expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
   });
 
   it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
@@ -34,8 +34,8 @@ describe("serving surface", () => {
     const beside = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
     // Two tables, never one table plus a list of which keys are ours: that list was a second answer
     // to the same question, and the two answers drifted apart twice.
-    expect(Object.keys(beside.ours).sort()).toEqual(["GET /health", "POST /invoke"]);
-    expect(Object.keys(beside.channels)).toEqual(["POST /hook"]);
+    expect(Object.keys(beside.unverified).sort()).toEqual(["GET /health", "POST /invoke"]);
+    expect(Object.keys(beside.selfVerifying)).toEqual(["POST /hook"]);
 
     // Reserved like /control/*: silently replacing the one route every client, every doc and the
     // startup line all name is worse than refusing to start. (A fresh dir: an ESM module already
@@ -66,7 +66,9 @@ describe("serving surface", () => {
     const onAgentcore = await routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {
       builtinInvoke: false,
     });
-    expect(await (await onAgentcore.channels["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe("mine");
+    expect(await (await onAgentcore.selfVerifying["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe(
+      "mine",
+    );
   });
 
   it("keeps health and the data plane for a long-connection channel", async () => {
@@ -77,10 +79,10 @@ describe("serving surface", () => {
       `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n`,
     );
     const surface = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(surface.ours).sort()).toEqual(["GET /health", "POST /invoke"]);
+    expect(Object.keys(surface.unverified).sort()).toEqual(["GET /health", "POST /invoke"]);
     expect(surface.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
     expect(surface.routeChannels).toEqual([]);
-    const health = surface.ours["GET /health"]!;
+    const health = surface.unverified["GET /health"]!;
     expect((await health(new Request("http://x/health"))).status).toBe(503);
     surface.setReady(true);
     expect((await health(new Request("http://x/health"))).status).toBe(200);
@@ -154,7 +156,7 @@ describe("cli: the serving report", () => {
         {
           routes: { "POST /telegram": () => new Response("x") },
           channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
-          ours: ["POST /invoke", "GET /health"],
+          unverifiedRoutes: ["POST /invoke", "GET /health"],
         } as never,
         "127.0.0.1",
         8787,
@@ -184,7 +186,7 @@ describe("cli: the assembled serving surface", () => {
   /** A serve that mounts the data plane — what most postures look like. */
   const withInvoke = (controlPrefix: string | undefined) => ({
     ...(controlPrefix ? { controlPrefix } : {}),
-    ours: ["POST /invoke", "GET /health"],
+    unverifiedRoutes: ["POST /invoke", "GET /health"],
   });
 
   it("--no-invoke withholds the data plane for ONE run, without touching the definition", async () => {
@@ -193,13 +195,28 @@ describe("cli: the assembled serving surface", () => {
     // publishes the port at a public quick-tunnel URL — and would publish an anonymous, fully-tooled
     // `POST /invoke` alongside it. Same relationship `--bind` has to `http.host`.
     const opened = { serveInvoke: undefined, agentDir: "/x" } as unknown as MountableAgent;
-    expect(withRunOverrides(opened, {})).toBe(opened); // no flag, nothing added
-    expect(withRunOverrides(opened, { invoke: false }).serveInvoke).toBe(false);
+    const local = { host: "127.0.0.1" };
+    expect(withRunOverrides(opened, local).serveInvoke).toBeUndefined(); // no flag, nothing withheld
+    expect(withRunOverrides(opened, { ...local, invoke: false }).serveInvoke).toBe(false);
     // Only `false` overrides: an absent flag must not turn into "serve it", which would beat a
     // definition that said `http.invoke: false`.
     const configuredOff = { ...opened, serveInvoke: false } as MountableAgent;
-    expect(withRunOverrides(configuredOff, {}).serveInvoke).toBe(false);
-    expect(withRunOverrides(configuredOff, { invoke: true }).serveInvoke).toBe(false);
+    expect(withRunOverrides(configuredOff, local).serveInvoke).toBe(false);
+    expect(withRunOverrides(configuredOff, { ...local, invoke: true }).serveInvoke).toBe(false);
+  });
+
+  it("published follows the topology: a wildcard bind or a tunnel, never the config", async () => {
+    // It is the cross-origin default's only input. An unpublished loopback serve is the one port whose
+    // ONLY reachability is the developer's own browser, so it keeps the conservative default; anything
+    // the operator chose to publish is an ordinary API and gets an API's.
+    const opened = { agentDir: "/x" } as unknown as MountableAgent;
+    expect(withRunOverrides(opened, { host: "127.0.0.1" }).published).toBeUndefined();
+    expect(withRunOverrides(opened, { host: "localhost" }).published).toBeUndefined();
+    // A tunnel publishes a loopback bind — the bind alone would read this one wrong.
+    expect(withRunOverrides(opened, { host: "127.0.0.1", tunnel: true }).published).toBe(true);
+    expect(withRunOverrides(opened, { host: "0.0.0.0" }).published).toBe(true);
+    expect(withRunOverrides(opened, { host: "192.168.1.5" }).published).toBe(true);
+    expect(withRunOverrides(opened, {}).published).toBe(true); // unset bind = the wildcard `start` uses
   });
 
   it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {
@@ -230,15 +247,15 @@ describe("cli: the assembled serving surface", () => {
       expect(withoutPlane).toContain("POST /invoke");
       expect(withoutPlane).not.toContain("/control/*");
 
-      // …and it names only what THIS process serves, from `ours`. The AgentCore posture
+      // …and it names only what THIS process serves, from `unverifiedRoutes`. The AgentCore posture
       // answers the Runtime's /invocations behind IAM and mounts no /invoke; `http.invoke: false`
       // withholds it; a channel serving that path answers for itself, behind its own signature
       // check. A warning about an endpoint that is not ours teaches the operator to skim past all.
       warn.mockClear();
-      announceControl({ ours: [] }, { tunnel: true });
+      announceControl({ unverifiedRoutes: [] }, { tunnel: true });
       expect(warn).not.toHaveBeenCalled();
       // With the control plane still published, the warning stands — naming only that.
-      announceControl({ controlPrefix: "/control", ours: [] }, { tunnel: true });
+      announceControl({ controlPrefix: "/control", unverifiedRoutes: [] }, { tunnel: true });
       const controlOnly = warn.mock.calls.flat().join(" ");
       expect(controlOnly).toContain("/control/* (read, steer, delete any session) answers");
       expect(controlOnly).not.toContain("POST /invoke");

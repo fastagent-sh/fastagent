@@ -174,6 +174,23 @@ describe("mountAgentcoreService", () => {
     }
   });
 
+  it("names every config key that cannot mean anything here, not just sessionControl", async () => {
+    // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
+    // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.invoke`
+    // has no `/invoke` to withhold (this host serves `POST /invocations`).
+    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false } }`);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const service = await mountAgentcoreService(await open(dir));
+    try {
+      const said = warn.mock.calls.flat().join(" ");
+      expect(said).toMatch(/http\.cors has no effect here/);
+      expect(said).toMatch(/http\.invoke has no effect here/);
+    } finally {
+      warn.mockRestore();
+      await service.close();
+    }
+  });
+
   it("does NOT serve /control/* here, whatever sessionControl says, and says so out loud", async () => {
     // The hole this closes: the forwarder relays an arbitrary `rawPath` as a webhook envelope AND
     // attaches the ingress secret itself, so an anonymous caller of the public Function URL arrives as
@@ -197,7 +214,7 @@ describe("mountAgentcoreService", () => {
       // …so the startup report has nothing of ours to warn about here either. The advice it would
       // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
       // host: the real ingress is the forwarder's Function URL.
-      expect(service.ours).not.toContain("POST /invoke");
+      expect(service.unverifiedRoutes).not.toContain("POST /invoke");
       expect(warn.mock.calls.flat().join(" ")).toMatch(/sessionControl is ON but \/control\/\* is NOT served here/);
 
       /** What the forwarder sends for ANY public request to the Function URL. */
@@ -233,7 +250,7 @@ describe("mountAgentcoreService", () => {
       // …so the startup report has nothing of ours to warn about here either. The advice it would
       // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
       // host: the real ingress is the forwarder's Function URL.
-      expect(service.ours).not.toContain("POST /invoke");
+      expect(service.unverifiedRoutes).not.toContain("POST /invoke");
       expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
       await service.close();

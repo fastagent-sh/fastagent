@@ -63,14 +63,17 @@ function closeWithin(
 
 export interface ServingSurface {
   /**
-   * The routes fastagent itself serves — `POST /invoke` and `GET /health`, minus what a channel took over or
+   * The routes that AUTHENTICATE NOBODY — `POST /invoke` and `GET /health`, minus what a channel took over or
    * `http.invoke: false` withheld. Kept APART from the channels' rather than merged with a list of which keys are
-   * ours: three separate decisions read this (browser reachability, the path a channel may not take, what the
-   * startup line calls unauthenticated), and while it was a derived list each of them could answer differently.
+   * which: three separate decisions read this (browser reachability, the JSON body gate, what the startup line
+   * calls unauthenticated), and while it was a derived list each of them could answer differently.
    */
-  ours: Routes;
-  /** What the `channels/` files serve. Never browser-callable: their caller is a platform's server. */
-  channels: Routes;
+  unverified: Routes;
+  /**
+   * What the `channels/` files serve. Exempt from both guards because a channel checks its platform's signature
+   * inside itself — an assumption about the author for a CUSTOM channel, not a property we enforce (§14).
+   */
+  selfVerifying: Routes;
   /** Prefix-owning handlers mounted beside the routes (the session control plane). */
   mounts?: readonly PrefixMount[];
   longConnections: LoadedLongConnectionChannel[];
@@ -126,12 +129,12 @@ export async function routesFor(
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
   // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
-  const ours: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
-  if (options.builtinInvoke !== false) ours["POST /invoke"] = createInvokeHandler(agent);
+  const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
+  if (options.builtinInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.
-  const taken = Object.keys(ours).flatMap((key) => {
+  const taken = Object.keys(unverified).flatMap((key) => {
     const entry = parseRouteKey(key);
     const channelKey = covered(entry.path, entry.method ?? "");
     return channelKey === undefined ? [] : [{ channelKey, key }];
@@ -143,8 +146,8 @@ export async function routesFor(
     );
   }
   return {
-    ours,
-    channels: routes,
+    unverified,
+    selfVerifying: routes,
     longConnections,
     routeChannels,
     setReady(value: boolean) {
@@ -222,13 +225,13 @@ export interface AgentService {
    */
   channels: { routes: string[]; longConnections: string[] };
   /**
-   * The route keys fastagent itself answers on here — `POST /invoke` and `GET /health`, minus what a channel took
-   * over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
+   * The route keys on this port that AUTHENTICATE NOBODY — `POST /invoke` and `GET /health`, minus what a channel
+   * took over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
    * `routes` instead answers a different question, since a channel may serve one of those paths with a protocol of
    * its own. That mistake ran in both directions here — a try-it curl for a route that 404s, and a warning about an
    * unauthenticated `/invoke` that was really a signature-checked channel.
    */
-  ours: readonly string[];
+  unverifiedRoutes: readonly string[];
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
@@ -285,6 +288,12 @@ export interface MountableAgent {
    * and runs a turn with the agent's full tool authority.
    */
   serveInvoke?: boolean;
+  /**
+   * Is this port reachable by anyone but the developer's own browser? The CLI derives it from the bind and
+   * `--tunnel`; an embedder leaves it unset (they own the mounting, so widening the cross-origin default is theirs
+   * to say). It decides that default and nothing else — `channels/serve.ts` `allowedOrigin`.
+   */
+  published?: boolean;
 }
 
 /**
@@ -307,7 +316,7 @@ export async function mountAgentService(
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
     ...(opened.serveInvoke !== undefined ? { builtinInvoke: opened.serveInvoke } : {}),
   });
-  const withControl = mountSessionControl(routed.channels, opened.publishControl ? sessionControl : undefined);
+  const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   if (opened.corsOrigins?.includes("*")) {
     // Here rather than in the CLI's startup report, because an embedder sets this key too and the consequence is
     // theirs as well. It is exactly the posture a loopback bind is supposed to rule out: every route is
@@ -319,8 +328,9 @@ export async function mountAgentService(
     );
   }
   // Composed BEFORE anything starts.
-  const handler = router(routed.ours, withControl.routes, withControl.mounts, {
+  const handler = router(routed.unverified, withControl.routes, withControl.mounts, {
     ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+    ...(opened.published ? { published: true } : {}),
   });
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -447,14 +457,14 @@ export async function mountAgentService(
         return {
           handler,
           agent,
-          routes: { ...routed.ours, ...withControl.routes },
+          routes: { ...routed.unverified, ...withControl.routes },
           agentDir,
           workspace,
           channels: {
             routes: routed.routeChannels,
             longConnections: names,
           },
-          ours: Object.keys(routed.ours),
+          unverifiedRoutes: Object.keys(routed.unverified),
           schedules: scheduled.schedules,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

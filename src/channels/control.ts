@@ -21,7 +21,7 @@ import {
 import type { ChannelHandler } from "../channel.ts";
 import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { log } from "../log.ts";
-import { readBodyCapped, refuseNonJsonBody } from "./body.ts";
+import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES } from "./http.ts";
 import { sseResponse } from "./sse.ts";
 import { text } from "./respond.ts";
@@ -235,12 +235,13 @@ export function mountControlPlane(routes: PlaneRoutes): PrefixMount {
 export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
   const epoch = crypto.randomUUID();
 
-  /** Read a JSON body under the shared cap, from a request that declared one. */
+  /**
+   * Read a JSON body under the shared cap.
+   *
+   * No content-type gate here: this plane only ever rides the host router, which applies it to every route that
+   * authenticates nobody — this whole prefix included (channels/serve.ts).
+   */
   const readJson = async (req: Request): Promise<{ value: unknown } | { error: Response }> => {
-    // The gate, before the cap and before the emptiness rule below — an empty body reads as `{}`, so checking
-    // "has a body" instead would let a body-less cross-origin POST straight through (body.ts).
-    const wrongType = refuseNonJsonBody(req);
-    if (wrongType) return { error: wrongType };
     const body = await readBodyCapped(req, ACTION_BODY_LIMIT);
     // The 413 names the ceiling: the docs promise images on this plane, and an unexplained rejection would send a
     // client author hunting everywhere but the cap.

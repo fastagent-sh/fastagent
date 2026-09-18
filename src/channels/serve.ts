@@ -7,7 +7,11 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { classifyBind } from "../bind.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
+import { refuseNonJsonBody } from "./body.ts";
 import { text } from "./respond.ts";
+
+/** Methods whose request carries a body a handler will parse — what the JSON gate applies to. */
+const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {
@@ -71,26 +75,33 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 /**
- * THE cross-origin policy, in one place, for the routes fastagent OWNS.
+ * THE cross-origin policy, in one place, for the routes that authenticate nobody.
  *
- * Default: a browser on the serving machine only. Everything this port serves is UNAUTHENTICATED (design
- * §14), so a wildcard would hand every page the developer visits a working client for `POST /invoke` (a turn with
- * the agent's full tool authority) and `/control/*` (read every conversation, delete a session) — the loopback bind
- * that is supposed to be the boundary does not stop a cross-origin request, only a same-machine one. This is Vite's
- * CVE-2025-24010 with tool authority behind it, and its fix is the shape copied here: loopback origins by default,
- * real origins named explicitly.
+ * THIS IS AN API, so the default is an API's: `*`. Origin is not access control — what makes a normal API safe to
+ * call from any page is that it demands a credential the page does not have, which makes the caller's origin
+ * irrelevant. On a PUBLISHED port the same reasoning holds for the opposite reason: anyone can already curl it, so
+ * answering a browser hands an attacker nothing they did not have. What is in front of a published port is the
+ * deployment's decision, and a conservative default there is us doing the operator's job badly.
  *
- * `allow` is exact-match origins from `http.cors`; `"*"` in that list restores the wildcard for a deployment that
- * has decided the port is safely fronted.
+ * The ONE exception is a port whose only reachability is the developer's own browser — an unpublished loopback
+ * serve. There the attacker cannot reach the port at all, so answering their page IS the whole attack path. Note
+ * what this is and is not: the browser already denies a cross-origin read by default, so we are not adding a lock,
+ * we are declining to REMOVE one on behalf of a port that has nothing else protecting it. Vite shipped the wildcard
+ * in this exact posture and it became CVE-2025-24010, over source code rather than tool authority; its fix and
+ * Ollama's default are both this shape.
  *
- * A page that is not on the list is simply not ANSWERED — no headers, no refusal. That is the shape Ollama and
- * Vite's post-CVE default both take, and it is safe here only because a route of ours refuses a body that is not
- * `application/json` (channels/body.ts): without that, a cross-origin `text/plain` POST is a CORS simple request,
- * sent with no preflight, and withholding the headers would stop the page from reading a turn that had already run.
+ * `allow` is `http.cors`, and when it is set it REPLACES the default rather than adding to it — one value, one
+ * meaning, in both directions: a front end calling an unpublished dev serve widens, a deployment pinning one origin
+ * instead of `*` narrows. A dev serve that also wants its own loopback page back lists it.
+ *
+ * A page that is not allowed is simply not ANSWERED — no headers, no refusal. That is safe only because a route
+ * that authenticates nobody also refuses a body that is not `application/json` (channels/body.ts): without that, a
+ * cross-origin `text/plain` POST is a CORS simple request, sent with no preflight, and withholding the headers
+ * would only stop the page from reading a turn that had already run.
  */
-function allowedOrigin(origin: string, allow: readonly string[]): string | undefined {
-  if (allow.includes("*")) return "*";
-  if (allow.includes(origin)) return origin;
+function allowedOrigin(origin: string, allow: readonly string[], published: boolean): string | undefined {
+  if (allow.length > 0) return allow.includes("*") ? "*" : allow.includes(origin) ? origin : undefined;
+  if (published) return "*";
   return isLoopbackOrigin(origin) ? origin : undefined;
 }
 
@@ -125,25 +136,36 @@ export function assertCorsOrigins(origins: unknown, where: string): asserts orig
 }
 
 export interface RouterOptions {
-  /** Extra origins beyond loopback, from `http.cors`. `["*"]` is the wildcard, and is a deployment's decision. */
+  /** `http.cors` — exact origins, or `["*"]`. Widens an unpublished serve, narrows a published one. */
   corsOrigins?: readonly string[];
+  /**
+   * Is this port reachable by anyone but the developer's own browser? A wildcard/LAN bind, or a tunnel over a
+   * loopback one. It decides the cross-origin default and nothing else — see {@link allowedOrigin}. Unset is the
+   * conservative reading, which is what an embedder gets: they own the mounting, so widening is theirs to say.
+   */
+  published?: boolean;
 }
 
 /**
- * Compose the routes fastagent OWNS, the channels' routes, and the {@link PrefixMount}s into one handler.
+ * Compose the routes that AUTHENTICATE NOBODY, the self-verifying channel routes, and the {@link PrefixMount}s
+ * into one handler.
  *
- * TWO TABLES, not one table plus a list of which keys are ours. Ownership decides three separate things — who may
- * call a route from a browser, which path a channel may not take, and what the startup line calls an
- * unauthenticated endpoint — and while it was a parallel array every one of those had its own chance to answer
- * differently. It did: a channel serving `/invoke` was announced as our data plane, and the same fact was
- * hand-written as `[]` in one place while being derived in another. Two tables cannot disagree with themselves.
+ * That is the axis, not authorship. Two things follow from it and nothing else does: whether a browser may drive
+ * the route, and whether its body must declare JSON. A channel route is exempt from both because it checks its
+ * platform's signature inside itself — a Telegram webhook is public on purpose. Ours check nothing, so the router
+ * checks for them.
  *
- * A channel's route is never ours: its caller is a platform's server, and a webhook that answers cross-origin
- * requests is one a page can drive. Mounted prefixes always are (the control plane is the only mount).
+ * TWO TABLES, not one table plus a list of which keys are which. While it was a parallel array, three readers each
+ * had their own chance to answer differently, and two of them did: a channel serving `/invoke` was announced as
+ * our data plane, and the same fact was hand-written as `[]` in one place while derived in another.
+ *
+ * CAVEAT, stated because we cannot enforce it: a CUSTOM channel that verifies nothing lands in `selfVerifying`
+ * anyway and gets neither guard. That is decision B (docs/design/session-control.md §14) and it belongs to the
+ * channel's author, who owns the credential the platform issued — but it is an assumption here, not a property.
  */
 export function router(
-  ours: Routes,
-  channels: Routes,
+  unverified: Routes,
+  selfVerifying: Routes,
   mounts: readonly PrefixMount[] = [],
   options: RouterOptions = {},
 ): ChannelHandler {
@@ -164,8 +186,8 @@ export function router(
   }
   const byKey = new Map<string, ChannelHandler>();
   const paths = new Set<string>();
-  const browserRoutes = new Set<string>();
-  for (const [key, handler] of [...Object.entries(ours), ...Object.entries(channels)]) {
+  const unguarded = new Set<string>();
+  for (const [key, handler] of [...Object.entries(unverified), ...Object.entries(selfVerifying)]) {
     assertRouteKey(key, (problem) => `route "${key}" is not a valid route key — ${problem}`);
     const { path } = parseRouteKey(key);
     for (const mount of mounts) {
@@ -183,17 +205,18 @@ export function router(
     const normalised = method ? `${method} ${path}` : path;
     byKey.set(normalised, handler);
     paths.add(path);
-    if (key in ours) browserRoutes.add(normalised);
+    if (key in unverified) unguarded.add(normalised);
   }
 
   const corsOrigins = options.corsOrigins ?? [];
-  /** Ours to publish to a browser? Every mount is (the control plane), plus the routes we registered ourselves. */
-  const ownedByUs = (method: string, path: string): boolean =>
+  const published = options.published === true;
+  /** Does this route authenticate nobody? Every mount does (the control plane), plus what we registered ourselves. */
+  const authenticatesNobody = (method: string, path: string): boolean =>
     mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||
-    browserRoutes.has(`${method} ${path}`) ||
-    browserRoutes.has(path) ||
-    // The router answers HEAD from a GET route, so the browser question follows it.
-    (method === "HEAD" && browserRoutes.has(`GET ${path}`));
+    unguarded.has(`${method} ${path}`) ||
+    unguarded.has(path) ||
+    // The router answers HEAD from a GET route, so the question follows it.
+    (method === "HEAD" && unguarded.has(`GET ${path}`));
 
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
@@ -204,14 +227,23 @@ export function router(
       req.method === "OPTIONS"
         ? (req.headers.get("access-control-request-method")?.toUpperCase() ?? "OPTIONS")
         : req.method;
-    // A BROWSER request against a route we publish. A non-browser client sends no `Origin` and is untouched by any
-    // of this.
-    const owned = ownedByUs(asking, path);
+    // A BROWSER request against a route that authenticates nobody. A non-browser client sends no `Origin` and is
+    // untouched by any of this.
+    const owned = authenticatesNobody(asking, path);
     const fromPage = origin !== null && owned;
     // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
     // that cannot read the 405 gets an opaque network error instead of the reason.
-    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins) : undefined;
+    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins, published) : undefined;
     const answer = (): Response | Promise<Response> => {
+      // The gate that makes "an origin we do not allow is simply not answered" safe: a POST carrying `text/plain`
+      // is a CORS simple request, sent with no preflight at all, so a route that authenticates nobody must refuse
+      // the body itself. HERE, over the whole unguarded surface, rather than inside each handler — the next route
+      // we add is covered by existing. A self-verifying channel is exempt: Slack posts urlencoded, and a page
+      // cannot forge its signature anyway.
+      if (owned && BODY_METHODS.has(req.method)) {
+        const wrongType = refuseNonJsonBody(req);
+        if (wrongType) return wrongType;
+      }
       // The preflight is the ROUTER's to answer: it names a method the route table does not register, so leaving it
       // to the routes below is a 405 with no CORS headers, which is a browser client that cannot call a route that
       // works.

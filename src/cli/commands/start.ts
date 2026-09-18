@@ -199,7 +199,10 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   }
   const traced = logAgentLoop(agent);
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
-  const mountable = withRunOverrides(opened, opts);
+  // The SAME bind chain `runStart` resolves (`--bind` > `http.host` > the wildcard a container needs), read here
+  // because the assembly happens before the serve does. Its only use is the cross-origin default.
+  const host = parseBind(opts.bind) ?? config.http?.host;
+  const mountable = withRunOverrides(opened, { ...opts, ...(host !== undefined ? { host } : {}) });
   const service = await (isAgentcoreRuntime()
     ? mountAgentcoreService(mountable, { wrapAgent: () => traced, onStateReady })
     : mountAgentService(

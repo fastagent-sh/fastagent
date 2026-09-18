@@ -1,6 +1,7 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
 import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
+import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
@@ -18,7 +19,6 @@ import type { ChannelHandler } from "../channel.ts";
 import { router } from "./serve.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
-import { secretEquals } from "./secret.ts";
 
 /**
  * Runtime filesystems appear on invocation, so even opening the definition must be deferred — in the TWO stages that
@@ -76,7 +76,7 @@ export function deferAgentcoreService<T>(stages: {
           } catch {
             // Invalid envelopes retain the initialization error.
           }
-          if (envelope?.kind === "probe" && secretEquals(envelope.auth, process.env.FASTAGENT_INGRESS_SECRET)) {
+          if (envelope?.kind === "probe" && fromForwarder(envelope, process.env.FASTAGENT_INGRESS_SECRET)) {
             return Response.json({ ok: false, error: message });
           }
         }
@@ -128,6 +128,20 @@ export async function mountAgentcoreService(
   // envelope is request/response with a buffered body (see the webhook reply), so the one route a GUI actually
   // renders from — the long-lived `GET /control/sessions/{id}/events` stream — could not ride it anyway. Half a
   // control plane, for nobody, on a third transport.
+  // Every config key that cannot mean anything on this host says so. Silence here is how an operator concludes a
+  // setting took effect — `sessionControl` was the one that already warned, and the other two were just as inert.
+  if (opened.corsOrigins) {
+    log.warn(
+      "[fastagent] agentcore: http.cors has no effect here — no browser reaches this container. Its ingress is the " +
+        "forwarder's Function URL (webhooks) and the Runtime's IAM-gated API, neither of which is a page.",
+    );
+  }
+  if (opened.serveInvoke !== undefined) {
+    log.warn(
+      "[fastagent] agentcore: http.invoke has no effect here — this host serves the Runtime's POST /invocations " +
+        "contract instead of our own /invoke, and reaching it already requires bedrock-agentcore:InvokeAgentRuntime.",
+    );
+  }
   if (opened.publishControl) {
     log.warn(
       "[fastagent] agentcore: sessionControl is ON but /control/* is NOT served here — this host's only public " +
@@ -149,9 +163,9 @@ export async function mountAgentcoreService(
           `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
       );
     }
-    // CHANNELS ONLY — nothing of ours rides the public relay. `lazy.ours` (here just `GET /health`) is dropped
+    // CHANNELS ONLY — nothing unverified rides the public relay. `lazy.unverified` (here just `GET /health`) is dropped
     // with the control plane, for the same reason: what arrives through that URL is anonymous.
-    return { routes: lazy.channels };
+    return { routes: lazy.selfVerifying };
   };
 
   const adapterRoutes = mountAgentcore({
@@ -174,7 +188,7 @@ export async function mountAgentcoreService(
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
     // The adapter's own two paths are the whole surface here; the channels arrive lazily behind them.
-    ours: Object.keys(adapterRoutes),
+    unverifiedRoutes: Object.keys(adapterRoutes),
     // No `controlPrefix`: it is not served here, so nothing may report a prefix a caller could dial.
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections

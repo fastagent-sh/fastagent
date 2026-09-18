@@ -1,4 +1,5 @@
 /** The wire between the forwarder Lambda and the container, in ONE place. */
+import { secretEquals } from "./secret.ts";
 
 /** Paths the forwarder answers ITSELF — never forwarded to a channel route. */
 export const RESERVED_PATHS = {
@@ -10,6 +11,26 @@ export const RESERVED_PATHS = {
 
 /** Every kind the container's `POST /invocations` dispatches on. */
 export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke", "probe"] as const;
+
+/**
+ * Did this envelope come from the FORWARDER, rather than from some other principal holding
+ * `bedrock-agentcore:InvokeAgentRuntime`?
+ *
+ * WHAT IT ACTUALLY GUARDS, in one line: only the forwarder may tell the container where the forwarder is. That URL
+ * (`envelope.wake.url`) is where the container later POSTs its wake alarms, carrying `FASTAGENT_WAKE_SECRET` — so a
+ * principal who could set it would redirect that callback and collect the secret along with every pending wake-up.
+ *
+ * The other thing it gates — the non-`invoke` kinds — is DEPTH, not a boundary. Every one of them is weaker than
+ * the `invoke` the same caller may already send: `schedule-fire` runs a prompt the definition wrote down,
+ * `webhook` reaches only channel routes that verify their own platform's signature, `wake-poke` wakes, `probe`
+ * reports. IAM is what decides who gets to ask at all.
+ *
+ * ONE reading, because the deferred wrapper answers a probe before the adapter exists and would otherwise spell the
+ * same rule twice (channels/agentcore-service.ts).
+ */
+export function fromForwarder(envelope: { auth?: unknown } | undefined, expected: string | undefined): boolean {
+  return secretEquals(envelope?.auth, expected);
+}
 
 /** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. */
 export type AgentcoreEnvelope = {
