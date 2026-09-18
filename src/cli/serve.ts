@@ -66,7 +66,7 @@ export function serveService(
     ready: service.ready,
     onListening: (p) => {
       reportServing(service, host, p);
-      announceControl(service.controlPrefix, { host, tunnel });
+      announceControl(service, { host, tunnel });
       maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
     },
     onShutdown: () => service.close(),
@@ -105,29 +105,36 @@ export function readyAddressLines(host: string | undefined, boundPort: number): 
  * does not matter (a loopback `dev`), so the warnings fire at a REACH the operator did not get by default: a bind
  * off this machine, and `--tunnel`'s public URL.
  *
- * `POST /invoke` is named FIRST and unconditionally, because it is the one that is always there. The warning used
- * to hang off `sessionControl`, so a definition serving only telegram published an unauthenticated "run a turn with
- * this agent's full tool authority" endpoint and heard nothing at all.
+ * WHAT IS EXPOSED is read off the surface that actually mounted, never assumed. `POST /invoke` is on most serves
+ * but not all: AgentCore answers the Runtime's `/invocations` behind IAM, and `http.invoke: false` withholds it. A
+ * warning naming an endpoint this process does not serve is how an operator learns to skim past all of them — the
+ * same reason `preflightDeploy` takes `publicUrl`.
  */
-export function announceControl(controlPrefix: string | undefined, bind: { host?: string; tunnel: boolean }): void {
+export function announceControl(
+  service: Pick<AgentService, "controlPrefix" | "routes">,
+  bind: { host?: string; tunnel: boolean },
+): void {
+  const { controlPrefix } = service;
   if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
   // What an unauthenticated caller of this port can do, worst first.
-  const exposed = `POST /invoke (run a turn with this agent's tools)${
-    controlPrefix ? ` and ${controlPrefix}/* (read, steer, delete any session)` : ""
-  }`;
+  const exposed = [
+    ...("POST /invoke" in service.routes ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
+  ];
+  if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
+  const what = `${exposed.join(" and ")} ${exposed.length > 1 ? "answer" : "answers"}`;
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(
       `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
-        `${exposed} answer UNAUTHENTICATED to anyone who can reach it — bind loopback (--bind 127.0.0.1), ` +
+        `${what} UNAUTHENTICATED to anyone who can reach it — bind loopback (--bind 127.0.0.1), ` +
         "firewall the port, or front it with a gateway (docs/design/session-control.md §14)",
     );
   }
   if (bind.tunnel) {
     log.warn(
-      `[fastagent] --tunnel publishes this port at a public URL with NO authentication: ${exposed}. ` +
-        "Anyone with that URL controls this agent — put real auth in front before sharing it " +
-        "(docs/design/session-control.md §14)",
+      `[fastagent] --tunnel publishes this port at a public URL with NO authentication: ${what} to anyone with ` +
+        "that URL — put real auth in front before sharing it (docs/design/session-control.md §14)",
     );
   }
 }

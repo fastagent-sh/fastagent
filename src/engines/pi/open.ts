@@ -175,6 +175,8 @@ export async function createPiAgentFromDir(
   selfSchedule: boolean;
   /** Origins beyond loopback a browser may call this serve from — `http.cors` (MountableAgent). */
   corsOrigins?: readonly string[];
+  /** Whether to serve the data plane, `POST /invoke` — `http.invoke` (MountableAgent). */
+  serveInvoke?: boolean;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
@@ -272,6 +274,7 @@ export async function createPiAgentFromDir(
     publishControl: publish,
     selfSchedule: config.selfSchedule ?? false,
     ...(config.http?.cors ? { corsOrigins: config.http.cors } : {}),
+    ...(config.http?.invoke !== undefined ? { serveInvoke: config.http.invoke } : {}),
     agentDir,
     workspace,
     config,

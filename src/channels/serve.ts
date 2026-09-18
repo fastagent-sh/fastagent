@@ -84,9 +84,15 @@ function isLoopbackOrigin(origin: string): boolean {
  * has decided the port is safely fronted.
  *
  * The SERVE'S OWN host is always allowed: a browser sends `Origin` on same-origin writes too, so a web UI shipped
- * from the deployment it talks to would otherwise be refused by the rule meant for third-party pages. Compared by
- * hostname rather than whole origin because a TLS-terminating gateway rewrites scheme and port, and neither is a
- * thing an attacking page can choose — the host is whatever the victim's browser dialled.
+ * from the deployment it talks to would otherwise be refused by the rule meant for third-party pages.
+ *
+ * HOSTNAME, not the whole origin, and that is a deliberate LOOSENING rather than an equivalence. A TLS-terminating
+ * gateway is the posture §14 recommends, and it rewrites both the scheme (`https` outside, `http` to the container)
+ * and the port, so `self.origin === origin` would refuse the very deployment shape being advised. What the
+ * loosening costs: a page can choose its own scheme and port, so an attacker who already controls a hostname that
+ * resolves here — i.e. the DNS-rebinding case §14 records as a known gap — gets a second way in, from
+ * `http://x.evil.com` to `http://x.evil.com:8787`. It does not help an attacker who cannot control the hostname,
+ * which is every ordinary cross-origin page, because the host is whatever the victim's browser dialled.
  */
 function allowedOrigin(origin: string, allow: readonly string[], self: string): string | undefined {
   if (allow.includes("*")) return "*";
@@ -102,11 +108,13 @@ function allowedOrigin(origin: string, allow: readonly string[], self: string): 
 
 export interface RouterOptions {
   /**
-   * Paths fastagent OWNS, which are therefore browser-callable: they answer CORS preflights and carry CORS headers.
-   * A channel's route is never in here — its caller is a platform's server, and a webhook that answers cross-origin
-   * requests is one a page can drive. Mounted prefixes are always owned (the control plane is the only mount).
+   * Route KEYS fastagent owns, which are therefore browser-callable: they answer CORS preflights and carry CORS
+   * headers. A channel's route is never in here — its caller is a platform's server, and a webhook that answers
+   * cross-origin requests is one a page can drive. Keys, not paths: a channel may legally serve `GET /invoke`
+   * beside our `POST /invoke`, and by path alone that channel route would inherit both the headers and the 403.
+   * Mounted prefixes are always owned (the control plane is the only mount).
    */
-  browserPaths?: readonly string[];
+  browserRoutes?: readonly string[];
   /** Extra origins beyond loopback, from `http.cors`. `["*"]` is the wildcard, and is a deployment's decision. */
   corsOrigins?: readonly string[];
 }
@@ -153,20 +161,30 @@ export function router(
     paths.add(path);
   }
 
-  const browserPaths = new Set(options.browserPaths ?? []);
+  const browserRoutes = new Set(options.browserRoutes ?? []);
   const corsOrigins = options.corsOrigins ?? [];
-  /** Ours to publish to a browser? Every mount is (the control plane), plus the paths the caller named. */
-  const ownedByUs = (path: string): boolean =>
-    browserPaths.has(path) || mounts.some((mount) => pathUnderPrefix(path, mount.prefix));
+  /** Ours to publish to a browser? Every mount is (the control plane), plus the routes the caller named. */
+  const ownedByUs = (method: string, path: string): boolean =>
+    mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||
+    browserRoutes.has(`${method} ${path}`) ||
+    browserRoutes.has(path) ||
+    // The router answers HEAD from a GET route, so the browser question follows it.
+    (method === "HEAD" && browserRoutes.has(`GET ${path}`));
 
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
     const self = new URL(req.url);
     const path = self.pathname;
     const origin = req.headers.get("origin");
-    // A BROWSER request against a path we publish. A non-browser client sends no `Origin` and is untouched by any
+    // A preflight asks ABOUT a method; ownership is that method's, not `OPTIONS`'s (nothing registers OPTIONS).
+    const asking =
+      req.method === "OPTIONS"
+        ? (req.headers.get("access-control-request-method")?.toUpperCase() ?? "OPTIONS")
+        : req.method;
+    // A BROWSER request against a route we publish. A non-browser client sends no `Origin` and is untouched by any
     // of this.
-    const fromPage = origin !== null && ownedByUs(path);
+    const owned = ownedByUs(asking, path);
+    const fromPage = origin !== null && owned;
     // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
     // that cannot read the 405 gets an opaque network error instead of the reason.
     const cors = fromPage ? allowedOrigin(origin as string, corsOrigins, self.hostname) : undefined;
@@ -197,10 +215,17 @@ export function router(
       const out = req.method === "HEAD" ? withoutBody(res) : res;
       // `vary` whether or not the origin was allowed: the answer DEPENDS on the request's origin either way, and a
       // cache that does not know it would serve one caller's verdict to another.
-      if (ownedByUs(path)) out.headers.append("vary", "origin");
+      if (owned) out.headers.append("vary", "origin");
       if (cors === undefined) return out;
       out.headers.set("access-control-allow-origin", cors);
-      out.headers.set("access-control-allow-headers", "authorization, content-type");
+      // Echoed for the same reason the methods are: what a caller needs is not ours to enumerate. A gateway in front
+      // of this port demands its own header (`connectSessionControl({ headers })` is how a client sends one), and a
+      // fixed list turns that preflight into a 204 the browser then refuses to act on. The default names the two a
+      // client of ours always needs, for a preflight that asked about nothing.
+      out.headers.set(
+        "access-control-allow-headers",
+        req.headers.get("access-control-request-headers") ?? "authorization, content-type",
+      );
       // The method the preflight ASKED about, not a table lookup: a mount owns a prefix and does not publish which
       // methods each path under it serves. Naming one the path does not serve costs nothing now that the 405 it
       // produces carries these same headers.

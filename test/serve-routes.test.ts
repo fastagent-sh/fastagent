@@ -34,7 +34,7 @@ describe("serve: who may call this from a browser", () => {
   };
   const build = (corsOrigins?: string[]) => {
     ran = [];
-    return router(routes, [plane], { browserPaths: ["/invoke"], ...(corsOrigins ? { corsOrigins } : {}) });
+    return router(routes, [plane], { browserRoutes: ["POST /invoke"], ...(corsOrigins ? { corsOrigins } : {}) });
   };
   const preflight = (handle: ReturnType<typeof router>, path: string, origin: string, method = "POST") =>
     handle(
@@ -54,6 +54,26 @@ describe("serve: who may call this from a browser", () => {
     expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
     expect(res.headers.get("access-control-allow-methods")).toContain("POST");
     expect(res.headers.get("access-control-allow-headers")).toContain("content-type");
+  });
+
+  it("echoes the headers the preflight asked for — a fixed list is a 204 the browser refuses to act on", async () => {
+    // `connectSessionControl({ headers })` exists so a caller can satisfy whatever fronts this port.
+    // A fixed allow-list cannot know that header's name, so the preflight would pass and the real
+    // request would never be sent.
+    const res = await build()(
+      new Request("http://h/invoke", {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://localhost:5173",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "x-gateway-key, content-type",
+        },
+      }),
+    );
+    expect(res.headers.get("access-control-allow-headers")).toBe("x-gateway-key, content-type");
+    // A preflight that asked about no header still gets what a client of ours always needs.
+    const bare = await preflight(build(), "/invoke", "http://localhost:5173");
+    expect(bare.headers.get("access-control-allow-headers")).toBe("authorization, content-type");
   });
 
   it("allows loopback origins by default and refuses every other one", async () => {
@@ -124,12 +144,12 @@ describe("serve: who may call this from a browser", () => {
     const hook = await handle(new Request("http://h/telegram", { method: "POST", headers: local }));
     expect(hook.headers.get("access-control-allow-origin")).toBeNull();
     expect((await preflight(handle, "/telegram", "http://localhost:5173")).status).not.toBe(204);
-    // Ours: the mounted prefix and the data plane, on the replies no handler produces too — a 405 a
-    // browser cannot read is an opaque network error instead of a diagnosable status.
+    // Ours: the mounted prefix (every path under it, including the 404/405 no handler produces — a
+    // reply a browser cannot read is an opaque network error instead of a diagnosable status) and
+    // the data plane under the method we registered it for.
     for (const [path, init] of [
       ["/control/anything", { headers: local }],
       ["/invoke", { method: "POST", headers: local }],
-      ["/invoke", { method: "GET", headers: local }], // 405 from the router itself
     ] as const) {
       const res = await handle(new Request(`http://h${path}`, init));
       expect({ path, method: init.method ?? "GET", allowed: res.headers.get("access-control-allow-origin") }).toEqual({
@@ -140,6 +160,32 @@ describe("serve: who may call this from a browser", () => {
       // `vary: origin` on ours whatever the verdict — a cache must not serve one origin's answer to another.
       expect(res.headers.get("vary")?.toLowerCase()).toContain("origin");
     }
+  });
+
+  it("ownership is per route KEY: a channel beside us on the same path is still the channel's", async () => {
+    // `routesFor` reserves `POST /invoke` only, so a channel may legally serve `GET /invoke`. By path
+    // alone that route would inherit both the CORS headers and the 403 — a channel route made
+    // browser-callable, and a foreign-origin caller of a channel route refused, both from a rule that
+    // was never about it.
+    ran = [];
+    const handle = router(
+      { "POST /invoke": () => new Response("ours"), "GET /invoke": () => new Response("a channel's") },
+      [],
+      { browserRoutes: ["POST /invoke"] },
+    );
+    const local = { origin: "http://localhost:5173" };
+    const channelRoute = await handle(new Request("http://h/invoke", { headers: local }));
+    expect(await channelRoute.text()).toBe("a channel's");
+    expect(channelRoute.headers.get("access-control-allow-origin")).toBeNull();
+    // …and a foreign origin is not refused on it either: nothing about it is ours to police.
+    const foreign = await handle(new Request("http://h/invoke", { headers: { origin: "https://evil.example.com" } }));
+    expect({ status: foreign.status, body: await foreign.text() }).toEqual({ status: 200, body: "a channel's" });
+    // Ours on the same path is unaffected.
+    expect(
+      (await handle(new Request("http://h/invoke", { method: "POST", headers: local }))).headers.get(
+        "access-control-allow-origin",
+      ),
+    ).toBe("http://localhost:5173");
   });
 
   it("a request with no Origin is not a browser request: no CORS headers, nothing refused", async () => {

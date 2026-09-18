@@ -69,10 +69,10 @@ export interface ServingSurface {
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
   /**
-   * The paths fastagent itself serves here — what {@link router} may publish to a browser. A channel's route is
+   * The route KEYS fastagent itself serves here — what {@link router} may publish to a browser. A channel's route is
    * deliberately absent: its caller is a platform's server (channels/serve.ts `RouterOptions`).
    */
-  browserPaths: string[];
+  browserRoutes: string[];
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
@@ -90,6 +90,11 @@ export async function routesFor(
   agent: Agent,
   stateRoot: string,
   control: SessionControl | undefined,
+  /**
+   * `builtinInvoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
+   * Runtime's `/invocations` contract instead, and an author sets `http.invoke: false` to leave the channels'
+   * signature checks as the only way into a public port.
+   */
   options: { builtinInvoke?: boolean } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
@@ -127,7 +132,7 @@ export async function routesFor(
     routes: { ...builtin, ...routes },
     longConnections,
     routeChannels,
-    browserPaths: Object.keys(builtin).map((key) => parseRouteKey(key).path),
+    browserRoutes: Object.keys(builtin),
     setReady(value: boolean) {
       ready = value;
     },
@@ -253,6 +258,12 @@ export interface MountableAgent {
    * the serving machine, and nothing else — see `channels/serve.ts`, since every route here is unauthenticated.
    */
   corsOrigins?: readonly string[];
+  /**
+   * Serve the data plane, `POST /invoke` (`http.invoke`; default true). The OFF switch for a deployment whose port
+   * is public and whose channels' signature checks are meant to be the only way in — the route is unauthenticated
+   * and runs a turn with the agent's full tool authority.
+   */
+  serveInvoke?: boolean;
 }
 
 /**
@@ -269,7 +280,9 @@ export async function mountAgentService(
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
 
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl);
+  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
+    ...(opened.serveInvoke !== undefined ? { builtinInvoke: opened.serveInvoke } : {}),
+  });
   const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined);
   if (opened.corsOrigins?.includes("*")) {
     // Here rather than in the CLI's startup report, because an embedder sets this key too and the consequence is
@@ -283,7 +296,7 @@ export async function mountAgentService(
   }
   // Composed BEFORE anything starts.
   const handler = router(withControl.routes, withControl.mounts, {
-    browserPaths: routed.browserPaths,
+    browserRoutes: routed.browserRoutes,
     ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
   });
   return Effect.runPromise(

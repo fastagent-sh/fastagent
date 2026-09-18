@@ -34,8 +34,14 @@ export interface FastagentConfig {
    * `cors` names the origins a BROWSER may call this serve from, beyond the loopback ones allowed by default — a web
    * front end's real domain. `["*"]` allows every site the visitor opens; every route here is unauthenticated, so
    * that is a decision about a port you have already fronted, not a convenience.
+   *
+   * `invoke` serves the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment
+   * that can only be reached through a chat channel is still worth curling. Set it `false` when this port is public
+   * and the channels' own signature checks are meant to be the only way in — the route is unauthenticated and runs a
+   * turn with the agent's full tool authority, so "my telegram bot is deployed" should not have to mean "and anyone
+   * with the URL can drive it".
    */
-  http?: { port?: number; host?: string; cors?: string[] };
+  http?: { port?: number; host?: string; cors?: string[]; invoke?: boolean };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
   selfSchedule?: boolean;
   /**
@@ -169,9 +175,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http" must be an object`);
   }
   for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "host" && key !== "cors") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors)`);
+    if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke") {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke)`);
     }
+  }
+  if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
+    throw new Error(`${path}: "http.invoke" must be a boolean`);
   }
   if (c.http?.cors !== undefined) {
     if (!Array.isArray(c.http.cors) || c.http.cors.some((o) => typeof o !== "string" || o === "")) {

@@ -52,7 +52,7 @@ async function serveControl() {
   const plane = createControlPlane(control);
   // BOTH planes, as a real serve has them: the DATA plane at the root, control under its prefix.
   const server = serveNode(
-    router({ "POST /invoke": createInvokeHandler(agent) }, [plane], { browserPaths: ["/invoke"] }),
+    router({ "POST /invoke": createInvokeHandler(agent) }, [plane], { browserRoutes: ["POST /invoke"] }),
     { port: 0 },
   );
   const port = await server.listening;

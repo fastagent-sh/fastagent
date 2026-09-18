@@ -629,7 +629,10 @@ credential:
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`/control/*` appears only under `sessionControl: true`. `POST /invoke` does not: it is on every serve.
+`/control/*` appears only under `sessionControl: true`. `POST /invoke` is on by default on every
+serve — `http.invoke: false` is its off switch, for a public port whose channels' signature checks are
+meant to be the only way in. The startup and deploy warnings name what actually mounted, so turning
+either off removes it from them.
 
 **What this obliges.** Everything below §14 assumes the port itself is the boundary. `dev` binds
 loopback; `start` binds all interfaces because a container needs that, and says so at startup;
@@ -656,8 +659,12 @@ So `channels/serve.ts`'s router answers, for the paths fastagent OWNS only:
   cross-origin requests is one a page can drive.
 - **The serve's own host** is always allowed: a browser sends `Origin` on same-origin writes too, so a
   web UI shipped from the deployment it talks to must not be refused by the rule aimed at third-party
-  pages. Compared by hostname, because a TLS-terminating gateway rewrites scheme and port and an
-  attacking page chooses neither.
+  pages. Compared by HOSTNAME, not by whole origin, and that is a deliberate loosening: a
+  TLS-terminating gateway — the posture this section recommends — rewrites both scheme and port, so an
+  exact-origin comparison would refuse it. The cost is that a page does choose its own scheme and
+  port, so the rebinding gap below gains a second route in (`http://x.evil.com` → `http://x.evil.com:8787`).
+  It gives nothing to an attacker who cannot make a hostname resolve here, which is every ordinary
+  cross-origin page.
 - **A disallowed page is REFUSED (403), not merely denied the reply.** Withholding the headers stops
   the page from READING the answer, which is no protection at all for a write: a simple request
   (`content-type: text/plain`, which nothing here rejects) skips the preflight, so the turn it asked
@@ -671,7 +678,7 @@ A non-browser client sends no `Origin` and none of this applies to it. `connectS
 `connectAgent` take `headers`, sent on every request including the streams, which is how a caller
 satisfies whatever is fronting the serve.
 
-KNOWN GAP: DNS rebinding defeats an origin allowlist (the page rebinds its own hostname to 127.0.0.1
+KNOWN GAP (and the hostname comparison above widens it slightly): DNS rebinding defeats an origin allowlist (the page rebinds its own hostname to 127.0.0.1
 and its requests become same-origin, carrying no `Origin` at all). The standard answer is to also
 require a loopback `Host` — which would break the two postures this design recommends, a same-host
 reverse proxy forwarding `Host: agent.example.com` and `--tunnel`, both of which legitimately send a

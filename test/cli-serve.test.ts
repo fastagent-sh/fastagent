@@ -165,33 +165,54 @@ describe("cli: the assembled serving surface", () => {
     expect((await handle(new Request("http://h/health"))).status).toBe(200);
   });
 
+  /** A serve that mounts the data plane — what most postures look like. */
+  const withInvoke = (controlPrefix: string | undefined) => ({
+    ...(controlPrefix ? { controlPrefix } : {}),
+    routes: { "POST /invoke": () => new Response("x") },
+  });
+
   it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
-      announceControl("/control", { host: "127.0.0.1", tunnel: false });
+      announceControl(withInvoke("/control"), { host: "127.0.0.1", tunnel: false });
       expect(warn).not.toHaveBeenCalled(); // loopback is not reachable off this machine
 
       // A specific non-wildcard bind is reachable as itself, and the warning NAMES that bind —
       // counting alone would stay green if the address rendered as `undefined`.
-      announceControl("/control", { host: "192.168.1.5", tunnel: false });
+      announceControl(withInvoke("/control"), { host: "192.168.1.5", tunnel: false });
       expect(warn.mock.calls.flat().join(" ")).toContain("192.168.1.5 (off this machine)");
-      announceControl("/control", { tunnel: false });
+      announceControl(withInvoke("/control"), { tunnel: false });
       expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
       expect(warn).toHaveBeenCalledTimes(2);
 
       // The tunnel takes the port PUBLIC, and nothing authenticates it — the word has to be there.
-      announceControl("/control", { host: "127.0.0.1", tunnel: true });
+      announceControl(withInvoke("/control"), { host: "127.0.0.1", tunnel: true });
       expect(warn.mock.calls.flat().join(" ")).toMatch(/--tunnel publishes this port.*NO authentication/s);
 
       // WITHOUT the control plane the exposure is still real: `POST /invoke` runs a turn on the
       // agent's own tools, and it is on every serve. This used to say nothing at all.
       warn.mockClear();
-      announceControl(undefined, { host: "127.0.0.1", tunnel: true }); // the tunnel alone
-      announceControl(undefined, { tunnel: false }); // the wildcard bind alone
+      announceControl(withInvoke(undefined), { host: "127.0.0.1", tunnel: true }); // the tunnel alone
+      announceControl(withInvoke(undefined), { tunnel: false }); // the wildcard bind alone
       const withoutPlane = warn.mock.calls.flat().join(" ");
       expect(warn).toHaveBeenCalledTimes(2); // the tunnel, and the wildcard bind
       expect(withoutPlane).toContain("POST /invoke");
       expect(withoutPlane).not.toContain("/control/*");
+
+      // …and it names only what THIS process serves. The AgentCore posture answers the Runtime's
+      // /invocations behind IAM and mounts no /invoke; `http.invoke: false` withholds it too. A
+      // warning about an endpoint that is not there teaches the operator to skim past all of them.
+      warn.mockClear();
+      announceControl({ routes: { "POST /invocations": () => new Response("x") } }, { tunnel: true });
+      expect(warn).not.toHaveBeenCalled();
+      // With the control plane still published, the warning stands — naming only that.
+      announceControl(
+        { controlPrefix: "/control", routes: { "POST /invocations": () => new Response("x") } },
+        { tunnel: true },
+      );
+      const controlOnly = warn.mock.calls.flat().join(" ");
+      expect(controlOnly).toContain("/control/* (read, steer, delete any session) answers");
+      expect(controlOnly).not.toContain("POST /invoke");
     } finally {
       warn.mockRestore();
     }

@@ -49,6 +49,23 @@ describe("createAgentService", () => {
     }
   });
 
+  it("http.invoke: false withholds the data plane, and frees its path for a channel", async () => {
+    // The OFF switch. Without it, upgrading published an anonymous, fully-tooled POST /invoke on the
+    // public URL of every deployment that had previously only exposed a signed webhook.
+    const dir = await agentDir(
+      { "channels/own.mjs": `export default () => ({ "POST /invoke": () => new Response("the channel's") });` },
+      `{ model: "openai-codex/gpt-5.5", http: { invoke: false } }`,
+    );
+    const service = await createAgentService(dir);
+    try {
+      expect(await (await service.handler(new Request("http://h/invoke", { method: "POST" }))).text()).toBe(
+        "the channel's",
+      );
+    } finally {
+      await service.close();
+    }
+  });
+
   it("publishes the control plane at its prefix, unauthenticated", async () => {
     // An embedded surface has no port of its own to advertise, so the prefix is all a client needs.
     // Nothing gates it: fastagent authenticates nothing, and the embedder's own middleware is what

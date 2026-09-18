@@ -45,7 +45,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       assemble: async (prepared) => {
         const service = await openPreparedWorkspace(prepared, opts);
         await service.ready;
-        announceControl(service.controlPrefix, { host: bindFlag, tunnel: false });
+        announceControl(service, { host: bindFlag, tunnel: false });
         return service;
       },
     });
