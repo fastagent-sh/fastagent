@@ -162,6 +162,17 @@ agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TU
 to the same file). With no model set, `chat` runs the same first-run picker as the serving commands
 (credential-annotated catalog, inline login) and writes the choice back to the config.
 
+**pi's settings are the machine's, with one exception.** Theme, keybindings, external editor and the rest of the
+TUI come from your `~/.pi/agent/settings.json`, as they should — they are a person's, not an agent's. Reasoning
+effort does not: a served turn takes it from `thinkingLevel` in `fastagent.config.ts` (default `medium`), so `chat`
+does too, and a `defaultThinkingLevel` you saved for coding does not quietly make this the one posture that answers
+at a different effort than your deployment.
+
+The rest of pi's turn-shaping settings — `compaction`, `retry`, `thinkingBudgets`, `transport`, the HTTP timeouts —
+still come from your machine in `chat` while `dev`/`start` read them from the definition (`<workspace>/.fastagent/pi/`).
+Set them in either place and the two postures can compact or retry differently. They are not split today because pi
+re-reads its settings from storage on every resource reload, which discards any per-key override applied on top.
+
 ## `fastagent invoke`
 
 ```bash

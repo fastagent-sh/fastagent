@@ -544,3 +544,42 @@ describe("session builder: chat offers the model the same tool set serving does"
     }
   });
 });
+
+describe("session builder: a chat turn runs at the definition's reasoning effort, not the machine's", () => {
+  it("ignores the pi settings a `/thinking` Ctrl+S wrote, and honors fastagent.config.ts", async () => {
+    // `chat` reads pi's settings from the USER's agent dir (theme, keybindings, editor belong to a person),
+    // while a served turn reads them from the definition. Reasoning effort is in that file too, so leaving the
+    // level unset made chat the one posture answering at an effort dev/start never uses.
+    const piDir = await mkdtemp(join(tmpdir(), "fa-chat-pi-settings-"));
+    await writeFile(join(piDir, "settings.json"), JSON.stringify({ defaultThinkingLevel: "high", theme: "light" }));
+    vi.stubEnv("PI_CODING_AGENT_DIR", piDir);
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-thinking-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    try {
+      await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+      const defaulted = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        expect(defaulted.session.thinkingLevel).toBe("medium"); // the serving default, not the machine's "high"
+        // The machine still owns how the TUI LOOKS — the split is what a turn executes on, not the chrome.
+        expect(defaulted.session.settingsManager.getTheme()).toBe("light");
+      } finally {
+        await defaulted.dispose?.();
+      }
+
+      await writeFile(
+        join(dir, "fastagent.config.ts"),
+        'export default { model: "openai-codex/gpt-5.5", thinkingLevel: "low" };\n',
+      );
+      const configured = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        expect(configured.session.thinkingLevel).toBe("low"); // the definition's answer wins over both
+      } finally {
+        await configured.dispose?.();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+      await rm(piDir, { recursive: true, force: true });
+    }
+  });
+});

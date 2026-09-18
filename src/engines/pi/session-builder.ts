@@ -17,7 +17,7 @@ import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors }
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
-import { createPiModelRuntime } from "./models.ts";
+import { DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
@@ -120,7 +120,11 @@ export async function buildAgentSessionRuntime(
       sessionManager,
       sessionStartEvent,
       model,
-      thinkingLevel,
+      // The SPELLING serving uses (agent-session-factory), never `thinkingLevel` alone: pi resolves an ABSENT level
+      // from its own settings, and chat reads those from the machine (`~/.pi/agent/settings.json`) while a served
+      // turn reads them from the definition. A `/thinking` + Ctrl+S saved for coding would otherwise silently make
+      // this the one posture that answers at a different reasoning effort than the deployment does.
+      thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools,
       // A tool must see one spelling of the workspace, including when opened through a symlink.
       cwd: rootCwd,
