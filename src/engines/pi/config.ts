@@ -96,9 +96,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   let mod: { default?: unknown };
   try {
     // Cache-bust on file change: ESM `import()` caches by URL, so a config REWRITTEN in this process (the first-run
-    // picker's write-back) would otherwise read back stale.
+    // picker's write-back) would otherwise read back stale. An INTEGER stamp (mtimeNs), because `mtimeMs` carries a
+    // fraction and a loader that decides how to transform a module by looking at the last dot in the URL reads
+    // `…config.ts?v=1789701227227.251` as extension `251` and parses the file as JavaScript — which the scaffold's
+    // `import type` + `satisfies` (what makes an editor complete these keys) does not survive.
     const url = pathToFileURL(path);
-    url.searchParams.set("v", String(statSync(path).mtimeMs));
+    url.searchParams.set("v", String(statSync(path, { bigint: true }).mtimeNs));
     mod = (await import(url.href)) as { default?: unknown };
   } catch (error) {
     throw new Error(`${path}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`);

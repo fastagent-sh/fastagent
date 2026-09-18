@@ -7,17 +7,27 @@
 // below. Or set it by hand to a "provider/modelId" (`fastagent models` lists them).
 // Self-hosted model (vLLM/Ollama/…) or your own gateway? Declare it in a models.json next to this
 // file and select it like any other spec — see docs/configuration.md "Custom model endpoints".
+//
+// `satisfies` is what makes your editor complete these keys and describe them on hover — and what
+// turns a typo into an error you see while writing rather than one `fastagent dev` reports. The
+// import is TYPE-only: nothing is loaded at runtime. Every key is optional; the commented lines
+// below carry the default.
+import type { FastagentConfig } from "@fastagent-sh/fastagent";
+
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   http: { port: 8787 },
+  // http: { host: "127.0.0.1" }, // bind address; default: `start` all interfaces (containers), `dev` loopback
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.
   // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)
+  // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way
   // deploy: what the agent needs on the box (so `fastagent deploy` doesn't need a hand-written Dockerfile
   // or hand-set host variables). Uncomment as needed:
   // deploy: {
   //   secrets: ["GH_TOKEN"], // extra secret env vars your tools use — deploy reads their values from .secrets/.env
   //   apt: ["git"],          // extra apt packages baked into the image (git, ripgrep, …; default repos only)
+  //   agentcore: { idleTimeoutSeconds: 180 }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
   // },
-};
+} satisfies FastagentConfig;

@@ -47,6 +47,23 @@ describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bu
     await utimes(path, t, t);
     expect((await loadConfig(dir)).config.model).toBe("prov/m1");
   });
+
+  it("loads the TYPE SYNTAX the scaffold writes, cache-buster and all", async () => {
+    // The scaffolded config is typed so an editor completes its keys, which makes the load path's own URL the
+    // hazard: a stamp carrying a dot (`mtimeMs`) reads to an extension-sniffing loader as extension `251`, the
+    // file is parsed as JavaScript, and `import type` fails with "Expected `from` but found `{`".
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-typed-"));
+    const body = [
+      'import type { FastagentConfig } from "@fastagent-sh/fastagent";',
+      "",
+      "export default {",
+      '  model: "prov/typed",',
+      "} satisfies FastagentConfig;",
+      "",
+    ].join("\n");
+    await writeFile(join(dir, "fastagent.config.ts"), body);
+    expect((await loadConfig(dir)).config.model).toBe("prov/typed");
+  });
 });
 
 describe("config: loadConfig validation", () => {
@@ -440,6 +457,18 @@ describe("rewriteConfigModel (first-run picker write-back)", async () => {
     // Deleting the model line is the natural "reset" gesture — the next pick must persist again.
     const src = "export default {\n  http: { port: 8787 },\n};\n";
     expect(rewriteConfigModel(src, "x/y")).toBe('export default {\n  model: "x/y",\n  http: { port: 8787 },\n};\n');
+  });
+
+  it("writes into the SCAFFOLDED file, which is the shape it was built for", async () => {
+    // The coupling this pins: the picker edits config SOURCE TEXT, so the template's shape is part of the
+    // contract. Wrapping the object in a call (`defineConfig({`) would silently make every first-run pick
+    // unpersistable — `satisfies` keeps `export default {` and the write-back with it.
+    const { baseTemplate } = await import("../src/scaffold/templates.ts");
+    const written = rewriteConfigModel(baseTemplate("fastagent.config.ts"), "anthropic/claude-x");
+    expect(written).toContain('model: "anthropic/claude-x",');
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-scaffold-"));
+    await writeFile(join(dir, "fastagent.config.ts"), written as string);
+    expect((await loadConfig(dir)).config.model).toBe("anthropic/claude-x");
   });
 
   it("returns null for a hand-shaped config (no model line, no scaffold block shape)", () => {

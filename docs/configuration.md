@@ -26,28 +26,34 @@ nothing. (Your own `tools/`, `channels/`, and `schedules/` still accept `.ts`, `
 Example:
 
 ```ts
-import { defineConfig } from "@fastagent-sh/fastagent";
+import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
-export default defineConfig({
+export default {
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
-});
+} satisfies FastagentConfig;
 ```
 
-Supported keys:
+`satisfies` is what `init` scaffolds, and it is the whole configuration UI: your editor completes every key,
+describes it on hover, and marks a typo while you write it instead of at the next `fastagent dev`. The import is
+type-only, so nothing is loaded at runtime. (`defineConfig({ … })` is exported too and behaves identically; the
+`satisfies` form keeps the file shaped as a plain `export default {`, which is what the first-run model picker
+rewrites.)
 
-| Key | Meaning |
-|---|---|
-| `model` | Default model spec, in `provider/modelId` form. |
-| `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `tools` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
-| `http.port` | Default port for `dev` / `start`. |
-| `http.host` | Bind address for `dev` / `start`. Unset leaves the default to the command: `start` binds all interfaces (what containers need), `dev` binds `127.0.0.1`. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
-| `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
-| `sessionControl` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; `start` binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
-| `deploy.secrets` | Secret env-var names **no code declares** — a value read outside `tools/`/`schedules/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and, under `--run`, read from the agent's `.secrets/.env` — the file that declares the deployed environment — and set on the host; a missing value gates the run. Exporting the variable in your shell does not reach the deployment (in CI, write the file before running the command). |
-| `deploy.agentcore.idleTimeoutSeconds` | `deploy agentcore` only: how long an idle session keeps its microVM, 60–1209600 seconds. Default `180`. Memory bills for the whole idle tail and a session past it cold-starts, so the workload picks the trade — raise it for a chat agent talked to in bursts, lower it for a schedule-only one. Changing it changes the generated template, so an existing `agentcore.template.yaml` needs `--force` to pick it up — and `--run` refuses to deploy from the stale one. See [AgentCore](deploy.md#aws-bedrock-agentcore). |
-| `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
+Every key is optional. Supported keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `model` | none | Default model spec, in `provider/modelId` form. With none set, the first-run picker asks and writes the choice back here. |
+| `thinkingLevel` | `"medium"` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
+| `tools` | `[]` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
+| `http.port` | `8787` | Default port for `dev` / `start`. |
+| `http.host` | per command | Bind address for `dev` / `start`. Unset leaves the default to the command: `start` binds all interfaces (what containers need), `dev` binds `127.0.0.1`. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
+| `selfSchedule` | `false` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
+| `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; `start` binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
+| `deploy.secrets` | `[]` | Secret env-var names **no code declares** — a value read outside `tools/`/`schedules/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and, under `--run`, read from the agent's `.secrets/.env` — the file that declares the deployed environment — and set on the host; a missing value gates the run. Exporting the variable in your shell does not reach the deployment (in CI, write the file before running the command). |
+| `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM, 60–1209600 seconds. Default `180`. Memory bills for the whole idle tail and a session past it cold-starts, so the workload picks the trade — raise it for a chat agent talked to in bursts, lower it for a schedule-only one. Changing it changes the generated template, so an existing `agentcore.template.yaml` needs `--force` to pick it up — and `--run` refuses to deploy from the stale one. See [AgentCore](deploy.md#aws-bedrock-agentcore). |
+| `deploy.apt` | `[]` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
 
 Unknown keys fail at startup. This catches typos such as `modle` instead of silently degrading to defaults.
 
@@ -136,9 +142,9 @@ shape, a key, and the model ids it serves — everything else has a default:
 The provider id joins the model id into a normal spec, usable everywhere a spec is:
 
 ```ts
-export default defineConfig({
+export default {
   model: "mygw/deepseek-v3",
-});
+} satisfies FastagentConfig;
 ```
 
 Custom endpoints are **additive** — built-in providers stay available alongside them.
@@ -169,10 +175,10 @@ need to declare it. `deploy.secrets` remains for the variables `deploy` cannot i
 in `headers`, or a value assembled from several variables (`"${A}_${B}"`):
 
 ```ts
-export default defineConfig({
+export default {
   model: "mygw/deepseek-v3",
   deploy: { secrets: ["MYGW_PORTKEY_KEY"] },
-});
+} satisfies FastagentConfig;
 ```
 
 A key written INTO `models.json` (a literal, or a `!command` resolved on the host) travels with the
@@ -367,12 +373,13 @@ path. Run `fastagent info --json` to inspect the complete mounted surface.
 Reusable packages do not need a separate plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
 
 ```ts
+import type { FastagentConfig } from "@fastagent-sh/fastagent";
 import { integrationTools } from "@acme/fastagent-tools";
 
-export default defineConfig({
+export default {
   tools: integrationTools(),
   deploy: { secrets: ["ACME_API_KEY"] }, // only if the package reads it itself
-});
+} satisfies FastagentConfig;
 ```
 
 Package tools receive the same `ToolContext` as definition-local `defineTool` tools, including the
