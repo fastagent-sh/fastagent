@@ -495,6 +495,48 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
 The scheduler is started by
 the serve path (`dev`/`start`); `fastagent schedule fire <name>` runs one schedule's turn immediately for authoring.
 
+**An external clock can fire a schedule too.** A serve that declares any schedule also answers
+`POST /trigger`:
+
+```bash
+curl -sS -X POST https://your-agent/trigger \
+  -H 'content-type: application/json' -d '{"name":"daily-digest"}'
+```
+
+The body is a REFERENCE, never a prompt: the turn's content stays in `schedules/<name>.ts`, which is
+what makes this different from driving `POST /invoke` from a crontab line. `slot` is optional and is
+an IDENTITY rather than a timestamp — `claimSlot` keys on it, so two deliveries of one occurrence must
+name the same instant or the turn runs twice. A caller that computed the cron grid itself sends it
+(AWS EventBridge sends `<aws.scheduler.scheduled-time>`); a `curl` in a crontab omits it and the serve
+snaps to the occurrence that schedule most recently had. Either way the resident clock and the
+external one are safe together: the slot claim is an `O_EXCL` create, so exactly one of them runs it.
+
+**On a host that also runs the resident clock, an omitted `slot` is TAKEOVER, not drive.** Both clocks
+name the same occurrence, and the resident one gets there first, so a crontab pointed at a `dev`/
+`start` serve reads `fired: false` almost every time — it fires only when the resident clock did not
+(the process was down, or the turn never settled). That is worth having as redundancy; it is not a way
+to drive a schedule that is already being driven. A deployment whose whole point is the external clock
+is one with no resident clock to race — AgentCore today, and a scaled-to-zero host once
+[#557](https://github.com/fastagent-sh/fastagent/issues/557) lands.
+
+A `slot` ahead of this machine's clock is refused (400), with no tolerance at all: a slot names an
+occurrence that has ARRIVED, and the claim gate has no ceiling — a claim dated ahead makes every real
+occurrence after it sort before the newest and be refused as stale, for the resident clock too, across
+restarts. A tolerance would only price that attack rather than close it (wait until the next
+occurrence is inside the window, name it, repeat). A container whose clock lags its caller therefore
+sees a 4xx, which is self-healing: the AgentCore forwarder throws on it and EventBridge retries, by
+which time the clock has moved. A crontab should omit `slot` and let the serve snap it.
+
+The route follows `http.invoke`: turning the anonymous turn endpoint off takes this one with it, since
+that is what `http.invoke: false` means. `http.trigger: true` is the exception for a port that has no
+`/invoke` but does have an external clock.
+
+The reply is the fire's outcome — `{ slot, fired, skippedReason?, failed?, ms }`. `fired: false` with
+a `skippedReason` means the occurrence was already claimed (a duplicate delivery, or the resident
+clock got there first), which is a successful delivery of a slot that needed no work. A 404 names the
+schedules this deployment does have, so a stale rule is distinguishable from a typo. **The route is
+unauthenticated like everything else fastagent serves** — see [design §14](design/session-control.md).
+
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
 capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
 one-shot `invoke`/`fire`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
@@ -826,6 +868,7 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
+POST   /trigger                                {name, slot?} — fire a schedule this agent declares
 ```
 
 The data plane is a root verb endpoint, not part of this prefix: `/control/*` is REST over session

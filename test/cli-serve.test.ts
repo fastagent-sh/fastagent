@@ -24,6 +24,46 @@ describe("serving surface", () => {
     expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
   });
 
+  it("mounts POST /trigger only where there is something to trigger, and reserves that path too", async () => {
+    // It rides the unverified table for the reason that table exists: the JSON gate, the cross-origin
+    // policy, the reserved path and the startup report's account of what is open all follow from being
+    // in it — none of which this route had to ask for.
+    const dir = await mkdtemp(join(tmpdir(), "fa-trigger-surface-"));
+    const none = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
+    expect(Object.keys(none.unverified)).not.toContain("POST /trigger");
+
+    const schedules = [{ name: "digest", cron: "0 * * * *", tz: "UTC", prompt: "go" }];
+    const withTrigger = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { schedules });
+    expect(Object.keys(withTrigger.unverified)).toContain("POST /trigger");
+
+    // It FOLLOWS `serveInvoke`: `http.invoke: false` means "the channels' signature checks are the only
+    // way in", and a second anonymous turn-starter appearing behind that choice would reverse it.
+    const invokeOff = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      schedules,
+      serveInvoke: false,
+    });
+    expect(Object.keys(invokeOff.unverified)).toEqual(["GET /health"]);
+    // …with one explicit exception, which is the combination this route exists for: no `/invoke`, but
+    // an external clock driving the schedules.
+    const clockOnly = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      schedules,
+      serveInvoke: false,
+      serveTrigger: true,
+    });
+    expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "POST /trigger"]);
+
+    // Reserved like /invoke: a channel taking the path would answer for a route every runbook names.
+    const taken = await mkdtemp(join(tmpdir(), "fa-trigger-taken-"));
+    await mkdir(join(taken, "channels"));
+    await writeFile(
+      join(taken, "channels", "mine.mjs"),
+      `export default () => ({ "POST /trigger": () => new Response("mine") });\n`,
+    );
+    await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, { schedules })).rejects.toThrow(
+      /channel route\(s\) "POST \/trigger" take a path this serve answers on itself/,
+    );
+  });
+
   it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-invoke-surface-"));
     await mkdir(join(dir, "channels"));
@@ -216,6 +256,15 @@ describe("cli: the assembled serving surface", () => {
       expect(said).toMatch(/any web page your browser visits can call this serve cross-origin/);
       expect(said).toContain("POST /invoke");
       expect(said).toContain("http.cors");
+
+      // `POST /trigger` is on the same table and is named the same way: it runs a turn too, from a
+      // prompt the definition wrote down rather than one the caller sent.
+      warn.mockClear();
+      announceControl(
+        { unverifiedRoutes: ["POST /invoke", "POST /trigger", "GET /health"] },
+        { host: "127.0.0.1", tunnel: false },
+      );
+      expect(warn.mock.calls.flat().join(" ")).toContain("POST /trigger (fire any schedule this agent has)");
 
       // …and NOT once `http.cors` has taken it back — then the operator named the origins themselves.
       warn.mockClear();
