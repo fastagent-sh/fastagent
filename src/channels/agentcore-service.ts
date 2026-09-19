@@ -1,19 +1,12 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
-import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
-import { fireScheduleOnce } from "../schedule/scheduler.ts";
-import { type AgentService, type MountableAgent, routesFor, startSchedules } from "../service.ts";
-import {
-  type AgentcoreAdapterOptions,
-  type RouteSurface,
-  UnknownScheduleError,
-  agentcoreRoutes,
-  agentcorePing,
-} from "./agentcore.ts";
+import { type AgentService, loadServingSchedules, type MountableAgent, routesFor, startSchedules } from "../service.ts";
+import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
+import { createTriggerHandler } from "../schedule/trigger.ts";
 import { activeWork, beginWork } from "./busy.ts";
 import type { ChannelHandler } from "../channel.ts";
 import { router } from "./serve.ts";
@@ -151,9 +144,8 @@ export async function mountAgentcoreService(
   }
 
   // Started here, not deferred to an envelope.
-  const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
-    externalClock: true,
-  });
+  const schedules = await loadServingSchedules(agentDir);
+  const scheduled = startSchedules(agent, stateRoot, opened.selfSchedule, schedules, { externalClock: true });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
     const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { serveInvoke: false });
@@ -214,6 +206,7 @@ export function mountAgentcore(options: {
   channels: AgentcoreAdapterOptions["channels"];
 }): Routes {
   const { agent, stateRoot, schedules, onStateReady, channels } = options;
+  const trigger = createTriggerHandler({ agent, stateRoot, schedules });
   return agentcoreRoutes({
     channels,
     agent,
@@ -222,15 +215,7 @@ export function mountAgentcore(options: {
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
-    fire:
-      schedules.length === 0
-        ? undefined
-        : (name, slot) => {
-            const schedule = schedules.find((s) => s.name === name);
-            if (!schedule) throw new UnknownScheduleError(name);
-            return Effect.runPromise(
-              fireScheduleOnce({ agent, stateRoot, schedule, slot }).pipe(Effect.mapError((error) => error.cause)),
-            );
-          },
+    // The route's handler, not a second fire path: the envelope is a transport for `POST /trigger`.
+    ...(trigger ? { trigger } : {}),
   });
 }

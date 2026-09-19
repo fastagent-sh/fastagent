@@ -9,7 +9,6 @@ import type { ChannelHandler, Routes } from "../channel.ts";
 import { router } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
-import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
@@ -40,8 +39,8 @@ export interface AgentcoreAdapterOptions {
   stateRoot: string;
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
   isBusy: () => boolean;
-  /** Slot-idempotent schedule fire, bound to this workspace's schedules; undefined when the workspace has none. */
-  fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
+  /** The `POST /trigger` handler bound to this workspace's schedules; undefined when it declares none. */
+  trigger?: (req: Request) => Promise<Response>;
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */
   ingressSecret?: string;
   /** Runs once on activation, after accepting the current forwarder callback URL. */
@@ -103,7 +102,7 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, agent, stateRoot, isBusy, fire, ingressSecret, onStateReady } = options;
+  const { channels, agent, stateRoot, isBusy, trigger, ingressSecret, onStateReady } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
   const invokeHandler = createInvokeHandler(agent);
 
@@ -199,22 +198,21 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         if (typeof name !== "string" || typeof slot !== "string" || Number.isNaN(Date.parse(slot))) {
           return text('schedule-fire envelope needs { "name": string, "slot": ISO-date }\n', 400);
         }
-        // No fire capability (no schedules in this definition) or an unknown name is deploy drift — an external clock
-        // rule outliving the schedule it fired for.
-        if (!fire) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
+        // No schedules in this definition: nothing to fire, and no route was built for it either.
+        if (!trigger) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
+        // The SAME handler the `POST /trigger` route is, reached the way `invoke` reaches its own — this envelope is
+        // a transport for that request, not a second implementation of it. Unknown names, claim-state faults and the
+        // outcome shape are all decided once, in schedule/trigger.ts.
+        const inner = new Request("http://agentcore.local/trigger", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ name, slot }),
+        });
         // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may time out and drop
         // the connection while the turn keeps running server-side.
         const workDone = beginWork();
         try {
-          const outcome = await fire(name, new Date(slot));
-          return json(outcome, 200);
-        } catch (e) {
-          if (e instanceof UnknownScheduleError) return text(`${e.message}\n`, 404);
-          // A claim-state fault (the slot claim could not be read or created) — surface it as the request's
-          // failure so the external clock's logs carry it, and so its retry runs the slot that was never claimed
-          // (fail visibly, never a silent absorb).
-          log.error(`[agentcore] schedule-fire ${name} failed: ${String(e)}`);
-          return text(`schedule-fire failed: ${String(e)}\n`, 500);
+          return await trigger(inner);
         } finally {
           workDone();
         }
@@ -266,12 +264,4 @@ export function agentcorePing(isBusy: () => boolean): ChannelHandler {
     }
     return json({ status, time_of_last_update: lastTransition }, 200);
   };
-}
-
-/** Thrown by the mount-site `fire` binding when the envelope names a schedule this workspace does not have. */
-export class UnknownScheduleError extends Error {
-  constructor(name: string) {
-    super(`unknown schedule "${name}"`);
-    this.name = "UnknownScheduleError";
-  }
 }
