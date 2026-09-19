@@ -220,8 +220,8 @@ export async function createPiAgentFromDir(
   const caller = options.observer;
   // TWO decisions, not one. The hub is in-process bookkeeping over the run observer: a serve gets it unconditionally,
   // because `/stop` in a chat is an ordinary thing to ask for and reaching the live run is the only way to answer it.
-  // Publishing `/control/*` — steer, rewrite, delete, over one bearer token at the public URL — is the separate
-  // decision `config.sessionControl` makes, and it is the only one that also wires the boundary.
+  // Publishing `/control/*` — steer, rewrite, delete, unauthenticated at whatever URL this serves on — is the
+  // separate decision `config.sessionControl` makes, and it is the only one that also wires the boundary.
   const publish = options.sessionControl ?? config.sessionControl === true;
   const wantControl = publish || options.serving === true;
   let hub: ReturnType<typeof createPiSessionControl> | undefined;

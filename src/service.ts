@@ -97,11 +97,12 @@ export async function routesFor(
   stateRoot: string,
   control: SessionControl | undefined,
   /**
-   * `builtinInvoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
+   * `serveInvoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
    * Runtime's `/invocations` contract instead, and an author sets `http.invoke: false` to leave the channels'
-   * signature checks as the only way into a public port.
+   * signature checks as the only way into a public port. Named for the config key it carries, not for the
+   * "built-in fallback" it once withheld — that concept is gone.
    */
-  options: { builtinInvoke?: boolean } = {},
+  options: { serveInvoke?: boolean } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -130,7 +131,7 @@ export async function routesFor(
   // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
   const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
-  if (options.builtinInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
+  if (options.serveInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.
@@ -314,16 +315,16 @@ export async function mountAgentService(
   if (opened.corsOrigins) assertCorsOrigins(opened.corsOrigins, "mountAgentService: corsOrigins");
 
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
-    ...(opened.serveInvoke !== undefined ? { builtinInvoke: opened.serveInvoke } : {}),
+    ...(opened.serveInvoke !== undefined ? { serveInvoke: opened.serveInvoke } : {}),
   });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
-  const handler = router(
-    { unverified: routed.unverified, selfVerifying: withControl.routes, mounts: withControl.mounts },
-    {
-      ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
-    },
-  );
+  const handler = router({
+    unverified: routed.unverified,
+    selfVerifying: withControl.routes,
+    mounts: withControl.mounts,
+    ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+  });
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();

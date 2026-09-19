@@ -156,7 +156,7 @@ export async function mountAgentcoreService(
   });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
-    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: false });
+    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { serveInvoke: false });
     if (lazy.longConnections.length > 0) {
       throw new Error(
         `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +

@@ -128,9 +128,6 @@ export interface RouterSurface {
   selfVerifying?: Routes;
   /** Prefix-owning handlers. Always treated as unverified — the control plane is the only one. */
   mounts?: readonly PrefixMount[];
-}
-
-export interface RouterOptions {
   /** `http.cors` — exact origins, or `["*"]`. Set, it REPLACES the `*` default; unset, the default stands. */
   corsOrigins?: readonly string[];
 }
@@ -152,8 +149,8 @@ export interface RouterOptions {
  * anyway and gets neither guard. That is decision B (docs/design/session-control.md §14) and it belongs to the
  * channel's author, who owns the credential the platform issued — but it is an assumption here, not a property.
  */
-export function router(surface: RouterSurface, options: RouterOptions = {}): ChannelHandler {
-  const { unverified = {}, selfVerifying = {}, mounts = [] } = surface;
+export function router(surface: RouterSurface): ChannelHandler {
+  const { unverified = {}, selfVerifying = {}, mounts = [], corsOrigins = [] } = surface;
   for (const [i, mount] of mounts.entries()) {
     assertRouteKey(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
     if (mount.prefix === "/") {
@@ -193,7 +190,6 @@ export function router(surface: RouterSurface, options: RouterOptions = {}): Cha
     if (key in unverified) unguarded.add(normalised);
   }
 
-  const corsOrigins = options.corsOrigins ?? [];
   /** Does this route authenticate nobody? Every mount does (the control plane), plus what we registered ourselves. */
   const authenticatesNobody = (method: string, path: string): boolean =>
     mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||

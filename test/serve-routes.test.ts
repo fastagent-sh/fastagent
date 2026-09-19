@@ -36,10 +36,12 @@ describe("serve: who may call this from a browser", () => {
   };
   const build = (corsOrigins?: string[]) => {
     ran = [];
-    return router(
-      { unverified: ours, selfVerifying: channels, mounts: [plane] },
-      { ...(corsOrigins ? { corsOrigins } : {}) },
-    );
+    return router({
+      unverified: ours,
+      selfVerifying: channels,
+      mounts: [plane],
+      ...(corsOrigins ? { corsOrigins } : {}),
+    });
   };
   const preflight = (handle: ReturnType<typeof router>, path: string, origin: string, method = "POST") =>
     handle(

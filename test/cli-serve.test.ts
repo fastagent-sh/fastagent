@@ -19,7 +19,7 @@ describe("serving surface", () => {
 
     // The ONE posture that opts out: AgentCore serves the Runtime's `/invocations` contract instead.
     const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
-      builtinInvoke: false,
+      serveInvoke: false,
     });
     expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
   });
@@ -64,7 +64,7 @@ describe("serving surface", () => {
     // …but ONLY where this serve actually answers there: AgentCore serves the Runtime's `/invocations`
     // contract instead, so the same channel is legal on that posture and the refusal would be a lie.
     const onAgentcore = await routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {
-      builtinInvoke: false,
+      serveInvoke: false,
     });
     expect(await (await onAgentcore.selfVerifying["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe(
       "mine",
