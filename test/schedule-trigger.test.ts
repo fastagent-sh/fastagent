@@ -128,27 +128,28 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(await res.text()).toContain('no schedule named "digets" (this deployment has: digest, weekly)');
   });
 
-  it("refuses a slot in the future, which would otherwise poison the schedule permanently", async () => {
-    // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so one claim dated 2999 makes every
-    // real occurrence after it sort before the newest and be refused as stale — forever, across
-    // restarts, for the resident clock too. Recovery means deleting files inside the container. This
-    // route is the only place a slot arrives from a caller we do not trust.
+  it("refuses ANY slot ahead of the clock — a tolerance would still starve the resident clock", async () => {
+    // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so a claim ahead of the wall clock
+    // makes every real occurrence after it sort before the newest and be refused as stale — forever,
+    // across restarts, for the resident clock too, recoverable only by deleting files in the container.
+    //
+    // A tolerance does not fix that, it prices it: with a window of T, a caller waits until the next
+    // occurrence is within T and names it, starving the schedule for one cheap request per period.
+    // This route is the only place a slot arrives from a caller we do not trust, so the window is zero.
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
-    const far = await trigger(handle!, { name: "digest", slot: "2999-01-01T00:00:00Z" });
-    expect(far.status).toBe(400);
-    expect(await far.text()).toContain("is in the future");
+    for (const ahead of ["2999-01-01T00:00:00Z", new Date(Date.now() + 30_000).toISOString()]) {
+      const res = await trigger(handle!, { name: "digest", slot: ahead });
+      expect({ ahead, status: res.status }).toEqual({ ahead, status: 400 });
+      expect(await res.text()).toContain("ahead of this machine's clock");
+    }
     expect(readFires(root, "digest")).toEqual([]); // nothing was written
     expect(calls).toEqual([]);
 
-    // …and a real occurrence still fires afterwards, which is the property the bound protects.
+    // …and a real occurrence still fires afterwards, which is the property the refusal protects.
     expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
       fired: true,
     });
-
-    // Clock skew between two machines is not an attack: a slot a few seconds ahead is accepted.
-    const skewed = new Date(Date.now() + 5_000).toISOString();
-    expect((await trigger(handle!, { name: "digest", slot: skewed })).status).toBe(200);
   });
 
   it("refuses a body that does not say which schedule, or says it with a bad slot", async () => {
@@ -160,6 +161,15 @@ describe("schedule/trigger: POST /trigger", () => {
     // The JSON gate every unverified route carries (channels/body.ts), here too.
     expect((await trigger(handle!, { name: "digest" }, { headers: {} })).status).toBe(415);
     expect((await handle!(new Request("http://h/trigger"))).status).toBe(405);
+  });
+
+  it("409s when there is no occurrence to snap to", async () => {
+    // A schedule whose first occurrence is still ahead: an omitted slot has nothing to name, and
+    // inventing one would be a claim for an instant the schedule has never had (cron.ts previousRun).
+    const { handle } = await handlerFor([hourly({ cron: "0 0 9 * * * 2099" })], recordingAgent().agent);
+    const res = await trigger(handle!, { name: "digest" });
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain("has no occurrence at or before now");
   });
 
   it("is not built at all when the definition declares no schedules", async () => {
