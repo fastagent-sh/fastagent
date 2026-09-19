@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
-import { ingressSessionId, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
+import { ingressSessionId, deploymentBucketName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { fastagentVersion } from "../../src/version.ts";
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
@@ -200,6 +200,10 @@ export async function destroyAgentcoreDeployment(name: string, account: string):
     await attempt("s3 rb", ["s3", "rb", `s3://${bucket}`, "--force"]);
   }
   await attempt("ecr delete-repository", ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
+  // OUTLIVES THE STACK. AWS creates a Lambda's log group on first write, so it is not a stack resource
+  // and `delete-stack` leaves it — with a 14-day retention policy the deploy applied, i.e. holding data
+  // the probe produced. Every forwarder-bearing fixture leaks one per run without this.
+  await attempt("logs delete-log-group", ["logs", "delete-log-group", "--log-group-name", forwarderLogGroup(name)]);
 
   if (errors.length > 0) {
     throw new AggregateError(errors, `teardown failed — check stack ${stack}, bucket fa-${name}-*, repo ${repo}`);
