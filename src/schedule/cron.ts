@@ -19,11 +19,17 @@ export function nextRun(cron: string, tz: string | undefined, from: Date): Date 
  */
 export function previousRun(cron: string, tz: string | undefined, from: Date): Date | undefined {
   const job = new Cron(cron, { timezone: tz ?? "UTC" });
+  // FLOORED TO THE SECOND FIRST, and that is the whole correctness of this function. croner steps backwards by
+  // zeroing the milliseconds and then subtracting a whole second, so any reference inside the second an occurrence
+  // began — `10:00:00.300` for a `0 * * * *` — walks past it to the previous one. That is precisely where a crontab
+  // lands: cron wakes at the instant, the process starts, the request arrives some hundreds of milliseconds later.
+  // The second an occurrence began IS that occurrence, so the caller is placed in it rather than one before.
+  const floored = new Date(Math.floor(from.getTime() / 1000) * 1000);
   // `previousRuns` is exclusive of its reference, and a caller landing exactly ON an instant means THAT occurrence —
-  // which is the ordinary case for an external clock that computed the same grid we did.
-  const exact = job.nextRun(new Date(from.getTime() - 1));
-  if (exact !== null && exact.getTime() === from.getTime()) return from;
-  return job.previousRuns(1, from)[0];
+  // the ordinary case for an external clock that computed the same grid we did.
+  const exact = job.nextRun(new Date(floored.getTime() - 1));
+  if (exact !== null && exact.getTime() === floored.getTime()) return floored;
+  return job.previousRuns(1, floored)[0];
 }
 
 /**

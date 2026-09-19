@@ -32,6 +32,21 @@ const runFire = (agent: Agent, stateRoot: string, schedule: LoadedSchedule, slot
 const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 
 /**
+ * How far ahead of THIS machine's clock a caller's slot may be.
+ *
+ * A slot names an occurrence that has ARRIVED — the resident loop only ever claims one once `now()` has reached it,
+ * and an external clock sends the instant it just fired for. So the only reason a slot is ahead of us at all is skew
+ * between two clocks, and a minute is generous for that.
+ *
+ * The bound is load-bearing, not tidiness. `claimSlot`'s stale gate is `wanted < newest`, with no ceiling: one
+ * request naming the year 2999 writes a claim that every later occurrence — forever, across restarts, for the
+ * resident clock too — sorts before and is refused as stale. That is permanent damage from a single anonymous
+ * request, recoverable only by deleting files inside the container, and this route is the only place a slot arrives
+ * from a caller we do not trust.
+ */
+const MAX_SLOT_AHEAD_MS = 60_000;
+
+/**
  * Build the handler for `POST /trigger`, bound to the schedules this serve loaded.
  *
  * `undefined` when the definition declares none: a route that can only ever answer 404 is not a route, and its
@@ -73,6 +88,13 @@ export function createTriggerHandler(options: {
     }
     if (slot !== undefined && (typeof slot !== "string" || Number.isNaN(Date.parse(slot)))) {
       return text('"slot" must be an ISO date\n', 400);
+    }
+    if (typeof slot === "string" && Date.parse(slot) > Date.now() + MAX_SLOT_AHEAD_MS) {
+      return text(
+        `"slot" ${slot} is in the future — a slot names an occurrence that has arrived, and claiming one ahead of ` +
+          `time would refuse every real occurrence after it as stale\n`,
+        400,
+      );
     }
 
     // The slot is an IDENTITY, not a timestamp: `claimSlot` keys on it, so two deliveries of the same occurrence

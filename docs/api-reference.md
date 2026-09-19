@@ -511,6 +511,15 @@ name the same instant or the turn runs twice. A caller that computed the cron gr
 snaps to the occurrence that schedule most recently had. Either way the resident clock and the
 external one are safe together: the slot claim is an `O_EXCL` create, so exactly one of them runs it.
 
+A `slot` in the future is refused (400): a slot names an occurrence that has ARRIVED, and the claim
+gate has no ceiling — a claim dated far ahead would make every real occurrence after it sort before
+the newest and be refused as stale, for the resident clock too, across restarts. A minute of clock
+skew between two machines is tolerated.
+
+The route follows `http.invoke`: turning the anonymous turn endpoint off takes this one with it, since
+that is what `http.invoke: false` means. `http.trigger: true` is the exception for a port that has no
+`/invoke` but does have an external clock.
+
 The reply is the fire's outcome — `{ slot, fired, skippedReason?, failed?, ms }`. `fired: false` with
 a `skippedReason` means the occurrence was already claimed (a duplicate delivery, or the resident
 clock got there first), which is a successful delivery of a slot that needed no work. A 404 names the
