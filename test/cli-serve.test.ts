@@ -36,6 +36,22 @@ describe("serving surface", () => {
     const withTrigger = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { schedules });
     expect(Object.keys(withTrigger.unverified)).toContain("POST /trigger");
 
+    // It FOLLOWS `serveInvoke`: `http.invoke: false` means "the channels' signature checks are the only
+    // way in", and a second anonymous turn-starter appearing behind that choice would reverse it.
+    const invokeOff = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      schedules,
+      serveInvoke: false,
+    });
+    expect(Object.keys(invokeOff.unverified)).toEqual(["GET /health"]);
+    // …with one explicit exception, which is the combination this route exists for: no `/invoke`, but
+    // an external clock driving the schedules.
+    const clockOnly = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      schedules,
+      serveInvoke: false,
+      serveTrigger: true,
+    });
+    expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "POST /trigger"]);
+
     // Reserved like /invoke: a channel taking the path would answer for a route every runbook names.
     const taken = await mkdtemp(join(tmpdir(), "fa-trigger-taken-"));
     await mkdir(join(taken, "channels"));

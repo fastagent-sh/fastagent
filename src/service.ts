@@ -104,9 +104,10 @@ export async function routesFor(
    * "built-in fallback" it once withheld — that concept is gone.
    *
    * `schedules` mounts `POST /trigger`. Passed in rather than loaded here so the route and the resident clock
-   * cannot disagree about which schedules exist (`loadServingSchedules`).
+   * cannot disagree about which schedules exist (`loadServingSchedules`). `serveTrigger` overrides the default
+   * that route inherits from `serveInvoke`.
    */
-  options: { serveInvoke?: boolean; schedules?: readonly LoadedSchedule[] } = {},
+  options: { serveInvoke?: boolean; serveTrigger?: boolean; schedules?: readonly LoadedSchedule[] } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -139,7 +140,15 @@ export async function routesFor(
   // `POST /trigger` exists only where there is something to trigger. It rides this table for the reason the table
   // exists: it authenticates nobody, so it inherits the JSON body gate, the cross-origin policy, the reserved path
   // and the startup report's account of what is open — none of which it had to ask for.
-  const trigger = createTriggerHandler({ agent, stateRoot, schedules: options.schedules ?? [] });
+  //
+  // It FOLLOWS `serveInvoke` by default, because `http.invoke: false` is documented as "the channels' signature
+  // checks are meant to be the only way in" and a second anonymous turn-starter appearing behind that choice would
+  // reverse it silently. `serveTrigger` is the explicit exception, and it is a real one: a port with no `/invoke`
+  // but an external clock driving its schedules is exactly what this route exists for.
+  const serveTrigger = options.serveTrigger ?? options.serveInvoke !== false;
+  const trigger = serveTrigger
+    ? createTriggerHandler({ agent, stateRoot, schedules: options.schedules ?? [] })
+    : undefined;
   if (trigger) unverified["POST /trigger"] = trigger;
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
@@ -315,6 +324,12 @@ export interface MountableAgent {
    * and runs a turn with the agent's full tool authority.
    */
   serveInvoke?: boolean;
+  /**
+   * Serve `POST /trigger` (`http.trigger`). Defaults to whatever `serveInvoke` is: closing the anonymous turn
+   * endpoint must not leave a second one open behind it. Set it explicitly for the one combination that default
+   * gets wrong — no `/invoke`, but an external clock firing this agent's schedules.
+   */
+  serveTrigger?: boolean;
 }
 
 /**
@@ -339,6 +354,7 @@ export async function mountAgentService(
   const schedules = await loadServingSchedules(agentDir);
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
     ...(opened.serveInvoke !== undefined ? { serveInvoke: opened.serveInvoke } : {}),
+    ...(opened.serveTrigger !== undefined ? { serveTrigger: opened.serveTrigger } : {}),
     schedules,
   });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);

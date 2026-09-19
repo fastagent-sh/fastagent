@@ -65,6 +65,26 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(readFires(root, "digest").map((f) => f.slot)).toEqual(["2026-07-07T10:00:00.000Z"]);
   });
 
+  it("an omitted slot snaps to the occurrence the caller was woken for, not the one before it", async () => {
+    // THE window a crontab actually lands in: cron wakes at the instant, the process starts, the
+    // request arrives a few hundred milliseconds later. croner steps backwards by zeroing the
+    // milliseconds and then subtracting a second, so without flooring, every `0 * * * *` trigger
+    // fired by a crontab resolved to the PREVIOUS hour — permanently one occurrence behind, and
+    // silently skipped outright once the resident clock had claimed that slot.
+    vi.useFakeTimers();
+    try {
+      const { agent } = recordingAgent();
+      const { handle } = await handlerFor([hourly()], agent);
+      for (const offsetMs of [0, 1, 300, 999, 1000, 59_999]) {
+        vi.setSystemTime(new Date(Date.parse("2026-07-07T10:00:00.000Z") + offsetMs));
+        const body = (await (await trigger(handle!, { name: "digest" })).json()) as { slot: string };
+        expect({ offsetMs, slot: body.slot }).toEqual({ offsetMs, slot: "2026-07-07T10:00:00.000Z" });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("an omitted slot snaps to the occurrence this schedule most recently had", async () => {
     // A crontab line firing `curl` cannot compute the cron instant, and the slot is an IDENTITY:
     // sending `now` would mint a different claim name on every retry and run the turn twice.
@@ -106,6 +126,29 @@ describe("schedule/trigger: POST /trigger", () => {
     const res = await trigger(handle!, { name: "digets" });
     expect(res.status).toBe(404);
     expect(await res.text()).toContain('no schedule named "digets" (this deployment has: digest, weekly)');
+  });
+
+  it("refuses a slot in the future, which would otherwise poison the schedule permanently", async () => {
+    // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so one claim dated 2999 makes every
+    // real occurrence after it sort before the newest and be refused as stale — forever, across
+    // restarts, for the resident clock too. Recovery means deleting files inside the container. This
+    // route is the only place a slot arrives from a caller we do not trust.
+    const { agent, calls } = recordingAgent();
+    const { root, handle } = await handlerFor([hourly()], agent);
+    const far = await trigger(handle!, { name: "digest", slot: "2999-01-01T00:00:00Z" });
+    expect(far.status).toBe(400);
+    expect(await far.text()).toContain("is in the future");
+    expect(readFires(root, "digest")).toEqual([]); // nothing was written
+    expect(calls).toEqual([]);
+
+    // …and a real occurrence still fires afterwards, which is the property the bound protects.
+    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
+      fired: true,
+    });
+
+    // Clock skew between two machines is not an attack: a slot a few seconds ahead is accepted.
+    const skewed = new Date(Date.now() + 5_000).toISOString();
+    expect((await trigger(handle!, { name: "digest", slot: skewed })).status).toBe(200);
   });
 
   it("refuses a body that does not say which schedule, or says it with a bad slot", async () => {
