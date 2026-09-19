@@ -285,8 +285,8 @@ export interface MountableAgent {
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
   /**
-   * Origins beyond loopback that a browser may call this serve from (`http.cors`). Empty is the default: a page on
-   * the serving machine, and nothing else — see `channels/serve.ts`, since every route here is unauthenticated.
+   * The origins a browser may call this serve from (`http.cors`). Unset is the default, which answers EVERY origin
+   * — see `channels/serve.ts`; setting this is the only way to narrow it, and an empty list is refused.
    */
   corsOrigins?: readonly string[];
   /**

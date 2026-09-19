@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Routes } from "../src/channel.ts";
 import {
+  assertCorsOrigins,
   assertRouteKey,
   parseRouteKey,
   routeKeysConflict,
@@ -11,8 +12,8 @@ import {
 
 describe("serve: who may call this from a browser", () => {
   // THE cross-origin policy, tested where it lives (channels/serve.ts). Every route this process
-  // serves is unauthenticated by design, so the allowance IS the access control: a wildcard would
-  // hand any page the developer has open a working client for `POST /invoke` and `/control/*`.
+  // serves is unauthenticated by design, and the default answers every origin — so what these cases
+  // pin is the grant itself, and `http.cors` as the one way to take it back.
   /** What ran. The side effect is the finding: a refused page must not reach a handler at all. */
   let ran: string[] = [];
   const plane = {
@@ -135,6 +136,19 @@ describe("serve: who may call this from a browser", () => {
     expect(
       (await preflight(build(["*"]), "/invoke", "https://evil.example.com")).headers.get("access-control-allow-origin"),
     ).toBe("*");
+  });
+
+  it("an EMPTY http.cors is refused at load, because it would mean the opposite of what it looks like", async () => {
+    // `allowedOrigin` reads "nothing configured" as the `*` default and cannot tell that apart from a
+    // list written as empty. So `http.cors: []` — the obvious way to write "no page may call this" —
+    // would grant the widest policy there is AND silence the boot warning that names it, since
+    // `announceControl` treats a set list as the operator having chosen the origins.
+    expect(() => assertCorsOrigins([], 'fastagent.config.ts: "http.cors"')).toThrow(
+      /"http\.cors" is empty — list at least one origin, or write \["\*"\] to say the default out loud/,
+    );
+    // The two spellings that DO mean something are both accepted.
+    expect(() => assertCorsOrigins(["*"], "x")).not.toThrow();
+    expect(() => assertCorsOrigins(["https://app.example.com"], "x")).not.toThrow();
   });
 
   it("an origin outside a pinned http.cors is not answered — and not refused either", async () => {

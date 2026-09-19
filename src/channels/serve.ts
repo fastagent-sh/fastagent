@@ -96,6 +96,13 @@ export function assertCorsOrigins(origins: unknown, where: string): asserts orig
   if (!Array.isArray(origins) || origins.some((o) => typeof o !== "string" || o === "")) {
     throw new Error(`${where} must be an array of origin strings (e.g. ["https://app.example.com"])`);
   }
+  // An EMPTY list is the one spelling that means the OPPOSITE of what it looks like. `allowedOrigin` reads "nothing
+  // configured" as the `*` default and cannot tell that apart from a list someone wrote as empty, so `http.cors: []`
+  // — the obvious way to write "no page may call this" — would grant the widest policy there is, and silence the
+  // boot warning that names it (`announceControl` treats a set list as the operator having chosen the origins).
+  if (origins.length === 0) {
+    throw new Error(`${where} is empty — list at least one origin, or write ["*"] to say the default out loud`);
+  }
   for (const origin of origins as string[]) {
     if (origin === "*") continue;
     let parsed: URL;

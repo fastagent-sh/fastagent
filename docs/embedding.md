@@ -111,10 +111,11 @@ bound, no signal handlers are installed, nothing calls `process.exit`. With `ses
 
 **Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the
 handler behind your own middleware; it is a Fetch handler, so your existing auth applies to it the
-same way it applies to any other route you mount. A browser is constrained on its own: our routes
-refuse a body that is not `application/json`, which forces a preflight the unknown origin never gets
-answered — so a site your user merely visits cannot drive the agent. Name a real front end's origin in
-`http.cors` to let it through.
+same way it applies to any other route you mount. A browser is NOT constrained by default: the
+cross-origin default is `*`, so any page your user visits can call this port and read the reply. Our
+routes do refuse a body that is not `application/json`, which is what stops a no-preflight cross-origin
+write once you have narrowed the origins — pin your real front end's domain in `http.cors` to take the
+default back.
 
 Composing the same thing by hand means assembling routes, mounts, schedules and long connections in
 the right order — and getting it wrong is silent (a control plane that 404s while the startup line

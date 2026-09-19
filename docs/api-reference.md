@@ -785,9 +785,8 @@ import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 
 // Set `sessionControl: true` in fastagent.config.ts; the plane is then mounted on the service's
 // handler, owning the /control prefix. Routes, preflight, 404/405 and a failing handler all carry
-// CORS headers — but only for a browser on THIS machine (a loopback Origin). A real front end's
-// domain goes in `http.cors`. Every write must send content-type: application/json. SSE at
-// /control/sessions/{id}/events.
+// CORS headers, and the default answers EVERY origin — `http.cors` is the only way to narrow it.
+// Every write must send content-type: application/json. SSE at /control/sessions/{id}/events.
 const service = await createAgentService("./my-agent");
 
 // Client side — the SAME SessionControl interface, isomorphic to local. Point `url` at whatever

@@ -32,9 +32,10 @@ export interface FastagentConfig {
    * containers need), `dev` binds `127.0.0.1`. `0.0.0.0` is all interfaces either way; `127.0.0.1` keeps the serve
    * (including `/control/*`) off the LAN.
    *
-   * `cors` names the origins a BROWSER may call this serve from, beyond the loopback ones allowed by default — a web
-   * front end's real domain. `["*"]` allows every site the visitor opens; every route here is unauthenticated, so
-   * that is a decision about a port you have already fronted, not a convenience.
+   * `cors` names the origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin:
+   * any page your users visit can call this port and read the reply, and every route here is unauthenticated. Set it
+   * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
+   * refused, because it reads as "nobody" and would mean the opposite).
    *
    * `invoke` serves the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment
    * that can only be reached through a chat channel is still worth curling. Set it `false` when this port is public

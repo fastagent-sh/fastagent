@@ -173,7 +173,7 @@ export async function createPiAgentFromDir(
    * not have to reach back into it (MountableAgent).
    */
   selfSchedule: boolean;
-  /** Origins beyond loopback a browser may call this serve from — `http.cors` (MountableAgent). */
+  /** The origins a browser may call this serve from; unset answers every one — `http.cors` (MountableAgent). */
   corsOrigins?: readonly string[];
   /** Whether to serve the data plane, `POST /invoke` — `http.invoke` (MountableAgent). */
   serveInvoke?: boolean;
