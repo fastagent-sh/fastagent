@@ -676,25 +676,33 @@ and a preflight we do not answer is a request that is never sent. Asked of the R
 this have a body": the control plane reads an empty body as `{}`, so a body-less POST would otherwise
 walk straight through. `GET` has no side effect here and the browser blocks the read anyway.
 
-**2. CORS, and its default follows the topology** (`channels/serve.ts`):
+**2. CORS, and the default is `*`** (`channels/serve.ts`). Origin is not access control: what makes any
+API safe to call from a page is a credential the page does not have. We have none, and the boundary
+that replaces it — who may reach this port — belongs to the deployment, by the same rule that removed
+the bearer token. Deciding it from a signal this process can observe (which address it bound) is not
+that rule: a wildcard bind is what a container needs, a loopback one is `dev`'s default, and neither is
+something the operator said.
 
-| the port is | the default | what that means |
-|---|---|---|
-| **published** — the bind is not loopback, or `--tunnel` is on | `*` | The operator put this port on a network. Who may reach that network, and what sits in front of it, is their decision; a conservative guess here is us doing their job with less information than they have. **Be clear about what `*` grants:** any page the user visits can call this port from their browser and read the reply. On a public host that adds nothing an attacker could not already curl; on a LAN or VPC host it adds the victim's network position, which they could not. Narrow it with `http.cors`, or take the port off that network with `--bind 127.0.0.1`. |
-| **unpublished** — a loopback bind, no tunnel | loopback origins only, echoed exactly, `vary: origin` | The attacker cannot reach this port at all; the developer's own browser is their ONLY route to it. Note what this is: the browser already denies a cross-origin read by default, so we are not adding a lock, we are declining to REMOVE one. Vite shipped `*` in this posture and it became CVE-2025-24010, over source code rather than tool authority; its fix and Ollama's default are both this shape. |
+**Know what `*` grants.** Any page the user's browser visits can call this port cross-origin and read
+the reply — `POST /invoke` is a turn with the agent's full tool authority, and `sessionControl: true`
+adds reading, rewriting and deleting sessions. On a published port that is nothing an attacker could
+not already curl. On a loopback `dev` serve it is the whole attack path: a loopback bind stops a
+process on another machine, not a page in your own browser. **A long-running `dev` serve should be
+treated as drivable by any page you visit.** `announceControl` says this at every boot, including on
+loopback, because nobody opts into a default.
 
-- **`http.cors` REPLACES that default**, in both directions — a front end's real origin for an
-  unpublished dev serve, or one pinned origin instead of `*` for a published one. One value, one
-  meaning; a dev serve that also wants its own loopback page lists it. `*` cannot be combined with
-  cookie credentials (the browser refuses), so a gateway doing cookie auth needs the exact origin.
+- **`http.cors` is the only way to take it back**, and when set it REPLACES the default rather than
+  adding to it: `["https://app.example.com"]` pins that origin and refuses every other, including your
+  own loopback page. `["*"]` is the default said out loud. `*` cannot be combined with cookie
+  credentials (the browser refuses), so a gateway doing cookie auth needs the exact origin.
 - **A channel's route is exempt from both mechanisms**, because it verifies its platform's signature
   inside itself — a Telegram webhook is public on purpose, and Slack posts urlencoded. For a CUSTOM
   channel that is an assumption about its author, not a property we enforce: verifying the caller is
   the channel's half of this boundary (decision B), and a channel that verifies nothing is as
   reachable from a page as `POST /invoke` would be without mechanism 1.
-- **An origin we do not allow is simply not answered** — no headers, no refusal. Refusing would mean
-  policing same-origin writes too (a browser sends `Origin` on those), which costs a special case for
-  the serve's own host and buys nothing mechanism 1 does not already cover.
+- **An origin `http.cors` does not list is simply not answered** — no headers, no refusal. Refusing
+  would mean policing same-origin writes too (a browser sends `Origin` on those), which costs a
+  special case for the serve's own host and buys nothing mechanism 1 does not already cover.
 - **The router, not the handlers.** It is the only layer that can answer an `OPTIONS` preflight for a
   route registered under `POST` alone, the only one that sees the 404/405 it writes itself, and the
   only one that covers a route added later. `createInvokeHandler` keeps its own copy of mechanism 1
@@ -710,22 +718,30 @@ One thing neither mechanism covers, recorded so it is not rediscovered: a cross-
 `/control/sessions/{id}/events` is a simple request, so it is sent and the server subscribes, even
 though the page cannot read a byte of it. That costs a held connection, not a disclosure.
 
-KNOWN GAP (tracked as issue #573): DNS rebinding defeats both mechanisms. The page rebinds its own hostname to 127.0.0.1, so
-its requests become same-origin — no `Origin` to judge, and any content type it likes. The only thing
-left to check would be `Host`, and this is a deliberate decision not to:
+KNOWN GAP (tracked as issue #573): DNS rebinding. The page rebinds its own hostname to `127.0.0.1`, so
+its requests become same-origin — no `Origin` to judge, and any content type it likes, which defeats
+mechanism 1 as well.
 
-- It is reachable in exactly ONE posture, the one where this section's claim is that the port is the
-  boundary: a loopback bind, left running, while its author visits the attacker's page. `start` binds
-  all interfaces, where a foreign `Host` is the normal case and the check could not exist.
+Note what changed when the cross-origin default became `*`: rebinding is no longer NEEDED to reach a
+loopback serve from a page, since an ordinary cross-origin call is now answered. What it still buys an
+attacker is the rest of mechanism 1 — a same-origin request may carry any content type, so the JSON
+gate stops applying, and a `dev` serve narrowed by `http.cors` is reachable again despite the list.
+
+The only thing left to check would be `Host`, and this is a deliberate decision not to:
+
 - Closing it costs a config key. A loopback-only `Host` rule cannot be unconditional: `cloudflared`
   forwards the original `Host` by default (`httpHostHeader` is empty), and so do Caddy and Traefik. We
   know when `--tunnel` is on and could exempt it; we do not know about the operator's reverse proxy,
   so a same-host facade — the deployment shape recommended below — would meet a 403 with no way to
   answer it unless we also ship a host allowlist. (nginx happens to pass: its default is
   `proxy_set_header Host $proxy_host`.)
+- It closes a narrower gap than it used to. With `*` as the default, the page a developer visits can
+  already drive a loopback serve without any DNS trick; `Host` validation would take back the
+  `http.cors` narrowing, not the default.
 
-So a `dev` serve left running is worth treating as reachable by an attacker who controls DNS. If that
-matters for a deployment, bind it somewhere a browser cannot resolve to, or stop the serve.
+So a `dev` serve left running is worth treating as drivable by any page the developer visits, and by
+an attacker who controls DNS even when `http.cors` is pinned. If that matters, stop the serve, or put
+it behind something that authenticates.
 
 **The multi-tenant facade.** N users behind one deployment, each reaching only their own sessions: the
 facade authenticates its user, reads the session id out of the request, checks it against its OWN

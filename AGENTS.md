@@ -75,7 +75,7 @@ src/
 │   ├── serve.ts            # how route tables become a running server, split by WHO AUTHENTICATES THE CALLER:
 │   │                       # ours (nobody) vs the channels' (their platform's signature), one table each so the
 │   │                       # answer cannot drift. Both guards on the first table live here — the JSON body gate
-│   │                       # and the one CORS decision (`*` published, loopback-only not) — plus literal-path
+│   │                       # and the one CORS decision (`*`, narrowed only by http.cors) — plus literal-path
 │   │                       # dispatch, prefix mounts, the totality boundary, the node:http binding
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │                           # host): channels discovered on trusted ingress, the whole definition opened

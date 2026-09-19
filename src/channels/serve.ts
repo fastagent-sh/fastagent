@@ -4,7 +4,6 @@
  */
 import { serve, getRequestListener } from "@hono/node-server";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { classifyBind } from "../bind.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
 import { refuseNonJsonBody } from "./body.ts";
@@ -57,53 +56,32 @@ export function pathUnderPrefix(path: string, prefix: string): boolean {
 }
 
 /**
- * Is this `Origin` a browser running on the SERVING machine?
- *
- * The same loopback vocabulary the bind uses ({@link classifyBind}), asked of an origin's host — so "what counts as
- * this machine" has one definition, not one per question.
- */
-function isLoopbackOrigin(origin: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(origin);
-  } catch {
-    // Not a URL at all (`null`, a bare hostname): no origin a browser could have produced.
-    return false;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  return classifyBind(url.hostname) === "loopback";
-}
-
-/**
  * THE cross-origin policy, in one place, for the routes that authenticate nobody.
  *
- * THIS IS AN API, so the default is an API's: `*`. Origin is not access control — what makes a normal API safe to
- * call from any page is that it demands a credential the page does not have, which makes the caller's origin
- * irrelevant. We have no credential, so once the port is PUBLISHED the question becomes which network it is on and
- * what sits in front of it — the operator's decision, made with information this process does not have. On a public
- * host `*` adds nothing an attacker could not already curl; on a LAN or VPC host it adds the victim's network
- * position, which is why the docs state the grant plainly rather than calling the default safe.
+ * THIS IS AN API, so the default is an API's: `*`, unconditionally. Origin is not access control — what makes any
+ * API safe to call from a page is a credential the page does not have, which makes the caller's origin irrelevant.
+ * We have no credential, and the boundary that replaces it — who may reach this port — belongs to the deployment,
+ * the same rule that removed the bearer token. Deciding for the operator from a signal this process can observe
+ * (which address it bound) is not that rule: a wildcard bind is what a container needs, not something the operator
+ * said, and a loopback one is `dev`'s default, not a claim about who may call.
  *
- * The ONE exception is a port whose only reachability is the developer's own browser — an unpublished loopback
- * serve. There the attacker cannot reach the port at all, so answering their page IS the whole attack path. Note
- * what this is and is not: the browser already denies a cross-origin read by default, so we are not adding a lock,
- * we are declining to REMOVE one on behalf of a port that has nothing else protecting it. Vite shipped the wildcard
- * in this exact posture and it became CVE-2025-24010, over source code rather than tool authority; its fix and
- * Ollama's default are both this shape.
+ * WHAT `*` GRANTS, stated because it is the default and nobody opts into it: any page the user's browser visits can
+ * call this port cross-origin and read the reply — a turn with the agent's full tool authority, and with
+ * `sessionControl: true`, reading and deleting sessions. On a published port that is nothing an attacker could not
+ * already curl. On a loopback `dev` serve it is the whole attack path, and this is the posture the decision costs:
+ * `announceControl` says so at every boot, and `http.cors` is the one way to take it back.
  *
- * `allow` is `http.cors`, and when it is set it REPLACES the default rather than adding to it — one value, one
- * meaning, in both directions: a front end calling an unpublished dev serve widens, a deployment pinning one origin
- * instead of `*` narrows. A dev serve that also wants its own loopback page back lists it.
+ * `allow` is `http.cors`, and when it is set it REPLACES the default rather than adding to it: `["*"]` is the
+ * default said out loud, a list of origins is the narrowing.
  *
- * A page that is not allowed is simply not ANSWERED — no headers, no refusal. That is safe only because a route
+ * An origin that is not allowed is simply not ANSWERED — no headers, no refusal. That is safe only because a route
  * that authenticates nobody also refuses a body that is not `application/json` (channels/body.ts): without that, a
  * cross-origin `text/plain` POST is a CORS simple request, sent with no preflight, and withholding the headers
  * would only stop the page from reading a turn that had already run.
  */
-function allowedOrigin(origin: string, allow: readonly string[], published: boolean): string | undefined {
-  if (allow.length > 0) return allow.includes("*") ? "*" : allow.includes(origin) ? origin : undefined;
-  if (published) return "*";
-  return isLoopbackOrigin(origin) ? origin : undefined;
+function allowedOrigin(origin: string, allow: readonly string[]): string | undefined {
+  if (allow.length === 0) return "*";
+  return allow.includes("*") ? "*" : allow.includes(origin) ? origin : undefined;
 }
 
 /**
@@ -153,14 +131,8 @@ export interface RouterSurface {
 }
 
 export interface RouterOptions {
-  /** `http.cors` — exact origins, or `["*"]`. Widens an unpublished serve, narrows a published one. */
+  /** `http.cors` — exact origins, or `["*"]`. Set, it REPLACES the `*` default; unset, the default stands. */
   corsOrigins?: readonly string[];
-  /**
-   * Is this port reachable by anyone but the developer's own browser? A wildcard/LAN bind, or a tunnel over a
-   * loopback one. It decides the cross-origin default and nothing else — see {@link allowedOrigin}. Unset is the
-   * conservative reading, which is what an embedder gets: they own the mounting, so widening is theirs to say.
-   */
-  published?: boolean;
 }
 
 /**
@@ -222,7 +194,6 @@ export function router(surface: RouterSurface, options: RouterOptions = {}): Cha
   }
 
   const corsOrigins = options.corsOrigins ?? [];
-  const published = options.published === true;
   /** Does this route authenticate nobody? Every mount does (the control plane), plus what we registered ourselves. */
   const authenticatesNobody = (method: string, path: string): boolean =>
     mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||
@@ -246,7 +217,7 @@ export function router(surface: RouterSurface, options: RouterOptions = {}): Cha
     const fromPage = origin !== null && owned;
     // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
     // that cannot read the 405 gets an opaque network error instead of the reason.
-    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins, published) : undefined;
+    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins) : undefined;
     const answer = (): Response | Promise<Response> => {
       // The gate that makes "an origin we do not allow is simply not answered" safe: a POST carrying `text/plain`
       // is a CORS simple request, sent with no preflight at all, so a route that authenticates nobody must refuse

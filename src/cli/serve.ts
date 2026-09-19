@@ -42,31 +42,17 @@ export function resolveBindHost(
 }
 
 /**
- * What THIS run knows that the definition does not: the flags that override it, and the topology it is about to be
- * served on.
+ * Apply the flags that override what the definition said, for THIS run only.
  *
- * ONE place, because `dev` and `start` both need it and a mapping two call sites must each remember is one a third
+ * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
  * will not.
  *
- * `published` is the CROSS-ORIGIN default's only input (`channels/serve.ts`). A wildcard or LAN bind, or a tunnel
- * over a loopback one, means the port is reachable by someone other than the developer's own browser — and then
- * this is an ordinary API whose cross-origin default is an API's. Only an unpublished loopback serve keeps the
- * conservative default, because there the browser is the attacker's ONLY route to a port they cannot otherwise
- * reach.
- *
- * `invoke` follows `--bind` over `http.host`: a config value travels into a deployed image, so "do not publish a
- * turn endpoint on this tunnel" has to be sayable without editing the definition.
+ * `--no-invoke` outranks `http.invoke`, for the same reason `--bind` outranks `http.host`: a config value travels
+ * into a deployed image, so "do not publish a turn endpoint on this tunnel" has to be sayable without editing the
+ * definition.
  */
-export function withRunOverrides<T extends MountableAgent>(
-  opened: T,
-  run: { invoke?: boolean; host?: string; tunnel?: boolean },
-): T {
-  const published = run.tunnel === true || classifyBind(run.host) !== "loopback";
-  return {
-    ...opened,
-    ...(run.invoke === false ? { serveInvoke: false } : {}),
-    ...(published ? { published: true } : {}),
-  };
+export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
+  return run.invoke === false ? { ...opened, serveInvoke: false } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -141,9 +127,13 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * Say what this port exposes and how far it reaches.
  *
  * NOTHING fastagent serves is authenticated — authentication belongs to the deployment (a gateway, a private
- * network, AgentCore's IAM, an embedder's middleware). Saying so on every boot would be noise on the path where it
- * does not matter (a loopback `dev`), so the warnings fire at a REACH the operator did not get by default: a bind
- * off this machine, and `--tunnel`'s public URL.
+ * network, AgentCore's IAM, an embedder's middleware). Two of the three warnings fire at a REACH the operator did
+ * not get by default: a bind off this machine, and `--tunnel`'s public URL.
+ *
+ * The cross-origin one is UNCONDITIONAL, including on a loopback `dev`, because the grant is. `*` is the default
+ * (`channels/serve.ts`), so a page the developer merely visits can drive this port from their browser and read the
+ * reply — and a loopback bind, which used to make that impossible, no longer does. Nobody opts into a default, so
+ * the one posture the decision costs is the one that has to hear about it.
  *
  * WHAT IS EXPOSED is read off `AgentService.unverifiedRoutes`, never assumed and never guessed from the route table.
  * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,
@@ -153,10 +143,10 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * `publicUrl`.
  */
 export function announceControl(
-  service: Pick<AgentService, "controlPrefix" | "unverifiedRoutes">,
+  service: Pick<AgentService, "controlPrefix" | "unverifiedRoutes" | "corsOrigins">,
   bind: { host?: string; tunnel: boolean },
 ): void {
-  const { controlPrefix } = service;
+  const { controlPrefix, corsOrigins } = service;
   if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
   // What an unauthenticated caller of this port can do, worst first. From `unverifiedRoutes`, so a channel that serves
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
@@ -166,6 +156,13 @@ export function announceControl(
   ];
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
   const what = `${exposed.join(" and ")} ${exposed.length > 1 ? "answer" : "answers"}`;
+  if (corsOrigins === undefined || corsOrigins.includes("*")) {
+    log.warn(
+      `[fastagent] any web page your browser visits can call this serve cross-origin and read the reply: ${what} ` +
+        "with no credential. That is the default (`*`); pin the origins you actually use with http.cors " +
+        "(docs/design/session-control.md §14)",
+    );
+  }
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(

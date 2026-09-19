@@ -140,9 +140,11 @@ function handleControl(session: Record<string, unknown>): never {
   } as never;
 }
 
-/** A browser on the SERVING machine — the only origin allowed without `http.cors` (channels/serve.ts). */
+/** Any origin; the cross-origin default is `*` unless `http.cors` narrows it (channels/serve.ts). */
 const LOCAL_ORIGIN = "http://localhost:5173";
 const fromBrowser = { origin: LOCAL_ORIGIN };
+/** What the default answers a browser with. */
+const ALLOWED = "*";
 
 async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const out: AgentEvent[] = [];
@@ -281,7 +283,7 @@ describe("session control over HTTP", () => {
         expect({ path: key, status: res.status, origin: origin(res) }).toEqual({
           path: key,
           status: 204,
-          origin: LOCAL_ORIGIN,
+          origin: ALLOWED,
         });
         expect(res.headers.get("vary")?.toLowerCase()).toContain("origin");
         expect({ path: key, ...permits(res, method, requested) }).toEqual({
@@ -293,12 +295,12 @@ describe("session control over HTTP", () => {
 
       // A rejected or failing call must stay READABLE: without the headers the browser hands the
       // client an opaque network error instead of the status that says what went wrong.
-      expect(origin(await fetch(`${served.url}/control/capabilities`, { headers: fromBrowser }))).toBe(LOCAL_ORIGIN);
-      expect(origin(await fetch(`${served.url}/control/sessions/s`, { headers: fromBrowser }))).toBe(LOCAL_ORIGIN);
+      expect(origin(await fetch(`${served.url}/control/capabilities`, { headers: fromBrowser }))).toBe(ALLOWED);
+      expect(origin(await fetch(`${served.url}/control/sessions/s`, { headers: fromBrowser }))).toBe(ALLOWED);
       // SSE too — the long-lived route a GUI actually renders from.
       const sse = await fetch(`${served.url}/control/sessions/s/events`, { headers: fromBrowser });
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
-      expect(origin(sse)).toBe(LOCAL_ORIGIN);
+      expect(origin(sse)).toBe(ALLOWED);
       await sse.body?.cancel();
     } finally {
       served.close();
@@ -321,9 +323,7 @@ describe("session control over HTTP", () => {
         .split(",")
         .map((m) => m.trim().toUpperCase());
       return (
-        pre.status === 204 &&
-        pre.headers.get("access-control-allow-origin") === LOCAL_ORIGIN &&
-        allowed.includes(method)
+        pre.status === 204 && pre.headers.get("access-control-allow-origin") === ALLOWED && allowed.includes(method)
       );
     };
     try {
@@ -348,10 +348,10 @@ describe("session control over HTTP", () => {
       // 1. A path under the prefix that no route serves. 404 (not 405) is load-bearing: a remote
       //    client reads it as "this serve predates the route", i.e. version skew, not a fault.
       const unknown = await fetch(`${served.url}/control/nonexistent`, { headers: fromBrowser });
-      expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: LOCAL_ORIGIN });
+      expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: ALLOWED });
       // 2. A known path under a method it does not serve.
       const wrongMethod = await fetch(`${served.url}/control/sessions/sW/actions`, { headers: fromBrowser });
-      expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: LOCAL_ORIGIN });
+      expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: ALLOWED });
       // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
       //    server, only for what it owns.
       expect((await fetch(`${served.url}/not-control`)).status).toBe(404);
@@ -367,7 +367,7 @@ describe("session control over HTTP", () => {
       //    normalisation `URL` already performed, turning `%2F..%2F` back into `/../`. No client
       //    sends these (the remote client percent-encodes session ids into a path segment).
       const encoded = await fetch(`${served.url}/control/%63apabilities`, { headers: fromBrowser });
-      expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: LOCAL_ORIGIN });
+      expect({ status: encoded.status, cors: cors(encoded) }).toEqual({ status: 404, cors: ALLOWED });
       // 5. A HEAD the plane will actually serve must not be refused by its own advertisement.
       const headable = await fetch(`${served.url}/control/capabilities`, { method: "HEAD" });
       const getable = await fetch(`${served.url}/control/capabilities`);
@@ -394,7 +394,7 @@ describe("session control over HTTP", () => {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/control/commands`, { headers: fromBrowser });
       expect(res.status).toBe(500);
-      expect(res.headers.get("access-control-allow-origin")).toBe(LOCAL_ORIGIN);
+      expect(res.headers.get("access-control-allow-origin")).toBe(ALLOWED);
       // Failing visibly is not optional just because the client now gets a readable status.
       expect(errors.mock.calls.map(String).join("\n")).toMatch(/permission denied/);
       // ...and the internal message stays internal.
@@ -421,7 +421,7 @@ describe("session control over HTTP", () => {
       const url = `http://127.0.0.1:${await server.listening}`;
       const res = await fetch(`${url}/control/sessions/s/events`, { headers: fromBrowser });
       expect(res.status).toBe(500);
-      expect(res.headers.get("access-control-allow-origin")).toBe(LOCAL_ORIGIN);
+      expect(res.headers.get("access-control-allow-origin")).toBe(ALLOWED);
       expect(await res.text()).toBe("internal error\n");
       const remote = await connectSessionControl({ url });
       const iterator = remote.sessions.get("s").events()[Symbol.asyncIterator]();
@@ -1064,7 +1064,7 @@ describe("session control over HTTP", () => {
       // …and through the host router it is readable by a browser, like every other reply it owns.
       const res = await served(new Request(`http://x${path}`, { headers: fromBrowser }));
       expect(res.status).toBe(404);
-      expect(res.headers.get("access-control-allow-origin")).toBe(LOCAL_ORIGIN);
+      expect(res.headers.get("access-control-allow-origin")).toBe(ALLOWED);
     }
   });
 

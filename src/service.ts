@@ -232,6 +232,12 @@ export interface AgentService {
    * unauthenticated `/invoke` that was really a signature-checked channel.
    */
   unverifiedRoutes: readonly string[];
+  /**
+   * The cross-origin allow-list this service was assembled with (`http.cors`), or `undefined` for the `*` default.
+   * Read by the startup report for the same reason as {@link AgentService.unverifiedRoutes}: what a caller says
+   * about this surface must come from what was actually assembled, not from re-deriving it.
+   */
+  corsOrigins?: readonly string[];
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
@@ -288,12 +294,6 @@ export interface MountableAgent {
    * and runs a turn with the agent's full tool authority.
    */
   serveInvoke?: boolean;
-  /**
-   * Is this port reachable by anyone but the developer's own browser? The CLI derives it from the bind and
-   * `--tunnel`; an embedder leaves it unset (they own the mounting, so widening the cross-origin default is theirs
-   * to say). It decides that default and nothing else — `channels/serve.ts` `allowedOrigin`.
-   */
-  published?: boolean;
 }
 
 /**
@@ -317,22 +317,11 @@ export async function mountAgentService(
     ...(opened.serveInvoke !== undefined ? { builtinInvoke: opened.serveInvoke } : {}),
   });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
-  if (opened.corsOrigins?.includes("*")) {
-    // Here rather than in the CLI's startup report, because an embedder sets this key too and the consequence is
-    // theirs as well. It is exactly the posture a loopback bind is supposed to rule out: every route is
-    // unauthenticated, so any site the user has open can drive this agent and read the answer.
-    log.warn(
-      '[fastagent] http.cors includes "*" — ANY website a browser visits can call this serve (POST /invoke runs a ' +
-        "turn with this agent's tools) and read the reply, whatever address it binds; name the front end's origin " +
-        "instead (docs/design/session-control.md §14)",
-    );
-  }
   // Composed BEFORE anything starts.
   const handler = router(
     { unverified: routed.unverified, selfVerifying: withControl.routes, mounts: withControl.mounts },
     {
       ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
-      ...(opened.published ? { published: true } : {}),
     },
   );
   return Effect.runPromise(
@@ -468,6 +457,7 @@ export async function mountAgentService(
             longConnections: names,
           },
           unverifiedRoutes: Object.keys(routed.unverified),
+          ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
           schedules: scheduled.schedules,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

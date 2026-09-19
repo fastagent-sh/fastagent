@@ -195,55 +195,73 @@ describe("cli: the assembled serving surface", () => {
     // publishes the port at a public quick-tunnel URL — and would publish an anonymous, fully-tooled
     // `POST /invoke` alongside it. Same relationship `--bind` has to `http.host`.
     const opened = { serveInvoke: undefined, agentDir: "/x" } as unknown as MountableAgent;
-    const local = { host: "127.0.0.1" };
-    expect(withRunOverrides(opened, local).serveInvoke).toBeUndefined(); // no flag, nothing withheld
-    expect(withRunOverrides(opened, { ...local, invoke: false }).serveInvoke).toBe(false);
+    expect(withRunOverrides(opened, {})).toBe(opened); // no flag, nothing changed
+    expect(withRunOverrides(opened, { invoke: false }).serveInvoke).toBe(false);
     // Only `false` overrides: an absent flag must not turn into "serve it", which would beat a
     // definition that said `http.invoke: false`.
     const configuredOff = { ...opened, serveInvoke: false } as MountableAgent;
-    expect(withRunOverrides(configuredOff, local).serveInvoke).toBe(false);
-    expect(withRunOverrides(configuredOff, { ...local, invoke: true }).serveInvoke).toBe(false);
+    expect(withRunOverrides(configuredOff, {}).serveInvoke).toBe(false);
+    expect(withRunOverrides(configuredOff, { invoke: true }).serveInvoke).toBe(false);
   });
 
-  it("published follows the topology: a wildcard bind or a tunnel, never the config", async () => {
-    // It is the cross-origin default's only input. An unpublished loopback serve is the one port whose
-    // ONLY reachability is the developer's own browser, so it keeps the conservative default; anything
-    // the operator chose to publish is an ordinary API and gets an API's.
-    const opened = { agentDir: "/x" } as unknown as MountableAgent;
-    expect(withRunOverrides(opened, { host: "127.0.0.1" }).published).toBeUndefined();
-    expect(withRunOverrides(opened, { host: "localhost" }).published).toBeUndefined();
-    // A tunnel publishes a loopback bind — the bind alone would read this one wrong.
-    expect(withRunOverrides(opened, { host: "127.0.0.1", tunnel: true }).published).toBe(true);
-    expect(withRunOverrides(opened, { host: "0.0.0.0" }).published).toBe(true);
-    expect(withRunOverrides(opened, { host: "192.168.1.5" }).published).toBe(true);
-    expect(withRunOverrides(opened, {}).published).toBe(true); // unset bind = the wildcard `start` uses
+  it("the cross-origin grant is said at EVERY boot, loopback included", async () => {
+    // It is the default now (`*`), so nobody opts into it — and a loopback bind, which used to make a
+    // page's cross-origin call impossible, no longer does. `dev` is the one posture the decision costs,
+    // and it is exactly the one the reach warnings below stay silent on.
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      announceControl(withInvoke("/control"), { host: "127.0.0.1", tunnel: false });
+      const said = warn.mock.calls.flat().join(" ");
+      expect(warn).toHaveBeenCalledTimes(1); // the grant, and nothing about reach
+      expect(said).toMatch(/any web page your browser visits can call this serve cross-origin/);
+      expect(said).toContain("POST /invoke");
+      expect(said).toContain("http.cors");
+
+      // …and NOT once `http.cors` has taken it back — then the operator named the origins themselves.
+      warn.mockClear();
+      announceControl({ ...withInvoke("/control"), corsOrigins: ["https://app.example.com"] }, { tunnel: false });
+      expect(warn.mock.calls.flat().join(" ")).not.toMatch(/any web page/);
+      // `["*"]` is the default said out loud, so it is still the default's grant.
+      warn.mockClear();
+      announceControl({ ...withInvoke("/control"), corsOrigins: ["*"] }, { host: "127.0.0.1", tunnel: false });
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/any web page/);
+
+      // Nothing of ours answers here (the AgentCore adapter's surface): no grant to describe.
+      warn.mockClear();
+      announceControl({ unverifiedRoutes: [] }, { host: "127.0.0.1", tunnel: false });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("announceControl names the reach: LAN and tunnel are warnings, loopback is not", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    /** Only the reach lines; the unconditional cross-origin grant is the test above. */
+    const reachLines = () => warn.mock.calls.flat().filter((line) => !String(line).includes("any web page"));
     try {
       announceControl(withInvoke("/control"), { host: "127.0.0.1", tunnel: false });
-      expect(warn).not.toHaveBeenCalled(); // loopback is not reachable off this machine
+      expect(reachLines()).toEqual([]); // loopback is not reachable off this machine
 
       // A specific non-wildcard bind is reachable as itself, and the warning NAMES that bind —
       // counting alone would stay green if the address rendered as `undefined`.
       announceControl(withInvoke("/control"), { host: "192.168.1.5", tunnel: false });
-      expect(warn.mock.calls.flat().join(" ")).toContain("192.168.1.5 (off this machine)");
+      expect(reachLines().join(" ")).toContain("192.168.1.5 (off this machine)");
       announceControl(withInvoke("/control"), { tunnel: false });
-      expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
-      expect(warn).toHaveBeenCalledTimes(2);
+      expect(reachLines().join(" ")).toContain("binds all interfaces");
+      expect(reachLines()).toHaveLength(2);
 
       // The tunnel takes the port PUBLIC, and nothing authenticates it — the word has to be there.
       announceControl(withInvoke("/control"), { host: "127.0.0.1", tunnel: true });
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/--tunnel publishes this port.*NO authentication/s);
+      expect(reachLines().join(" ")).toMatch(/--tunnel publishes this port.*NO authentication/s);
 
       // WITHOUT the control plane the exposure is still real: `POST /invoke` runs a turn on the
       // agent's own tools, and it is on every serve. This used to say nothing at all.
       warn.mockClear();
       announceControl(withInvoke(undefined), { host: "127.0.0.1", tunnel: true }); // the tunnel alone
       announceControl(withInvoke(undefined), { tunnel: false }); // the wildcard bind alone
-      const withoutPlane = warn.mock.calls.flat().join(" ");
-      expect(warn).toHaveBeenCalledTimes(2); // the tunnel, and the wildcard bind
+      const withoutPlane = reachLines().join(" ");
+      expect(reachLines()).toHaveLength(2); // the tunnel, and the wildcard bind
       expect(withoutPlane).toContain("POST /invoke");
       expect(withoutPlane).not.toContain("/control/*");
 
@@ -256,7 +274,7 @@ describe("cli: the assembled serving surface", () => {
       expect(warn).not.toHaveBeenCalled();
       // With the control plane still published, the warning stands — naming only that.
       announceControl({ controlPrefix: "/control", unverifiedRoutes: [] }, { tunnel: true });
-      const controlOnly = warn.mock.calls.flat().join(" ");
+      const controlOnly = reachLines().join(" ");
       expect(controlOnly).toContain("/control/* (read, steer, delete any session) answers");
       expect(controlOnly).not.toContain("POST /invoke");
     } finally {

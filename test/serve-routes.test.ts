@@ -56,7 +56,7 @@ describe("serve: who may call this from a browser", () => {
     // never reached.
     const res = await preflight(build(), "/invoke", "http://127.0.0.1:5173");
     expect(res.status).toBe(204);
-    expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
     expect(res.headers.get("access-control-allow-methods")).toContain("POST");
     expect(res.headers.get("access-control-allow-headers")).toContain("content-type");
   });
@@ -81,29 +81,21 @@ describe("serve: who may call this from a browser", () => {
     expect(bare.headers.get("access-control-allow-headers")).toBe("authorization, content-type");
   });
 
-  it("a published port is an ordinary API: the cross-origin default is `*`", async () => {
-    // Origin is not access control. What makes a normal API safe to call from any page is a credential
-    // the page does not have; on a PUBLISHED port the same conclusion holds for the opposite reason —
-    // anyone can already curl it, so answering a browser hands an attacker nothing new. What is in
-    // front of a published port is the deployment's decision, and guessing conservatively there is us
-    // doing the operator's job badly.
-    const handle = router({ unverified: ours, selfVerifying: channels, mounts: [plane] }, { published: true });
-    const res = await preflight(handle, "/invoke", "https://app.example.com");
-    expect({ status: res.status, allowed: res.headers.get("access-control-allow-origin") }).toEqual({
-      status: 204,
-      allowed: "*",
-    });
-    // …and `http.cors` still NARROWS it, which is the other half of that knob.
-    const pinned = router(
-      { unverified: ours, selfVerifying: channels, mounts: [plane] },
-      { published: true, corsOrigins: ["https://app.example.com"] },
-    );
-    expect(
-      (await preflight(pinned, "/invoke", "https://app.example.com")).headers.get("access-control-allow-origin"),
-    ).toBe("https://app.example.com");
-    expect(
-      (await preflight(pinned, "/invoke", "https://other.example.com")).headers.get("access-control-allow-origin"),
-    ).toBeNull();
+  it("the cross-origin default is an API's: `*`, whatever the bind", async () => {
+    // Origin is not access control: what makes any API safe to call from a page is a credential the
+    // page does not have. We have none, and the boundary that replaces it — who may reach this port —
+    // belongs to the deployment, the same rule that removed the bearer token. Deciding it from a
+    // signal this process can observe (the bind address) is not that rule: a wildcard bind is what a
+    // container needs, a loopback one is `dev`'s default, and neither is something the operator said.
+    const handle = build();
+    for (const origin of ["https://app.example.com", "http://localhost:5173", "http://192.168.1.5:5173"]) {
+      const res = await preflight(handle, "/invoke", origin);
+      expect({ origin, status: res.status, allowed: res.headers.get("access-control-allow-origin") }).toEqual({
+        origin,
+        status: 204,
+        allowed: "*",
+      });
+    }
   });
 
   it("the JSON gate covers the whole unverified surface, and exempts the channels", async () => {
@@ -127,26 +119,9 @@ describe("serve: who may call this from a browser", () => {
     expect(await (await post("/telegram", "application/x-www-form-urlencoded")).text()).toBe("a platform's");
   });
 
-  it("an UNPUBLISHED serve allows loopback origins only — the one port a browser is the sole route to", async () => {
-    // Not a lock we add: the browser already denies a cross-origin read by default, and `*` would be
-    // us REMOVING that on behalf of a port an attacker cannot otherwise reach at all. Vite shipped the
-    // wildcard in this exact posture (CVE-2025-24010), over source code rather than tool authority.
-    const handle = build();
-    for (const origin of ["http://localhost:5173", "http://127.0.0.1:3000", "https://[::1]:8443"]) {
-      expect((await preflight(handle, "/invoke", origin)).headers.get("access-control-allow-origin")).toBe(origin);
-    }
-    for (const origin of ["https://evil.example.com", "http://192.168.1.5:5173", "null", "not-a-url"]) {
-      const res = await preflight(handle, "/invoke", origin);
-      expect({ origin, allowed: res.headers.get("access-control-allow-origin") }).toEqual({ origin, allowed: null });
-      // Not a 204 either: a refused preflight must not read as an allowance.
-      expect(res.status).not.toBe(204);
-    }
-  });
-
-  it("http.cors REPLACES the default rather than adding to it — one value, one meaning", async () => {
-    // The knob points both ways (widen an unpublished serve, narrow a published one), so it cannot
-    // also be conditional about what it starts from. A dev serve that still wants its own loopback
-    // page lists it.
+  it("http.cors REPLACES the `*` default — the one way to take the grant back", async () => {
+    // The default grants every origin, so this knob only ever narrows: an origin outside the list is
+    // refused even when it is the developer's own loopback page.
     const named = build(["https://app.example.com"]);
     expect(
       (await preflight(named, "/invoke", "https://app.example.com")).headers.get("access-control-allow-origin"),
@@ -160,14 +135,11 @@ describe("serve: who may call this from a browser", () => {
     ).toBe("*");
   });
 
-  it("a page we do not allow is simply not answered — no headers, and no refusal either", async () => {
-    // The shape Ollama and Vite's post-CVE default both take: unmatched origin gets nothing, the
-    // request itself is left alone. Refusing here would mean policing same-origin writes too (a
-    // browser sends `Origin` on those), which is what forced an earlier version to special-case the
-    // serve's own hostname. What makes omission SAFE is that a route of ours refuses a body that is
-    // not application/json, so a cross-origin simple request never reaches a turn — asserted where
-    // that gate lives (test/http.test.ts, test/control-http.test.ts).
-    const handle = build();
+  it("an origin outside a pinned http.cors is not answered — and not refused either", async () => {
+    // Refusing would mean policing same-origin writes too (a browser sends `Origin` on those), which
+    // costs a special case for the serve's own host and buys nothing the JSON gate does not already
+    // cover. Only reachable once `http.cors` narrows the default; without it every origin is allowed.
+    const handle = build(["https://app.example.com"]);
     const post = (origin: string) =>
       handle(
         new Request("http://h/invoke", {
@@ -179,10 +151,9 @@ describe("serve: who may call this from a browser", () => {
     const foreign = await post("https://evil.example.com");
     expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
     expect(foreign.status).not.toBe(403);
-    // Same-origin and loopback pages are answered, and neither needs a rule of its own.
     ran = [];
-    expect((await post("http://localhost:5173")).headers.get("access-control-allow-origin")).toBe(
-      "http://localhost:5173",
+    expect((await post("https://app.example.com")).headers.get("access-control-allow-origin")).toBe(
+      "https://app.example.com",
     );
     expect(ran).toEqual(["invoke"]);
     // A non-browser client sends no Origin and is untouched by the ORIGIN rule — but the JSON gate is
@@ -212,10 +183,15 @@ describe("serve: who may call this from a browser", () => {
     expect({ status: foreign.status, body: await foreign.text() }).toEqual({ status: 200, body: "a channel's" });
     // Ours on the same path is unaffected.
     expect(
-      (await handle(new Request("http://h/invoke", { method: "POST", headers: local }))).headers.get(
-        "access-control-allow-origin",
-      ),
-    ).toBe("http://localhost:5173");
+      (
+        await handle(
+          new Request("http://h/invoke", {
+            method: "POST",
+            headers: { ...local, "content-type": "application/json" },
+          }),
+        )
+      ).headers.get("access-control-allow-origin"),
+    ).toBe("*");
   });
 
   it("a request with no Origin is not a browser request: no CORS headers, nothing refused", async () => {

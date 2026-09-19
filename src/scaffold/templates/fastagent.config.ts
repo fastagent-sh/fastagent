@@ -19,9 +19,8 @@ export default {
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   // add `host: "127.0.0.1"` here to pin the bind address; default: `start` all interfaces (what containers
   // need), `dev` loopback. `cors: ["https://your-app.example.com"]` pins which origins a browser may call
-  // this serve from — once the port is published (non-loopback bind, or --tunnel) the default is `*`, i.e.
-  // any page your users visit can call it and read the reply; an unpublished `dev` serve answers only
-  // pages on this machine.
+  // this serve from. The default is `*` on every bind — any page your users visit can call this port and
+  // read the reply, a loopback bind included (it stops another machine, not your own browser).
   // `invoke: false` withholds POST /invoke, for a serve meant to be reached only through its channels.
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
