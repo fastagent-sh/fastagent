@@ -178,6 +178,8 @@ src/
 │                             # no resident process, no volume — the facts every difference follows from
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types
+│   ├── trigger.ts          # POST /trigger: the EXTERNAL clock's form of a fire. The body is a REFERENCE
+│   │                       # (name + optional slot), never a prompt — the turn stays in the definition
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
 │   ├── discover.ts         # schedules/ filesystem discovery; a bad file is isolated
 │   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish

@@ -490,6 +490,7 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane (NOT this prefix — see below)
+POST   /trigger                                fire a declared schedule (also not this prefix)
 ```
 
 - **PATCH for properties, POST …/actions for actions.** What a session HAS is a resource field; what
@@ -623,13 +624,15 @@ credential:
 | Endpoint | What an anonymous caller gets |
 |---|---|
 | `POST /invoke` | A turn with this agent's full tool authority, on any session id, billed to your model account. Always served. |
+| `POST /trigger` | A turn from a prompt the definition wrote down, for any schedule it declares. Served when there is at least one. |
 | `GET /control/sessions` | Every conversation on the deployment |
 | `GET /control/sessions/{id}/entries`, `.../events` | The full contents of any one of them |
 | `POST /control/sessions/{id}/actions` | Steer, abort or compact a running turn |
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`/control/*` appears only under `sessionControl: true`, and **not at all on AgentCore**. That host has
+`POST /trigger` appears only where `schedules/` declares something. `/control/*` appears only under
+`sessionControl: true`, and **not at all on AgentCore**. That host has
 two doors, and this plane fits neither:
 
 - The forwarder's Function URL is `AuthType: NONE` — it has to be, since a platform's webhook cannot

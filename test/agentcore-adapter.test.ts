@@ -4,12 +4,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
-import { UnknownScheduleError, agentcoreRoutes, type RouteSurface } from "../src/channels/agentcore.ts";
+import { agentcoreRoutes, type RouteSurface } from "../src/channels/agentcore.ts";
 import type { AgentcoreEnvelope, WebhookReply } from "../src/channels/agentcore-protocol.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { Routes } from "../src/channel.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
-import type { ScheduleFireOutcome } from "../src/schedule/scheduler.ts";
 
 /** A fake agent yielding a scripted stream (the invoke-envelope SSE path). */
 function scriptedAgent(events: AgentEvent[] = [{ type: "text", delta: "hi" }, { type: "completed" }]): Agent {
@@ -29,7 +28,7 @@ interface AdapterOverrides {
   channels?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
   agent?: Agent;
   isBusy?: () => boolean;
-  fire?: (name: string, slot: Date) => Promise<ScheduleFireOutcome>;
+  trigger?: (req: Request) => Promise<Response>;
   ingressSecret?: string;
   onStateReady?: () => void;
 }
@@ -46,7 +45,7 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
-    fire: over.fire,
+    trigger: over.trigger,
     ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
     onStateReady: over.onStateReady,
   });
@@ -136,12 +135,12 @@ describe("agentcore adapter: lazy channel construction", () => {
 
   it("a schedule fire initializes the channels first, and a broken channel does NOT silence the clock", async () => {
     const order: string[] = [];
-    const fire = vi.fn(async (): Promise<ScheduleFireOutcome> => {
+    const fire = vi.fn(async (): Promise<Response> => {
       order.push("fire");
-      return { fired: true, ms: 5 };
+      return Response.json({ fired: true, ms: 5 });
     });
     const routes = adapter({
-      fire,
+      trigger: fire,
       channels: () => {
         order.push("construct");
         return { routes: health };
@@ -153,9 +152,9 @@ describe("agentcore adapter: lazy channel construction", () => {
 
     // Construction failure: logged, but the fire still runs — cron does not consume channels, and an
     // unrelated channel misconfiguration must not turn one fault into two.
-    const fire2 = vi.fn(async (): Promise<ScheduleFireOutcome> => ({ fired: true, ms: 5 }));
+    const fire2 = vi.fn(async () => Response.json({ fired: true, ms: 5 }));
     const broken = adapter({
-      fire: fire2,
+      trigger: fire2,
       channels: () => {
         throw new Error("channels/lark.ts is broken");
       },
@@ -303,57 +302,52 @@ describe("agentcore adapter: webhook envelope", () => {
 describe("agentcore adapter: schedule-fire envelope", () => {
   const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", slot: "2026-07-07T10:00:00Z" };
 
-  it("dispatches to the fire binding with the parsed slot and returns its outcome", async () => {
-    const fired: { name: string; slot: string }[] = [];
+  it("relays the envelope to the trigger handler as the POST /trigger request it is", async () => {
+    // Not a second fire path: the same handler the route mounts, reached the way `invoke` reaches its
+    // own. Unknown names, claim faults and the outcome shape are decided once, in schedule/trigger.ts.
+    const seen: { url: string; contentType: string | null; body: unknown }[] = [];
     const routes = adapter({
-      fire: async (name, slot) => {
-        fired.push({ name, slot: slot.toISOString() });
-        return { fired: true, ms: 5 };
+      trigger: async (req) => {
+        seen.push({ url: req.url, contentType: req.headers.get("content-type"), body: await req.json() });
+        return Response.json({ fired: true, ms: 5 });
       },
     });
     const res = await postEnvelope(routes, fireEnvelope);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ fired: true, ms: 5 });
-    expect(fired).toEqual([{ name: "job", slot: "2026-07-07T10:00:00.000Z" }]);
+    expect(seen).toEqual([
+      {
+        url: "http://agentcore.local/trigger",
+        // The handler's own JSON gate applies to this request like any other; the envelope must satisfy it.
+        contentType: "application/json",
+        body: { name: "job", slot: "2026-07-07T10:00:00Z" },
+      },
+    ]);
   });
 
-  it("a miss is 404 and a fault is 500 — the clock's logs must tell drift from breakage", async () => {
-    // No schedules at all, and a name the binding does not know: both are deploy drift, both 404.
-    expect((await postEnvelope(adapter(), fireEnvelope)).status).toBe(404);
-    const unknown = adapter({
-      fire: async (name) => {
-        throw new UnknownScheduleError(name);
-      },
-    });
-    const missing = await postEnvelope(unknown, fireEnvelope);
-    expect(missing.status).toBe(404);
-    expect(await missing.text()).toContain('unknown schedule "job"');
-
-    // A claim-state fault is not drift — it fails visibly, with its own message.
-    const broken = adapter({
-      fire: async () => {
-        throw new Error("slot claim unreadable");
-      },
-    });
-    const fault = await postEnvelope(broken, fireEnvelope);
-    expect(fault.status).toBe(500);
-    expect(await fault.text()).toContain("slot claim unreadable");
+  it("no schedules in this deployment is a 404 the adapter answers itself", async () => {
+    // The only verdict left here: with no schedules there is no trigger handler and no route either,
+    // so an EventBridge rule outliving its schedule gets an answer instead of a crash. Every other
+    // verdict (unknown name, claim fault, the outcome shape) belongs to the handler this relays to.
+    const res = await postEnvelope(adapter(), fireEnvelope);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("no schedules in this deployment");
   });
 
   it("a running schedule turn counts as in-flight work (/ping must hold the session)", async () => {
     const { activeWork } = await import("../src/channels/busy.ts");
     const base = activeWork();
-    let release: (o: ScheduleFireOutcome) => void = () => {};
-    const routes = adapter({ fire: () => new Promise<ScheduleFireOutcome>((r) => (release = r)) });
+    let release: (r: Response) => void = () => {};
+    const routes = adapter({ trigger: () => new Promise<Response>((r) => (release = r)) });
     const pending = postEnvelope(routes, fireEnvelope) as Promise<Response>;
     await vi.waitFor(() => expect(activeWork()).toBe(base + 1));
-    release({ fired: true, ms: 1 });
+    release(Response.json({ fired: true, ms: 1 }));
     await pending;
     expect(activeWork()).toBe(base);
   });
 
   it("rejects a malformed slot", async () => {
-    const res = await postEnvelope(adapter({ fire: async () => ({ fired: true, ms: 0 }) }), {
+    const res = await postEnvelope(adapter({ trigger: async () => Response.json({ fired: true, ms: 0 }) }), {
       kind: "schedule-fire",
       name: "job",
       slot: "not-a-date",
@@ -423,8 +417,11 @@ describe("agentcore adapter: envelope validation", () => {
 
 describe("agentcore adapter: the authentication boundary", () => {
   it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
-    const fire = vi.fn(async () => ({ fired: true, ms: 1 }) as ScheduleFireOutcome);
-    const routes = adapter({ fire, channels: { routes: { "POST /hook": () => new Response("must not run") } } });
+    const fire = vi.fn(async () => Response.json({ fired: true, ms: 1 }));
+    const routes = adapter({
+      trigger: fire,
+      channels: { routes: { "POST /hook": () => new Response("must not run") } },
+    });
 
     for (const envelope of [
       { kind: "schedule-fire", name: "digest", slot: "2026-07-28T09:00:00Z" },

@@ -152,6 +152,7 @@ export function announceControl(
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = [
     ...(service.unverifiedRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(service.unverifiedRoutes.includes("POST /trigger") ? ["POST /trigger (fire any schedule this agent has)"] : []),
     ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
   ];
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
