@@ -32,25 +32,10 @@ const runFire = (agent: Agent, stateRoot: string, schedule: LoadedSchedule, slot
 const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 
 /**
- * How far ahead of THIS machine's clock a caller's slot may be.
- *
- * A slot names an occurrence that has ARRIVED — the resident loop only ever claims one once `now()` has reached it,
- * and an external clock sends the instant it just fired for. So the only reason a slot is ahead of us at all is skew
- * between two clocks, and a minute is generous for that.
- *
- * The bound is load-bearing, not tidiness. `claimSlot`'s stale gate is `wanted < newest`, with no ceiling: one
- * request naming the year 2999 writes a claim that every later occurrence — forever, across restarts, for the
- * resident clock too — sorts before and is refused as stale. That is permanent damage from a single anonymous
- * request, recoverable only by deleting files inside the container, and this route is the only place a slot arrives
- * from a caller we do not trust.
- */
-const MAX_SLOT_AHEAD_MS = 60_000;
-
-/**
  * Build the handler for `POST /trigger`, bound to the schedules this serve loaded.
  *
- * `undefined` when the definition declares none: a route that can only ever answer 404 is not a route, and its
- * absence is what the startup report and the deploy runbook describe.
+ * `undefined` when the definition declares none: a route that can only ever answer 404 is not a route, and the
+ * startup report names what is actually mounted.
  */
 export function createTriggerHandler(options: {
   agent: Agent;
@@ -89,10 +74,21 @@ export function createTriggerHandler(options: {
     if (slot !== undefined && (typeof slot !== "string" || Number.isNaN(Date.parse(slot)))) {
       return text('"slot" must be an ISO date\n', 400);
     }
-    if (typeof slot === "string" && Date.parse(slot) > Date.now() + MAX_SLOT_AHEAD_MS) {
+    // NO TOLERANCE, and the zero is the point. A slot names an occurrence that has ARRIVED: the resident loop only
+    // claims one once `now()` has reached it, and an external clock sends the instant it just fired for.
+    //
+    // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so a claim ahead of the wall clock refuses
+    // every real occurrence after it. ANY tolerance leaves that open — with a window of T, a caller need only wait
+    // until the next occurrence is within T and name it, which starves the resident clock permanently for the price
+    // of one cheap request per period. Only refusing the future at all closes it.
+    //
+    // The cost is a container whose clock lags the caller's: its slot reads as future and is refused. That is
+    // self-healing rather than lost — a 4xx makes the forwarder throw, EventBridge retries, and our clock has moved
+    // by then (deploy/agentcore/forwarder.js). A crontab's `curl` should omit `slot` and let this serve snap it.
+    if (typeof slot === "string" && Date.parse(slot) > Date.now()) {
       return text(
-        `"slot" ${slot} is in the future — a slot names an occurrence that has arrived, and claiming one ahead of ` +
-          `time would refuse every real occurrence after it as stale\n`,
+        `"slot" ${slot} is ahead of this machine's clock — a slot names an occurrence that has already arrived, ` +
+          `and claiming one early would refuse every real occurrence after it as stale. Retry, or omit "slot"\n`,
         400,
       );
     }

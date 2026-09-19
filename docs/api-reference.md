@@ -534,10 +534,21 @@ name the same instant or the turn runs twice. A caller that computed the cron gr
 snaps to the occurrence that schedule most recently had. Either way the resident clock and the
 external one are safe together: the slot claim is an `O_EXCL` create, so exactly one of them runs it.
 
-A `slot` in the future is refused (400): a slot names an occurrence that has ARRIVED, and the claim
-gate has no ceiling — a claim dated far ahead would make every real occurrence after it sort before
-the newest and be refused as stale, for the resident clock too, across restarts. A minute of clock
-skew between two machines is tolerated.
+**On a host that also runs the resident clock, an omitted `slot` is TAKEOVER, not drive.** Both clocks
+name the same occurrence, and the resident one gets there first, so a crontab pointed at a `dev`/
+`start` serve reads `fired: false` almost every time — it fires only when the resident clock did not
+(the process was down, or the turn never settled). That is worth having as redundancy; it is not a way
+to drive a schedule that is already being driven. A deployment whose whole point is the external clock
+is one with no resident clock to race — AgentCore today, and a scaled-to-zero host once
+[#557](https://github.com/fastagent-sh/fastagent/issues/557) lands.
+
+A `slot` ahead of this machine's clock is refused (400), with no tolerance at all: a slot names an
+occurrence that has ARRIVED, and the claim gate has no ceiling — a claim dated ahead makes every real
+occurrence after it sort before the newest and be refused as stale, for the resident clock too, across
+restarts. A tolerance would only price that attack rather than close it (wait until the next
+occurrence is inside the window, name it, repeat). A container whose clock lags its caller therefore
+sees a 4xx, which is self-healing: the AgentCore forwarder throws on it and EventBridge retries, by
+which time the clock has moved. A crontab should omit `slot` and let the serve snap it.
 
 The route follows `http.invoke`: turning the anonymous turn endpoint off takes this one with it, since
 that is what `http.invoke: false` means. `http.trigger: true` is the exception for a port that has no
