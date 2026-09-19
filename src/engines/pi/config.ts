@@ -12,6 +12,7 @@ import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
 import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
+import { assertCorsOrigins } from "../../channels/serve.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
@@ -30,8 +31,19 @@ export interface FastagentConfig {
    * `host` is the bind address. Unset leaves the last rung to the command: `start` binds all interfaces (what
    * containers need), `dev` binds `127.0.0.1`. `0.0.0.0` is all interfaces either way; `127.0.0.1` keeps the serve
    * (including `/control/*`) off the LAN.
+   *
+   * `cors` names the origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin:
+   * any page your users visit can call this port and read the reply, and every route here is unauthenticated. Set it
+   * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
+   * refused, because it reads as "nobody" and would mean the opposite).
+   *
+   * `invoke` serves the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment
+   * that can only be reached through a chat channel is still worth curling. Set it `false` when this port is public
+   * and the channels' own signature checks are meant to be the only way in — the route is unauthenticated and runs a
+   * turn with the agent's full tool authority, so "my telegram bot is deployed" should not have to mean "and anyone
+   * with the URL can drive it".
    */
-  http?: { port?: number; host?: string };
+  http?: { port?: number; host?: string; cors?: string[]; invoke?: boolean };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
   selfSchedule?: boolean;
   /**
@@ -165,10 +177,14 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http" must be an object`);
   }
   for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "host") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host)`);
+    if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke") {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke)`);
     }
   }
+  if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
+    throw new Error(`${path}: "http.invoke" must be a boolean`);
+  }
+  if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
     throw new Error(`${path}: "http.port" must be an integer 0-65535`);
   }

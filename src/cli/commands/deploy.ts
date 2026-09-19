@@ -87,6 +87,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     run: !!opts.run,
     force: !!opts.force,
     externalClock: host === "agentcore", // cron rides EventBridge there — the resident-host notes don't apply
+    // AgentCore DOES get a public URL (the forwarder's, AuthType NONE) — but nothing of ours answers behind it:
+    // that relay reaches the channels' routes only, each verifying its platform's signature (agentcore-service.ts).
+    publicUrl: host !== "agentcore",
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);

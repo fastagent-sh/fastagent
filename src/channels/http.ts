@@ -4,7 +4,7 @@
  * and the body cap.
  */
 import type { Agent } from "../agent.ts";
-import { readBodyCapped } from "./body.ts";
+import { readBodyCapped, refuseNonJsonBody } from "./body.ts";
 import { text } from "./respond.ts";
 import { sseResponse } from "./sse.ts";
 
@@ -20,10 +20,20 @@ export const MAX_BODY_BYTES = 1 << 20;
  */
 export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
 
-/** Fetch-shaped invoke handler. */
+/**
+ * Fetch-shaped invoke handler.
+ *
+ * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/serve.ts`'s router
+ * — which is also the only layer that can answer the `OPTIONS` preflight, since this route registers only `POST`.
+ */
 export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response> {
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
+    // Also applied by the host router over every unguarded route — kept HERE too because this handler is a
+    // PUBLIC standalone artifact (docs/overview.md mounts it as a Next.js route), and a handler you can mount
+    // anywhere has to be safe anywhere. The router's copy is what stops a route added later from forgetting.
+    const wrongType = refuseNonJsonBody(req);
+    if (wrongType) return wrongType;
 
     const body = await readBodyCapped(req, MAX_BODY_BYTES);
     if ("tooLarge" in body) return text("body too large\n", 413);

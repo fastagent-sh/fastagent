@@ -20,7 +20,15 @@ import { mountAgentcoreService, deferAgentcoreService } from "../../channels/age
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup } from "../fail.ts";
-import { announceControl, cliMountOptions, readyAddressLines, resolveBindHost, serveService, serve } from "../serve.ts";
+import {
+  announceControl,
+  bindLine,
+  cliMountOptions,
+  resolveBindHost,
+  serveService,
+  serve,
+  withRunOverrides,
+} from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -28,6 +36,8 @@ export interface StartOptions {
   bind?: string;
   model?: string;
   tunnel?: boolean;
+  /** false ⇔ `--no-invoke`: withhold `POST /invoke` for THIS run (`http.invoke` is the persistent form). */
+  invoke?: boolean;
   input?: boolean;
 }
 
@@ -40,13 +50,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   if (isAgentcoreRuntime()) {
     // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.
     const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;
-    let unannounce = (): void => {};
     const deferred = deferAgentcoreService({
       prepare: () => prepareStartWorkspace(dirArg),
       assemble: async (prepared) => {
         const service = await openPreparedWorkspace(prepared, opts);
         await service.ready;
-        unannounce = announceControl(service.control, service.stateRoot, { host: bindFlag, tunnel: false }, port);
+        announceControl(service, { host: bindFlag, tunnel: false });
         return service;
       },
     });
@@ -57,13 +66,11 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         // The assembly report waits for the first envelope, so this line is the only sign of life a booted container
         // gives.
         onListening: (port) => {
-          for (const line of readyAddressLines(bindFlag, port, false)) log.info(line);
+          // NOT `readyAddressLines`: this posture serves the Runtime's `/invocations` contract, not our `/invoke`.
+          log.info(bindLine(bindFlag, port));
           log.info("[fastagent] agentcore: the definition opens on the first invocation");
         },
-        onShutdown: async () => {
-          unannounce();
-          await deferred.close();
-        },
+        onShutdown: () => deferred.close(),
       },
     );
     return;
@@ -192,10 +199,11 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   }
   const traced = logAgentLoop(agent);
   const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  const mountable = withRunOverrides(opened, opts);
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(opened, { wrapAgent: () => traced, onStateReady })
+    ? mountAgentcoreService(mountable, { wrapAgent: () => traced, onStateReady })
     : mountAgentService(
-        opened,
+        mountable,
         cliMountOptions(() => traced),
       ));
   return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };

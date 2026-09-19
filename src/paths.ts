@@ -216,7 +216,7 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
 }
 
 /**
- * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/, control.json):
+ * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/):
  * `FASTAGENT_STATE_DIR` env > `<agentDir>/.state`.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -254,7 +254,7 @@ export function isAgentcoreRuntime(): boolean {
 }
 
 /**
- * The mode of a file fastagent CREATES to hold a secret: `auth.json`, a `.env` it makes itself, `control.json`,
+ * The mode of a file fastagent CREATES to hold a secret: `auth.json`, a `.env` it makes itself,
  * a host's parameter file. That is the whole extent of its opinion about permissions — a file it did not create
  * keeps the mode its owner gave it, and no directory's mode is ever decided or repaired. Every comparable tool
  * draws the line here: Rails chmods the `master.key` it generates and leaves `config/` alone
@@ -266,7 +266,7 @@ export function isAgentcoreRuntime(): boolean {
  * all for scenarios with no reported use, and none of it reachable under this rule at all.
  *
  * One consequence worth knowing: `writeFileAtomic` sets the mode on the temp file it renames into place, so a
- * file it owns end-to-end (`auth.json`, `control.json`) is 0600 after every write, including one an operator had
+ * file it owns end-to-end (`auth.json`) is 0600 after every write, including one an operator had
  * placed by hand. Appending to a file fastagent did not create (`.env`) cannot and does not do that.
  */
 export const SECRET_FILE_MODE = 0o600;

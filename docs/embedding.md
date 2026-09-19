@@ -86,6 +86,8 @@ const { text } = await collect(agent.invoke({ session: "u1" }, { text: "hi" }));
 // (3) HTTP/SSE — createInvokeHandler is a Fetch handler: mount it in any host route
 import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
+// Standalone it checks the method, requires content-type: application/json, and caps the body. It sends
+// NO CORS headers — mounted in your app, who may call it cross-origin is your middleware's decision.
 ```
 
 ### The whole agent, as a service
@@ -105,12 +107,19 @@ await service.close();    // stops long connections and schedules
 
 `createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
 bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
-`service.control` carries the plane's bearer token so you can hand a client access without the
-CLI's `control.json` discovery file — a per-boot mint, or `FASTAGENT_CONTROL_TOKEN` when your
-process environment sets it (set it yourself to hand out a token that survives a restart). Composing the same thing by hand
-means assembling routes, mounts, schedules and long connections in the right order — and getting it
-wrong is silent (a control plane that 404s while `control.json` advertises it, a schedule that never
-fires).
+`service.controlPrefix` names the prefix the plane owns (`/control`) so your app can route around it.
+
+**Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the
+handler behind your own middleware; it is a Fetch handler, so your existing auth applies to it the
+same way it applies to any other route you mount. A browser is NOT constrained by default: the
+cross-origin default is `*`, so any page your user visits can call this port and read the reply. Our
+routes do refuse a body that is not `application/json`, which is what stops a no-preflight cross-origin
+write once you have narrowed the origins — pin your real front end's domain in `http.cors` to take the
+default back.
+
+Composing the same thing by hand means assembling routes, mounts, schedules and long connections in
+the right order — and getting it wrong is silent (a control plane that 404s while the startup line
+announces it, a schedule that never fires).
 
 Pass `{ signal }` to bind its lifetime to something you already own.
 

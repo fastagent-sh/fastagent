@@ -198,10 +198,13 @@ function createAgentService(
   routes: Routes;                        // what is served, for a startup line
   agentDir: string;
   workspace: string;
-  channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
+  channels: { routes: string[]; longConnections: string[] };
+  unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
+                                          // ("POST /invoke", "GET /health"), minus what a channel
+                                          // took over or `http.invoke: false` withheld
   schedules: readonly LoadedSchedule[];
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
-  control?: { token: string; prefix: string };  // the plane's bearer token, when sessionControl is on
+  controlPrefix?: string;                // "/control", when sessionControl is on
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
                                          // to stop, or does not stop within 5s
 }>;
@@ -736,8 +739,7 @@ IDEMPOTENT — the new record carries where it came from, so repeating the same 
 and writes nothing (a retry after a lost response does not produce a second record), while the same
 id holding a different history rejects `invalid_command`. Cloning is `fork` at the session's own
 `leafEntryId`. There is no `create` — `invoke` is what brings a session into being. `delete` ends the
-session's live `events()` streams; it is guarded by the same bearer token as every other call, which
-is the only key the framework owns.
+session's live `events()` streams. Nothing in this plane is authenticated — see below.
 
 Overrides persist in the session record and every later turn's fresh session binding applies them on any
 serving path, channels included. `resolveSessionSettings` clamps both recorded thinking levels and
@@ -770,29 +772,36 @@ channel's stop command aborts the running turn through it — that action needs 
 ### Remote (HTTP + SSE)
 
 The same contract over the wire — for a Web panel, a desktop app, or any other remote client. Server
-side, mount the bearer-authenticated routes (dev/start do this automatically when the config sets
-`sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json` — or using
-`FASTAGENT_CONTROL_TOKEN` when the environment sets it, which is how a deployed box gets a token its
-callers already know):
+side, set `sessionControl: true` and dev/start mount the routes.
+
+**fastagent authenticates nothing.** Not `/invoke`, not `/control/*`. Authentication is the
+deployment's: a gateway, an IdP-backed proxy, a private network, AgentCore's IAM, or — when you embed
+the handler — your own middleware in front of it. A port that reaches the internet with no such layer
+is a public remote control for your agent.
 
 ```ts
 import { createAgentService } from "@fastagent-sh/fastagent";
 import { connectSessionControl } from "@fastagent-sh/fastagent/core";
 
 // Set `sessionControl: true` in fastagent.config.ts; the plane is then mounted on the service's
-// handler, owning the /control prefix — routes, preflight, 404/405 and a failing handler all carry
-// CORS headers, so a browser client can read every reply. SSE at /control/sessions/{id}/events.
+// handler, owning the /control prefix. Routes, preflight, 404/405 and a failing handler all carry
+// CORS headers, and the default answers EVERY origin — `http.cors` is the only way to narrow it.
+// Every write must send content-type: application/json. SSE at /control/sessions/{id}/events.
 const service = await createAgentService("./my-agent");
-// service.control?.token is how you hand a client access
 
-// Client side — the SAME SessionControl interface, isomorphic to local:
-const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });
+// Client side — the SAME SessionControl interface, isomorphic to local. Point `url` at whatever
+// fronts the serve (a gateway, an ssh -L tunnel), not at a public port; `fetchFn` is where a
+// gateway's credential goes, and it rides every request including the streams:
+const remote = await connectSessionControl({
+  url: "https://agent.example.com",
+  fetchFn: (input, init) =>
+    fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), authorization: await token() } }),
+});
 for await (const ev of remote.sessions.get("s1").events()) console.log(ev.type);
 ```
 
-The DATA plane travels the same wire: `connectAgent({ url, token })` returns an `Agent` whose
-`invoke` drives `POST /control/invoke` (mounted when the serve wires an agent — dev/start do) —
-paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
+The DATA plane travels the same wire: `connectAgent({ url, fetchFn })` returns an `Agent` whose
+`invoke` drives `POST /invoke` — paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
 same two contracts local code uses. Disconnecting the invoke stream cancels the run. Both streams refuse
 an endpoint that accepts the connection and never answers — the events stream after 10s (a reconnecting
 client waits on it), `invoke` after 60s, since a
@@ -815,8 +824,13 @@ DELETE /control/sessions/{id}
 GET    /control/sessions/{id}/entries          ?since=
 GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
-POST   /control/invoke                         the DATA plane: {session, text} — SSE, starts a run
+
+POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
 ```
+
+The data plane is a root verb endpoint, not part of this prefix: `/control/*` is REST over session
+resources, `POST /invoke` is the RPC every LLM API of this shape uses (the session rides in the body
+because a Caller-minted id may contain `:` and `/`).
 
 `{id}` is percent-encoded, so a Telegram group is `/control/sessions/tg%3A-1001234567890` — session
 ids are opaque Caller strings and may contain `:` and `/`.
@@ -824,8 +838,8 @@ ids are opaque Caller strings and may contain `:` and `/`.
 The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
 gap — and any mid-stream transport failure, a server restart included — throws from the events
 iterator so the consumer's failure handling owns it (only the consumer's own detach reads as a
-clean end); recovery is the standard reconnect steps. Exposing the port beyond loopback exposes a
-remote-control surface — wrap it with real authentication and authorization
+clean end); recovery is the standard reconnect steps. Exposing the port beyond loopback exposes an
+unauthenticated remote-control surface — put real authentication and authorization in front of it
 ([design §14](design/session-control.md)).
 
 ## Subpath exports

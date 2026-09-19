@@ -314,12 +314,13 @@ Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channe
 `telegram.ts.disabled` disables one without adding a second config source.
 
 The loader collects all per-file diagnostics, but `dev`/`start` treats any broken enabled channel or
-route collision as fatal: a declared inbound endpoint must not silently disappear, and a broken channel
-must never cause the default `/invoke` route to appear. That route is mounted only when there are no
-enabled channel files.
+route collision as fatal: a declared inbound endpoint must not silently disappear.
 
-`mountAgentService` adds `GET /health`, starts long connections and schedules, and owns their shutdown.
-A long-connection channel counts as declared, so the fallback `/invoke` does not appear. Health returns
+`mountAgentService` adds `POST /invoke` and `GET /health`, starts long connections and schedules, and
+owns their shutdown. `/invoke` is the framework's data plane, so it is served whatever else is
+declared, and a channel claiming that path is refused; `/health` stays overridable, because a probe is
+the deployment's to shape. AgentCore is the one posture that opts out of `/invoke`: it serves the
+Runtime's own `/invocations` contract instead. Health returns
 503 until every long connection is ready, and again if one closes unexpectedly. The CLI binds the
 service's handler through `channels/serve.ts` and exits on unexpected channel closure; its
 SIGINT/SIGTERM handler closes the service and listener, force-closes active HTTP streams, and bounds

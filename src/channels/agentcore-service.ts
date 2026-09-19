@@ -1,18 +1,12 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
 import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
+import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
-import {
-  type AgentService,
-  type MountableAgent,
-  assertNoControlPlaneCollision,
-  mountSessionControl,
-  routesFor,
-  startSchedules,
-} from "../service.ts";
+import { type AgentService, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import {
   type AgentcoreAdapterOptions,
   type RouteSurface,
@@ -25,7 +19,6 @@ import type { ChannelHandler } from "../channel.ts";
 import { router } from "./serve.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
-import { secretEquals } from "./secret.ts";
 
 /**
  * Runtime filesystems appear on invocation, so even opening the definition must be deferred — in the TWO stages that
@@ -83,7 +76,7 @@ export function deferAgentcoreService<T>(stages: {
           } catch {
             // Invalid envelopes retain the initialization error.
           }
-          if (envelope?.kind === "probe" && secretEquals(envelope.auth, process.env.FASTAGENT_INGRESS_SECRET)) {
+          if (envelope?.kind === "probe" && fromForwarder(envelope, process.env.FASTAGENT_INGRESS_SECRET)) {
             return Response.json({ ok: false, error: message });
           }
         }
@@ -117,9 +110,45 @@ export async function mountAgentcoreService(
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
-  // The control plane mounts over an EMPTY route surface: the lazy channels join it later, and the collision rule
-  // runs again then (below) against what they actually brought.
-  const withControl = mountSessionControl({}, opened.publishControl ? sessionControl : undefined, { agent });
+  // NO control plane on this host, and `sessionControl: true` cannot change that.
+  //
+  // The only public way in is the forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a
+  // webhook envelope (deploy/agentcore/forwarder.js) and attaches the ingress secret ITSELF — so every anonymous
+  // caller arrives as trusted ingress. A channel route survives that because the platform's signature is checked
+  // inside it; `/control/*` has no such check, and mounting it here made `GET /control/sessions` and
+  // `DELETE /control/sessions/{id}` answerable from the public URL with no credential at all.
+  //
+  // It is NOT that the two callers cannot be told apart. AWS already separates them and we already use that:
+  // `InvokeAgentRuntime` is IAM-gated, the forwarder builds its own envelopes and emits exactly four kinds, so a
+  // kind it never sends can only have come from a direct IAM call — which is how `kind: "invoke"` runs a turn here
+  // without the ingress secret. Adding `kind: "control"` on the same footing is small, and is the recipe if this is
+  // ever wanted.
+  //
+  // It is not built because nothing asks for it: `connectSessionControl` has no caller in this repo, and the
+  // envelope is request/response with a buffered body (see the webhook reply), so the one route a GUI actually
+  // renders from — the long-lived `GET /control/sessions/{id}/events` stream — could not ride it anyway. Half a
+  // control plane, for nobody, on a third transport.
+  // Every config key that cannot mean anything on this host says so. Silence here is how an operator concludes a
+  // setting took effect — `sessionControl` was the one that already warned, and the other two were just as inert.
+  if (opened.corsOrigins) {
+    log.warn(
+      "[fastagent] agentcore: http.cors has no effect here — no browser reaches this container. Its ingress is the " +
+        "forwarder's Function URL (webhooks) and the Runtime's IAM-gated API, neither of which is a page.",
+    );
+  }
+  if (opened.serveInvoke !== undefined) {
+    log.warn(
+      "[fastagent] agentcore: http.invoke has no effect here — this host serves the Runtime's POST /invocations " +
+        "contract instead of our own /invoke, and reaching it already requires bedrock-agentcore:InvokeAgentRuntime.",
+    );
+  }
+  if (opened.publishControl) {
+    log.warn(
+      "[fastagent] agentcore: sessionControl is ON but /control/* is NOT served here — this host's only public " +
+        "ingress relays anonymous traffic as trusted, so the plane is not assembled behind it " +
+        "(docs/design/session-control.md §14)",
+    );
+  }
 
   // Started here, not deferred to an envelope.
   const scheduled = await startSchedules(agentDir, agent, stateRoot, opened.selfSchedule, {
@@ -127,17 +156,16 @@ export async function mountAgentcoreService(
   });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
-    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: false });
+    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { serveInvoke: false });
     if (lazy.longConnections.length > 0) {
       throw new Error(
         `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
           `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
       );
     }
-    // The SAME rule mountSessionControl applies, through the same function: its check ran against an empty base at
-    // boot, so it has to run again once the channels are real.
-    for (const plane of withControl.mounts) assertNoControlPlaneCollision(lazy.routes, plane);
-    return { routes: lazy.routes, mounts: withControl.mounts };
+    // CHANNELS ONLY — nothing unverified rides the public relay. `lazy.unverified` (here just `GET /health`) is dropped
+    // with the control plane, for the same reason: what arrives through that URL is anonymous.
+    return { routes: lazy.selfVerifying };
   };
 
   const adapterRoutes = mountAgentcore({
@@ -147,7 +175,10 @@ export async function mountAgentcoreService(
     onStateReady: options.onStateReady,
     channels: lazyChannels,
   });
-  const handler = router(adapterRoutes, withControl.mounts);
+  // SELF-VERIFYING, not unverified: both paths are reached only through `InvokeAgentRuntime`, which AWS gates with
+  // IAM. Putting them in the other table applied our JSON body gate to `POST /invocations` (whose content type is
+  // AWS's to set) and reported two IAM-protected paths as authenticating nobody.
+  const handler = router({ selfVerifying: adapterRoutes });
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   return {
@@ -158,10 +189,12 @@ export async function mountAgentcoreService(
     agentDir,
     workspace,
     // Channels remain lazy until the adapter receives trusted ingress.
-    channels: { routes: [], longConnections: [], builtinInvoke: false },
+    channels: { routes: [], longConnections: [] },
+    // NONE: the adapter's two paths are IAM-gated and the channels behind them verify their own platform.
+    unverifiedRoutes: [],
+    // No `controlPrefix`: it is not served here, so nothing may report a prefix a caller could dial.
     schedules: scheduled.schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
-    ...(withControl.control ? { control: withControl.control } : {}),
     async close() {
       scheduled.stop();
     },

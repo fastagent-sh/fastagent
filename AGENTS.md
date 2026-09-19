@@ -72,8 +72,11 @@ src/
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── serve.ts            # how a route table becomes a running server: literal-path dispatch, prefix mounts,
-│   │                       # the totality boundary, the node:http binding. Shared ground, not a deploy target
+│   ├── serve.ts            # how route tables become a running server, split by WHO AUTHENTICATES THE CALLER:
+│   │                       # ours (nobody) vs the channels' (their platform's signature), one table each so the
+│   │                       # answer cannot drift. Both guards on the first table live here — the JSON body gate
+│   │                       # and the one CORS decision (`*`, narrowed only by http.cors) — plus literal-path
+│   │                       # dispatch, prefix mounts, the totality boundary, the node:http binding
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │                           # host): channels discovered on trusted ingress, the whole definition opened
 │                           # on the first envelope, an external clock, no resident connections
@@ -83,13 +86,14 @@ src/
 │   ├── agentcore-limits.ts # the host's body ceilings, computed once
 │   ├── busy.ts             # process-wide background work counter read by /ping (HealthyBusy): a webhook
 │                           # ACK does not mean the turn has finished
-│   ├── http.ts             # HTTP/SSE channel (consumes only the Agent contract)
-│   ├── control.ts          # session-control transport: bearer-token /control/* routes + SSE events + /control/invoke
+│   ├── http.ts             # the DATA plane: POST /invoke, HTTP/SSE (consumes only the Agent contract)
+│   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
+│   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), engine-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
 │   │                       # (the only way a CUSTOM channel's credentials can reach a deploy)
-│   ├── body.ts, respond.ts # channel-authoring kit (body cap, responses)
+│   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate serve.ts applies, responses)
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop

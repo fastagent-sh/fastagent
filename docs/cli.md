@@ -121,7 +121,7 @@ generates and leaves `config/` alone), as does the aws CLI (a `0600` `~/.aws/con
 ## `fastagent dev`
 
 ```bash
-fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
+fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
 Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
@@ -330,7 +330,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
+fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-invoke] [--no-input]
 ```
 
 Runs the agent in production posture: no watch, same assembly as `dev`.
@@ -345,6 +345,7 @@ Bind precedence:
 
 ```txt
 --bind > fastagent.config.ts http.host > all interfaces
+--no-invoke > fastagent.config.ts http.invoke > served
 ```
 
 `dev` reads the same chain but ends it at `127.0.0.1` — see [Bind address](configuration.md#bind-address).
@@ -391,6 +392,7 @@ Recurring per-command options (same meaning everywhere they appear):
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: `127.0.0.1` for `dev`, all interfaces for `start` (containers need it); `--bind 0.0.0.0` opens a dev serve to the LAN. Prefer this flag over `http.host` for a non-wildcard bind — that value travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
+| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run. The data plane is unauthenticated and runs a turn with the agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it — `dev --tunnel` publishes the port, and that is the case this flag is for. Prefer it over `http.invoke: false` for a one-off, for the same reason `--bind` is preferred over `http.host`: the config value travels into a deployed image. |
 | `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
 | `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |

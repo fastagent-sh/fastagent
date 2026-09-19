@@ -3,26 +3,33 @@ import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
 import { PortFailure, portJoin } from "../effect-port.ts";
 import type { Agent } from "../agent.ts";
-import { type AgentcoreEnvelope, ENVELOPE_KINDS, type WebhookReply } from "./agentcore-protocol.ts";
+import { type AgentcoreEnvelope, ENVELOPE_KINDS, fromForwarder, type WebhookReply } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
-import { type PrefixMount, router } from "../channels/serve.ts";
+import { router } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import type { ScheduleFireOutcome } from "../schedule/scheduler.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
-import { secretEquals } from "./secret.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
 /**
- * What the lazy factory hands back: literal routes plus any prefix-owning mounts (the control plane), so the adapter's
- * INNER dispatch is assembled exactly like a direct host's.
+ * What the lazy factory hands back: the CHANNELS' routes, and nothing else.
+ *
+ * Deliberately not "the whole inner surface". Every request that reaches this dispatcher arrived through the
+ * forwarder's public Function URL, which relays an arbitrary path verbatim and supplies the ingress secret itself —
+ * so behind THIS door an anonymous caller and an IAM one are the same thing. A channel route survives that because
+ * it verifies the platform's signature inside itself; nothing fastagent serves does.
+ *
+ * The other door is the Runtime's own, IAM-gated: the forwarder emits only `webhook`, `schedule-fire`, `wake-poke`
+ * and `probe`, so any other KIND can only come from a direct `InvokeAgentRuntime` call. That is what lets
+ * `kind: "invoke"` run a turn here with no ingress secret, and it is where anything else that needs a real caller
+ * identity belongs.
  */
 export interface RouteSurface {
   routes: Routes;
-  mounts?: readonly PrefixMount[];
 }
 
 export interface AgentcoreAdapterOptions {
@@ -74,7 +81,7 @@ function createActivation(deps: {
     Effect.cached(
       portJoin(async () => {
         const surface = await deps.channels();
-        return router(surface.routes, surface.mounts);
+        return router({ selfVerifying: surface.routes });
       }).pipe(Effect.uninterruptible),
     ),
   );
@@ -112,8 +119,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     if (envelope === null || typeof envelope !== "object" || typeof envelope.kind !== "string") {
       return text(`need { "kind": ${ENVELOPE_KINDS.map((k) => `"${k}"`).join(" | ")}, ... }\n`, 400);
     }
-    // AUTHENTICATION BOUNDARY.
-    const trusted = secretEquals(envelope.auth, ingressSecret);
+    // The forwarder, or another IAM principal? See `fromForwarder` for what that actually decides.
+    const trusted = fromForwarder(envelope, ingressSecret);
     if (!trusted) {
       if (envelope.kind !== "invoke") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);

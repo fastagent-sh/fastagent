@@ -22,9 +22,9 @@ describe("writeFileAtomic", () => {
 
   it("applies mode even when a crashed writer left a loose temp behind", () => {
     // `writeFileSync`'s mode option only applies on CREATE. Without the explicit chmod, the stale
-    // temp's permissions survive the write and the rename publishes them — a token file at 0644.
+    // temp's permissions survive the write and the rename publishes them — a secret file at 0644.
     const dir = fresh();
-    const path = join(dir, "control.json");
+    const path = join(dir, "auth.json");
     writeFileSync(`${path}.tmp`, "stale");
     chmodSync(`${path}.tmp`, 0o644);
 

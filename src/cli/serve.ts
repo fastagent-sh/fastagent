@@ -1,13 +1,9 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import { writeFileAtomic } from "../atomic-write.ts";
-import { SECRET_FILE_MODE } from "../paths.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
-import type { AgentService, MountAgentServiceOptions } from "../service.ts";
+import type { AgentService, MountableAgent, MountAgentServiceOptions } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -45,6 +41,20 @@ export function resolveBindHost(
   return host;
 }
 
+/**
+ * Apply the flags that override what the definition said, for THIS run only.
+ *
+ * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
+ * will not.
+ *
+ * `--no-invoke` outranks `http.invoke`, for the same reason `--bind` outranks `http.host`: a config value travels
+ * into a deployed image, so "do not publish a turn endpoint on this tunnel" has to be sayable without editing the
+ * definition.
+ */
+export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
+  return run.invoke === false ? { ...opened, serveInvoke: false } : opened;
+}
+
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
 export function cliMountOptions(wrapAgent: (agent: Agent) => Agent): MountAgentServiceOptions {
   return {
@@ -66,85 +76,107 @@ export function serveService(
 ): void {
   const { host } = bind;
   const { tunnel, agentDir, stateRoot } = posture;
-  let unannounce = (): void => {};
   serve(service.handler, bind, {
     ready: service.ready,
     onListening: (p) => {
       reportServing(service, host, p);
-      unannounce = announceControl(service.control, stateRoot, { host, tunnel }, p);
+      announceControl(service, { host, tunnel });
       maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
     },
-    onShutdown: () => {
-      unannounce();
-      return service.close();
-    },
+    onShutdown: () => service.close(),
   });
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
-  for (const line of readyAddressLines(host, boundPort, service.channels.builtinInvoke)) log.info(line);
+  for (const line of readyAddressLines(host, boundPort, service.unverifiedRoutes.includes("POST /invoke"))) {
+    log.info(line);
+  }
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
   }
 }
 
-/** The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies. */
-export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
-  const dial = `${clientHost(host)}:${boundPort}`;
-  const lines = [
-    `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`,
-  ];
-  if (builtinInvoke) {
-    lines.push(
-      `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
-    );
-  }
-  return lines;
+/** The line that names WHERE the serve is — every posture reports it, including AgentCore's own surface. */
+export function bindLine(host: string | undefined, boundPort: number): string {
+  return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
 }
 
 /**
- * Write `<stateRoot>/control.json` so a LOCAL client (a desktop app on this machine) can find the control plane once the port is
- * known, and say what reaches it.
+ * The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies.
+ *
+ * `servesInvoke` is `AgentService.unverifiedRoutes`, never a guess from the route table: `http.invoke: false` leaves no
+ * `/invoke` to curl, and a channel may serve that path with a protocol of its own — both would turn this line into
+ * a copyable request that fails.
+ */
+export function readyAddressLines(host: string | undefined, boundPort: number, servesInvoke: boolean): string[] {
+  const dial = `${clientHost(host)}:${boundPort}`;
+  return [
+    bindLine(host, boundPort),
+    ...(servesInvoke
+      ? [
+          `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
+        ]
+      : []),
+  ];
+}
+
+/**
+ * Say what this port exposes and how far it reaches.
+ *
+ * NOTHING fastagent serves is authenticated — authentication belongs to the deployment (a gateway, a private
+ * network, AgentCore's IAM, an embedder's middleware). Two of the three warnings fire at a REACH the operator did
+ * not get by default: a bind off this machine, and `--tunnel`'s public URL.
+ *
+ * The cross-origin one is UNCONDITIONAL, including on a loopback `dev`, because the grant is. `*` is the default
+ * (`channels/serve.ts`), so a page the developer merely visits can drive this port from their browser and read the
+ * reply — and a loopback bind, which used to make that impossible, no longer does. Nobody opts into a default, so
+ * the one posture the decision costs is the one that has to hear about it.
+ *
+ * WHAT IS EXPOSED is read off `AgentService.unverifiedRoutes`, never assumed and never guessed from the route table.
+ * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,
+ * `http.invoke: false` withholds it, and a channel may serve that path itself — in which case the caller it is
+ * open to is the platform that signs its requests, not anyone at all. A warning naming an endpoint this process
+ * does not serve is how an operator learns to skim past all of them — the same reason `preflightDeploy` takes
+ * `publicUrl`.
  */
 export function announceControl(
-  control: { token: string; prefix: string } | undefined,
-  stateRoot: string,
+  service: Pick<AgentService, "controlPrefix" | "unverifiedRoutes" | "corsOrigins">,
   bind: { host?: string; tunnel: boolean },
-  boundPort: number,
-): () => void {
-  if (!control) return () => {};
-  mkdirSync(stateRoot, { recursive: true });
-  const path = join(stateRoot, "control.json");
-  const url = `http://${clientHost(bind.host)}:${boundPort}`;
-  // The token rides in a file, so the FILE carries the mode — the directory's is the operator's (paths.ts).
-  writeFileAtomic(path, `${JSON.stringify({ url, token: control.token })}\n`, SECRET_FILE_MODE);
-  log.info(`[fastagent] session control on ${control.prefix}/* (token in ${path})`);
-  // LAN-reachable with the bearer token as the only protection.
+): void {
+  const { controlPrefix, corsOrigins } = service;
+  if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
+  // What an unauthenticated caller of this port can do, worst first. From `unverifiedRoutes`, so a channel that serves
+  // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
+  const exposed = [
+    ...(service.unverifiedRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
+  ];
+  if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
+  const what = `${exposed.join(" and ")} ${exposed.length > 1 ? "answer" : "answers"}`;
+  if (corsOrigins === undefined || corsOrigins.includes("*")) {
+    log.warn(
+      `[fastagent] any web page your browser visits can call this serve cross-origin and read the reply: ${what} ` +
+        "with no credential. That is the default (`*`); pin the origins you actually use with http.cors " +
+        "(docs/design/session-control.md §14)",
+    );
+  }
   const reach = classifyBind(bind.host);
   if (reach !== "loopback") {
     log.warn(
       `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
-        "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
-        "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs/design/session-control.md §14)",
+        `${what} UNAUTHENTICATED to anyone who can reach it — bind loopback (--bind 127.0.0.1), ` +
+        "firewall the port, or front it with a gateway (docs/design/session-control.md §14)",
     );
   }
   if (bind.tunnel) {
-    // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC.
     log.warn(
-      "[fastagent] --tunnel exposes /control/* (steer, stop, rewrite or delete a session) at the public tunnel URL, " +
-        "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs/design/session-control.md §14)",
+      `[fastagent] --tunnel publishes this port at a public URL with NO authentication: ${what} to anyone with ` +
+        "that URL — put real auth in front before sharing it (docs/design/session-control.md §14)",
     );
   }
-  return () => {
-    try {
-      rmSync(path, { force: true });
-    } catch {
-      // the file is advisory — shutdown must not fail on it
-    }
-  };
 }
 
 /** What the CLI gives a service to stop in, and the hard exit that follows it. */

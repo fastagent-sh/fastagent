@@ -1,12 +1,16 @@
 /**
- * How a {@link Routes} table becomes a running server: the path rule, dispatch, the totality boundary, and the
- * node:http binding.
+ * How a {@link Routes} table becomes a running server: the path rule, dispatch, WHO MAY CALL IT FROM A BROWSER, the
+ * totality boundary, and the node:http binding.
  */
 import { serve, getRequestListener } from "@hono/node-server";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { log } from "../log.ts";
+import { refuseNonJsonBody } from "./body.ts";
 import { text } from "./respond.ts";
+
+/** Methods whose request carries a body a handler will parse — what the JSON gate applies to. */
+const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {
@@ -51,8 +55,109 @@ export function pathUnderPrefix(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
-/** Compose a {@link Routes} table and its {@link PrefixMount}s into one handler. */
-export function router(routes: Routes, mounts: readonly PrefixMount[] = []): ChannelHandler {
+/**
+ * THE cross-origin policy, in one place, for the routes that authenticate nobody.
+ *
+ * THIS IS AN API, so the default is an API's: `*`, unconditionally. Origin is not access control — what makes any
+ * API safe to call from a page is a credential the page does not have, which makes the caller's origin irrelevant.
+ * We have no credential, and the boundary that replaces it — who may reach this port — belongs to the deployment,
+ * the same rule that removed the bearer token. Deciding for the operator from a signal this process can observe
+ * (which address it bound) is not that rule: a wildcard bind is what a container needs, not something the operator
+ * said, and a loopback one is `dev`'s default, not a claim about who may call.
+ *
+ * WHAT `*` GRANTS, stated because it is the default and nobody opts into it: any page the user's browser visits can
+ * call this port cross-origin and read the reply — a turn with the agent's full tool authority, and with
+ * `sessionControl: true`, reading and deleting sessions. On a published port that is nothing an attacker could not
+ * already curl. On a loopback `dev` serve it is the whole attack path, and this is the posture the decision costs:
+ * `announceControl` says so at every boot, and `http.cors` is the one way to take it back.
+ *
+ * `allow` is `http.cors`, and when it is set it REPLACES the default rather than adding to it: `["*"]` is the
+ * default said out loud, a list of origins is the narrowing.
+ *
+ * An origin that is not allowed is simply not ANSWERED — no headers, no refusal. That is safe only because a route
+ * that authenticates nobody also refuses a body that is not `application/json` (channels/body.ts): without that, a
+ * cross-origin `text/plain` POST is a CORS simple request, sent with no preflight, and withholding the headers
+ * would only stop the page from reading a turn that had already run.
+ */
+function allowedOrigin(origin: string, allow: readonly string[]): string | undefined {
+  if (allow.length === 0) return "*";
+  return allow.includes("*") ? "*" : allow.includes(origin) ? origin : undefined;
+}
+
+/**
+ * Refuse a cross-origin allow-list that cannot match anything.
+ *
+ * ONE check for BOTH ways in: `http.cors` in a config file, and `corsOrigins` handed to `mountAgentService` by an
+ * embedder. `allowedOrigin` compares exact strings, so `"https://app.example.com/"` — one trailing slash — never
+ * matches and the front end is refused with nothing pointing at the rule. A rule that silently matches nothing is
+ * worse than one that refuses to load.
+ */
+export function assertCorsOrigins(origins: unknown, where: string): asserts origins is string[] {
+  if (!Array.isArray(origins) || origins.some((o) => typeof o !== "string" || o === "")) {
+    throw new Error(`${where} must be an array of origin strings (e.g. ["https://app.example.com"])`);
+  }
+  // An EMPTY list is the one spelling that means the OPPOSITE of what it looks like. `allowedOrigin` reads "nothing
+  // configured" as the `*` default and cannot tell that apart from a list someone wrote as empty, so `http.cors: []`
+  // — the obvious way to write "no page may call this" — would grant the widest policy there is, and silence the
+  // boot warning that names it (`announceControl` treats a set list as the operator having chosen the origins).
+  if (origins.length === 0) {
+    throw new Error(`${where} is empty — list at least one origin, or write ["*"] to say the default out loud`);
+  }
+  for (const origin of origins as string[]) {
+    if (origin === "*") continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      // `new URL` throwing IS the answer here ("not a URL at all"); rethrown as the rule that cannot load.
+      throw new Error(`${where} entry ${JSON.stringify(origin)} is not an origin ("https://host[:port]")`);
+    }
+    // An ORIGIN, not a URL with a path: `new URL(...).origin` is what a browser sends.
+    if (parsed.origin !== origin) {
+      throw new Error(
+        `${where} entry ${JSON.stringify(origin)} is not the origin a browser sends — use ${JSON.stringify(parsed.origin)}`,
+      );
+    }
+  }
+}
+
+/**
+ * The tables a router composes, NAMED rather than ordered.
+ *
+ * Two same-typed positional arguments encoded which side of the trust axis a table was on, and getting them the
+ * wrong way round type-checked: the AgentCore adapter passed its IAM-gated routes as `unverified` and they were
+ * reported as unauthenticated for two commits. A caller now spells the axis at the call site.
+ */
+export interface RouterSurface {
+  /** Routes that authenticate NOBODY — the router applies the JSON body gate and the cross-origin policy to them. */
+  unverified?: Routes;
+  /** Routes that verify their own caller (a channel's platform signature, a host's IAM). Neither guard applies. */
+  selfVerifying?: Routes;
+  /** Prefix-owning handlers. Always treated as unverified — the control plane is the only one. */
+  mounts?: readonly PrefixMount[];
+  /** `http.cors` — exact origins, or `["*"]`. Set, it REPLACES the `*` default; unset, the default stands. */
+  corsOrigins?: readonly string[];
+}
+
+/**
+ * Compose the routes that AUTHENTICATE NOBODY, the self-verifying channel routes, and the {@link PrefixMount}s
+ * into one handler.
+ *
+ * That is the axis, not authorship. Two things follow from it and nothing else does: whether a browser may drive
+ * the route, and whether its body must declare JSON. A channel route is exempt from both because it checks its
+ * platform's signature inside itself — a Telegram webhook is public on purpose. Ours check nothing, so the router
+ * checks for them.
+ *
+ * TWO TABLES, not one table plus a list of which keys are which. While it was a parallel array, three readers each
+ * had their own chance to answer differently, and two of them did: a channel serving `/invoke` was announced as
+ * our data plane, and the same fact was hand-written as `[]` in one place while derived in another.
+ *
+ * CAVEAT, stated because we cannot enforce it: a CUSTOM channel that verifies nothing lands in `selfVerifying`
+ * anyway and gets neither guard. That is decision B (docs/design/session-control.md §14) and it belongs to the
+ * channel's author, who owns the credential the platform issued — but it is an assumption here, not a property.
+ */
+export function router(surface: RouterSurface): ChannelHandler {
+  const { unverified = {}, selfVerifying = {}, mounts = [], corsOrigins = [] } = surface;
   for (const [i, mount] of mounts.entries()) {
     assertRouteKey(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
     if (mount.prefix === "/") {
@@ -70,7 +175,8 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
   }
   const byKey = new Map<string, ChannelHandler>();
   const paths = new Set<string>();
-  for (const [key, handler] of Object.entries(routes)) {
+  const unguarded = new Set<string>();
+  for (const [key, handler] of [...Object.entries(unverified), ...Object.entries(selfVerifying)]) {
     assertRouteKey(key, (problem) => `route "${key}" is not a valid route key — ${problem}`);
     const { path } = parseRouteKey(key);
     for (const mount of mounts) {
@@ -85,14 +191,50 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
     // Stored normalised: `parseRouteKey` upper-cases the method, so `"get /x"` validates under `GET` and would
     // otherwise be looked up under a name nothing stores.
     const { method } = parseRouteKey(key);
-    byKey.set(method ? `${method} ${path}` : path, handler);
+    const normalised = method ? `${method} ${path}` : path;
+    byKey.set(normalised, handler);
     paths.add(path);
+    if (key in unverified) unguarded.add(normalised);
   }
+
+  /** Does this route authenticate nobody? Every mount does (the control plane), plus what we registered ourselves. */
+  const authenticatesNobody = (method: string, path: string): boolean =>
+    mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||
+    unguarded.has(`${method} ${path}`) ||
+    unguarded.has(path) ||
+    // The router answers HEAD from a GET route, so the question follows it.
+    (method === "HEAD" && unguarded.has(`GET ${path}`));
 
   return (req) => {
     // `URL` normalises the path (`/a/../x` → `/x`) and drops query/fragment.
     const path = new URL(req.url).pathname;
+    const origin = req.headers.get("origin");
+    // A preflight asks ABOUT a method; ownership is that method's, not `OPTIONS`'s (nothing registers OPTIONS).
+    const asking =
+      req.method === "OPTIONS"
+        ? (req.headers.get("access-control-request-method")?.toUpperCase() ?? "OPTIONS")
+        : req.method;
+    // A BROWSER request against a route that authenticates nobody. A non-browser client sends no `Origin` and is
+    // untouched by any of this.
+    const owned = authenticatesNobody(asking, path);
+    const fromPage = origin !== null && owned;
+    // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
+    // that cannot read the 405 gets an opaque network error instead of the reason.
+    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins) : undefined;
     const answer = (): Response | Promise<Response> => {
+      // The gate that makes "an origin we do not allow is simply not answered" safe: a POST carrying `text/plain`
+      // is a CORS simple request, sent with no preflight at all, so a route that authenticates nobody must refuse
+      // the body itself. HERE, over the whole unguarded surface, rather than inside each handler — the next route
+      // we add is covered by existing. A self-verifying channel is exempt: Slack posts urlencoded, and a page
+      // cannot forge its signature anyway.
+      if (owned && BODY_METHODS.has(req.method)) {
+        const wrongType = refuseNonJsonBody(req);
+        if (wrongType) return wrongType;
+      }
+      // The preflight is the ROUTER's to answer: it names a method the route table does not register, so leaving it
+      // to the routes below is a 405 with no CORS headers, which is a browser client that cannot call a route that
+      // works.
+      if (req.method === "OPTIONS" && cors !== undefined) return new Response(null, { status: 204 });
       for (const mount of mounts) if (pathUnderPrefix(path, mount.prefix)) return mount.handler(req);
       const exact = byKey.get(`${req.method} ${path}`) ?? byKey.get(path);
       if (exact) return exact(req);
@@ -102,11 +244,34 @@ export function router(routes: Routes, mounts: readonly PrefixMount[] = []): Cha
       }
       return paths.has(path) ? text("method not allowed\n", 405) : text("not found\n", 404);
     };
-    // ONE exit, so the HEAD rule holds for every reply — a mount's, a route's, the GET fallback's, and the 404/405
-    // this router writes itself.
+    /**
+     * ONE exit, so the HEAD rule and the CORS verdict hold for every reply — a mount's, a route's, the GET
+     * fallback's, and the 404/405 this router writes itself.
+     */
+    const finish = (res: Response): Response => {
+      const out = req.method === "HEAD" ? withoutBody(res) : res;
+      // `vary` whether or not the origin was allowed: the answer DEPENDS on the request's origin either way, and a
+      // cache that does not know it would serve one caller's verdict to another.
+      if (owned) out.headers.append("vary", "origin");
+      if (cors === undefined) return out;
+      out.headers.set("access-control-allow-origin", cors);
+      // Echoed for the same reason the methods are: what a caller needs is not ours to enumerate. A gateway in front
+      // of this port demands its own header (`connectSessionControl({ fetchFn })` is how a client sends one), and a
+      // fixed list turns that preflight into a 204 the browser then refuses to act on. The default names the two a
+      // client of ours always needs, for a preflight that asked about nothing.
+      out.headers.set(
+        "access-control-allow-headers",
+        req.headers.get("access-control-request-headers") ?? "authorization, content-type",
+      );
+      // The method the preflight ASKED about, not a table lookup: a mount owns a prefix and does not publish which
+      // methods each path under it serves. Naming one the path does not serve costs nothing now that the 405 it
+      // produces carries these same headers.
+      const asked = req.headers.get("access-control-request-method")?.toUpperCase();
+      out.headers.set("access-control-allow-methods", [...new Set([asked, "OPTIONS"].filter(Boolean))].join(", "));
+      return out;
+    };
     const res = answer();
-    if (req.method !== "HEAD") return res;
-    return res instanceof Promise ? res.then(withoutBody) : withoutBody(res);
+    return res instanceof Promise ? res.then(finish) : finish(res);
   };
 }
 

@@ -173,6 +173,10 @@ export async function createPiAgentFromDir(
    * not have to reach back into it (MountableAgent).
    */
   selfSchedule: boolean;
+  /** The origins a browser may call this serve from; unset answers every one — `http.cors` (MountableAgent). */
+  corsOrigins?: readonly string[];
+  /** Whether to serve the data plane, `POST /invoke` — `http.invoke` (MountableAgent). */
+  serveInvoke?: boolean;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
@@ -216,8 +220,8 @@ export async function createPiAgentFromDir(
   const caller = options.observer;
   // TWO decisions, not one. The hub is in-process bookkeeping over the run observer: a serve gets it unconditionally,
   // because `/stop` in a chat is an ordinary thing to ask for and reaching the live run is the only way to answer it.
-  // Publishing `/control/*` — steer, rewrite, delete, over one bearer token at the public URL — is the separate
-  // decision `config.sessionControl` makes, and it is the only one that also wires the boundary.
+  // Publishing `/control/*` — steer, rewrite, delete, unauthenticated at whatever URL this serves on — is the
+  // separate decision `config.sessionControl` makes, and it is the only one that also wires the boundary.
   const publish = options.sessionControl ?? config.sessionControl === true;
   const wantControl = publish || options.serving === true;
   let hub: ReturnType<typeof createPiSessionControl> | undefined;
@@ -269,6 +273,8 @@ export async function createPiAgentFromDir(
     sessionControl: hub?.control,
     publishControl: publish,
     selfSchedule: config.selfSchedule ?? false,
+    ...(config.http?.cors ? { corsOrigins: config.http.cors } : {}),
+    ...(config.http?.invoke !== undefined ? { serveInvoke: config.http.invoke } : {}),
     agentDir,
     workspace,
     config,

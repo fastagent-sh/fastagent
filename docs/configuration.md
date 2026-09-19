@@ -49,8 +49,10 @@ Every key is optional. Supported keys:
 | `tools` | `[]` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | `8787` | Default port for `dev` / `start`. |
 | `http.host` | per command | Bind address for `dev` / `start`. Unset leaves the default to the command: `start` binds all interfaces (what containers need), `dev` binds `127.0.0.1`. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
+| `http.cors` | `*` | Which origins a **browser** may call this serve from. The default answers every origin, on every bind: this is an API, and who may reach the port is your deployment's decision, not something we guess from the address it bound. **Know what that grants**: any page your users visit can call this port from their browser and read the reply — `POST /invoke` runs a turn with the agent's full tools, and `sessionControl: true` adds reading and deleting sessions. A long-running `dev` serve should be treated as drivable by any page you visit; a loopback bind stops another machine, not your own browser. Setting this REPLACES the default and is the only way to take it back: `["https://app.example.com"]` pins that origin and refuses every other, including your own loopback page. `["*"]` is the default said out loud, and an empty list is refused at load — it reads as "nobody may call this" and would mean the opposite. `*` cannot be combined with cookie credentials — a gateway doing cookie auth needs the exact origin. A channel's own route is never browser-callable whatever this says. |
+| `http.invoke` | `true` | Serve the data plane, `POST /invoke`. On by default — it is the framework's interface, and a deployment reachable only through a chat channel is still worth curling. Set it `false` when the port is public and the channels' own signature checks are meant to be the only way in: the route is unauthenticated and runs a turn with the agent's full tool authority, so "my telegram bot is deployed" need not also mean "anyone with the URL can drive it". With it off, a channel may serve `POST /invoke` itself. `--no-invoke` is the same choice for one run — prefer the flag when the reason is temporary (a `dev --tunnel` session), since this value travels into a deployed image. |
 | `selfSchedule` | `false` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
-| `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; `start` binds all interfaces by default, so the routes are LAN-reachable with the token as the only protection — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or wrap it (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, so the token comes from outside instead: set `FASTAGENT_CONTROL_TOKEN` as a deploy secret (`deploy` lists it and warns) and the serve uses that value rather than minting one nothing outside can read. |
+| `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. **It is unauthenticated, like every other route fastagent serves.** `start` binds all interfaces by default, so the routes are reachable by anyone who can reach the port — bind loopback (`--bind 127.0.0.1` — not `http.host`, which travels into a deployed image), firewall the port, or front it with a gateway (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, which is what the deploy warning is about. |
 | `deploy.secrets` | `[]` | Secret env-var names **no code declares** — a value read outside `tools/`/`schedules/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and, under `--run`, read from the agent's `.secrets/.env` — the file that declares the deployed environment — and set on the host; a missing value gates the run. Exporting the variable in your shell does not reach the deployment (in CI, write the file before running the command). |
 | `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM, 60–1209600 seconds. Default `180`. Memory bills for the whole idle tail and a session past it cold-starts, so the workload picks the trade — raise it for a chat agent talked to in bursts, lower it for a schedule-only one. Changing it changes the generated template, so an existing `agentcore.template.yaml` needs `--force` to pick it up — and `--run` refuses to deploy from the stale one. See [AgentCore](deploy.md#aws-bedrock-agentcore). |
 | `deploy.apt` | `[]` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
@@ -263,23 +265,31 @@ start: --bind > fastagent.config.ts http.host > all interfaces
 ```
 
 `localhost` is accepted and resolved to `127.0.0.1` as it is read, so what binds, what the startup
-lines print and what `control.json` records are the same address — a name would leave that to
+lines print are the same address — a name would leave that to
 `dns.lookup` on one side and to the client's resolver on the other, which can disagree.
 
 The chain is one; only its last rung differs, because the two commands sit in different places.
 `start` is the container/server posture, where all interfaces is what makes the port reachable at all.
 `dev` runs on a laptop, on networks its author does not own, and serves the agent's full tool
 authority — so it ends at loopback, and `--bind 0.0.0.0` gives back the reach a container, a phone on
-the LAN, or a colleague needs. `<stateRoot>/control.json` records the address a client should dial,
-so clients read it rather than assume one.
+the LAN, or a colleague needs.
 
-**FastAgent does not provide a security boundary, and a default cannot be one.** The built-in
-`POST /invoke` has no authentication; author-written `tools/` can import anything; a WebSocket or
+**FastAgent does not provide a security boundary, and a default cannot be one.** Nothing it serves is
+authenticated — `POST /invoke` and `/control/*` alike; author-written `tools/` can import anything; a WebSocket or
 Socket-Mode channel dials OUT, so no bind address constrains who can message the agent. Whoever can
 reach an agent can use everything it mounts. A bind address decides who can reach the port by
 accident, nothing more. Authentication belongs where the request is still a request: a channel's own
-handler (declaring any channel also replaces the built-in `/invoke`), or your host framework's
-middleware when you [embed](embedding.md) — that is where the boundary lives.
+handler, or your host framework's middleware when you [embed](embedding.md) — that is where the
+boundary lives. `POST /invoke` is served whatever channels a definition declares, so it is on every
+deployment; a channel may not take that path.
+
+A browser gets no special treatment either: the cross-origin default is `*` on every bind, because who
+may reach this port is your decision and not one we can read off the address it bound. That means any
+page your users visit can call the port from their browser and read the reply — including a loopback
+`dev` serve, where a bind address stops another machine but not your own browser. `http.cors` is the
+only way to narrow it, and `--bind 127.0.0.1` still takes the port off the network for everything
+except that browser. Our routes refuse a body that is not `application/json` whatever the origin,
+which is what stops a cross-origin write that skips the preflight.
 
 Two edges: `--tunnel` reaches the serve by dialing `localhost`, so a bind that name never resolves to
 (`--bind 192.168.1.5`, or even `--bind 127.0.0.2`) is refused with it; and `http.host` travels into a deployed image, where any non-wildcard bind

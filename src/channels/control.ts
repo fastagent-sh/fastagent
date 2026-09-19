@@ -1,5 +1,13 @@
-/** The session control plane over HTTP + SSE (docs/design/session-control.md §13). */
-import type { ImageRef, Prompt, Agent } from "../agent.ts";
+/**
+ * The session control plane over HTTP + SSE (docs/design/session-control.md §13) — PURE control: inspect, steer,
+ * abort, rewrite a session. Running a turn is the DATA plane's (`POST /invoke`), not this prefix's.
+ *
+ * UNAUTHENTICATED, like every other route this process serves. Authentication is the deployment's: a gateway, a
+ * private network, AgentCore's IAM, or an embedder's own middleware. The bearer token this plane used to mint was
+ * the only thing in the tree that pretended otherwise, and it protected one prefix while `POST /invoke` next to it
+ * was open — a scheme that has to be remembered per route is one that will be forgotten per route.
+ */
+import type { ImageRef, Prompt } from "../agent.ts";
 import {
   INVALID_COMMAND_CODE,
   SESSIONS_UNAVAILABLE_CODE,
@@ -14,10 +22,9 @@ import type { ChannelHandler } from "../channel.ts";
 import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
-import { MAX_BODY_BYTES, createInvokeHandler } from "./http.ts";
+import { MAX_BODY_BYTES } from "./http.ts";
 import { sseResponse } from "./sse.ts";
 import { text } from "./respond.ts";
-import { secretEquals } from "./secret.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
 const CONTROL_PREFIX = "/control";
@@ -25,16 +32,16 @@ const CONTROL_PREFIX = "/control";
 /** The one variable segment in this plane's paths: a percent-encoded session id. */
 const SESSION_SEGMENT = "{session}";
 
-/** A plane handler: the request, plus the session id the path named (`""` where the path has none). */
-type PlaneHandler = (req: Request, session: string) => Response | Promise<Response>;
+/**
+ * A plane handler: the request, its URL (for query parameters), and the session id the path named (`""` where the
+ * path has none).
+ */
+type PlaneHandler = (req: Request, url: URL, session: string) => Response | Promise<Response>;
 
 /**
  * The plane's route table: `"<METHOD> <path>"` → handler, where at most one path segment is {@link SESSION_SEGMENT}.
  */
 export type PlaneRoutes = Record<string, PlaneHandler>;
-
-/** The token, when the DEPLOYER owns it rather than the box (`mountSessionControl` reads it, `deploy` carries it). */
-export const CONTROL_TOKEN_ENV = "FASTAGENT_CONTROL_TOKEN";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
 export interface WireEvent {
@@ -88,26 +95,15 @@ function planeApp(routes: PlaneRoutes): ChannelHandler {
     }
     return hits;
   };
-  // Per PATH, stating what it actually serves — omitting a method it does serve has the browser refuse a call that
-  // would have worked.
-  const allowMethods = (hits: ReturnType<typeof match>, requested: string | null) => {
-    const methods = new Set(hits.flatMap((h) => (h.route.method ? [h.route.method] : [])));
-    if (methods.has("GET")) methods.add("HEAD");
-    // The requested method is always allowed, even where this path does not serve it.
-    if (requested) methods.add(requested.toUpperCase());
-    return [...methods, "OPTIONS"].join(", ");
-  };
-
   return async (req) => {
-    const path = new URL(req.url).pathname;
+    const url = new URL(req.url);
+    const path = url.pathname;
     const hits = match(path);
     const answer = async (): Promise<Response> => {
-      // A preflight carries no token — that is its purpose.
-      if (req.method === "OPTIONS") return new Response(null, { status: 204 });
       const hit =
         hits.find((h) => h.route.method === req.method) ??
         (req.method === "HEAD" ? hits.find((h) => h.route.method === "GET") : undefined);
-      if (hit) return await hit.route.handler(req, hit.session ?? "");
+      if (hit) return await hit.route.handler(req, url, hit.session ?? "");
       // 404 vs 405 as in the host router: a client reads 404 as "this serve predates the route".
       if (hits.length > 0) return text("method not allowed\n", 405);
       return text("not found\n", 404);
@@ -123,13 +119,8 @@ function planeApp(routes: PlaneRoutes): ChannelHandler {
       log.error(`[control] ${req.method} ${path} failed: ${String(error)}`);
       res = text("internal error\n", 500);
     }
-    // THE single exit. Every reply above — route, preflight, 404, 405, 500 — leaves through here.
-    res.headers.set("access-control-allow-origin", "*");
-    res.headers.set("access-control-allow-headers", "authorization, content-type");
-    res.headers.set(
-      "access-control-allow-methods",
-      allowMethods(hits, req.headers.get("access-control-request-method")),
-    );
+    // CORS is NOT set here: the host router owns that verdict for every path it publishes, this prefix included
+    // (channels/serve.ts). A second writer of those headers is a second policy to keep in sync.
     return res;
   };
 }
@@ -228,19 +219,9 @@ function parseWireUpdate(raw: unknown): { patch: SessionUpdate } | { code: strin
   return { patch };
 }
 
-export interface ControlPlaneOptions {
-  /** Shared bearer secret, required on every route. */
-  token: string;
-  /**
-   * The DATA plane over the wire: when provided, `POST /control/invoke` mounts the standard invoke handler behind the
-   * same bearer token.
-   */
-  agent?: Agent;
-}
-
 /** Create the control plane as a mountable prefix owner. */
-export function createControlPlane(control: SessionControl, options: ControlPlaneOptions): PrefixMount {
-  return mountControlPlane(controlPlaneRoutes(control, options));
+export function createControlPlane(control: SessionControl): PrefixMount {
+  return mountControlPlane(controlPlaneRoutes(control));
 }
 
 /**
@@ -251,27 +232,15 @@ export function mountControlPlane(routes: PlaneRoutes): PrefixMount {
   return { prefix: CONTROL_PREFIX, handler: planeApp(routes) };
 }
 
-export function controlPlaneRoutes(control: SessionControl, options: ControlPlaneOptions): PlaneRoutes {
-  const { token } = options;
-  if (!token) throw new Error("createControlPlane: a bearer token is required (empty tokens are not a mode)");
+export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
   const epoch = crypto.randomUUID();
 
-  // The bearer token is this surface's ONLY auth (and the --tunnel warning names it as the sole protection on a
-  // public URL).
-  const expected = `Bearer ${token}`;
-  const authed = (req: Request): boolean => secretEquals(req.headers.get("authorization"), expected);
-  const invokeHandler = options.agent ? createInvokeHandler(options.agent) : undefined;
   /**
-   * Authenticate, then hand the handler the pieces every route wants: the request, the URL (for query parameters), and
-   * the session the PATH named.
+   * Read a JSON body under the shared cap.
+   *
+   * No content-type gate here: this plane only ever rides the host router, which applies it to every route that
+   * authenticates nobody — this whole prefix included (channels/serve.ts).
    */
-  const guard =
-    (handler: (req: Request, url: URL, session: string) => Response | Promise<Response>): PlaneHandler =>
-    (req, session) => {
-      if (!authed(req)) return text("unauthorized\n", 401);
-      return handler(req, new URL(req.url), session);
-    };
-  /** Read a JSON body under the shared cap. */
   const readJson = async (req: Request): Promise<{ value: unknown } | { error: Response }> => {
     const body = await readBodyCapped(req, ACTION_BODY_LIMIT);
     // The 413 names the ceiling: the docs promise images on this plane, and an unexplained rejection would send a
@@ -292,15 +261,12 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
   };
 
   return {
-    // The DATA plane, at the prefix rather than under a session.
-    ...(invokeHandler ? { "POST /control/invoke": guard((req) => invokeHandler(req)) } : {}),
+    "GET /control/capabilities": () => json(control.capabilities()),
 
-    "GET /control/capabilities": guard(() => json(control.capabilities())),
-
-    "GET /control/commands": guard(async () => json(await control.commands())),
+    "GET /control/commands": async () => json(await control.commands()),
 
     // The DEPLOYMENT's conversation list — and the one read that may fail.
-    "GET /control/sessions": guard(async () => {
+    "GET /control/sessions": async () => {
       try {
         return json(await control.sessions.list());
       } catch (error) {
@@ -312,10 +278,10 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
         log.error(`[control] GET /control/sessions failed: ${String(error)}`);
         return json({ code: SESSIONS_UNAVAILABLE_CODE, message: String(error), retryable: true }, 503);
       }
-    }),
+    },
 
     // PUT, because a fork is idempotent: this id, holding the history that was at `from`@`at`.
-    [`PUT /control/sessions/${SESSION_SEGMENT}`]: guard(async (req, _url, session) => {
+    [`PUT /control/sessions/${SESSION_SEGMENT}`]: async (req, _url, session) => {
       const read = await readJson(req);
       if ("error" in read) return read.error;
       // `JSON.parse("null")` is null, and a body is whatever the client sent: reaching into it unguarded turns a
@@ -325,14 +291,13 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
         return text("expected { from: string, at: string }\n", 400);
       }
       return json(await control.sessions.fork({ from: body.from, at: body.at, into: session }));
-    }),
+    },
 
-    [`GET /control/sessions/${SESSION_SEGMENT}`]: guard(async (_req, _url, session) =>
+    [`GET /control/sessions/${SESSION_SEGMENT}`]: async (_req, _url, session) =>
       json(await control.sessions.get(session).state()),
-    ),
 
     // PATCH, because these are session PROPERTIES: last-wins, durable, applied by the next turn.
-    [`PATCH /control/sessions/${SESSION_SEGMENT}`]: guard(async (req, _url, session) => {
+    [`PATCH /control/sessions/${SESSION_SEGMENT}`]: async (req, _url, session) => {
       const read = await readJson(req);
       if ("error" in read) return read.error;
       const parsed = parseWireUpdate(read.value);
@@ -341,19 +306,18 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
         return json({ ok: false, error: { ...parsed, retryable: false } });
       }
       return json(await control.sessions.get(session).update(parsed.patch));
-    }),
+    },
 
-    [`DELETE /control/sessions/${SESSION_SEGMENT}`]: guard(async (_req, _url, session) =>
+    [`DELETE /control/sessions/${SESSION_SEGMENT}`]: async (_req, _url, session) =>
       json(await control.sessions.get(session).delete()),
-    ),
 
-    [`GET /control/sessions/${SESSION_SEGMENT}/entries`]: guard(async (_req, url, session) => {
+    [`GET /control/sessions/${SESSION_SEGMENT}/entries`]: async (_req, url, session) => {
       const since = url.searchParams.get("since") ?? undefined;
       return json(await control.sessions.get(session).entries(since !== undefined ? { since } : undefined));
-    }),
+    },
 
     // The run actions.
-    [`POST /control/sessions/${SESSION_SEGMENT}/actions`]: guard(async (req, _url, session) => {
+    [`POST /control/sessions/${SESSION_SEGMENT}/actions`]: async (req, _url, session) => {
       const read = await readJson(req);
       if ("error" in read) return read.error;
       const action = parseWireAction(read.value);
@@ -376,9 +340,9 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
         case "compact":
           return json(await s.compact(action.instructions !== undefined ? { instructions: action.instructions } : {}));
       }
-    }),
+    },
 
-    [`GET /control/sessions/${SESSION_SEGMENT}/events`]: guard((_req, _url, session) => {
+    [`GET /control/sessions/${SESSION_SEGMENT}/events`]: (_req, _url, session) => {
       let seq = 0;
       return sseResponse(
         control.sessions.get(session).events(),
@@ -389,6 +353,6 @@ export function controlPlaneRoutes(control: SessionControl, options: ControlPlan
           event,
         }),
       );
-    }),
+    },
   };
 }

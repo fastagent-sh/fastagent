@@ -5,10 +5,10 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { Agent } from "./agent.ts";
-import { CONTROL_TOKEN_ENV, createControlPlane } from "./channels/control.ts";
+import { createControlPlane } from "./channels/control.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
-import { parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
+import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
@@ -62,27 +62,47 @@ function closeWithin(
 }
 
 export interface ServingSurface {
-  routes: Routes;
+  /**
+   * The routes that AUTHENTICATE NOBODY — `POST /invoke` and `GET /health`, minus what a channel took over or
+   * `http.invoke: false` withheld. Kept APART from the channels' rather than merged with a list of which keys are
+   * which: three separate decisions read this (browser reachability, the JSON body gate, what the startup line
+   * calls unauthenticated), and while it was a derived list each of them could answer differently.
+   */
+  unverified: Routes;
+  /**
+   * What the `channels/` files serve. Exempt from both guards because a channel checks its platform's signature
+   * inside itself — an assumption about the author for a CUSTOM channel, not a property we enforce (§14).
+   */
+  selfVerifying: Routes;
   /** Prefix-owning handlers mounted beside the routes (the session control plane). */
   mounts?: readonly PrefixMount[];
   longConnections: LoadedLongConnectionChannel[];
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
-  builtinInvoke: boolean;
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
 
 /**
- * The surface this deployment serves: default `GET /health` plus discovered channels, or the default POST `/invoke`
- * only when neither a route nor a long-connection channel was declared.
+ * The surface this deployment serves: the DATA plane (`POST /invoke`), `GET /health`, and the discovered channels.
+ *
+ * `/invoke` is the framework's interface, so it is always there — it used to appear only when a definition declared
+ * NO channel, which made "can I curl this deployment" depend on whether someone had added telegram. It is RESERVED
+ * for the same reason `/control/*` is: a channel taking that path would silently replace the one route every client,
+ * every doc and the startup line all name. `/health` stays overridable — a probe is the deployment's to shape.
  */
 export async function routesFor(
   agentDir: string,
   agent: Agent,
   stateRoot: string,
   control: SessionControl | undefined,
-  options: { builtinInvoke?: boolean } = {},
+  /**
+   * `serveInvoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
+   * Runtime's `/invocations` contract instead, and an author sets `http.invoke: false` to leave the channels'
+   * signature checks as the only way into a public port. Named for the config key it carries, not for the
+   * "built-in fallback" it once withheld — that concept is gone.
+   */
+  options: { serveInvoke?: boolean } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -96,20 +116,41 @@ export async function routesFor(
   if (collisions.length > 0) {
     throw new Error(`${collisions.length} channel route collision(s) — two channels cannot serve one route`);
   }
-  const builtinInvoke =
-    options.builtinInvoke !== false && Object.keys(routes).length === 0 && longConnections.length === 0;
-  const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
-  const healthCovered = Object.keys(channels).some((key) => {
-    const entry = parseRouteKey(key);
-    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
-  });
+  /**
+   * Which channel key already serves this path for the method a built-in would answer — the CHANNEL's spelling, not
+   * ours. A channel may write the method-less `"/invoke"`, and an error naming `"POST /invoke"` sends its author
+   * grepping their own file for a string that is not in it.
+   */
+  const covered = (path: string, method: string): string | undefined =>
+    Object.keys(routes).find((key) => {
+      const entry = parseRouteKey(key);
+      return entry.path === path && (entry.method === undefined || entry.method === method);
+    });
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
+  // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
+  // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
+  const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
+  if (options.serveInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
+  // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
+  // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
+  // channel already serves it, because a probe is the deployment's to shape.
+  const taken = Object.keys(unverified).flatMap((key) => {
+    const entry = parseRouteKey(key);
+    const channelKey = covered(entry.path, entry.method ?? "");
+    return channelKey === undefined ? [] : [{ channelKey, key }];
+  });
+  if (taken.length > 0) {
+    throw new Error(
+      `channel route(s) ${taken.map((t) => `"${t.channelKey}"`).join(", ")} take a path this serve answers on ` +
+        `itself (${taken.map((t) => `"${t.key}"`).join(", ")}) — rename the channel route`,
+    );
+  }
   return {
-    routes: healthCovered ? channels : { "GET /health": health, ...channels },
+    unverified,
+    selfVerifying: routes,
     longConnections,
     routeChannels,
-    builtinInvoke,
     setReady(value: boolean) {
       ready = value;
     },
@@ -130,36 +171,16 @@ export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: Pref
 export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
-  options: { agent?: Agent } = {},
 ): {
   routes: Routes;
   mounts: PrefixMount[];
-  /**
-   * The plane's bearer token and prefix — how a caller distributes access (the CLI writes it to
-   * `<stateRoot>/control.json` for local discovery; an embedder hands it out itself).
-   */
-  control?: { token: string; prefix: string };
+  /** The prefix the plane owns, when it is published — what a startup line names. */
+  controlPrefix?: string;
 } {
   if (!control) return { routes, mounts: [] };
-  // WHO OWNS the secret.
-  const injected = process.env[CONTROL_TOKEN_ENV]?.trim();
-  // SET BUT EMPTY is the deployed default, not an edge case.
-  if (injected === "") {
-    log.warn(
-      `[fastagent] ${CONTROL_TOKEN_ENV} is set but empty — minting a per-boot token instead; callers holding ` +
-        "the deploy-time value will get 401 (set it, or read the minted one from control.json on the box)",
-    );
-  } else if (injected !== undefined && injected.length < 16) {
-    // Length is a crude proxy for entropy — sixteen `a`s pass.
-    log.warn(
-      `[fastagent] ${CONTROL_TOKEN_ENV} is ${injected.length} characters — it is the ONLY thing between ` +
-        "/control/* (steer, stop, rewrite a session) and anyone who can reach the port; use a random value (uuidgen)",
-    );
-  }
-  const token = injected || crypto.randomUUID();
-  const plane = createControlPlane(control, { token, agent: options.agent });
+  const plane = createControlPlane(control);
   assertNoControlPlaneCollision(routes, plane);
-  return { routes, mounts: [plane], control: { token, prefix: plane.prefix } };
+  return { routes, mounts: [plane], controlPrefix: plane.prefix };
 }
 
 /** Load and start the agent's `schedules/` — a time-trigger firing the agent on each cron. */
@@ -201,17 +222,28 @@ export interface AgentService {
   agentDir: string;
   workspace: string;
   /**
-   * What actually mounted, for a startup line: channel files serving routes, long connections, and whether the
-   * built-in `POST /invoke` fallback is one of the routes.
+   * What actually mounted, for a startup line: channel files serving routes, and long connections.
    */
-  channels: { routes: string[]; longConnections: string[]; builtinInvoke: boolean };
+  channels: { routes: string[]; longConnections: string[] };
+  /**
+   * The route keys on this port that AUTHENTICATE NOBODY — `POST /invoke` and `GET /health`, minus what a channel
+   * took over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
+   * `routes` instead answers a different question, since a channel may serve one of those paths with a protocol of
+   * its own. That mistake ran in both directions here — a try-it curl for a route that 404s, and a warning about an
+   * unauthenticated `/invoke` that was really a signature-checked channel.
+   */
+  unverifiedRoutes: readonly string[];
+  /**
+   * The cross-origin allow-list this service was assembled with (`http.cors`), or `undefined` for the `*` default.
+   * Read by the startup report for the same reason as {@link AgentService.unverifiedRoutes}: what a caller says
+   * about this surface must come from what was actually assembled, not from re-deriving it.
+   */
+  corsOrigins?: readonly string[];
   schedules: readonly LoadedSchedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
-  /**
-   * The control plane's bearer token and prefix, when `sessionControl` is on — how a caller hands access to a client.
-   */
-  control?: { token: string; prefix: string };
+  /** The control plane's prefix, when `sessionControl` is on. */
+  controlPrefix?: string;
   /**
    * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
    * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
@@ -252,6 +284,17 @@ export interface MountableAgent {
   publishControl: boolean;
   /** Whether the agent schedules its own follow-up turns. */
   selfSchedule: boolean;
+  /**
+   * The origins a browser may call this serve from (`http.cors`). Unset is the default, which answers EVERY origin
+   * — see `channels/serve.ts`; setting this is the only way to narrow it, and an empty list is refused.
+   */
+  corsOrigins?: readonly string[];
+  /**
+   * Serve the data plane, `POST /invoke` (`http.invoke`; default true). The OFF switch for a deployment whose port
+   * is public and whose channels' signature checks are meant to be the only way in — the route is unauthenticated
+   * and runs a turn with the agent's full tool authority.
+   */
+  serveInvoke?: boolean;
 }
 
 /**
@@ -267,13 +310,21 @@ export async function mountAgentService(
   // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
+  // The embedder's way in, checked like the config file's (`http.cors`): `allowedOrigin` compares exact strings, so
+  // a stray trailing slash would refuse the front end with nothing naming the rule.
+  if (opened.corsOrigins) assertCorsOrigins(opened.corsOrigins, "mountAgentService: corsOrigins");
 
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { builtinInvoke: true });
-  const withControl = mountSessionControl(routed.routes, opened.publishControl ? sessionControl : undefined, {
-    agent,
+  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
+    ...(opened.serveInvoke !== undefined ? { serveInvoke: opened.serveInvoke } : {}),
   });
+  const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
-  const handler = router(withControl.routes, withControl.mounts);
+  const handler = router({
+    unverified: routed.unverified,
+    selfVerifying: withControl.routes,
+    mounts: withControl.mounts,
+    ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+  });
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();
@@ -399,17 +450,18 @@ export async function mountAgentService(
         return {
           handler,
           agent,
-          routes: withControl.routes,
+          routes: { ...routed.unverified, ...withControl.routes },
           agentDir,
           workspace,
           channels: {
             routes: routed.routeChannels,
             longConnections: names,
-            builtinInvoke: routed.builtinInvoke,
           },
+          unverifiedRoutes: Object.keys(routed.unverified),
+          ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
           schedules: scheduled.schedules,
           ready,
-          ...(withControl.control ? { control: withControl.control } : {}),
+          ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
           close,
         };
       }).pipe(

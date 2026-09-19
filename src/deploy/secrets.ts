@@ -1,5 +1,4 @@
 /** The secret set a deployed agent needs, computed from the definition — host-neutral. */
-import { CONTROL_TOKEN_ENV } from "../channels/control.ts";
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { CHANNEL_KINDS, type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
@@ -41,18 +40,13 @@ export function deploymentSecrets(
   // runbook, and two tools declaring the same name are one secret.
   for (const { name, source } of dedupeSecrets(extraSecrets)) {
     if (!secrets.some((s) => s.name === name)) {
-      const control = name === CONTROL_TOKEN_ENV;
       secrets.push({
         name,
         // The SOURCE, not a fixed sentence: a declared name now comes from wherever it was declared
         // (a tool, a schedule, the config list), and the runbook's reader is the person who has to
         // find the value — pointing at the wrong file is worse than pointing at none.
-        hint: control
-          ? "the /control/* bearer token — mint one (uuidgen) and give the same value to callers"
-          : `required by ${source}`,
-        // OPTIONAL, unlike every other extra: unset, the box mints a per-boot token and still serves, and every host
-        // with a shell can read it back out of control.json.
-        required: !control,
+        hint: `required by ${source}`,
+        required: true,
       });
     }
   }
@@ -120,8 +114,7 @@ export function assembleSecrets(input: {
     if (name in secrets || missingSecrets.includes(name)) continue; // already covered by model/channel — no dup
     const v = input.values.get(name);
     if (v) secrets[name] = v;
-    // The control token is CARRIED, never gated.
-    else if (name !== CONTROL_TOKEN_ENV) missingSecrets.push(name);
+    else missingSecrets.push(name);
   }
   return { secrets, missingSecrets, needsModelCredential };
 }

@@ -8,6 +8,9 @@ import { fauxAgent } from "./agent.ts";
 
 const makeAgent = (responses: FauxResponseStep[]): Agent => fauxAgent(responses).agent;
 
+/** The data plane refuses a body it was not told is JSON (channels/body.ts) — every caller declares it. */
+const JSON_HEADERS = { "content-type": "application/json" } as const;
+
 /** Drive the Fetch handler directly (no server) and parse SSE lines into AgentEvent[]. */
 async function invoke(
   handler: (req: Request) => Promise<Response>,
@@ -15,7 +18,11 @@ async function invoke(
   text: string,
 ): Promise<AgentEvent[]> {
   const res = await handler(
-    new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session, text }) }),
+    new Request("http://app/invoke", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ session, text }),
+    }),
   );
   expect(res.headers.get("content-type")).toBe("text/event-stream");
   const body = await res.text();
@@ -41,7 +48,9 @@ describe("invoke handler (Fetch/SSE)", () => {
     // The constant's contract: it lives next to the shape check and must keep passing it — this test
     // is what actually prevents the curl hint from drifting when the protocol changes.
     const handler = createInvokeHandler(makeAgent([fauxAssistantMessage("ok")]));
-    const res = await handler(new Request("http://app/invoke", { method: "POST", body: INVOKE_EXAMPLE_BODY }));
+    const res = await handler(
+      new Request("http://app/invoke", { method: "POST", headers: JSON_HEADERS, body: INVOKE_EXAMPLE_BODY }),
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
@@ -89,11 +98,61 @@ describe("invoke handler (Fetch/SSE)", () => {
   it("non-POST returns 405; bad/missing body returns 400", async () => {
     const handler = createInvokeHandler(makeAgent([fauxAssistantMessage("x")]));
     expect((await handler(new Request("http://app/invoke", { method: "GET" }))).status).toBe(405);
-    expect((await handler(new Request("http://app/invoke", { method: "POST", body: "{not json" }))).status).toBe(400);
     expect(
-      (await handler(new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s" }) })))
+      (await handler(new Request("http://app/invoke", { method: "POST", headers: JSON_HEADERS, body: "{not json" })))
         .status,
     ).toBe(400);
+    expect(
+      (
+        await handler(
+          new Request("http://app/invoke", {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ session: "s" }),
+          }),
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  it("a body that does not declare JSON never reaches the agent — the cross-origin write gate", async () => {
+    // THE reason a foreign origin can simply be left unanswered instead of refused. A cross-origin
+    // POST carrying text/plain (or a form's multipart) is a CORS *simple request*: no preflight, sent
+    // regardless, and withholding the response headers only stops the page from READING a turn that
+    // has already run and been billed. Demanding application/json takes it out of that class, so the
+    // browser must preflight — and a preflight we do not answer is a request never sent.
+    let ran = 0;
+    const handler = createInvokeHandler({
+      invoke: () => {
+        ran++;
+        return (async function* () {
+          yield { type: "completed" as const };
+        })();
+      },
+    });
+    const body = JSON.stringify({ session: "s", text: "hi" });
+    for (const contentType of ["text/plain", "multipart/form-data", "application/x-www-form-urlencoded", undefined]) {
+      const res = await handler(
+        new Request("http://app/invoke", {
+          method: "POST",
+          ...(contentType ? { headers: { "content-type": contentType } } : {}),
+          body,
+        }),
+      );
+      expect({ contentType, status: res.status, ran }).toEqual({ contentType, status: 415, ran: 0 });
+    }
+    // Asked of the ROUTE, not of "does this have a body": a body-less POST is refused too.
+    expect((await handler(new Request("http://app/invoke", { method: "POST" }))).status).toBe(415);
+    // …and the parameters browsers attach are part of the header, not a different media type.
+    const ok = await handler(
+      new Request("http://app/invoke", {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body,
+      }),
+    );
+    expect({ status: ok.status, ran }).toEqual({ status: 200, ran: 1 });
+    await ok.body?.cancel();
   });
 
   it("oversized body returns 413 before invoke and counts real bytes, not JS characters", async () => {
@@ -101,6 +160,7 @@ describe("invoke handler (Fetch/SSE)", () => {
     const big = await handler(
       new Request("http://app/invoke", {
         method: "POST",
+        headers: JSON_HEADERS,
         body: JSON.stringify({ session: "s", text: "x".repeat(2 * 1024 * 1024) }),
       }),
     );
@@ -109,6 +169,7 @@ describe("invoke handler (Fetch/SSE)", () => {
     const multibyte = await handler(
       new Request("http://app/invoke", {
         method: "POST",
+        headers: JSON_HEADERS,
         body: JSON.stringify({ session: "s", text: "🙂".repeat(400_000) }),
       }),
     );
@@ -139,7 +200,11 @@ describe("invoke handler (Fetch/SSE)", () => {
     };
     const handler = createInvokeHandler(fake);
     const res = await handler(
-      new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s", text: "hi" }) }),
+      new Request("http://app/invoke", {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ session: "s", text: "hi" }),
+      }),
     );
     const reader = res.body!.getReader();
     await reader.read(); // stream has started
@@ -180,6 +245,7 @@ describe("nodeListener (embedded server bridge)", () => {
     try {
       const res = await fetch(`${srv.url}/invoke`, {
         method: "POST",
+        headers: JSON_HEADERS,
         body: JSON.stringify({ session: "s", text: "hi" }),
       });
       const body = await res.text();
@@ -250,6 +316,7 @@ describe("nodeListener (embedded server bridge)", () => {
       const controller = new AbortController();
       const res = await fetch(`http://localhost:${port}/invoke`, {
         method: "POST",
+        headers: JSON_HEADERS,
         body: JSON.stringify({ session: "s", text: "hi" }),
         signal: controller.signal,
       });

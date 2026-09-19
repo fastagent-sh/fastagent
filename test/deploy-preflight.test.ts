@@ -675,10 +675,36 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (!run.ok) expect(run.gate).toMatch(/tools\/broken\.mjs failed to load.*would refuse to start/);
   });
 
-  it("sessionControl carries the plane's token as a deploy secret — a minted one is unreadable off-box", async () => {
+  it("sessionControl needs no secret of ours — it warns that the deployed plane is unauthenticated", async () => {
     const dir = await workspace();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(off.ok && off.extraSecrets).toEqual([]); // no plane, no secret
+    expect(off.ok && off.extraSecrets).toEqual([]);
+    // WITHOUT the control plane the warning still fires, naming `POST /invoke`: it is on every
+    // deployment whatever channels are declared, and conditioning this on `sessionControl` left a
+    // telegram-only agent publishing "run a turn with my tools" on a public URL in silence.
+    const unauthenticated = (pre: Awaited<ReturnType<typeof call>>) =>
+      pre.ok ? pre.messages.filter((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text)) : [];
+    const anonymous = unauthenticated(off);
+    expect(anonymous).toHaveLength(1);
+    expect(anonymous[0]?.text).toContain("POST /invoke");
+    expect(anonymous[0]?.text).not.toContain("/control/*");
+    // …and NOT on a host that publishes no URL at all: the AgentCore container is reachable only
+    // through the Runtime's IAM and the forwarder's shared secret. A warning about a public endpoint
+    // that does not exist is how an operator learns to skim past every deploy warning.
+    expect(unauthenticated(await call(dir, { model: "openai/gpt-4o-mini" }, { publicUrl: false }))).toEqual([]);
+
+    // The same rule applied to the definition, not just the host: `http.invoke: false` withholds the
+    // one endpoint this warning would otherwise name, so with no control plane either there is
+    // nothing left to warn about.
+    const withheld = await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false } });
+    expect(unauthenticated(withheld)).toEqual([]);
+    // With the control plane on, the warning stands — naming only what is actually served.
+    const controlOnly = unauthenticated(
+      await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false }, sessionControl: true }),
+    );
+    expect(controlOnly).toHaveLength(1);
+    expect(controlOnly[0]?.text).toContain("/control/*");
+    expect(controlOnly[0]?.text).not.toContain("POST /invoke");
 
     const on = await call(dir, {
       model: "openai/gpt-4o-mini",
@@ -687,11 +713,10 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     });
     expect(on.ok).toBe(true);
     if (on.ok) {
-      expect(on.extraSecrets).toEqual([
-        { name: "GH_TOKEN", source: "fastagent.config deploy.secrets" },
-        { name: "FASTAGENT_CONTROL_TOKEN", source: "fastagent.config sessionControl" },
-      ]);
-      expect(on.messages.some((m) => m.level === "warn" && /FASTAGENT_CONTROL_TOKEN/.test(m.text))).toBe(true);
+      // Only what the DEFINITION declared: fastagent mints no credential of its own any more.
+      expect(on.extraSecrets).toEqual([{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }]);
+      // The operator still has to hear it, because the plane rides the PUBLIC host URL.
+      expect(on.messages.some((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text))).toBe(true);
     }
   });
 });
