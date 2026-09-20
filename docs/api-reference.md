@@ -589,10 +589,19 @@ The route follows `http.invoke`: turning the anonymous turn endpoint off takes t
 that is what `http.invoke: false` means. `http.trigger: true` is the exception for a port that has no
 `/invoke` but does have an external clock.
 
-The reply is the fire's outcome — `{ slot, fired, skippedReason?, failed?, ms }`, where `slot` is the
-occurrence that was claimed. `fired: false` with a `skippedReason` means no work was needed: the
-occurrence was already claimed (a redelivery, or the resident clock got there first), the state root
-has moved past it, or it is past its freshness window. All are successful DELIVERIES, which is why
+The reply is the fire's outcome — `{ slot, fired, skippedReason?, skipped?, failed?, ms }`, where
+`slot` is the occurrence that was claimed. `fired: false` with a `skippedReason` means no turn ran:
+the occurrence was already claimed (a redelivery, or the resident clock got there first), the state
+root has moved past it, it is past its freshness window, or the previous turn of this schedule is
+still running (`skipped: true` — the overlap policy, recorded as `skipped` rather than `failed`, since
+"the last run was still going" and "the model call died" are not the same event).
+
+`failed` means the turn RAN and did not finish. The occurrence is spent either way: the claim is the
+decision, so **a failed turn is not retried**. An agent turn has external side effects — a message
+sent, a file written — and nothing here can tell a failure before them from one after, so re-running
+it would duplicate whatever already landed. Transient model errors are the engine's own retry budget
+to absorb; by the time `failed` reaches this reply, that budget is spent. Look at it with
+`fastagent schedule history <name>`. All are successful DELIVERIES, which is why
 they are 200 — a clock that kept retrying a 4xx would hammer the route over an occurrence that is gone. A 404 names the
 schedules this deployment does have, so a stale rule is distinguishable from a typo. **The route is
 unauthenticated like everything else fastagent serves** — see [design §14](design/session-control.md).

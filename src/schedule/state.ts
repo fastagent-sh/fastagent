@@ -101,7 +101,16 @@ function listClaims(dir: string): string[] {
  * How a fired slot ended. There is no `deferred` or `stale` here because neither has a claim: a deferred wake-up was
  * never claimed, and a stale delivery is refused before one is taken. Both are log lines.
  */
-export type FireOutcome = "completed" | "failed" | "interrupted";
+/**
+ * How a claimed occurrence ended.
+ *
+ * `skipped` is NOT a failure and is the reason this is an enum rather than a boolean: a schedule's turns share one
+ * `schedule:<name>` session, so an occurrence arriving while the previous one is still running is refused by that
+ * session, and recording it as `failed` made "the last run was still going" indistinguishable from "the model call
+ * died" — two things an operator reacts to completely differently. Every scheduler names this: Kubernetes calls it
+ * `concurrencyPolicy: Forbid`, Temporal calls it the `Skip` overlap policy, and neither treats it as an error.
+ */
+export type FireOutcome = "completed" | "failed" | "skipped" | "interrupted";
 
 /** One fired slot, as its claim file records it. `outcome` absent = claimed, never settled. */
 export interface Fire {
@@ -113,7 +122,8 @@ export interface Fire {
   ms?: number;
 }
 
-const isOutcome = (s: unknown): s is FireOutcome => s === "completed" || s === "failed" || s === "interrupted";
+const isOutcome = (s: unknown): s is FireOutcome =>
+  s === "completed" || s === "failed" || s === "skipped" || s === "interrupted";
 
 /**
  * Read one claim file: `{"firedAt":"…"}`, plus `outcome` and `ms` once the turn has reported.

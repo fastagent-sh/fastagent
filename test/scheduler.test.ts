@@ -561,6 +561,38 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(readFires(root, "job")).toMatchObject([{ firedAt: "2026-07-07T10:00:03.000Z", outcome: "completed" }]);
   });
 
+  it("OVERLAP is `skipped`, not `failed` — the previous turn still running is a policy, not a fault", async () => {
+    // A schedule's turns share one `schedule:<name>` session, so an occurrence arriving while the
+    // previous one runs is refused by that session. Recording it as `failed` made "the last run was
+    // still going" indistinguishable from "the model call died" in `fastagent schedule history`, and
+    // handed a public `POST /trigger` caller a `failed` that is not one. Every scheduler names this
+    // instead: k8s `concurrencyPolicy: Forbid`, Temporal's `Skip` overlap policy.
+    const root = await freshRoot();
+    const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+
+    expect(outcome).toMatchObject({ fired: false, skipped: true });
+    expect(outcome.failed).toBeUndefined();
+    expect(String(outcome.skippedReason)).toContain("still running");
+    // The claim STANDS — this occurrence is decided and will not be retried — it just did not fail.
+    expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "skipped" }]);
+  });
+
+  it("a turn that really fails is `failed`, and its occurrence is spent either way", async () => {
+    // The boundary this pair draws. The claim is the DECISION, so a failed turn is not retried: an
+    // agent turn has external side effects (a message sent, a file written) and nothing here can tell
+    // a failure before them from one after. The engine's own retry budget is what covers a transient
+    // model error; by the time a `failed` event arrives, that budget is spent.
+    const root = await freshRoot();
+    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "upstream 500" }]);
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+
+    expect(outcome).toMatchObject({ fired: true, failed: "upstream 500" });
+    expect(outcome.skipped).toBeUndefined();
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "failed" }]);
+  });
+
   it("what the turn SAID is neither logged nor stored — it is already in the session", async () => {
     // #546 asked us to stop storing model output that nothing prunes. The reply is durable exactly once, in the
     // session this fire ran in (`schedule:job`, persisted under `<stateRoot>/sessions/` like any other): the claim

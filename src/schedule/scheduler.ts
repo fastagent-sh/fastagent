@@ -129,6 +129,12 @@ export interface ScheduleFireOutcome {
   /** A delivery whose slot was already claimed, or which is older than the newest claim (a stale replay). */
   skippedReason?: string;
   failed?: string;
+  /**
+   * The occurrence was claimed but the turn was refused because the previous one is still running — the overlap
+   * policy, not a fault. Reported apart from `failed` because an operator reacts to the two differently, and a
+   * clock that reads `failed` on a public route would be reading an error that is not one.
+   */
+  skipped?: true;
   ms: number;
 }
 
@@ -170,6 +176,18 @@ export function fireScheduleOnce(opts: {
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
     const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
+    // OVERLAP IS NOT FAILURE. The claim still stands — this occurrence is decided and will not be retried — but
+    // what decided it was the previous turn still holding `schedule:<name>`, which is the policy every scheduler
+    // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
+    if (r.busy) {
+      settleClaim(stateRoot, s.name, slot, "skipped", r.ms);
+      return {
+        fired: false,
+        skippedReason: `the previous turn of "${s.name}" is still running — this occurrence is skipped, the next fires per cron`,
+        skipped: true as const,
+        ms: r.ms,
+      };
+    }
     settleClaim(stateRoot, s.name, slot, r.failed ? "failed" : "completed", r.ms);
     return { fired: true, failed: r.failed, ms: r.ms };
   }).pipe(Effect.uninterruptible);
