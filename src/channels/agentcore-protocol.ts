@@ -10,7 +10,7 @@ export const RESERVED_PATHS = {
 } as const;
 
 /** Every kind the container's `POST /invocations` dispatches on. */
-export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke", "probe"] as const;
+export const ENVELOPE_KINDS = ["webhook", "routine-fire", "invoke", "wake-poke", "probe"] as const;
 
 /**
  * Did this envelope come from the FORWARDER, rather than from some other principal holding
@@ -21,7 +21,7 @@ export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke"
  * principal who could set it would redirect that callback and collect the secret along with every pending wake-up.
  *
  * The other thing it gates — the non-`invoke` kinds — is DEPTH, not a boundary. Every one of them is weaker than
- * the `invoke` the same caller may already send: `schedule-fire` runs a prompt the definition wrote down,
+ * the `invoke` the same caller may already send: `routine-fire` runs a prompt the definition wrote down,
  * `webhook` reaches only channel routes that verify their own platform's signature, `wake-poke` wakes, `probe`
  * reports. IAM is what decides who gets to ask at all.
  *
@@ -54,7 +54,7 @@ export type AgentcoreEnvelope = {
       bodyB64?: string;
     }
   | {
-      kind: "schedule-fire";
+      kind: "routine-fire";
       name: string;
       /**
        * The instant EventBridge scheduled this fire for — the clock's NAME for the occurrence, stable across its
@@ -101,7 +101,7 @@ export interface WakeAlarmRequest {
 /**
  * What EventBridge hands the forwarder when a cron rule fires: which schedule, and which occurrence of it.
  * `occurrence` is `<aws.scheduler.scheduled-time>` — the clock names its own fire, which is the only thing that
- * survives a retry (schedule/trigger.ts).
+ * survives a retry (schedule/run.ts).
  */
 export interface ScheduleFireEvent {
   scheduleFire: { name: string; occurrence: string };

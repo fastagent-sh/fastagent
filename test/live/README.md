@@ -53,7 +53,7 @@ removes must match what the fixture's branch actually creates.
 | `railway-deploy` | a REAL Railway project provisioned and destroyed — the only way to observe `railway domain`, which MINTS one when absent |
 | `agentcore` | CloudFormation ACCEPTING the YAML this repo emits by hand, forwarder and schedule branches included (read-only, free, and the only check that the template parses). Also what a missing stack SAYS, in both directions through `isMissingStack` — the wording that decides whether a deploy warns it is about to replace the agent's memory |
 | `agentcore-deploy` | a REAL stack + ECR repo + S3 bucket provisioned and destroyed. No public URL exists, so it proves the deployment works through `InvokeAgentRuntime`. Teardown is THREE places because the repo and runtime-created wake alarms live outside the stack on purpose, and it is ONE shared function in `env.ts` because a second copy of cleanup code drifts where nobody looks |
-| `agentcore-schedule` | a REAL EventBridge cron delivering to the container: that the container ACCEPTS the fire end to end (cold start, opened definition and model turn all inside one invocation) and runs the occurrence the clock named. Measured 2026-09-20: 7/7 deliveries `200 {"fired":true}`, every `slot` equal to the `<aws.scheduler.scheduled-time>` sent, 61.4s for the cold one and 23.5–24.5s in steady state — so the delivery always arrives AFTER its instant, which is what `POST /trigger`'s no-tolerance future-slot rule needs |
+| `agentcore-schedule` | a REAL EventBridge cron delivering to the container: that the container ACCEPTS the fire end to end (cold start, opened definition and model turn all inside one invocation) and runs the occurrence the clock named. Measured 2026-09-20: 7/7 deliveries `200 {"fired":true}`, every `slot` equal to the `<aws.scheduler.scheduled-time>` sent, 61.4s for the cold one and 23.5–24.5s in steady state — so the delivery always arrives AFTER its instant, which is what `POST /run`'s no-tolerance future-slot rule needs |
 | `agentcore-wake` | an agent SCHEDULING ITSELF on a host with no resident process: the wake tool's write becomes a POST to the forwarder becomes an EventBridge one-shot — three systems that must be simultaneously right and all silent from inside the agent when they are not. The FIRE is only weakly checked, via a self-deleting alarm's disappearance |
 
 ## What a probe deploys
@@ -64,7 +64,7 @@ checkout**, packed once per run by the `globalSetup` in `vitest.live.config.ts`.
 It used to be a version string, which npm resolves from the **registry**. The container then ran the
 last published release while the CLI, the generated template and the forwarder all came from the
 working tree — a pair that exists nowhere, and a probe that cannot fail on the code under review. A
-`POST /trigger` branch shipped a forwarder speaking a newer envelope than the container it deployed,
+`POST /run` branch shipped a forwarder speaking a newer envelope than the container it deployed,
 and the only symptom was "EventBridge never delivered".
 
 `FASTAGENT_LIVE_VERSION` no longer reaches a deploy probe, in CI either. Three of the four artifacts

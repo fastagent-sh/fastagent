@@ -69,7 +69,7 @@ This is the rule §3's question 4 already implied, written as something a review
 
 ```
 fastagent.config.ts               # in git (or .js/.mjs): name / model / http / selfSchedule / deploy.{secrets,apt}
-persona.md  skills/  tools/  channels/  schedules/
+persona.md  skills/  tools/  channels/  routines/
 
 .secrets/.env                     # the local (= single-instance deploy) values
 .secrets/auth.json                # this project's OAuth credentials (login writes here by default)

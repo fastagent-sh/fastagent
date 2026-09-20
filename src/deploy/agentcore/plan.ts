@@ -10,7 +10,7 @@ import { type Artifact, type ContainerInput, containerArtifacts } from "../conta
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
-/** The one schedule fact the plan needs (from loadSchedules) — name + cron + tz. */
+/** The one schedule fact the plan needs (from loadRoutines) — name + cron + tz. */
 export interface ScheduleFact {
   name: string;
   cron: string;
@@ -445,7 +445,7 @@ function template(
       `      FunctionName: ${forwarderFunctionName(input.name)}`,
       `      Runtime: nodejs22.x`,
       `      Handler: index.handler`,
-      `      # Webhook ACKs are fast, but schedule-fire holds the connection for the WHOLE agent turn`,
+      `      # Webhook ACKs are fast, but routine-fire holds the connection for the WHOLE agent turn`,
       `      # (claim-before-run means a timeout never double-fires; the turn also continues and is`,
       `      # audited container-side). EventBridge→Lambda is async, so the long timeout costs nothing.`,
       `      Timeout: 900`,

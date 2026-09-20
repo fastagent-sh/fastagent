@@ -10,7 +10,7 @@
  * days later, with the error only in the host's logs.
  *
  * So the declaration moved next to the code that needs it (`defineTool({ secrets: [...] })`,
- * `defineSchedule({ secrets: [...] })`), and this module is where every source converges. Two things
+ * `defineRoutine({ secrets: [...] })`), and this module is where every source converges. Two things
  * follow from having ONE list, and they are the whole point:
  *
  *  - `deploy` CARRIES a declared name automatically — no second list to keep in sync.
@@ -19,7 +19,7 @@
  *    `botToken` fails `telegramChannel` at mount).
  *
  * Agent code does not read `process.env`: each authoring surface (`defineTool`, `defineChannel`,
- * `defineSchedule`) hands back exactly the values it declared, so the declaration cannot drift from
+ * `defineRoutine`) hands back exactly the values it declared, so the declaration cannot drift from
  * the read, and a typo is a type error rather than an `undefined` at 3am. What this can NOT force is
  * the environment itself — a provider SDK reads its own variable, and the coding tools need `PATH`
  * and `HOME` — so the values still travel through the process env; what changes is that no authored
@@ -30,7 +30,7 @@
 export interface DeclaredSecret {
   /** The env-var name. */
   name: string;
-  /** Where it was declared: "tools/x-post.ts", "schedules/daily-digest.ts", "config.tools",
+  /** Where it was declared: "tools/x-post.ts", "routines/daily-digest.ts", "config.tools",
    *  "fastagent.config deploy.secrets" — printed in runbooks and failures, so it must name a place
    *  the author can open. */
   source: string;
@@ -61,7 +61,7 @@ function secretNamesProblem(value: unknown): string | undefined {
 
 /**
  * THE READ: what a code-input module declared, attributed to its file — the one implementation for
- * `tools/`, `schedules/` and `channels/`.
+ * `tools/`, `routines/` and `channels/`.
  *
  * It is one function because it was four, and the fourth was written without the shape check the
  * other three had: a `secrets: "FOO"` in a channel file crashed the whole directory with a
@@ -115,7 +115,7 @@ export function missingSecrets(
   return dedupeSecrets(declared).filter((s) => !env[s.name]);
 }
 
-/** "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (schedules/digest.ts)" — grouped by the
+/** "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (routines/digest.ts)" — grouped by the
  *  file to open, since that is the unit the author fixes. */
 export function describeSecrets(declared: readonly DeclaredSecret[]): string {
   const bySource = new Map<string, string[]>();

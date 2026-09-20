@@ -10,15 +10,15 @@ import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
-import { loadSchedules } from "./schedule/discover.ts";
-import { createTriggerHandler } from "./schedule/trigger.ts";
+import { loadRoutines } from "./schedule/discover.ts";
+import { createRunHandler } from "./schedule/run.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
 import { refuseBrokenDeclarations } from "./loader.ts";
 import { gateSecrets } from "./secrets-gate.ts";
-import type { LoadedSchedule } from "./schedule/schedule.ts";
+import type { LoadedRoutine } from "./schedule/routine.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. */
 const CLOSE_DEADLINE_MS = 5_000;
@@ -64,8 +64,8 @@ function closeWithin(
 
 export interface ServingSurface {
   /**
-   * The routes that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /trigger` where the definition
-   * declares schedules, minus what a channel took over or `http.invoke: false` withheld. Kept APART from the channels' rather than merged with a list of which keys are
+   * The routes that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /run` where the definition
+   * declares routines, minus what a channel took over or `http.invoke: false` withheld. Kept APART from the channels' rather than merged with a list of which keys are
    * which: three separate decisions read this (browser reachability, the JSON body gate, what the startup line
    * calls unauthenticated), and while it was a derived list each of them could answer differently.
    */
@@ -85,19 +85,19 @@ export interface ServingSurface {
 }
 
 /**
- * Does this definition serve `POST /trigger`, given a schedule to fire?
+ * Does this definition serve `POST /run`, given a schedule to fire?
  *
  * It FOLLOWS `invoke` by default, because `http.invoke: false` is documented as "the channels' signature checks are
  * meant to be the only way in" and a second anonymous turn-starter appearing behind that choice would reverse it
  * silently. `trigger` is the explicit exception, and it is a real one: a port with no `/invoke` but an external
- * clock driving its schedules is exactly what this route exists for.
+ * clock driving its routines is exactly what this route exists for.
  *
  * ONE function, because two readers need the same answer and they are not near each other: the assembly mounts the
  * route, and `preflightDeploy` names it in the list of what a public URL answers unauthenticated. A default spelled
  * twice is a default that moves once.
  */
-export function shouldServeTrigger(serve: { serveInvoke?: boolean; serveTrigger?: boolean }): boolean {
-  return serve.serveTrigger ?? serve.serveInvoke !== false;
+export function shouldServeRun(serve: { serveInvoke?: boolean; serveRun?: boolean }): boolean {
+  return serve.serveRun ?? serve.serveInvoke !== false;
 }
 
 /**
@@ -119,11 +119,11 @@ export async function routesFor(
    * signature checks as the only way into a public port. Named for the config key it carries, not for the
    * "built-in fallback" it once withheld — that concept is gone.
    *
-   * `schedules` mounts `POST /trigger`. Passed in rather than loaded here so the route and the resident clock
-   * cannot disagree about which schedules exist (`loadServingSchedules`). `serveTrigger` overrides the default
+   * `schedules` mounts `POST /run`. Passed in rather than loaded here so the route and the resident clock
+   * cannot disagree about which routines exist (`loadServingRoutines`). `serveRun` overrides the default
    * that route inherits from `serveInvoke`.
    */
-  options: { serveInvoke?: boolean; serveTrigger?: boolean; schedules?: readonly LoadedSchedule[] } = {},
+  options: { serveInvoke?: boolean; serveRun?: boolean; routines?: readonly LoadedRoutine[] } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -153,14 +153,12 @@ export async function routesFor(
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
   const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
   if (options.serveInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
-  // `POST /trigger` exists only where there is something to trigger. It rides this table for the reason the table
+  // `POST /run` exists only where there is something to trigger. It rides this table for the reason the table
   // exists: it authenticates nobody, so it inherits the JSON body gate, the cross-origin policy, the reserved path
   // and the startup report's account of what is open — none of which it had to ask for.
   //
-  const trigger = shouldServeTrigger(options)
-    ? createTriggerHandler({ agent, schedules: options.schedules ?? [] })
-    : undefined;
-  if (trigger) unverified["POST /trigger"] = trigger;
+  const trigger = shouldServeRun(options) ? createRunHandler({ agent, routines: options.routines ?? [] }) : undefined;
+  if (trigger) unverified["POST /run"] = trigger;
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.
@@ -213,43 +211,43 @@ export function mountSessionControl(
 }
 
 /**
- * Load the agent's `schedules/`, gated.
+ * Load the agent's `routines/`, gated.
  *
  * Separate from {@link startSchedules} because two things need the SAME list and one of them runs first: the
- * `POST /trigger` route is built with the routes (so a channel cannot take that path unnoticed), and the resident
- * clock starts later, inside the service's scope. Loading twice would let them disagree about which schedules exist.
+ * `POST /run` route is built with the routes (so a channel cannot take that path unnoticed), and the resident
+ * clock starts later, inside the service's scope. Loading twice would let them disagree about which routines exist.
  */
-export async function loadServingSchedules(agentDir: string): Promise<LoadedSchedule[]> {
+export async function loadServingRoutines(agentDir: string): Promise<LoadedRoutine[]> {
   // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library that calls
   // process.exit takes a decision (degrade? retry? stop?) that belongs to its host.
-  const { schedules, secrets, failures } = await loadSchedules(agentDir);
-  // The schedules' half of the serving-path gate (the opener does the tools', loadChannels the
-  // channels'): a schedule reads its env at IMPORT time, so an unset declared value has already
+  const { routines, secrets, failures } = await loadRoutines(agentDir);
+  // The routines' half of the serving-path gate (the opener does the tools', loadChannels the
+  // channels'): a routine reads its env at IMPORT time, so an unset declared value has already
   // produced a broken prompt — refusing here is the last point where that is a startup failure.
   gateSecrets({ declared: secrets, failures });
   refuseBrokenDeclarations(failures);
-  return schedules;
+  return routines;
 }
 
-/** Start the resident clock over schedules {@link loadServingSchedules} already gated. */
+/** Start the resident clock over routines {@link loadServingRoutines} already gated. */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
   selfSchedule: boolean,
-  schedules: LoadedSchedule[],
+  routines: LoadedRoutine[],
   options: { externalClock?: boolean } = {},
-): { schedules: LoadedSchedule[]; stop: () => void } {
-  if (schedules.length === 0 && !selfSchedule) return { schedules, stop: () => {} };
+): { routines: LoadedRoutine[]; stop: () => void } {
+  if (routines.length === 0 && !selfSchedule) return { routines, stop: () => {} };
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
+    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock }),
   );
   scheduler.start();
-  if (schedules.length > 0) {
+  if (routines.length > 0) {
     log.info(
-      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
+      `[fastagent] routines: ${routines.map((r) => r.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
     );
   }
-  return { schedules, stop: () => scheduler.stop() };
+  return { routines, stop: () => scheduler.stop() };
 }
 
 export interface AgentService {
@@ -266,8 +264,8 @@ export interface AgentService {
    */
   channels: { routes: string[]; longConnections: string[] };
   /**
-   * The route keys on this port that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /trigger` where
-   * the definition declares schedules, minus what a channel took over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
+   * The route keys on this port that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /run` where
+   * the definition declares routines, minus what a channel took over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
    * `routes` instead answers a different question, since a channel may serve one of those paths with a protocol of
    * its own. That mistake ran in both directions here — a try-it curl for a route that 404s, and a warning about an
    * unauthenticated `/invoke` that was really a signature-checked channel.
@@ -279,13 +277,13 @@ export interface AgentService {
    * about this surface must come from what was actually assembled, not from re-deriving it.
    */
   corsOrigins?: readonly string[];
-  schedules: readonly LoadedSchedule[];
+  routines: readonly LoadedRoutine[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
   /** The control plane's prefix, when `sessionControl` is on. */
   controlPrefix?: string;
   /**
-   * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
+   * Stop long connections and routines. It does NOT drain agent turns: a turn takes seconds to minutes, and the
    * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
    * that safe is replay, not waiting — a chat turn's intent is durable before it is accepted and its channel
    * replays it on the next boot (`channels/kit/turn-store.ts`), and an in-flight HTTP/SSE caller sees the stream
@@ -310,7 +308,7 @@ export interface MountAgentServiceOptions {
 /** What the assembly needs from an opened agent directory — the whole of it. */
 export interface MountableAgent {
   agent: Agent;
-  /** The definition dir: where channels/, tools/ and schedules/ are read from. */
+  /** The definition dir: where channels/, tools/ and routines/ are read from. */
   agentDir: string;
   /** The agent's cwd. */
   workspace: string;
@@ -322,7 +320,7 @@ export interface MountableAgent {
   /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Required, not defaulted: an
    *  embedder assembling this by hand would otherwise lose the plane to a 404 with nothing said anywhere. */
   publishControl: boolean;
-  /** Whether the agent schedules its own follow-up turns. */
+  /** Whether the agent routines its own follow-up turns. */
   selfSchedule: boolean;
   /**
    * The origins a browser may call this serve from (`http.cors`). Unset is the default, which answers EVERY origin
@@ -336,15 +334,15 @@ export interface MountableAgent {
    */
   serveInvoke?: boolean;
   /**
-   * Serve `POST /trigger` (`http.trigger`). Defaults to whatever `serveInvoke` is: closing the anonymous turn
+   * Serve `POST /run` (`http.run`). Defaults to whatever `serveInvoke` is: closing the anonymous turn
    * endpoint must not leave a second one open behind it. Set it explicitly for the one combination that default
-   * gets wrong — no `/invoke`, but an external clock firing this agent's schedules.
+   * gets wrong — no `/invoke`, but an external clock firing this agent's routines.
    */
-  serveTrigger?: boolean;
+  serveRun?: boolean;
 }
 
 /**
- * The assembly itself, over an already-opened directory: channels, the control plane, schedules and long connections,
+ * The assembly itself, over an already-opened directory: channels, the control plane, routines and long connections,
  * composed into one handler.
  */
 export async function mountAgentService(
@@ -352,7 +350,7 @@ export async function mountAgentService(
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
-  // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the same agent, so
+  // Wrapped BEFORE anything consumes it: routes, the control plane and routines must all drive the same agent, so
   // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
@@ -360,13 +358,13 @@ export async function mountAgentService(
   // a stray trailing slash would refuse the front end with nothing naming the rule.
   if (opened.corsOrigins) assertCorsOrigins(opened.corsOrigins, "mountAgentService: corsOrigins");
 
-  // Loaded BEFORE the routes, because `POST /trigger` is one of them and the resident clock below must run over the
-  // same list — two loads would be two answers to "which schedules exist".
-  const schedules = await loadServingSchedules(agentDir);
+  // Loaded BEFORE the routes, because `POST /run` is one of them and the resident clock below must run over the
+  // same list — two loads would be two answers to "which routines exist".
+  const routines = await loadServingRoutines(agentDir);
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
     ...(opened.serveInvoke !== undefined ? { serveInvoke: opened.serveInvoke } : {}),
-    ...(opened.serveTrigger !== undefined ? { serveTrigger: opened.serveTrigger } : {}),
-    schedules,
+    ...(opened.serveRun !== undefined ? { serveRun: opened.serveRun } : {}),
+    routines,
   });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
@@ -421,7 +419,7 @@ export async function mountAgentService(
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, opened.selfSchedule, schedules),
+            try: () => startSchedules(agent, stateRoot, opened.selfSchedule, routines),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),
@@ -510,7 +508,7 @@ export async function mountAgentService(
           },
           unverifiedRoutes: Object.keys(routed.unverified),
           ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
-          schedules: scheduled.schedules,
+          routines: scheduled.routines,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
           close,

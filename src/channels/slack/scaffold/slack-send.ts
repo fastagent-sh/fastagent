@@ -3,13 +3,13 @@ import { slackTransport } from "@fastagent-sh/fastagent/slack";
 
 // Send a message or upload a local file to Slack. In a CHAT turn the channel delivers the reply
 // itself — do NOT call this to answer a normal chat turn (that posts the message twice). This tool is
-// for file uploads, and for turns NO channel is carrying: a scheduled turn (schedules/<name>.ts) or a
+// for file uploads, and for turns NO channel is carrying: a scheduled turn (routines/<name>.ts) or a
 // self-scheduled wake-up, whose plain reply is not delivered anywhere. The channelId/threadTs come
 // from the [slack: …] context line in a chat turn; a scheduled/woken turn has no such line, so its
 // prompt must name the target channel id. tools/ is auto-discovered.
 //
 // Delivery rides the channel's own transport (slackTransport): its token, API base, Markdown splitting
-// and rate-limit handling. With no channel mounted (`fastagent schedule fire` / `invoke`) it is built from
+// and rate-limit handling. With no channel mounted (`fastagent routine run` / `invoke`) it is built from
 // SLACK_BOT_TOKEN in .env.
 
 export default defineTool({

@@ -1,5 +1,5 @@
 /**
- * `POST /trigger` — **an API**: run a unit of work this definition declares, by name.
+ * `POST /run` — **an API**: run a unit of work this definition declares, by name.
  *
  * NOT A TIME TRIGGER, and the difference is the whole design. Occurrence semantics — a slot, a claim, a fire
  * history, an overlap policy — exist exactly where fastagent OWNS the clock: the resident loop in `dev`/`start`,
@@ -38,7 +38,7 @@ import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
 import { readBodyCapped, refuseNonJsonBody } from "../channels/body.ts";
 import { text } from "../channels/respond.ts";
-import { type LoadedSchedule, scheduleSession } from "./schedule.ts";
+import { type LoadedRoutine, routineSession } from "./routine.ts";
 import { runTurn } from "./scheduler.ts";
 
 /** A trigger body is a name; the cap only has to admit that. */
@@ -52,21 +52,21 @@ const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 const MAX_ECHOED_NAME = 64;
 
 /** The Effect boundary, in one place: the turn runs, and its outcome is what the caller reads. */
-const runOnce = (agent: Agent, schedule: LoadedSchedule) =>
-  Effect.runPromise(runTurn(agent, schedule.name, scheduleSession(schedule.name), schedule.prompt));
+const runOnce = (agent: Agent, routine: LoadedRoutine) =>
+  Effect.runPromise(runTurn(agent, routine.name, routineSession(routine.name), routine.prompt));
 
 /**
- * Build the handler for `POST /trigger`, bound to what this serve loaded.
+ * Build the handler for `POST /run`, bound to what this serve loaded.
  *
  * `undefined` when the definition declares nothing runnable: a route that can only ever answer 404 is not a route,
  * and the startup report names what is actually mounted.
  */
-export function createTriggerHandler(options: {
+export function createRunHandler(options: {
   agent: Agent;
-  schedules: readonly LoadedSchedule[];
+  routines: readonly LoadedRoutine[];
 }): ((req: Request) => Promise<Response>) | undefined {
-  const { agent, schedules } = options;
-  if (schedules.length === 0) return undefined;
+  const { agent, routines } = options;
+  if (routines.length === 0) return undefined;
 
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -85,22 +85,22 @@ export function createTriggerHandler(options: {
     if (typeof name !== "string" || name === "") {
       return text('need { "name": string } — e.g. {"name":"daily"}\n', 400);
     }
-    const schedule = schedules.find((s) => s.name === name);
+    const routine = routines.find((r) => r.name === name);
     // Drift: a caller outliving the thing it calls. The names are listed so an operator can see whether it is a
     // typo or a stale job without shelling in.
-    if (!schedule) {
+    if (!routine) {
       return text(
         // The name is CLIPPED before it goes back out — the one thing this route echoes. Listing this deployment's
         // own names is deliberate; quoting an unauthenticated caller's 4 KiB of body is not (`refuseNonJsonBody`
         // states the same rule for the same table).
-        `no declared work named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${schedules
-          .map((s) => s.name)
+        `no declared work named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${routines
+          .map((r) => r.name)
           .join(", ")})\n`,
         404,
       );
     }
-    const session = scheduleSession(schedule.name);
-    const { busy, failed, ms } = await runOnce(agent, schedule);
+    const session = routineSession(routine.name);
+    const { busy, failed, ms } = await runOnce(agent, routine);
     // BUSY IS NOT A FAILURE and it is the one "did not run" this route has: a declared unit of work has ONE
     // session, so a call arriving while the previous turn holds it is refused by that session. Reported as itself,
     // with what the caller needs in order to decide — try later — rather than as an error it would retry blindly.
@@ -114,7 +114,7 @@ export function createTriggerHandler(options: {
       });
     }
     // `session` is the WHERE TO LOOK: the turn's own output lives in that session's journal, readable with
-    // `fastagent schedule history` or over `/control/*` when it is served. An id minted here would appear nowhere
+    // `fastagent routine history` or over `/control/*` when it is served. An id minted here would appear nowhere
     // else, which is decoration rather than a handle.
     return Response.json({ name, session, ran: true, ...(failed !== undefined ? { failed } : {}), ms });
   };

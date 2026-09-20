@@ -22,10 +22,10 @@ export default {
   // this serve from. The default is `*` on every bind — any page your users visit can call this port and
   // read the reply, a loopback bind included (it stops another machine, not your own browser).
   // `invoke: false` withholds POST /invoke, for a serve meant to be reached only through its channels
-  // (POST /trigger goes with it; `trigger: true` keeps it for an external clock firing your schedules).
+  // (POST /run goes with it; `run: true` keeps that one for a scheduler of yours that calls routines by name).
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
-  //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.
+  //                     // ("check the deploy in 10 min"). A routine needs no opt-in — drop a routines/<name>.ts.
   // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)
   // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way
   // deploy: what the agent needs on the box (so `fastagent deploy` doesn't need a hand-written Dockerfile

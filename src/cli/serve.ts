@@ -51,13 +51,13 @@ export function resolveBindHost(
  * into a deployed image, so "do not publish a turn endpoint on this tunnel" has to be sayable without editing the
  * definition.
  *
- * It takes `POST /trigger` WITH it, including over a definition that said `http.trigger: true`. Both routes start a
+ * It takes `POST /run` WITH it, including over a definition that said `http.run: true`. Both routes start a
  * turn for an anonymous caller, and the flag's whole reason for existing is the case where the definition cannot be
  * edited — `dev --tunnel --no-invoke` leaving the other one published at the tunnel URL would be the flag failing at
  * exactly the job it was added for.
  */
 export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
-  return run.invoke === false ? { ...opened, serveInvoke: false, serveTrigger: false } : opened;
+  return run.invoke === false ? { ...opened, serveInvoke: false, serveRun: false } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -157,7 +157,7 @@ export function announceControl(
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = [
     ...(service.unverifiedRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
-    ...(service.unverifiedRoutes.includes("POST /trigger") ? ["POST /trigger (fire any schedule this agent has)"] : []),
+    ...(service.unverifiedRoutes.includes("POST /run") ? ["POST /run (fire any schedule this agent has)"] : []),
     ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
   ];
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)

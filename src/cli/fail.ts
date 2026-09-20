@@ -23,7 +23,7 @@ export function failStartup(error: unknown): never {
 
 /**
  * {@link gateSecrets} at the process boundary, for a command that runs ONE owner's code (`fastagent
- * tool`, `fastagent schedule fire`). The gate throws SYNCHRONOUSLY, so there is no promise to hang the usual
+ * tool`, `fastagent routine run`). The gate throws SYNCHRONOUSLY, so there is no promise to hang the usual
  * `.catch(failStartup)` on, and a raw throw reaches `cli.ts`'s top-level await as a Node stack that
  * buries the one line naming the file. The catch translates that expected failure into the CLI's
  * single-line refusal and exits 1; nothing is recovered.

@@ -1,6 +1,6 @@
 /**
  * `defineChannel` — a channel file's authoring surface, and the third member of the `defineX` family
- * (with `defineTool` / `defineSchedule`). Its whole job is the secrets: a channel is the one code
+ * (with `defineTool` / `defineRoutine`). Its whole job is the secrets: a channel is the one code
  * input that is ALL credentials (a bot token, a signing secret), and before this it read them from
  * `process.env` at module scope, which meant a CUSTOM channel could not tell `deploy` what to carry —
  * the deploy could only guess from a table of first-party names.

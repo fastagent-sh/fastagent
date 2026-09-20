@@ -50,32 +50,32 @@ describe("createAgentService", () => {
     }
   });
 
-  it("a schedules/ directory reaches POST /trigger — the only wiring dev and start actually use", async () => {
-    // THE WIRE, not the route: `loadServingSchedules(agentDir)` → `routesFor({ schedules })` is the
-    // only path from a real `schedules/` file to this route, and every other test bypasses it (one
-    // hands `routesFor` a literal, the other calls `createTriggerHandler` directly). Cutting it —
-    // `schedules: []` at the call site — left all 128 test files green while the feature was dead on
+  it("a routines/ directory reaches POST /run — the only wiring dev and start actually use", async () => {
+    // THE WIRE, not the route: `loadServingRoutines(agentDir)` → `routesFor({ routines })` is the
+    // only path from a real `routines/` file to this route, and every other test bypasses it (one
+    // hands `routesFor` a literal, the other calls `createRunHandler` directly). Cutting it —
+    // `routines: []` at the call site — left all 128 test files green while the feature was dead on
     // the delivery path.
     const dir = await agentDir({
-      "schedules/daily.mjs": `export default { cron: "0 9 * * *", prompt: "summarise the day" };\n`,
+      "routines/daily.mjs": `export default { cron: "0 9 * * *", prompt: "summarise the day" };\n`,
     });
     const service = await createAgentService(dir);
     try {
       // 415, like `/invoke` above: mounted, and refusing a body it was not told is JSON.
-      expect((await service.handler(new Request("http://h/trigger", { method: "POST" }))).status).toBe(415);
-      expect(service.unverifiedRoutes).toContain("POST /trigger");
+      expect((await service.handler(new Request("http://h/run", { method: "POST" }))).status).toBe(415);
+      expect(service.unverifiedRoutes).toContain("POST /run");
     } finally {
       await service.close();
     }
   });
 
-  it("no schedules/ directory means no POST /trigger at all", async () => {
+  it("no routines/ directory means no POST /run at all", async () => {
     // A route that can only ever answer 404 is not a route, and the startup report names what is
     // actually mounted.
     const service = await createAgentService(await agentDir({}));
     try {
-      expect((await service.handler(new Request("http://h/trigger", { method: "POST" }))).status).toBe(404);
-      expect(service.unverifiedRoutes).not.toContain("POST /trigger");
+      expect((await service.handler(new Request("http://h/run", { method: "POST" }))).status).toBe(404);
+      expect(service.unverifiedRoutes).not.toContain("POST /run");
     } finally {
       await service.close();
     }
@@ -543,19 +543,19 @@ describe("createAgentService", () => {
     // here, which for a mounted surface means taking down someone else's server. A single bad
     // schedule FILE is isolated on purpose (G2); this is the whole-load fault that is not.
     const dir = await agentDir();
-    await writeFile(join(dir, "schedules"), "not a directory\n"); // readdir fails on it
+    await writeFile(join(dir, "routines"), "not a directory\n"); // readdir fails on it
     await expect(createAgentService(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
   });
 
-  it("refuses to serve while a schedule's declared secret has no value", async () => {
+  it("refuses to serve while a routine's declared secret has no value", async () => {
     // A schedule reads its env at IMPORT time, so an unset value has already produced a broken
     // prompt by the time the scheduler starts — this is the last point it is still a startup failure
     // rather than a wrong turn at 9am.
     const dir = await agentDir({
-      "schedules/digest.mjs": `export default { cron: "0 9 * * *", prompt: "d", secrets: ["FA_TEST_DIGEST_CHANNEL"] };`,
+      "routines/digest.mjs": `export default { cron: "0 9 * * *", prompt: "d", secrets: ["FA_TEST_DIGEST_CHANNEL"] };`,
     });
     delete process.env.FA_TEST_DIGEST_CHANNEL;
-    await expect(createAgentService(dir)).rejects.toThrow(/FA_TEST_DIGEST_CHANNEL \(schedules\/digest\.mjs\)/);
+    await expect(createAgentService(dir)).rejects.toThrow(/FA_TEST_DIGEST_CHANNEL \(routines\/digest\.mjs\)/);
   });
 
   it("surfaces a broken channel at open, rather than serving without it", async () => {
@@ -567,7 +567,7 @@ describe("createAgentService", () => {
     // The same declaration used to get a different guarantee per directory: a broken channel stopped the boot, a
     // broken tool or schedule became one warning and a service that reported itself ready — with the cron never
     // firing and the model never seeing the tool. Absent directories stay valid; `*.disabled` is the opt-out.
-    for (const file of ["tools/broken.mjs", "schedules/digest.mjs"]) {
+    for (const file of ["tools/broken.mjs", "routines/digest.mjs"]) {
       const dir = await agentDir({ [file]: `throw new Error("missing target");` });
       await expect(createAgentService(dir)).rejects.toThrow(
         new RegExp(`failed to load: ${file.replace(".", "\\.")} \\(missing target`),

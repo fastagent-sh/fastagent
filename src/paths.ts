@@ -27,7 +27,7 @@ export const STATE_DIRNAME = ".state";
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
- * author writes (`tools/`, `channels/`, `schedules/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
+ * author writes (`tools/`, `channels/`, `routines/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
  */
 export const AGENT_CONFIG_FILE = "fastagent.config.ts";
 

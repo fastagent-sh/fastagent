@@ -29,10 +29,10 @@ const BIND: FlagSpec = {
 const NO_INVOKE: FlagSpec = {
   flags: "--no-invoke",
   description:
-    "do not serve POST /invoke on this run, nor POST /trigger — both are unauthenticated and run a turn with the " +
+    "do not serve POST /invoke on this run, nor POST /run — both are unauthenticated and run a turn with the " +
     "agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold " +
     "them (fastagent.config.ts http.invoke: false is the same choice, but it travels into a deployed image; this " +
-    "flag outranks http.trigger: true, because a flag is what a definition you cannot edit still answers to)",
+    "flag outranks http.run: true, because a flag is what a definition you cannot edit still answers to)",
 };
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",
@@ -209,8 +209,8 @@ const start: CommandSpec = {
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > fastagent.config.ts http.host > all interfaces\n" +
     "  /invoke:  --no-invoke > fastagent.config.ts http.invoke > served\n" +
-    "  /trigger: --no-invoke > fastagent.config.ts http.trigger > http.invoke\n" +
-    "            (only mounted when the definition declares schedules/)\n" +
+    "  /trigger: --no-invoke > fastagent.config.ts http.run > http.invoke\n" +
+    "            (only mounted when the definition declares routines/)\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +
@@ -411,19 +411,19 @@ const deploy: CommandSpec = {
     }),
 };
 
-const schedule: CommandSpec = {
-  name: "schedule",
-  summary: "run, inspect and control time triggers: fire now, fire history, pending fires, cancel a wake-up",
+const routine: CommandSpec = {
+  name: "routine",
+  summary: "run and inspect the units of work this definition declares: run now, fire history, what exists",
   subcommands: [
     {
-      name: "fire",
-      summary: "run ONE schedule's turn immediately, without waiting for its cron",
+      name: "run",
+      summary: "run ONE routine's turn immediately, without waiting for a clock",
       description:
-        "Run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts now " +
-        "without waiting for its cron. Reply→stdout; does NOT advance the schedule's fire state.",
-      args: [{ name: "<name>", description: "the schedule name (schedules/<name>.ts)" }, DIR_ARG],
+        "Run ONE routine's turn immediately (authoring loop, like invoke) — runs routines/<name>.ts now, " +
+        "whether or not it declares a cron. Reply→stdout; does NOT advance its fire state.",
+      args: [{ name: "<name>", description: "the routine name (routines/<name>.ts)" }, DIR_ARG],
       flags: [MODEL, NO_INPUT],
-      examples: [{ cmd: "fastagent schedule fire daily-digest" }],
+      examples: [{ cmd: "fastagent routine run daily-digest" }],
       run: async (args, f) =>
         (await import("./commands/fire.ts")).runFire(args[0] as string, args[1] as string, {
           model: f.model as string | undefined,
@@ -432,16 +432,16 @@ const schedule: CommandSpec = {
     },
     {
       name: "history",
-      summary: "print the recent fires of a schedule",
+      summary: "print the recent fires of a routine",
       description:
-        "Print a schedule's recent fires: when each fired, completed/failed/interrupted, and how long it took " +
-        '— the answer to "did last night\'s run silently fail?". What the run SAID is in its session, a JSON-lines ' +
-        "journal under the state root's sessions/ — which this command points at. Read-only.",
-      args: [{ name: "<name>", description: "the schedule name" }, DIR_ARG],
+        "Print a routine's recent fires: when each fired, completed/failed/skipped/interrupted, and how long it " +
+        'took — the answer to "did last night\'s run silently fail?". What the run SAID is in its session, a ' +
+        "JSON-lines journal under the state root's sessions/ — which this command points at. Read-only.",
+      args: [{ name: "<name>", description: "the routine name" }, DIR_ARG],
       flags: [{ flags: "--json", description: "the full records" }],
-      examples: [{ cmd: "fastagent schedule history daily-digest" }],
+      examples: [{ cmd: "fastagent routine history daily-digest" }],
       run: async (args, flags) =>
-        (await import("./commands/schedule.ts")).runScheduleHistory(
+        (await import("./commands/routine.ts")).runRoutineHistory(
           args[0] as string,
           args[1] as string,
           flags.json === true,
@@ -449,15 +449,36 @@ const schedule: CommandSpec = {
     },
     {
       name: "list",
-      summary: "everything that will fire: static schedules (next instant) + pending wake-ups",
+      summary: "every declared routine, and when (or whether) a clock fires it",
       description:
-        "List everything that will fire, from BOTH producers: the static schedules/ files (name + next " +
-        "cron instant) and the agent's pending self-scheduled wake-ups. Read-only.",
+        "List the routines this definition declares: the next cron instant for each that has one, and " +
+        '"on demand" for each that does not — those are reached by name (POST /run, `routine run`). The agent\'s ' +
+        "own pending wake-ups are `fastagent wake list`, a different owner. Read-only.",
       args: [DIR_ARG],
       flags: [JSON_FLAG],
-      examples: [{ cmd: "fastagent schedule list" }],
+      examples: [{ cmd: "fastagent routine list" }],
       run: async (args, flags) =>
-        (await import("./commands/schedule.ts")).runScheduleList(args[0] as string, flags.json === true),
+        (await import("./commands/routine.ts")).runRoutineList(args[0] as string, flags.json === true),
+    },
+  ],
+};
+
+const wake: CommandSpec = {
+  name: "wake",
+  summary: "inspect and cancel the wake-ups the agent scheduled for itself",
+  subcommands: [
+    {
+      name: "list",
+      summary: "every pending wake-up, with the session it will resume",
+      description:
+        "List the agent's pending self-scheduled wake-ups: id, when it fires, one-shot or recurring, and the " +
+        "session it resumes. These are written into the STATE by a running agent, which is why they are not " +
+        "`routine list` — that one reads the definition. Read-only.",
+      args: [DIR_ARG],
+      flags: [JSON_FLAG],
+      examples: [{ cmd: "fastagent wake list" }],
+      run: async (args, flags) =>
+        (await import("./commands/wake.ts")).runWakeList(args[0] as string, flags.json === true),
     },
     {
       name: "cancel",
@@ -465,10 +486,9 @@ const schedule: CommandSpec = {
       description:
         "Remove a pending wake-up — the operator's kill switch for a runaway recurring wake (the agent's own " +
         "is the `unwake` tool). Not session-scoped: the operator owns the box.",
-      args: [{ name: "<id>", description: "the wake-up id (`fastagent schedule list` shows ids)" }, DIR_ARG],
-      examples: [{ cmd: "fastagent schedule cancel wake-1700000000000-ab12" }],
-      run: async (args) =>
-        (await import("./commands/schedule.ts")).runScheduleCancel(args[0] as string, args[1] as string),
+      args: [{ name: "<id>", description: "the wake-up id (`fastagent wake list` shows ids)" }, DIR_ARG],
+      examples: [{ cmd: "fastagent wake cancel wake-1700000000000-ab12" }],
+      run: async (args) => (await import("./commands/wake.ts")).runWakeCancel(args[0] as string, args[1] as string),
     },
   ],
 };
@@ -539,7 +559,8 @@ export const specs: readonly CommandSpec[] = [
   info,
   tool,
   invoke,
-  schedule,
+  routine,
+  wake,
   dev,
   chat,
   start,

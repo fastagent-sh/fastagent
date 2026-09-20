@@ -140,7 +140,7 @@ async function listAlarms(): Promise<AlarmSummary[]> {
   return (JSON.parse(listed.stdout) as { Schedules?: AlarmSummary[] }).Schedules ?? [];
 }
 
-/** The full schedule: only `get-schedule` carries the expression and the completion action. */
+/** The full routine: only `get-schedule` carries the expression and the completion action. */
 async function getAlarm(name: string): Promise<{ ScheduleExpression?: string; ActionAfterCompletion?: string }> {
   const got = await aws(["scheduler", "get-schedule", "--name", name, "--output", "json"]);
   expect(got.code, `scheduler get-schedule ${name} failed: ${got.stderr}`).toBe(0);

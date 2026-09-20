@@ -1,6 +1,6 @@
 /**
  * The agent's self-scheduled wake-ups — the SECOND producer of scheduled invocations (the first is the author's
- * `schedules/` files).
+ * `routines/` files).
  */
 import { randomUUID } from "node:crypto";
 import { log } from "../log.ts";
@@ -84,7 +84,7 @@ function save(stateRoot: string, wakeups: Wakeup[]): void {
   }
 }
 
-/** The current pending wake-ups (`fastagent schedule list` uses this). */
+/** The current pending wake-ups (`fastagent routine list` uses this). */
 export function listWakeups(stateRoot: string): Wakeup[] {
   return load(stateRoot);
 }

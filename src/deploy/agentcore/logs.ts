@@ -102,7 +102,7 @@ export async function tailAgentcoreLogs(
         gate: `stack ${stack} has neither a forwarder log group nor an ingress URL — this looks like an invoke-only deployment, which has Runtime logs only`,
       };
     }
-    const trigger = plan.source === "runtime" ? "invoke the Runtime once" : "deliver one webhook or schedule fire";
+    const trigger = plan.source === "runtime" ? "invoke the Runtime once" : "deliver one webhook or routine run";
     return {
       ok: false,
       gate: `no ${plan.source} log group exists yet — ${trigger}, then retry (AWS creates it on first use)`,

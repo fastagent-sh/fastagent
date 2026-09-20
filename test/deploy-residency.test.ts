@@ -24,7 +24,7 @@ describe("deploy/residency", () => {
     // and it is why two hosts could not drift apart on it again.
     expect(residencyFor({ ...nothing, channels: [channel("github")] })).toMatchObject({ reason: "github" });
     expect(residencyFor({ ...nothing, hasWakeups: true })).toMatchObject({ reason: "wake-ups" });
-    expect(residencyFor({ ...nothing, hasCron: true })).toMatchObject({ reason: "schedules" });
+    expect(residencyFor({ ...nothing, hasCron: true })).toMatchObject({ reason: "cron" });
     expect(residencyFor({ ...nothing, channels: [channel("socket", "long-connection")] })).toMatchObject({
       reason: "long-connection",
     });
@@ -38,7 +38,7 @@ describe("deploy/residency", () => {
   });
 
   it("reports the reason WITHOUT a way out first — the message depends on which one it is", () => {
-    // A cron can be fired by someone else's clock through POST /trigger; a wake-up is minted by the
+    // A cron can be fired by someone else's clock through POST /run; a wake-up is minted by the
     // agent at runtime, so nothing outside can know to send it. Reporting the cron half of a
     // definition that has both would offer a way out that drops every wake-up.
     expect(residencyFor({ ...nothing, hasCron: true, hasWakeups: true })?.reason).toBe("wake-ups");
@@ -47,13 +47,13 @@ describe("deploy/residency", () => {
     expect(residencyFor({ channels: [channel("github")], hasCron: true, hasWakeups: true })?.reason).toBe("github");
     // A long connection is last only because the others are stronger, not because it is optional.
     expect(residencyFor({ ...nothing, hasCron: true, channels: [channel("socket", "long-connection")] })?.reason).toBe(
-      "schedules",
+      "cron",
     );
   });
 
   it("names exactly one reason as externally replaceable", () => {
-    // A guard on the constant itself: it decides whether a host prints "…or drive POST /trigger", and
+    // A guard on the constant itself: it decides whether a host prints "…or drive POST /run", and
     // pointing it at any other reason would publish advice that loses turns.
-    expect(CRON_CAN_BE_EXTERNAL).toBe("schedules");
+    expect(CRON_CAN_BE_EXTERNAL).toBe("cron");
   });
 });

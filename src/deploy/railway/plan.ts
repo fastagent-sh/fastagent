@@ -22,7 +22,7 @@ export interface RailwayPlanInput extends ContainerInput {
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
    *  attributed to the file that declared it. */
   extraSecrets?: readonly DeclaredSecret[];
-  /** `schedules/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
+  /** `routines/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
   hasCron: boolean;
   /** `selfSchedule` is on — the wake tool, which forbids it with no external substitute. */
   hasWakeups: boolean;
@@ -186,14 +186,14 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ...(residency?.reason === CRON_CAN_BE_EXTERNAL
       ? [
           `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
-          `# calls this service's \`POST /trigger\` over the private network — traffic from another service in the`,
+          `# calls this service's \`POST /run\` over the private network — traffic from another service in the`,
           `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
           `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
           `#     AGENT_TRIGGER=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/trigger`,
           `#     curl --retry 3 -fsS -X POST "$AGENT_TRIGGER" -H 'content-type: application/json' -d '{"name":"<schedule>"}'`,
           `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
           `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
-          `# \`POST /trigger\` is an API, not a clock: read its contract — docs/api-reference.md#post-trigger.`,
+          `# \`POST /run\` is an API, not a clock: read its contract — docs/api-reference.md#post-run.`,
         ]
       : []),
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,

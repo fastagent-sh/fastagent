@@ -102,7 +102,7 @@ async function syncAlarms(alarms, ctx) {
  * back at all.
  *
  * Lambda already logs an unhandled throw, so the failure is not invisible; what it is not is ATTRIBUTABLE. An
- * operator (or a probe) filtering this log group for `schedule-fire <name>` sees nothing and concludes the clock
+ * operator (or a probe) filtering this log group for `routine-fire <name>` sees nothing and concludes the clock
  * never fired, when what actually happened is that the clock fired and the call died. Those need different fixes
  * and looked identical from outside — that mistake cost a real debugging session.
  */
@@ -125,11 +125,11 @@ exports.handler = async (event, ctx) => {
   // EventBridge Scheduler fire — throw on failure so the miss lands in CloudWatch, never silently.
   if (event?.scheduleFire) {
     const { name, occurrence } = event.scheduleFire;
-    const label = `schedule-fire ${name} (${occurrence})`;
-    const r = await invokeLogged(label, { kind: "schedule-fire", name, occurrence });
+    const label = `routine-fire ${name} (${occurrence})`;
+    const r = await invokeLogged(label, { kind: "routine-fire", name, occurrence });
     const out = r.body.toString();
     console.log(`${label}: ${r.status} ${out}`);
-    if (r.status >= 400) throw new Error(`schedule-fire ${name} failed: ${r.status} ${out}`);
+    if (r.status >= 400) throw new Error(`routine-fire ${name} failed: ${r.status} ${out}`);
     return { status: r.status };
   }
   const http = event?.requestContext?.http;

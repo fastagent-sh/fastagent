@@ -1,5 +1,5 @@
 /**
- * `fastagent schedule fire <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for schedules (like `invoke`
+ * `fastagent routine run <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for routines (like `invoke`
  * is for a prompt).
  */
 import { join } from "node:path";
@@ -7,8 +7,8 @@ import { displayPath } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
-import { loadSchedules } from "../../schedule/discover.ts";
-import { scheduleSession } from "../../schedule/schedule.ts";
+import { loadRoutines } from "../../schedule/discover.ts";
+import { routineSession } from "../../schedule/routine.ts";
 import { failStartup, gateSecretsOrExit } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
@@ -20,20 +20,20 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const placement = await enterAgentCommand(dirArg, opts);
-  // Schedules are agent surface — discover them where dev/start/`schedule list` do (the agent dir), so `fire` sees
+  // Schedules are agent surface — discover them where dev/start/`routine list` do (the agent dir), so `fire` sees
   // the same set the scheduler serves.
-  const { schedules, secrets, failures } = await loadSchedules(placement.agentDir).catch(failStartup);
-  // Reported BEFORE the name is looked up: a schedule file that failed to import is missing from
-  // `schedules`, so "unknown schedule" is the case where the author most needs to hear about it.
+  const { routines, secrets, failures } = await loadRoutines(placement.agentDir).catch(failStartup);
+  // Reported BEFORE the name is looked up: a routine file that failed to import is missing from
+  // `routines`, so "unknown routine" is the case where the author most needs to hear about it.
   reportModuleLoadFailures(failures);
-  const schedule = schedules.find((s) => s.name === name);
-  if (!schedule) {
+  const routine = routines.find((r) => r.name === name);
+  if (!routine) {
     // Name the discovery path: a schedule misplaced in the workspace (outside the agent dir) should read as "wrong
     // place", not "broken file".
     failStartup(
       new Error(
-        `unknown schedule "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "schedules")) ?? "schedules"}). ` +
-          `available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
+        `unknown routine "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "routines")) ?? "schedules"}). ` +
+          `available: ${routines.map((r) => r.name).join(", ") || "(none)"}`,
       ),
     );
   }
@@ -53,7 +53,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   console.error(`[fastagent] fire: ${name} (${modelSpec})`);
   await reportAuth(placement.agentDir, modelSpec, authPath, fallbackAuthPath);
   const exitCode = await runInvokeStream(
-    agent.invoke({ session: scheduleSession(name) }, { text: schedule.prompt }),
+    agent.invoke({ session: routineSession(name) }, { text: routine.prompt }),
     (text) => process.stdout.write(text),
     (line) => console.error(line),
   );

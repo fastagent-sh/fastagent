@@ -202,7 +202,7 @@ function createAgentService(
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
                                           // took over or `http.invoke: false` withheld
-  schedules: readonly LoadedSchedule[];
+  routines: readonly LoadedRoutine[];
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   controlPrefix?: string;                // "/control", when sessionControl is on
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
@@ -320,7 +320,7 @@ bare read cannot have:
 
 `ctx.secrets` reads the process environment on every call, so a value rotated IN THE ENVIRONMENT
 takes effect without a restart — a value rotated in `.secrets/.env` does not, since that file is read
-once at startup. Its keys are typed from the list: a typo is a compile error. `defineChannel` and `defineSchedule` take the same
+once at startup. Its keys are typed from the list: a typo is a compile error. `defineChannel` and `defineRoutine` take the same
 field, and `fastagent info` prints every declared name plus the ones with no local value.
 
 The second `execute` argument is a `ToolContext`:
@@ -441,7 +441,7 @@ is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.
 
-Enabled files under `tools/`, `channels/` and `schedules/` are declarations, so a run that cannot load one refuses
+Enabled files under `tools/`, `channels/` and `routines/` are declarations, so a run that cannot load one refuses
 to start and names every file that failed: an agent short a tool or a cron is not the agent its author described,
 and a service that announced itself ready leaves nothing to notice that by. An absent directory is valid, and
 `<name>.ts.disabled` is how a file is turned off on purpose. Inspection (`fastagent info`, `fastagent tool`) is the
@@ -457,40 +457,60 @@ const textHeaders: { readonly "content-type": "text/plain" };
 
 See [Channel development](channel-development.md).
 
-## Schedule authoring
+## Routine authoring
+
+A **routine** is the unit of work, and the only named one: a prompt the definition owns, addressed by
+name. `cron` is a *field* of it, not a second concept — with one, a clock fires it; without one, its
+name is the only way in (`POST /run`, `fastagent routine run`). That is why this is not called a
+"schedule": the file used to be named for the time it carried, and a file carrying no time made the
+name a lie.
 
 ```ts
-interface Schedule {
-  cron: string; // 5-field cron expression
-  tz?: string; // IANA timezone (default "UTC")
-  prompt: string; // the turn's text = the job's instruction (a builder is resolved at load)
+interface Routine {
+  prompt: string; // the turn's text = the routine's instruction (a builder is resolved at load)
+  cron?: string; // 5-field cron expression — ABSENT means "by name only"
+  tz?: string; // IANA timezone (default "UTC"); meaningless without `cron`
   secrets?: readonly string[]; // env vars this file needs, typed into the prompt builder
 }
 // what an author writes: `prompt` may be built FROM the declared secrets, keys typed from `secrets`
-function defineSchedule<const S extends readonly string[]>(schedule: {
-  cron: string;
-  tz?: string;
+function defineRoutine<const S extends readonly string[]>(routine: {
   prompt: string | ((secrets: Record<S[number], string>) => string);
+  cron?: string;
+  tz?: string;
   secrets?: S;
-}): Schedule;
+}): Routine;
 ```
 
-An agent declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
-the filename becomes the schedule name (it also becomes a directory name under `<stateRoot>/schedule/claims/`, so
-`.`, `..` and path separators are refused — everything else a filename may contain is fine). Each file
-default-exports `defineSchedule({ cron, tz?, prompt })`.
+An agent declares routines by dropping `routines/<name>.ts`, mirroring `tools/`/`channels/`; the
+filename becomes the routine name (it also becomes a directory name under
+`<stateRoot>/schedule/claims/`, so `.`, `..` and path separators are refused — everything else a
+filename may contain is fine). Each file default-exports `defineRoutine({ prompt, cron? })`.
 
 ```ts
-// schedules/daily-digest.ts        → schedule "daily-digest"
-import { defineSchedule } from "@fastagent-sh/fastagent";
+// routines/daily-digest.ts        → routine "daily-digest", fired by the clock and callable by name
+import { defineRoutine } from "@fastagent-sh/fastagent";
 
-export default defineSchedule({
+export default defineRoutine({
   cron: "0 9 * * *",
   tz: "America/New_York",
   secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — carried by deploy, asserted at start
   prompt: (secrets) => `Generate today's digest and send it with slack-send to channel ${secrets.SLACK_DIGEST_CHANNEL}.`,
 });
 ```
+
+```ts
+// routines/reindex.ts             → routine "reindex", no clock: reached by name alone
+export default defineRoutine({ prompt: "Re-read the docs and refresh your notes." });
+```
+
+**A routine keeps one continuing conversation.** All of its turns run in `routine:<name>`, so it
+remembers its previous runs and knows nothing about any user's chat. That is also what separates it
+from a **wake-up**: the agent can schedule work for itself (`selfSchedule`), and conceptually that is
+the same idea — work to be done later — but every operational difference follows from one root. A
+routine is written in the *definition* (versioned, reviewed, shipped with the image, named by its
+author, reachable by name); a wake-up is written into the *state* by a running agent (minted id,
+cancellable, aimed back at the conversation it came from). Code and data. `fastagent routine list`
+reads the first, `fastagent wake list` the second.
 
 **The delivery target belongs in `secrets`, not in the prompt text.** A chat/channel id is
 environment-specific, so declare it and build the prompt from it: the builder runs once at load, its
@@ -501,13 +521,13 @@ The scheduler is a time-trigger (the N axis, clock form): on each cron instant i
 with `prompt` — borrowing the same `Agent` contract as channels, adding none. It:
 
 - **carries no `session` field** — a session id is runtime conversational context, not a build-time
-  value. It derives a stable per-schedule session (`schedule:<name>`), so a
+  value. It derives a stable per-schedule session (`routine:<name>`), so a
   schedule's turns share one continuing conversation persisted by the core session store (zero-touch on
   storage, like the telegram channel deriving a session from `chat.id`);
 - **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome (and the
   failure detail when there is one). What the turn SAID is not logged and not copied into the fire's record: it is
   in the session above, persisted under `<stateRoot>/sessions/` as a journal file.
-  `fastagent schedule history` prints the fired slots and their outcomes;
+  `fastagent routine history` prints the fired slots and their outcomes;
 - **catches up an overdue run once** — each fired slot leaves a claim under `<stateRoot>/schedule/claims/<name>/`,
   created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
   several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock
@@ -516,15 +536,15 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   claim is refused as a stale replay.
 
 The scheduler is started by
-the serve path (`dev`/`start`); `fastagent schedule fire <name>` runs one schedule's turn immediately for authoring.
+the serve path (`dev`/`start`); `fastagent routine run <name>` runs one schedule's turn immediately for authoring.
 
-### `POST /trigger`
+### `POST /run`
 
-A serve that declares any schedule also answers `POST /trigger` — **an API that runs one declared unit
+A serve that declares any schedule also answers `POST /run` — **an API that runs one declared unit
 of work by name**:
 
 ```bash
-curl -sS -X POST https://your-agent/trigger \
+curl -sS -X POST https://your-agent/run \
   -H 'content-type: application/json' -d '{"name":"daily-digest"}'
 ```
 
@@ -544,7 +564,7 @@ poisoned the claim gate permanently, one off the grid minted a claim no occurren
 an old one replayed history a turn at a time. A platform cron drifting by a few minutes (Railway
 documents exactly that) then lost an occurrence outright.
 
-**The body names WHAT to run and nothing else.** The prompt stays in `schedules/<name>.ts`, which is
+**The body names WHAT to run and nothing else.** The prompt stays in `routines/<name>.ts`, which is
 what makes this different from driving `POST /invoke` from a cron line — the caller there brings its
 own text, and with it the agent's behaviour. The name rides in the body rather than the path because a
 declared name is a filename (`每日简报`, `my schedule` are both legal) and a path segment would mean
@@ -553,18 +573,18 @@ percent-encoding it.
 **There is no idempotency key, and the reply is why.** One was built here and removed: it deduplicated
 the *call*, not the *work*. A turn that sent one message and then died would answer a keyed retry with
 "already ran" — safety exactly where it is absent, which is the same reason [a failed fire is not
-retried](#post-trigger). It was also a bounded window, so the guarantee came with an asterisk, and
+retried](#post-run). It was also a bounded window, so the guarantee came with an asterisk, and
 `POST /invoke` offers none of it on the same port under the same exposure. **Retry policy is yours,
 because only you know whether your work tolerates running twice** — and what makes a retry safe is
 idempotent work, which only the author can arrange.
 
 What the reply gives you instead is *where to look*: `session` is the session the turn ran in, and its
-journal is where that turn's output actually is (`fastagent schedule history <name>`, or
+journal is where that turn's output actually is (`fastagent routine history <name>`, or
 `/control/sessions/<id>/events` where the observation plane is served). An id minted per call would
 appear nowhere else.
 
 **It is exactly as exposed as `POST /invoke`**: unauthenticated, with the agent's full tool authority.
-`http.invoke: false` withholds both; `http.trigger: true` keeps this one for a port whose only other
+`http.invoke: false` withholds both; `http.run: true` keeps this one for a port whose only other
 ingress is the channels' signature checks. A gateway in front is the answer to anything more. The
 framework authenticates nothing — [design §14](design/session-control.md).
 
@@ -583,7 +603,7 @@ process, and every host has its own: [Fly](https://fly.io/docs/blueprints/task-s
 Cron Manager, supercronic or scheduled Machines; Railway offers a **cron service** (Settings → Cron
 Schedule, 5-minute floor) which can call this route over the private network, and traffic from another
 service in the project is what wakes a slept one. On AgentCore none of this applies — `deploy` already
-registered the rules, and `http.trigger` is inert there and says so at startup.
+registered the rules, and `http.run` is inert there and says so at startup.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
 capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
@@ -593,7 +613,7 @@ records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a R
 the conversation — the woken turn's prompt is enveloped with the wake-up's id and origin ("YOUR
 self-scheduled turn, not a user message"), so the model can tell its own alarm from the user speaking. It reads the current session through `ToolContext.sessionManager`; guardrails cap the minimum delay,
 the recurring frequency (≥10 min between fires), and the per-session pending count. The agent cancels its own
-with `unwake({ id })` (session-scoped); the operator with `fastagent schedule cancel <id>` (`schedule list`
+with `unwake({ id })` (session-scoped); the operator with `fastagent wake cancel <id>` (`schedule list`
 shows ids).
 
 ## Config and models
@@ -916,7 +936,7 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
-POST   /trigger                                {name, occurrence?} — fire a schedule this agent declares
+POST   /run                                {name, occurrence?} — fire a schedule this agent declares
 ```
 
 The data plane is a root verb endpoint, not part of this prefix: `/control/*` is REST over session

@@ -44,7 +44,7 @@ export function writeScheduleFile(path: string, value: unknown): void {
 // ── claims/: one file per fired slot — the DECISION to fire, made atomically ──
 
 /**
- * How many claims to keep per schedule — and therefore how far back `fastagent schedule history` can see, since
+ * How many claims to keep per schedule — and therefore how far back `fastagent routine history` can see, since
  * the claims ARE the history. The gate below reads only the newest, so this number answers the history's question,
  * "did last night's run silently fail?": at 512 a minute cron keeps ~8.5 hours, an hourly one ~3 weeks.
  *
@@ -186,7 +186,7 @@ function readClaim(dir: string, name: string): Fire | undefined {
 
 /**
  * A schedule name becomes a path segment (its claims live in `claims/<name>/`), so the rule is exactly the safety
- * boundary and nothing more: a name may not leave that directory. The name comes from a filename under `schedules/`,
+ * boundary and nothing more: a name may not leave that directory. The name comes from a filename under `routines/`,
  * which already cannot contain a separator — so what a stricter rule would actually reject is legal filenames
  * (`每日简报`, `my schedule`), whose only symptom would be a schedule that silently never fires again.
  *
@@ -274,7 +274,7 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
  * the history. Nothing here grows: the pruning that keeps the claim gate cheap keeps the history's size fixed too,
  * which is why there is no separate audit file to rotate (what the turn SAID is in its session, not here).
  *
- * THE HISTORY read, and its only caller is the read-only `schedule history` — which translates a read fault into a
+ * THE HISTORY read, and its only caller is the read-only `routine history` — which translates a read fault into a
  * one-line refusal. The serving boot reads `latestFire` instead: it asks about ONE claim, and a window of files kept
  * for an operator to look at has no business deciding whether a service starts.
  */

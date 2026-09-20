@@ -97,13 +97,13 @@ export async function liveVersion(): Promise<string> {
  * Every deploy probe used to write `dependencies: { "@fastagent-sh/fastagent": <version> }`, and npm resolved that
  * from the REGISTRY. The container then ran the last published release while the CLI, the generated template and
  * the forwarder all came from the working tree: the probe reported on a pair that exists nowhere, and could not
- * fail on a change to the code under review. A `POST /trigger` branch shipped a forwarder speaking a newer envelope
+ * fail on a change to the code under review. A `POST /run` branch shipped a forwarder speaking a newer envelope
  * than the container it deployed, and the probe's only symptom was "EventBridge never delivered".
  *
  * ALWAYS, INCLUDING IN CI, because the mixture is not something a pin can fix. Three of the four artifacts a deploy
  * probe exercises come from the checkout unconditionally, so honouring `FASTAGENT_LIVE_VERSION` here would keep the
  * nightly run deploying "published container + this branch's forwarder" — the very pairing this function exists to
- * end, and one that would have turned `agentcore-wake` red every night after `POST /trigger` merged, at the cost of
+ * end, and one that would have turned `agentcore-wake` red every night after `POST /run` merged, at the cost of
  * two AgentCore deployments each time. Verifying a release means checking out its tag, not pinning one dependency.
  *
  * The tarball is built once per run by the `globalSetup` in vitest.live.config.ts; the image build carries `*.tgz`

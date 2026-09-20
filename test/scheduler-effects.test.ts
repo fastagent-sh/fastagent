@@ -91,7 +91,7 @@ it.each(["cron", "one-shot", "recurring"] as const)(
   "SIGTERM preserves the claimed %s state without claiming the next wake",
   async (kind) => {
     const stateRoot = await freshRoot();
-    const schedules = kind === "cron" ? [hourly()] : [];
+    const routines = kind === "cron" ? [hourly()] : [];
     if (kind === "cron") seedFiredSlots(stateRoot, ["job"], "2026-07-07T08:00:00Z");
     else
       writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
@@ -112,13 +112,13 @@ it.each(["cron", "one-shot", "recurring"] as const)(
         `
     import * as Effect from "effect/Effect";
     const { createScheduler } = await import(process.argv[1]);
-    const { stateRoot, schedules, now } = JSON.parse(process.argv[2]);
+    const { stateRoot, routines, now } = JSON.parse(process.argv[2]);
     process.on("message", () => {});
     const agent = { async *invoke() { process.send("running"); await new Promise(() => {}); } };
-    Effect.runSync(createScheduler({ agent, stateRoot, schedules, now: () => new Date(now) })).start();
+    Effect.runSync(createScheduler({ agent, stateRoot, routines, now: () => new Date(now) })).start();
   `,
         new URL("../src/schedule/scheduler.ts", import.meta.url).href,
-        JSON.stringify({ stateRoot, schedules, now: NOW.toISOString() }),
+        JSON.stringify({ stateRoot, routines, now: NOW.toISOString() }),
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     );
@@ -157,7 +157,7 @@ it.each(["cron", "one-shot", "recurring"] as const)(
           },
         },
         stateRoot,
-        schedules,
+        routines,
         now: () => NOW,
       }),
     );
@@ -194,14 +194,14 @@ it("uses the provided clock across start and stop, without counting idle timers 
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
-      const s = yield* createScheduler({ agent, stateRoot, schedules: [hourly()] });
+      const s = yield* createScheduler({ agent, stateRoot, routines: [hourly()] });
       try {
         s.start();
         yield* TestClock.adjust(29 * 60_000);
         expect(calls).toEqual([]);
         expect(activeWork()).toBe(base);
         yield* TestClock.adjust(60_000);
-        expect(calls).toEqual(["schedule:job"]);
+        expect(calls).toEqual(["routine:job"]);
         expect(readFires(stateRoot, "job")[0]).toMatchObject({
           firedAt: "2026-07-07T11:00:00.000Z",
           outcome: "completed",
@@ -218,7 +218,7 @@ it("uses the provided clock across start and stop, without counting idle timers 
   );
 });
 
-it("keeps schedules concurrent, serializes each schedule, and skips slots missed by a slow turn", async () => {
+it("keeps routines concurrent, serializes each routine, and skips slots missed by a slow turn", async () => {
   const stateRoot = await freshRoot();
   const finish = Promise.withResolvers<void>();
   const calls: string[] = [];
@@ -232,17 +232,17 @@ it("keeps schedules concurrent, serializes each schedule, and skips slots missed
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
-      const s = yield* createScheduler({ agent, stateRoot, schedules: [hourly("a"), hourly("b")] });
+      const s = yield* createScheduler({ agent, stateRoot, routines: [hourly("a"), hourly("b")] });
       try {
         s.start();
         yield* TestClock.adjust(2 * 60 * 60_000);
-        expect(calls).toEqual(["schedule:a", "schedule:b"]);
+        expect(calls).toEqual(["routine:a", "routine:b"]);
         finish.resolve();
         yield* Effect.promise(tick);
         yield* TestClock.adjust(29 * 60_000);
         expect(calls).toHaveLength(2);
         yield* TestClock.adjust(60_000);
-        expect(calls).toEqual(["schedule:a", "schedule:b", "schedule:a", "schedule:b"]);
+        expect(calls).toEqual(["routine:a", "routine:b", "routine:a", "routine:b"]);
       } finally {
         s.stop();
         finish.resolve();
@@ -262,7 +262,7 @@ it("rechecks capped waits against wall-clock jumps and never fires early", async
       const s = yield* createScheduler({
         agent: { invoke },
         stateRoot,
-        schedules: [{ ...hourly(), cron: "0 9 * * *" }],
+        routines: [{ ...hourly(), cron: "0 9 * * *" }],
         now: () => wall,
       });
       try {
@@ -294,7 +294,7 @@ it("publishes the running loop before an invoke callback re-enters stop", async 
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
-      s = yield* createScheduler({ agent: { invoke }, stateRoot, schedules: [hourly("a"), hourly("b")] });
+      s = yield* createScheduler({ agent: { invoke }, stateRoot, routines: [hourly("a"), hourly("b")] });
       try {
         s.start();
         yield* Effect.promise(tick);
@@ -317,7 +317,7 @@ it("reports a defective wake clock instead of silently losing its polling loop",
     Effect.gen(function* () {
       const clock = yield* Clock.Clock;
       vi.spyOn(clock, "sleep").mockReturnValue(Effect.die(error));
-      const s = yield* createScheduler({ agent: { invoke: vi.fn() }, stateRoot, schedules: [] });
+      const s = yield* createScheduler({ agent: { invoke: vi.fn() }, stateRoot, routines: [] });
       s.start();
       expect(logged).toHaveBeenCalledWith(
         expect.stringContaining("wake-up poll: stopped unexpectedly: Error: clock failed"),
@@ -339,7 +339,7 @@ it("an iterator throw stays terminal, with or without a preceding busy event", a
     writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
       { id: "w", session: "s", prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
     ]);
-    const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [], now: () => NOW }));
+    const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, routines: [], now: () => NOW }));
     try {
       s.start();
       const label = `busy=${busy}`;
@@ -379,7 +379,7 @@ it.each([false, true])("reports a wake deferral write failure before restoring s
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
-      const s = yield* createScheduler({ agent, stateRoot, schedules: [] });
+      const s = yield* createScheduler({ agent, stateRoot, routines: [] });
       try {
         s.start();
         yield* Effect.promise(() => entered.promise);
@@ -451,7 +451,7 @@ it("a boot-time cron-state fault fails start synchronously before any loop runs"
   await mkdir(join(stateRoot, "schedule", "claims"), { recursive: true });
   await writeFile(join(stateRoot, "schedule", "claims", "job"), "");
   const invoke = vi.fn();
-  const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [hourly()] }));
+  const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, routines: [hourly()] }));
   expect(() => s.start()).toThrow(/ENOTDIR|not a directory/);
   s.stop();
   await tick();

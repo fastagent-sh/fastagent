@@ -4,7 +4,7 @@
  * `declared-secrets.ts` answers "which env vars did this code declare, and which have no value" —
  * a predicate. This module owns the three decisions that turn that predicate into a refusal, and it
  * exists because those three were hand-written at five call sites (the agent opener, the scheduler
- * start, channel loading, `fastagent tool`, `fastagent schedule fire`) and review found one or another of
+ * start, channel loading, `fastagent tool`, `fastagent routine run`) and review found one or another of
  * them wrong seven times:
  *
  *  1. WHICH declarations gate this run. A serve mounts every tool, schedule and channel, so all of

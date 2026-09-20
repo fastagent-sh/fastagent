@@ -194,11 +194,11 @@ describe("mountAgentcoreService", () => {
   it("names every config key that cannot mean anything here, not just sessionControl", async () => {
     // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
     // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.invoke`
-    // has no `/invoke` to withhold (this host serves `POST /invocations`); `http.trigger` has no
+    // has no `/invoke` to withhold (this host serves `POST /invocations`); `http.run` has no
     // anonymous route to withhold either, because schedules fire through the ingress-gated envelope.
     const dir = await agentDir(
       {},
-      `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false, trigger: false } }`,
+      `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false, run: false } }`,
     );
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const service = await mountAgentcoreService(await open(dir));
@@ -206,7 +206,7 @@ describe("mountAgentcoreService", () => {
       const said = warn.mock.calls.flat().join(" ");
       expect(said).toMatch(/http\.cors has no effect here/);
       expect(said).toMatch(/http\.invoke has no effect here/);
-      expect(said).toMatch(/http\.trigger has no effect here/);
+      expect(said).toMatch(/http\.run has no effect here/);
     } finally {
       warn.mockRestore();
       await service.close();
@@ -283,9 +283,9 @@ describe("mountAgentcoreService", () => {
     // This is the half of the split that keeps a slot, a claim, a fire history and the overlap policy:
     // `deploy` wrote the EventBridge rule and injected `<aws.scheduler.scheduled-time>`, the forwarder
     // relays it behind the ingress secret, so the instant IS a grid point of that schedule and the
-    // claim means something. `POST /trigger` is the other contract — an unauthenticated API with no
+    // claim means something. `POST /run` is the other contract — an unauthenticated API with no
     // occurrence — and is not served on this host at all (asserted above).
-    const dir = await agentDir({ "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` });
+    const dir = await agentDir({ "routines/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` });
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const service = await mountAgentcoreService(await open(dir));
     const occurrence = "2026-07-07T09:00:00.000Z";
@@ -294,7 +294,7 @@ describe("mountAgentcoreService", () => {
         new Request("http://h/invocations", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "digest", occurrence }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "routine-fire", name: "digest", occurrence }),
         }),
       );
     try {
@@ -305,7 +305,7 @@ describe("mountAgentcoreService", () => {
       const retry = (await (await fire()).json()) as { fired: boolean; skippedReason?: string };
       expect(retry.fired).toBe(false);
       expect(retry.skippedReason).toContain("already claimed");
-      // …and the fire is on the record, which is what `fastagent schedule history` reads.
+      // …and the fire is on the record, which is what `fastagent routine history` reads.
       const { readFires } = await import("../src/schedule/state.ts");
       const { resolveStateRoot } = await import("../src/paths.ts");
       expect(readFires(resolveStateRoot(dir), "digest").map((f) => f.slot)).toEqual([occurrence]);
@@ -315,7 +315,7 @@ describe("mountAgentcoreService", () => {
         new Request("http://h/invocations", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "gone", occurrence }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "routine-fire", name: "gone", occurrence }),
         }),
       );
       expect(unknown.status).toBe(404);
@@ -327,11 +327,11 @@ describe("mountAgentcoreService", () => {
 
   it("reports loaded schedules, and close() is safe to call twice", async () => {
     const dir = await agentDir(
-      { "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
+      { "routines/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
       `{ model: "openai-codex/gpt-5.5" }`,
     );
     const service = await mountAgentcoreService(await open(dir));
-    expect(service.schedules.map((s) => s.name)).toEqual(["digest"]);
+    expect(service.routines.map((s) => s.name)).toEqual(["digest"]);
 
     await service.close();
     // Both the shutdown hook and an explicit close can run.
