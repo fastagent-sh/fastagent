@@ -220,7 +220,7 @@ export default defineTool({
     //
     // Truncated PER ANSWER, not once over the array: a miss lists the active tools with their descriptions, which is
     // long enough to eat the hit that followed it — the same degradation, reached by formatting. The cap clears 350,
-    // the length of a real activation answer, because `addedToolNames` is the last field in it and IS the decider.
+    // the length of a real activation answer, whose `Activated: ...` line is what the assertion below reads.
     const answered = events.flatMap((e) =>
       e.type === "tool_ended" && searchIds.has(e.id) ? [JSON.stringify(e.content).slice(0, 600)] : [],
     );

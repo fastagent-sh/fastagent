@@ -5,7 +5,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import type { SessionSummary, SessionUpdateField } from "../../session.ts";
-import { LEAF_ANCHOR, publishedLeaf, stampProvenance } from "./session-markers.ts";
+import { LEAF_ANCHOR, isConversationMessage, publishedLeaf, stampProvenance } from "./session-markers.ts";
 import { type OverrideEntryLike, activePath } from "./session-settings.ts";
 import {
   type SessionInheritance,
@@ -359,12 +359,17 @@ function recordFiles(dir: string): { path: string; id: string }[] {
 
 /** One record as a conversation-list row. */
 function summarize(session: string, record: SessionManager): SessionSummary {
-  const entries = record.getEntries() as unknown as { type?: string; timestamp?: string; message?: unknown }[];
+  const entries = record.getEntries() as unknown as {
+    type?: string;
+    timestamp?: string;
+    message?: { role?: string; content?: unknown };
+  }[];
   const createdAt = Date.parse(record.getHeader()?.timestamp ?? "") || 0;
   // `|| 0` on both: an unparseable timestamp is NaN, and NaN in `updatedAt` serializes to `null` — which the contract
   // types as a number and a client sorts by.
   const lastAt = Date.parse(entries.at(-1)?.timestamp ?? "") || 0;
-  const messages = entries.filter((e) => e.type === "message");
+  // A list row counts turns in the conversation, not the engine's system bookkeeping (`isConversationMessage`).
+  const messages = entries.filter(isConversationMessage);
   const name = record.getSessionName();
   const preview = firstUserText(messages);
   return {
@@ -416,9 +421,15 @@ const PREVIEW_CHARS = 200;
  * It APPENDS the missing result, so a caller must run it on the record it is allowed to write.
  */
 function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
-  const messages = record.getBranch().flatMap((entry) => {
-    const message = (entry as { type?: string; message?: AgentMessage }).message;
-    return (entry as { type?: string }).type === "message" && message ? [message] : [];
+  // Conversation messages only (`isConversationMessage`), for consistency with the journal's other readers rather
+  // than against an observable failure: a system entry carries no toolCall to pair, and pi writes its prompt
+  // patches only at a request boundary, so the order is always `assistant(toolCall) -> toolResult... ->
+  // system(patch)` and the "unpaired leaf followed by a system entry" this would rule out cannot be constructed.
+  // Untested for that reason. What it does buy is that a future pi writing a system entry mid-batch degrades to
+  // "no repair needed" instead of silently reading the leaf as unrepairable.
+  const messages = record.getBranch().flatMap((raw) => {
+    const entry = raw as { type?: string; message?: AgentMessage };
+    return isConversationMessage(entry) && entry.message ? [entry.message] : [];
   });
 
   let leafIdx = -1;

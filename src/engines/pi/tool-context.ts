@@ -26,17 +26,23 @@ export function agentSessionManager(session: AgentSession, sessionId: string): R
 
 /**
  * The turn's tool-activation bridge — narrow closures over the CURRENT session (bound per turn), so a loader tool can
- * activate deferred tools mid-turn without tool.ts importing the engine. pi records the change in the session
- * (`active_tools_change`) and the per-invoke restore (agent-session-factory.ts) carries it into later turns;
- * defineTool's wrapper stamps the newly-activated names on the tool result (`addedToolNames`) — the load point native
- * deferred-loading providers preserve the prompt-cache prefix with.
+ * activate deferred tools mid-turn without tool.ts importing the engine. pi anchors the addition in the transcript
+ * (a system message carrying `toolsAdded`, written after the batch of tool results the activating call belongs to),
+ * so providers with native deferred loading keep their
+ * prompt-cache prefix; that message describes the run that wrote it, so what carries an activation into LATER turns
+ * is fastagent's own `fastagent:tool-activation` entry, replayed by the per-invoke restore
+ * (agent-session-factory.ts).
  */
 export interface ToolActivation {
   /** Names of the currently ACTIVE tools. */
   active(): string[];
   /** Every registered tool (active or not) — the discovery corpus for a loader like `search_tools`. */
   registered(): Array<{ name: string; description: string }>;
-  /** ADDITIVE activation. */
+  /**
+   * ADDITIVE activation. Returns ONLY the names this call actually added — a name a batch sibling activated first
+   * is not in it. That return value is the caller's truth for both what to report and what to charge an activation
+   * cap: the call is atomic, but an `active()` -> await -> `activate()` sequence around it is not.
+   */
   activate(names: string[]): string[];
 }
 

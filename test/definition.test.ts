@@ -3,7 +3,7 @@ import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-codin
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { makeFaux } from "./faux.ts";
+import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -153,7 +153,7 @@ describe("definition: loadAgentDefinition", () => {
     const { faux } = makeFaux();
     faux.setResponses([
       (context) => {
-        prompt = context.systemPrompt ?? "";
+        prompt = sentPrompt(context);
         return fauxAssistantMessage("ok");
       },
     ]);
@@ -178,7 +178,7 @@ describe("create: assembleSystemPrompt (identity and project context)", () => {
     expect(prompt).toContain("<project_instructions");
     expect(prompt).toContain("Haiku Bot");
     expect(prompt).not.toContain("<available_skills>");
-    expect(prompt).not.toContain("Current working directory:");
+    expect(prompt).not.toContain("<cwd>");
     expect(prompt.indexOf("operating inside pi")).toBeLessThan(prompt.indexOf("<project_instructions"));
   });
 
@@ -236,8 +236,8 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     const { faux } = makeFaux();
     faux.setResponses([
       (context) => {
-        seenSystemPrompt = context.systemPrompt;
-        seenTools = (context.tools ?? []).map((t) => t.name);
+        seenSystemPrompt = sentPrompt(context);
+        seenTools = sentTools(context);
         return fauxAssistantMessage("old pond… — haiku-bot");
       },
     ]);
@@ -255,7 +255,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("Haiku Bot");
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt?.match(/<available_skills>/g)).toHaveLength(1);
-    expect(seenSystemPrompt?.match(/Current working directory:/g)).toHaveLength(1);
+    expect(seenSystemPrompt?.match(/<cwd>/g)).toHaveLength(1);
     expect(seenSystemPrompt?.match(/<project_context>/g)).toHaveLength(1);
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
@@ -274,7 +274,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     const instructions = vi.fn((): string => `Instruction ${instructions.mock.calls.length}`);
     faux.setResponses(
       [1, 2].map(() => (context) => {
-        seen.push(context.systemPrompt ?? "");
+        seen.push(sentPrompt(context));
         return fauxAssistantMessage("ok");
       }),
     );
@@ -310,7 +310,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     const { faux } = makeFaux();
     faux.setResponses([
       (ctx) => {
-        seen = ctx.systemPrompt;
+        seen = sentPrompt(ctx);
         return fauxAssistantMessage("ok");
       },
     ]);
@@ -321,7 +321,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
-    expect((seen ?? "").split("\nCurrent working directory:")[0]).toBe("You are a support bot.");
+    expect((seen ?? "").split("\n\n<cwd>")[0]).toBe("You are a support bot.");
     expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
   });
 
@@ -332,7 +332,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     faux.setResponses([
       fauxAssistantMessage(fauxToolCall("try_enable_bash", {}, { id: "c1" })),
       (context) => {
-        offeredAfter = (context.tools ?? []).map((tool) => tool.name);
+        offeredAfter = sentTools(context);
         return fauxAssistantMessage("done");
       },
     ]);
@@ -363,7 +363,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       const { faux } = makeFaux();
       faux.setResponses([
         (ctx) => {
-          seen = ctx.systemPrompt;
+          seen = sentPrompt(ctx);
           return fauxAssistantMessage("ok");
         },
       ]);
@@ -378,7 +378,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       await collect(agent.invoke({ session: "s" }, { text: "hi" }));
       expect(seen, `read: ${read}`).toContain("P");
       expect(seen?.match(/<available_skills>/g) ?? [], `read: ${read}`).toHaveLength(read ? 1 : 0);
-      expect(seen?.match(/Current working directory:/g)).toHaveLength(1);
+      expect(seen?.match(/<cwd>/g)).toHaveLength(1);
     }
   });
 
@@ -388,7 +388,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       const { faux } = makeFaux();
       faux.setResponses([
         (ctx) => {
-          seen = ctx.systemPrompt;
+          seen = sentPrompt(ctx);
           return fauxAssistantMessage("ok");
         },
       ]);
@@ -435,11 +435,11 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { faux } = makeFaux();
     faux.setResponses([
       (ctx) => {
-        seen.push(ctx.systemPrompt);
+        seen.push(sentPrompt(ctx));
         return fauxAssistantMessage("one");
       },
       (ctx) => {
-        seen.push(ctx.systemPrompt);
+        seen.push(sentPrompt(ctx));
         return fauxAssistantMessage("two");
       },
     ]);
@@ -470,11 +470,11 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { faux } = makeFaux();
     faux.setResponses([
       (ctx) => {
-        seen.push(ctx.systemPrompt);
+        seen.push(sentPrompt(ctx));
         return fauxAssistantMessage("one");
       },
       (ctx) => {
-        seen.push(ctx.systemPrompt);
+        seen.push(sentPrompt(ctx));
         return fauxAssistantMessage("two");
       },
     ]);
@@ -614,7 +614,7 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     // one that resolves it, and each directory holds a different file at that name.
     faux.setResponses([
       (context) => {
-        systemPrompt = context.systemPrompt ?? "";
+        systemPrompt = sentPrompt(context);
         return {
           ...fauxAssistantMessage(""),
           content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "marker.txt" } }],
@@ -681,7 +681,7 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     let prompt = "";
     faux.setResponses([
       (context) => {
-        prompt = context.systemPrompt ?? "";
+        prompt = sentPrompt(context);
         return fauxAssistantMessage("ok");
       },
     ]);

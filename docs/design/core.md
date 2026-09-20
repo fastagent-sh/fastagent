@@ -182,13 +182,21 @@ deployment owns: per-invoke state (SPEC MUST 6, what AgentCore and every scaled 
 swappable at this rung alone — [conformance-levels.md](conformance-levels.md) states what each posture
 owes.
 
-Reopening is faithful to the whole record, not just the messages. pi does not read active-tool changes
-back (its own session is resident), so `piAgentSessionFactory` resolves the active-tool set itself: the
-union of the initial set (every non-deferred tool) and the session's accumulated activation *deltas* —
-`fastagent:tool-activation` entries carrying exactly the names that call activated. pi's own
-`active_tools_change` entries are full snapshots and are ignored: replaying one would freeze
-later-added tools out of old sessions and keep a later-`deferred` tool active in sessions that never
-discovered it. Corollary: *narrowing* the active set is not representable in this record.
+Reopening is faithful to the whole record, not just the messages. `piAgentSessionFactory` resolves the
+active-tool set itself: the union of the initial set (every non-deferred tool *currently* mounted) and
+the session's accumulated activation *deltas* — `fastagent:tool-activation` entries carrying exactly
+the names that call activated. pi has its own answer — since 0.86 an `AgentSession` can restore a tool
+set from the transcript's `toolsAdded` declarations — and it does not participate here. It has two triggers.
+At construction it is guarded: pi restores only for a session built without an explicit initial active set, and
+the SDK entry every bind goes through always passes one. On branch navigation (`AgentSession.navigateTree`)
+it is unconditional — out of reach only because the control plane moves a leaf with `SessionManager.branch()`
+and never through an `AgentSession`. Re-routing that write is the change that would break this.
+
+Resolving the set ourselves is what keeps a definition change reaching an old conversation: the initial set is
+read from TODAY's mounted tools, not from what the transcript declared. A tool added to the definition
+joins existing sessions (`agent-session-factory.test.ts`), and a tool flipped to
+`deferred` drops out of sessions that never discovered it. Corollary: *narrowing* the active set is not
+representable in this record.
 
 This per-invoke assembly is the only data plane. A client needing mid-run control, live observation, or
 reconnectable history uses the optional [session control plane](session-control.md) — never a second
@@ -260,11 +268,15 @@ receive the same workspace cwd and caller session id; their `thinkingLevel` gett
 schemas stay out of the request until the built-in `search_tools` loader (auto-mounted whenever a
 deferred tool exists; an authored `search_tools` wins) activates them by keyword mid-turn. Activation
 runs through a per-turn bridge on the turn context (`ToolActivation`: additive `setActiveTools`,
-unknown names filtered) and is stamped on that tool call's own result as `addedToolNames` — the load
-point that lets providers with native deferred loading add definitions at the transcript position
-without invalidating the cached prompt prefix. The stamp comes from that execute's own `activate()`
-calls, never an active-set snapshot diff: batch tool calls run in parallel and a diff would
-misattribute a sibling's activation. The base prompt lists only non-deferred tools plus a discovery
+unknown names filtered). pi records the addition in the transcript at that position — a system message
+carrying `toolsAdded`, written after the batch of tool results the activating call belongs to — the
+load point that lets providers with
+native deferred loading add definitions without invalidating the cached prompt prefix. `activate` is a
+synchronous read-modify-write over the session's active set and returns only the names it actually added — that
+return value, not the attempt, is what the built-in loader reports and counts its cap against, which is why two
+parallel calls matching the same tool yield one "Activated" and one "already active". The atomicity stops at
+`activate`: a loader that awaits between `active()` and `activate()` interleaves with its batch siblings and owes
+itself `executionMode: "sequential"`. The base prompt lists only non-deferred tools plus a discovery
 note, computed from the static mounted set, so activation never rewrites the prompt. The shared session
 builder (`session-builder.ts`, which `chat` consumes) emulates the same behavior over pi's
 AgentSession through `sessionToolActivation`, so the author debugs exactly what serves.

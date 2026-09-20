@@ -5,7 +5,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompactionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import { isPlaneMarker } from "./session-markers.ts";
+import { isConversationMessage, isPlaneMarker } from "./session-markers.ts";
 
 /** What a Caller names when a new session should start from an existing one. */
 export interface SessionInheritance {
@@ -94,8 +94,10 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
     );
   }
   if (usable.length === 0) return undefined;
-  // Serialize each message ONCE — the scan is hints × entries, and stringify must not sit in the inner loop.
-  const serialized = path.map((entry) => (entry.type === "message" ? JSON.stringify(entry.message) : ""));
+  // Serialize each conversation message ONCE — the scan is hints × entries, and stringify must not sit in the inner
+  // loop. A hint is something a participant said, so the engine's own system entries are not searched: see
+  // `isConversationMessage` for what a hint landing in the assembled prompt would otherwise do here.
+  const serialized = path.map((entry) => (isConversationMessage(entry) ? JSON.stringify(entry.message) : ""));
   for (const hint of usable) {
     for (let i = path.length - 1; i >= 0; i--) {
       if (!serialized[i]?.includes(hint)) continue;
@@ -196,6 +198,9 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
     let childId: string | undefined;
     switch (entry.type) {
       case "message":
+        // Every message, INCLUDING the engine's system entries: the child starts from the prompt the parent was
+        // running under, and pi diffs its own sections against it, so the thread's first request carries that
+        // prompt once rather than twice.
         if (entry.message) {
           childId = child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
         }

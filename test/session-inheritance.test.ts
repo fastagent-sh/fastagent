@@ -183,6 +183,39 @@ describe("inheritance edges", () => {
     expect(repaired).toHaveLength(1); // the thread starts on a transcript a provider will accept
   });
 
+  it("a hint that only appears in the assembled prompt does not cut the thread off from the room", async () => {
+    // Since pi 0.86 a served record carries the whole assembled system prompt (persona, project context,
+    // skill and tool descriptions) as one system message ahead of the conversation. `branchHints` is caller
+    // input over the wire, so any word of that prompt could be sent as a hint; matching it would fork above
+    // every exchange and hand the thread an empty history with no diagnostic.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    // pi's actual shape, not a convenient one: `content` is empty, the assembled prompt lives in `sections`,
+    // and the tool declarations in `toolsAdded`. A double that put the prompt in `content` would not be
+    // standing in for the record this fix is about.
+    room.appendMessage({
+      role: "system",
+      content: "",
+      sections: { preamble: "You are ZEBRA_PERSONA bot.", cwd: "<cwd>\n/tmp/room\n</cwd>" },
+      toolsAdded: [{ name: "read", description: "Read a file.", parameters: { type: "object", properties: {} } }],
+      timestamp: 0,
+    } as never);
+    room.appendMessage({ role: "user", content: "first question", timestamp: 1 });
+    room.appendMessage(fauxAssistantMessage("first answer"));
+
+    const logged: string[] = [];
+    const warn = vi.spyOn(console, "error").mockImplementation((line: unknown) => void logged.push(String(line)));
+    let thread: SessionManager;
+    try {
+      thread = await store.openOrCreate("thread", { parentSession: "room", branchHints: ["ZEBRA_PERSONA"] });
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(text(thread)).toContain("first answer"); // inherited from the room's present, not cut above it
+    expect(logged.join(" ")).toContain("no branch hint matched"); // …and said so
+  });
+
   it("the window's budget counts the copied compaction's retained tail", async () => {
     // The tail is a POINTER on pi's compaction entry, not messages on it, so a budget that reads the
     // entry alone saw only the summary — and admitted a window on top of a tail that can be the

@@ -197,7 +197,8 @@ src/
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
     ├── session-control.ts  # the pi control hub: observation projections + dispatch
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
-    ├── session-markers.ts  # which journal entries are POSITIONS and which are the plane's own bookkeeping
+    ├── session-markers.ts  # which journal entries are POSITIONS, which are the plane's own bookkeeping, and
+    │                       # which are conversation turns (vs the engine's own `system` entries)
     ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
     ├── open.ts             # shared opener: directory → agent for dev/start/invoke

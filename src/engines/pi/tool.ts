@@ -115,34 +115,15 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
         return { content: [{ type: "text", text: `Invalid arguments: ${detail}` }], details: { error: detail } };
       }
       const store = turnContext.getStore();
-      // Stamp tools THIS execute activates on its result.
-      const added: string[] = [];
-      const tools = store?.tools
-        ? {
-            ...store.tools,
-            activate: (names: string[]) => {
-              // biome-ignore lint/style/noNonNullAssertion: guarded by the ternary above
-              const activated = store.tools!.activate(names);
-              added.push(...activated);
-              return activated;
-            },
-          }
-        : undefined;
-      const result = wrapResult(
+      return wrapResult(
         await options.execute(parsed.data, {
           cwd: store?.cwd ?? process.cwd(),
           signal,
           sessionManager: store?.sessionManager,
-          tools,
+          tools: store?.tools,
           secrets: secretValues(options.secrets),
         }),
       );
-      if (added.length > 0) {
-        // A copy, not a mutation: wrapResult passes a full AgentToolResult through by REFERENCE, and an author may
-        // legally return a shared/frozen result object.
-        return { ...result, addedToolNames: [...new Set([...(result.addedToolNames ?? []), ...added])] };
-      }
-      return result;
     },
   };
   return tool as unknown as FastagentTool;

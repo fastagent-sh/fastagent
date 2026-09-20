@@ -273,6 +273,15 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
+### Running a tool alone in its batch
+
+A model can call several tools in one assistant message, and pi executes that batch concurrently.
+`defineTool({ ..., executionMode: "sequential" })` opts out: pi runs any batch containing this tool one
+call at a time. Reach for it when a tool's work cannot safely overlap another's — it writes a file the
+other reads, holds an exclusive resource, or drives something single-session. The default (`"parallel"`,
+inherited when the option is omitted) is right for anything that only reads or only touches its own
+state.
+
 ### Declaring the secrets a tool needs
 
 A tool that needs an env var says so where it is defined:
@@ -369,10 +378,11 @@ Costs and behavior to know:
   is pi's (see its Dynamic Tool Loading docs) and evolves with pi releases — fastagent adds no
   restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
-  loader can use; `activate` is additive and ignores unknown names. A custom loader must also declare
-  `executionMode: "sequential"` (a `defineTool` option; pi then serializes the batch — in chat, pi's
-  own before/after diff around SDK tools would otherwise attribute one activation to two parallel
-  calls). An agent's `search_tools` missing the mode gets it forced, with a warning.
+  loader can use; `activate` is additive, ignores unknown names, and returns ONLY the names it actually
+  activated. Report from that return value, and count your own activation cap against it: `activate` is
+  atomic, but a loader's own `active()` -> decide -> `await` -> `activate()` sequence interleaves with a
+  sibling call in the same batch, so two parallel calls can otherwise both claim one activation (and each
+  spend a full cap). Declare `executionMode: "sequential"` to serialize the batch instead.
   Both types are exported: `ToolActivation`, and `FastagentTool` (`AgentTool` + the `deferred` marker —
   the type `config.tools` and the L1/L2 `tools` options accept, so a raw object literal with
   `deferred: true` type-checks).

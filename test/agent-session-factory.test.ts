@@ -6,7 +6,13 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+  type FauxResponseStep,
+  type TranscriptContext,
+  fauxAssistantMessage,
+  fauxToolCall,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { stream as streamPiMessages } from "@earendil-works/pi-ai/api/pi-messages";
 import {
   type ExtensionContext,
@@ -29,7 +35,7 @@ import { defineTool, z } from "../src/pi.ts";
 import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
-import { makeFaux } from "./faux.ts";
+import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 import { fauxControlledAgent } from "./agent.ts";
 import type { SessionEvent } from "../src/session.ts";
 import { log } from "../src/log.ts";
@@ -61,7 +67,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const body = "gateway echoed private request: do-not-log";
     const message = await streamPiMessages(
       { ...faux.getModel(), api: "pi-messages", baseUrl: "https://gateway.invalid" },
-      { messages: [] },
+      normalizeContext({ messages: [] }),
       { apiKey: "test", fetch: async () => new Response(body, { status: 400, statusText: "Bad Request" }) },
     ).result();
     expect(message.diagnostics?.[0]?.error?.message).toContain(body);
@@ -132,7 +138,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const requests: string[] = [];
     const events: SessionEvent[] = [];
     const respond: FauxResponseStep = (context) => {
-      if (!context.systemPrompt?.startsWith("Same-run test")) {
+      if (!sentPrompt(context).startsWith("Same-run test")) {
         requests.push("summary");
         return fauxAssistantMessage("A compact summary");
       }
@@ -189,7 +195,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          systemPrompt = context.systemPrompt ?? "";
+          systemPrompt = sentPrompt(context);
           return fauxAssistantMessage("ok");
         },
       ],
@@ -199,6 +205,30 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
     expect(systemPrompt).toContain("You are terse. Answer in one word.");
+  });
+
+  it("the record carries that prompt as a system entry — the shape two readers filter on", async () => {
+    // `isConversationMessage` (and therefore branch-hint search and the session-list count) is built on pi
+    // writing the assembled prompt as a `type: "message"` / `role: "system"` entry, with the text in
+    // `sections` rather than `content`. Both of those callers are tested against hand-written entries, so
+    // this is the one place a REAL run pins the shape: if pi stops writing it, they go silently wrong.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const agent = await agentWith([fauxAssistantMessage("ok")], {
+      sessions: store,
+      readDefinition: () => ({ systemPrompt: "MARKER_PERSONA", skills: [] }),
+    });
+
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    const record = await store.openOrCreate("s");
+    const system = record
+      .getBranch()
+      .filter((e) => (e as { type?: string }).type === "message")
+      .map((e) => (e as { message: { role?: string; content?: unknown; sections?: Record<string, string> } }).message)
+      .filter((m) => m.role === "system");
+    expect(system).toHaveLength(1);
+    expect(system[0]?.content).toBe("");
+    expect(Object.values(system[0]?.sections ?? {}).join("\n")).toContain("MARKER_PERSONA");
   });
 
   it("a mounted tool executes, and sees the turn's session through the tool context", async () => {
@@ -443,7 +473,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          offered = (context.tools ?? []).map((t: { name: string }) => t.name);
+          offered = sentTools(context);
           return fauxAssistantMessage("ok");
         },
       ],
@@ -478,11 +508,11 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          seen.push(context.systemPrompt ?? "");
+          seen.push(sentPrompt(context));
           return fauxAssistantMessage("ok");
         },
         (context) => {
-          seen.push(context.systemPrompt ?? "");
+          seen.push(sentPrompt(context));
           return fauxAssistantMessage("ok");
         },
       ],
@@ -501,7 +531,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const seen: string[] = [];
     let disabled = false;
     const respond: FauxResponseStep = (context) => {
-      seen.push(context.systemPrompt ?? "");
+      seen.push(sentPrompt(context));
       return fauxAssistantMessage("ok");
     };
     const agent = await agentWith([respond, respond], {
@@ -529,8 +559,8 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
   it("concurrent turns each run on a definition that exists, and neither blocks the other", async () => {
     const seen: string[] = [];
     let persona = "first";
-    const record = (context: { systemPrompt?: string }) => {
-      seen.push(context.systemPrompt ?? "");
+    const record = (context: TranscriptContext) => {
+      seen.push(sentPrompt(context));
       return fauxAssistantMessage("ok");
     };
     // Park turn A between "definition read" and "session bound" - the window where the shared
@@ -590,7 +620,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          systemPrompt = context.systemPrompt ?? "";
+          systemPrompt = sentPrompt(context);
           return fauxAssistantMessage("ok");
         },
       ],
@@ -630,8 +660,8 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
 
   it("a tool discovered in one turn is still callable in the next", async () => {
     const offered: string[][] = [];
-    const record = (context: { tools?: { name: string }[] }) => {
-      offered.push((context.tools ?? []).map((t) => t.name));
+    const record = (context: TranscriptContext) => {
+      offered.push(sentTools(context));
       return undefined;
     };
     const agent = await agentWith(
@@ -658,6 +688,40 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     expect(offered[1]).toContain("weather_forecast"); // and restored for the next turn
   });
 
+  it("a tool added to the definition later joins an EXISTING conversation", async () => {
+    // pi 0.86 can restore a session's tool set from the transcript's `toolsAdded` declarations, which would
+    // pin an old conversation to the tools it started with. fastagent pins the initial active set instead
+    // (`noTools: "builtin"` makes pi's `initialActiveToolNames` an explicit list), so that restore never runs
+    // \u2014 and there is no warning to notice if it ever does.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const alpha = () =>
+      defineTool({ name: "alpha", description: "The first tool.", input: z.object({}), execute: async () => "" });
+    const before = await agentWith([fauxAssistantMessage("first")], { sessions: store, tools: [alpha()] });
+    await collect(before.invoke({ session: "grows" }, { text: "hello" }));
+
+    let offered: string[] = [];
+    const after = await agentWith(
+      [
+        (context) => {
+          offered = sentTools(context);
+          return fauxAssistantMessage("second");
+        },
+      ],
+      {
+        sessions: store,
+        tools: [
+          alpha(),
+          defineTool({ name: "beta", description: "Added later.", input: z.object({}), execute: async () => "" }),
+        ],
+      },
+    );
+
+    await collect(after.invoke({ session: "grows" }, { text: "and now?" }));
+
+    expect(offered).toContain("beta");
+    expect(offered).toContain("alpha");
+  });
+
   it("a recorded activation whose tool is gone is dropped, not replayed into a throw", async () => {
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const withTool = await agentWith(
@@ -674,7 +738,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     const without = await agentWith(
       [
         (context) => {
-          offered = (context.tools ?? []).map((t: { name: string }) => t.name);
+          offered = sentTools(context);
           return fauxAssistantMessage("ok");
         },
       ],

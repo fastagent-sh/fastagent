@@ -1,7 +1,10 @@
 /**
- * Which journal entries are POSITIONS and which are the control plane's own bookkeeping. pi's journal has one shape
- * for everything, so the plane writes what it needs to remember into the same log the conversation lives in: what fork
- * a record is, and the anchor that makes a leaf move survive a reopen.
+ * Which journal entries are POSITIONS, which are the control plane's own bookkeeping, and which are turns in the
+ * CONVERSATION. pi's journal has one shape for everything, so the plane writes what it needs to remember into the
+ * same log the conversation lives in (what fork a record is, and the anchor that makes a leaf move survive a
+ * reopen) \u2014 and since 0.86 the ENGINE writes its own bookkeeping there too, as the `system` entries carrying the
+ * assembled prompt. Three questions, one file: a reader of the journal answers them here or it answers them alone,
+ * which is how one reader came to count the prompt as history.
  */
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -20,6 +23,29 @@ export const LEAF_ANCHOR = "fastagent.leaf";
  */
 export function isPlaneMarker(entry: { type?: string; customType?: string }): boolean {
   return entry.type === "custom" && (entry.customType === FORK_PROVENANCE || entry.customType === LEAF_ANCHOR);
+}
+
+/**
+ * How the ENGINE marks its own prompt state. Since pi 0.86 it writes `system` messages into the same log the
+ * conversation lives in, carrying the assembled prompt (persona, project context, skill and tool descriptions)
+ * plus one more per prompt or tool-set change. They are bookkeeping, not something anyone said, and every reader
+ * of the journal has to decide about them. Deciding once, here, is the point: the first reader that forgot cut
+ * inheritance above every exchange and handed a new thread an empty history, with no diagnostic.
+ *
+ * Takes a MESSAGE rather than an entry, because the two readers hold different things: one has journal entries,
+ * the compaction gate has the context messages pi projects them into. The mark is the same in both.
+ */
+export function isEnginePromptMessage(message: { role?: string } | undefined): boolean {
+  return message?.role === "system";
+}
+
+/**
+ * An entry that is a TURN IN THE CONVERSATION — what a reader counting, previewing or searching the history means
+ * by "a message". Not every reader can use it: one that projects entries into context messages first wants
+ * {@link isEnginePromptMessage} directly, since a `custom_message` is model-visible history too.
+ */
+export function isConversationMessage(entry: { type?: string; message?: { role?: string } }): boolean {
+  return entry.type === "message" && !isEnginePromptMessage(entry.message);
 }
 
 /**
