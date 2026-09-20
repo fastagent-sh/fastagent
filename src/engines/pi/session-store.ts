@@ -364,7 +364,11 @@ function summarize(session: string, record: SessionManager): SessionSummary {
   // `|| 0` on both: an unparseable timestamp is NaN, and NaN in `updatedAt` serializes to `null` — which the contract
   // types as a number and a client sorts by.
   const lastAt = Date.parse(entries.at(-1)?.timestamp ?? "") || 0;
-  const messages = entries.filter((e) => e.type === "message");
+  // SYSTEM messages are pi's own bookkeeping (the assembled prompt, and one per prompt/tool-set change), not turns
+  // in the conversation a list row counts.
+  const messages = entries.filter(
+    (e) => e.type === "message" && (e.message as { role?: string } | undefined)?.role !== "system",
+  );
   const name = record.getSessionName();
   const preview = firstUserText(messages);
   return {

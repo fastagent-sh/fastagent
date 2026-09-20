@@ -259,7 +259,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect(text).not.toMatch(/No tools matched/);
   });
 
-  it("an author's frozen result object survives an activating call", async () => {
+  it("a custom loader's shared/frozen result object passes through untouched", async () => {
     const frozen = Object.freeze({ content: [{ type: "text", text: "done" }], details: {} });
     const loader = defineTool({
       name: "my_loader",
@@ -278,8 +278,14 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s6" }, { text: "go" })) events.push(e);
     expect(events.at(-1)?.type).toBe("completed"); // no throw on the frozen object
+    // `wrapResult` returns a full AgentToolResult BY REFERENCE: nothing on the path may stamp a field onto
+    // the author's object, and what the session records is the author's own content.
+    expect(Object.keys(frozen)).toEqual(["content", "details"]);
     const messages = recordedMessages(await sessions.openOrCreate("s6"));
-    expect(messages.flatMap((m) => toolsAddedNames(m) ?? [])).toContain("lookup_weather");
+    const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
+      content: Array<{ text?: string }>;
+    };
+    expect(toolResult.content[0]?.text).toBe("done");
   });
 
   it("a noise query (no searchable tokens) activates nothing — vacuous every() must not match the catalog", async () => {

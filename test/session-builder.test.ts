@@ -109,21 +109,18 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         expect(result.content[0]?.text).toMatch(/Activated: lookup_weather/);
         expect(session.getActiveToolNames()).toContain("lookup_weather");
 
-        // A batch's loader calls must not race the active set: only the first one activates, the sibling
-        // reports already-active. The production guard is pi's batch serialization, triggered by the
-        // loader's executionMode (these two awaited calls are serial either way; they pin the behavior
-        // UNDER the serialization pi guarantees).
+        // A batch's loader calls must not race the active set: one activates, the sibling reports
+        // already-active. `activate` is a synchronous read-modify-write, so this holds for calls pi runs
+        // concurrently too — started together here rather than awaited in turn, so the assertion is about the
+        // active set and not about call order.
         await rt.newSession();
         const reSession = rt.session;
         const loader2 = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
-          executionMode?: string;
           execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;
         };
-        expect(loader2.executionMode).toBe("sequential"); // what makes pi serialize the batch
-        const texts = [
-          (await loader2.execute("p1", { query: "weather" })).content[0]?.text ?? "",
-          (await loader2.execute("p2", { query: "forecast" })).content[0]?.text ?? "",
-        ];
+        const texts = (
+          await Promise.all([loader2.execute("p1", { query: "weather" }), loader2.execute("p2", { query: "forecast" })])
+        ).map((r) => r.content[0]?.text ?? "");
         expect(texts.filter((t) => /Activated: lookup_weather/.test(t))).toHaveLength(1);
         expect(texts.some((t) => /[Aa]lready active/.test(t))).toBe(true);
         expect(reSession.getActiveToolNames()).toContain("lookup_weather");

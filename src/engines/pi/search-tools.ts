@@ -17,13 +17,6 @@ export function withSearchTool(tools: MountedTool[]): MountedTool[] {
     );
     fixed = stripDeferredMarker(fixed);
   }
-  if (fixed.executionMode !== "sequential") {
-    // A non-sequential loader silently revives the parallel double-attribution (pi's diff around SDK tools in chat).
-    log.warn(
-      '[fastagent] search_tools lacks executionMode: "sequential" — forcing it: parallel loader calls would misattribute activations',
-    );
-    fixed = { ...fixed, executionMode: "sequential" };
-  }
   return fixed === authored ? tools : tools.map((t) => (t === authored ? fixed : t));
 }
 
@@ -36,7 +29,6 @@ const MAX_MISS_LISTING = 10;
 export function makeSearchToolsTool(): MountedTool {
   return defineTool({
     name: "search_tools",
-    executionMode: "sequential",
     description:
       // First line short on purpose: the base prompt's tools list truncates at the first newline, and the discovery
       // guidance below would otherwise flood it (and duplicate its deferred note).

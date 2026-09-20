@@ -185,10 +185,9 @@ owes.
 Reopening is faithful to the whole record, not just the messages. pi does not read active-tool changes
 back (its own session is resident), so `piAgentSessionFactory` resolves the active-tool set itself: the
 union of the initial set (every non-deferred tool) and the session's accumulated activation *deltas* —
-`fastagent:tool-activation` entries carrying exactly the names that call activated. pi's own
-`active_tools_change` entries are full snapshots and are ignored: replaying one would freeze
-later-added tools out of old sessions and keep a later-`deferred` tool active in sessions that never
-discovered it. Corollary: *narrowing* the active set is not representable in this record.
+`fastagent:tool-activation` entries carrying exactly the names that call activated. pi's own record of
+the change is the transcript's `toolsAdded` system message, which describes the tool set of the run
+that wrote it and is not replayed here. Corollary: *narrowing* the active set is not representable in this record.
 
 This per-invoke assembly is the only data plane. A client needing mid-run control, live observation, or
 reconnectable history uses the optional [session control plane](session-control.md) — never a second
@@ -262,9 +261,9 @@ deferred tool exists; an authored `search_tools` wins) activates them by keyword
 runs through a per-turn bridge on the turn context (`ToolActivation`: additive `setActiveTools`,
 unknown names filtered). pi records the addition in the transcript at that position — a system message
 carrying `toolsAdded` right after the activating result — the load point that lets providers with
-native deferred loading add definitions without invalidating the cached prompt prefix. The loader is
-`sequential`, so a batch's calls cannot race the active set: one activates, the rest report
-already-active. The base prompt lists only non-deferred tools plus a discovery
+native deferred loading add definitions without invalidating the cached prompt prefix. `activate` is a
+synchronous read-modify-write over the session's active set, so a batch's parallel calls cannot race
+it: one activates, the rest report already-active. The base prompt lists only non-deferred tools plus a discovery
 note, computed from the static mounted set, so activation never rewrites the prompt. The shared session
 builder (`session-builder.ts`, which `chat` consumes) emulates the same behavior over pi's
 AgentSession through `sessionToolActivation`, so the author debugs exactly what serves.

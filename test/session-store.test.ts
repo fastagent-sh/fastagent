@@ -277,6 +277,19 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     }
   });
 
+  it("the row counts the conversation, not pi's system bookkeeping", async () => {
+    // A served record carries the assembled prompt as a system message, plus one more whenever the prompt or
+    // tool set changes. Counting those makes a one-exchange conversation report 3, and the number a client
+    // shows drifts with pi's internal accounting.
+    const store = piInMemorySessionRecordStore();
+    const record = await store.openOrCreate("room");
+    record.appendMessage({ role: "system", content: "You are a bot.", timestamp: 0 } as never);
+    record.appendMessage({ role: "user", content: "a question", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage("an answer"));
+
+    expect((await store.list())[0]?.messageCount).toBe(2);
+  });
+
   it("in memory too: same three primitives, same semantics", async () => {
     const store = piInMemorySessionRecordStore();
     const parent = await store.openOrCreate("room");

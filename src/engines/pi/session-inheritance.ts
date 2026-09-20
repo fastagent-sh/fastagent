@@ -95,7 +95,12 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
   }
   if (usable.length === 0) return undefined;
   // Serialize each message ONCE — the scan is hints × entries, and stringify must not sit in the inner loop.
-  const serialized = path.map((entry) => (entry.type === "message" ? JSON.stringify(entry.message) : ""));
+  // SYSTEM messages are excluded: since pi 0.86 the record carries the whole assembled prompt (persona, project
+  // context, skill and tool descriptions) as one system message, and a hint that happens to appear in that text
+  // would cut the inheritance above every exchange — a silently empty thread.
+  const serialized = path.map((entry) =>
+    entry.type === "message" && entry.message?.role !== "system" ? JSON.stringify(entry.message) : "",
+  );
   for (const hint of usable) {
     for (let i = path.length - 1; i >= 0; i--) {
       if (!serialized[i]?.includes(hint)) continue;
