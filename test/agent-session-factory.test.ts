@@ -6,7 +6,13 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+  type FauxResponseStep,
+  type TranscriptContext,
+  fauxAssistantMessage,
+  fauxToolCall,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { stream as streamPiMessages } from "@earendil-works/pi-ai/api/pi-messages";
 import {
   type ExtensionContext,
@@ -29,7 +35,7 @@ import { defineTool, z } from "../src/pi.ts";
 import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
-import { makeFaux } from "./faux.ts";
+import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 import { fauxControlledAgent } from "./agent.ts";
 import type { SessionEvent } from "../src/session.ts";
 import { log } from "../src/log.ts";
@@ -61,7 +67,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const body = "gateway echoed private request: do-not-log";
     const message = await streamPiMessages(
       { ...faux.getModel(), api: "pi-messages", baseUrl: "https://gateway.invalid" },
-      { messages: [] },
+      normalizeContext({ messages: [] }),
       { apiKey: "test", fetch: async () => new Response(body, { status: 400, statusText: "Bad Request" }) },
     ).result();
     expect(message.diagnostics?.[0]?.error?.message).toContain(body);
@@ -132,7 +138,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const requests: string[] = [];
     const events: SessionEvent[] = [];
     const respond: FauxResponseStep = (context) => {
-      if (!context.systemPrompt?.startsWith("Same-run test")) {
+      if (!sentPrompt(context).startsWith("Same-run test")) {
         requests.push("summary");
         return fauxAssistantMessage("A compact summary");
       }
@@ -189,7 +195,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          systemPrompt = context.systemPrompt ?? "";
+          systemPrompt = sentPrompt(context);
           return fauxAssistantMessage("ok");
         },
       ],
@@ -443,7 +449,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          offered = (context.tools ?? []).map((t: { name: string }) => t.name);
+          offered = sentTools(context);
           return fauxAssistantMessage("ok");
         },
       ],
@@ -478,11 +484,11 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          seen.push(context.systemPrompt ?? "");
+          seen.push(sentPrompt(context));
           return fauxAssistantMessage("ok");
         },
         (context) => {
-          seen.push(context.systemPrompt ?? "");
+          seen.push(sentPrompt(context));
           return fauxAssistantMessage("ok");
         },
       ],
@@ -501,7 +507,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const seen: string[] = [];
     let disabled = false;
     const respond: FauxResponseStep = (context) => {
-      seen.push(context.systemPrompt ?? "");
+      seen.push(sentPrompt(context));
       return fauxAssistantMessage("ok");
     };
     const agent = await agentWith([respond, respond], {
@@ -529,8 +535,8 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
   it("concurrent turns each run on a definition that exists, and neither blocks the other", async () => {
     const seen: string[] = [];
     let persona = "first";
-    const record = (context: { systemPrompt?: string }) => {
-      seen.push(context.systemPrompt ?? "");
+    const record = (context: TranscriptContext) => {
+      seen.push(sentPrompt(context));
       return fauxAssistantMessage("ok");
     };
     // Park turn A between "definition read" and "session bound" - the window where the shared
@@ -590,7 +596,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith(
       [
         (context) => {
-          systemPrompt = context.systemPrompt ?? "";
+          systemPrompt = sentPrompt(context);
           return fauxAssistantMessage("ok");
         },
       ],
@@ -630,8 +636,8 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
 
   it("a tool discovered in one turn is still callable in the next", async () => {
     const offered: string[][] = [];
-    const record = (context: { tools?: { name: string }[] }) => {
-      offered.push((context.tools ?? []).map((t) => t.name));
+    const record = (context: TranscriptContext) => {
+      offered.push(sentTools(context));
       return undefined;
     };
     const agent = await agentWith(
@@ -674,7 +680,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     const without = await agentWith(
       [
         (context) => {
-          offered = (context.tools ?? []).map((t: { name: string }) => t.name);
+          offered = sentTools(context);
           return fauxAssistantMessage("ok");
         },
       ],

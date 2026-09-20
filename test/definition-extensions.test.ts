@@ -17,7 +17,7 @@ import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
-import { makeFaux } from "./faux.ts";
+import { makeFaux, sentTools } from "./faux.ts";
 
 /** An extension registering one tool whose presence proves the module was loaded and bound. */
 const markerExtension = (toolName: string) => `
@@ -107,7 +107,7 @@ describe("definition: serving does NOT run extensions, and says so", () => {
     let offered: string[] = [];
     faux.setResponses([
       (context) => {
-        offered = (context.tools ?? []).map((t) => t.name);
+        offered = sentTools(context);
         return fauxAssistantMessage("ok");
       },
     ]);

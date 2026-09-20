@@ -7,6 +7,7 @@ import { makeSearchToolsTool, withSearchTool } from "../src/engines/pi/search-to
 import { defineTool, isDeferredTool } from "../src/engines/pi/tool.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { fauxAgent } from "./agent.ts";
+import { sentTools } from "./faux.ts";
 
 const weather = () =>
   defineTool({
@@ -83,12 +84,18 @@ function recordedMessages(record: { getBranch(): unknown[] }): unknown[] {
   });
 }
 
+/** Tools a transcript message declares as added at its position (pi 0.86's tool-change anchor). */
+function toolsAddedNames(message: unknown): string[] | undefined {
+  const added = (message as { toolsAdded?: { name: string }[] } | undefined)?.toolsAdded;
+  return added?.map((tool) => tool.name);
+}
+
 describe("deferred tools: end-to-end through invoke (faux model)", () => {
   function makeAgent(responses: FauxResponseStep[], sessions = piInMemorySessionRecordStore({ cwd: process.cwd() })) {
     return fauxAgent(responses, { sessions, tools: withSearchTool([echo(), weather()]) });
   }
 
-  it("search_tools activates a deferred tool and stamps addedToolNames on the activating result", async () => {
+  it("search_tools activates a deferred tool and the transcript records the load point", async () => {
     const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { agent } = makeAgent(
       [
@@ -106,19 +113,19 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
     expect(JSON.stringify(ended.content)).toContain("lookup_weather");
 
-    // …the session recorded the activation with the load point (addedToolNames on the toolResult)…
+    // …and pi 0.86 anchors the addition in the transcript itself: a system message carrying `toolsAdded`,
+    // right after the activating result. That position is the prompt-cache prefix native deferred-loading
+    // providers keep.
     const messages = recordedMessages(await sessions.openOrCreate("s1"));
-    const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
-      addedToolNames?: string[];
-    };
-    expect(toolResult.addedToolNames).toEqual(["lookup_weather"]);
+    const activating = messages.findIndex((m) => (m as { role?: string }).role === "toolResult");
+    expect(toolsAddedNames(messages[activating + 1])).toEqual(["lookup_weather"]);
     // That the activation SURVIVES into the next turn is asserted where it is observable — against
     // the tools the model is offered (agent-session-factory.test.ts).
   });
 
-  it("parallel batch: two search_tools calls — addedToolNames lands on the activating call only, the other reports already-active", async () => {
-    // pi executes a batch's tool calls in parallel; the stamp must come from each execute's OWN
-    // activate() calls, not an active-set snapshot diff (which would stamp a sibling's activation).
+  it("parallel batch: two search_tools calls — one activates, the other reports already-active", async () => {
+    // pi executes a batch's tool calls in parallel; only the call that actually activated may produce an
+    // addition, and the sibling must report the truth rather than an empty "Activated: ." claim.
     const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { agent } = makeAgent(
       [
@@ -137,15 +144,11 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
 
     const messages = recordedMessages(await sessions.openOrCreate("s3"));
     const results = messages.filter((m) => (m as { role?: string }).role === "toolResult") as Array<{
-      addedToolNames?: string[];
       content: Array<{ text?: string }>;
     }>;
     expect(results).toHaveLength(2);
-    // Exactly ONE result carries the stamp — the call that actually activated the tool.
-    const stamped = results.filter((r) => r.addedToolNames !== undefined);
-    expect(stamped).toHaveLength(1);
-    expect(stamped[0]?.addedToolNames).toEqual(["lookup_weather"]);
-    // The other reports the truth (already active), never an empty "Activated: ." claim.
+    // The tool is added to the transcript exactly once, not once per sibling call.
+    expect(messages.flatMap((m) => toolsAddedNames(m) ?? []).filter((n) => n === "lookup_weather")).toHaveLength(1);
     const texts = results.map((r) => r.content[0]?.text ?? "");
     expect(texts.some((t) => /[Aa]lready active/.test(t))).toBe(true);
     expect(texts.some((t) => /Activated: \./.test(t))).toBe(false);
@@ -157,7 +160,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
       fauxAssistantMessage(fauxToolCall("search_tools", { query: "quantum chess" }, { id: "c1" })),
       fauxAssistantMessage("ok"),
       (context) => {
-        offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+        offeredNextTurn = sentTools(context);
         return fauxAssistantMessage("next");
       },
     ]);
@@ -189,7 +192,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
         fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch" }, { id: "c1" })),
         fauxAssistantMessage("ok"),
         (context) => {
-          offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+          offeredNextTurn = sentTools(context);
           return fauxAssistantMessage("next");
         },
       ],
@@ -222,7 +225,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
         fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch_3" }, { id: "c1" })),
         fauxAssistantMessage("ok"),
         (context) => {
-          offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+          offeredNextTurn = sentTools(context);
           return fauxAssistantMessage("next");
         },
       ],
@@ -256,7 +259,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect(text).not.toMatch(/No tools matched/);
   });
 
-  it("stamping copies the result — an author's frozen result object survives an activating call", async () => {
+  it("an author's frozen result object survives an activating call", async () => {
     const frozen = Object.freeze({ content: [{ type: "text", text: "done" }], details: {} });
     const loader = defineTool({
       name: "my_loader",
@@ -275,12 +278,8 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s6" }, { text: "go" })) events.push(e);
     expect(events.at(-1)?.type).toBe("completed"); // no throw on the frozen object
-    expect((frozen as { addedToolNames?: string[] }).addedToolNames).toBeUndefined(); // untouched
     const messages = recordedMessages(await sessions.openOrCreate("s6"));
-    const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
-      addedToolNames?: string[];
-    };
-    expect(toolResult.addedToolNames).toEqual(["lookup_weather"]); // the stamped COPY reached the session
+    expect(messages.flatMap((m) => toolsAddedNames(m) ?? [])).toContain("lookup_weather");
   });
 
   it("a noise query (no searchable tokens) activates nothing — vacuous every() must not match the catalog", async () => {
@@ -289,7 +288,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
       fauxAssistantMessage(fauxToolCall("search_tools", { query: "???" }, { id: "c1" })),
       fauxAssistantMessage("ok"),
       (context) => {
-        offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+        offeredNextTurn = sentTools(context);
         return fauxAssistantMessage("next");
       },
     ]);

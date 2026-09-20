@@ -109,23 +109,23 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         expect(result.content[0]?.text).toMatch(/Activated: lookup_weather/);
         expect(session.getActiveToolNames()).toContain("lookup_weather");
 
-        // Attribution regression (review): pi wraps SDK customTools in its own before/after active-set
-        // diff, so two PARALLEL loader calls would both get stamped with the same activation. The
-        // production guard is pi's batch serialization, triggered by the loader's executionMode — the
-        // marker assertion IS the parallel protection (these two awaited calls are serial either way;
-        // they pin the message/stamp behavior UNDER the serialization pi guarantees).
+        // A batch's loader calls must not race the active set: only the first one activates, the sibling
+        // reports already-active. The production guard is pi's batch serialization, triggered by the
+        // loader's executionMode (these two awaited calls are serial either way; they pin the behavior
+        // UNDER the serialization pi guarantees).
         await rt.newSession();
         const reSession = rt.session;
         const loader2 = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
           executionMode?: string;
-          execute: (id: string, params: unknown) => Promise<{ addedToolNames?: string[] }>;
+          execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;
         };
         expect(loader2.executionMode).toBe("sequential"); // what makes pi serialize the batch
-        const r1 = await loader2.execute("p1", { query: "weather" });
-        const r2 = await loader2.execute("p2", { query: "forecast" });
-        const stamped = [r1, r2].filter((r) => (r.addedToolNames ?? []).length > 0);
-        expect(stamped).toHaveLength(1);
-        expect(stamped[0]?.addedToolNames).toEqual(["lookup_weather"]);
+        const texts = [
+          (await loader2.execute("p1", { query: "weather" })).content[0]?.text ?? "",
+          (await loader2.execute("p2", { query: "forecast" })).content[0]?.text ?? "",
+        ];
+        expect(texts.filter((t) => /Activated: lookup_weather/.test(t))).toHaveLength(1);
+        expect(texts.some((t) => /[Aa]lready active/.test(t))).toBe(true);
         expect(reSession.getActiveToolNames()).toContain("lookup_weather");
 
         // The documented divergence, as a spec: chat activations do not survive /new — pi's chat
@@ -202,7 +202,9 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
           "write",
         ]);
         // The injected system prompt is fastagent's: the definition's AGENTS.md and skill are in it.
-        const sp = st.systemPrompt ?? "";
+        // pi 0.86 materializes the prompt into the transcript at the first request; the SESSION reader is the one
+        // that shows it before then (`state.systemPrompt` replays messages, which are still empty here).
+        const sp = rt.session.systemPrompt;
         expect(sp).toContain("MAGIC_CHAT_MARKER_91");
         expect(sp).toMatch(/greet/);
         expect(st.model).toBeDefined(); // the config model resolved (fastagent's, not pi's default)
@@ -210,7 +212,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         // its default prompt for cache stability); the override must carry only base+instructions, or
         // chat drifts from served and wastes context.
         expect((sp.match(/Current date/g) ?? []).length).toBe(0);
-        expect((sp.match(/Current working directory/g) ?? []).length).toBe(1);
+        expect((sp.match(/<cwd>/g) ?? []).length).toBe(1);
         expect((sp.match(/<available_skills>/g) ?? []).length).toBe(1);
 
         // Chat is a coherent startup snapshot per cwd: same-cwd rebuilds (/new, fork) must not
@@ -222,7 +224,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         // state afterward) is what makes that hold.
         await rt.newSession();
         expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("ping");
-        const rebuiltPrompt = rt.session.agent.state.systemPrompt ?? "";
+        const rebuiltPrompt = rt.session.systemPrompt;
         expect(rebuiltPrompt).toContain("MAGIC_CHAT_MARKER_91");
         expect(rebuiltPrompt).not.toContain("SHOULD_NOT_HOT_RELOAD_IN_CHAT");
       } finally {
@@ -249,7 +251,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
 
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
-        const sp = rt.session.agent.state.systemPrompt ?? "";
+        const sp = rt.session.systemPrompt;
         expect(sp).toContain("PERSONA_MARKER"); // ① persona from the workspace root
         expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from the workspace
         expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from the workspace root
@@ -275,7 +277,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
 
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
-        const sp = rt.session.agent.state.systemPrompt ?? "";
+        const sp = rt.session.systemPrompt;
         expect(sp).toContain("DEFN_ONLY_MARKER"); // fastagent's prompt is there
         expect(sp).not.toContain("GLOBAL_APPEND_LEAK_MARKER"); // pi's append prompt is suppressed
       } finally {

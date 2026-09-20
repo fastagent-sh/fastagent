@@ -260,11 +260,11 @@ receive the same workspace cwd and caller session id; their `thinkingLevel` gett
 schemas stay out of the request until the built-in `search_tools` loader (auto-mounted whenever a
 deferred tool exists; an authored `search_tools` wins) activates them by keyword mid-turn. Activation
 runs through a per-turn bridge on the turn context (`ToolActivation`: additive `setActiveTools`,
-unknown names filtered) and is stamped on that tool call's own result as `addedToolNames` — the load
-point that lets providers with native deferred loading add definitions at the transcript position
-without invalidating the cached prompt prefix. The stamp comes from that execute's own `activate()`
-calls, never an active-set snapshot diff: batch tool calls run in parallel and a diff would
-misattribute a sibling's activation. The base prompt lists only non-deferred tools plus a discovery
+unknown names filtered). pi records the addition in the transcript at that position — a system message
+carrying `toolsAdded` right after the activating result — the load point that lets providers with
+native deferred loading add definitions without invalidating the cached prompt prefix. The loader is
+`sequential`, so a batch's calls cannot race the active set: one activates, the rest report
+already-active. The base prompt lists only non-deferred tools plus a discovery
 note, computed from the static mounted set, so activation never rewrites the prompt. The shared session
 builder (`session-builder.ts`, which `chat` consumes) emulates the same behavior over pi's
 AgentSession through `sessionToolActivation`, so the author debugs exactly what serves.
