@@ -8,8 +8,7 @@
  *
  * ORDER IS THE POINT, not just precedence: the reason reported has to be the one an operator cannot work around,
  * because the message it produces differs. A github turn and a runtime-minted wake-up have no substitute at all; a
- * declared schedule does — `POST /trigger` lets an external clock fire it, which is the only one of these that a
- * scaled-to-zero deployment can still honour (see {@link CRON_CAN_BE_EXTERNAL}).
+ * declared schedule has one, because the clock does not have to be ours — see {@link CRON_CAN_BE_EXTERNAL}.
  */
 import type { DeclaredChannel } from "../channels/discover.ts";
 
@@ -23,9 +22,10 @@ export interface Residency {
 }
 
 /**
- * The ONE reason a caller may offer a way out of: a declared schedule can be fired by someone else's clock through
- * `POST /trigger`, so an operator who would rather scale to zero has a real option. Nothing else here does — a
- * wake-up is minted by the agent at runtime, so no external clock can know to send it.
+ * The ONE reason a caller may offer a way out of: a cron is a TIME, and a time can be kept elsewhere — a platform
+ * scheduler, a CI cron, a crontab — which then calls this agent. Nothing else here can be moved out: a wake-up is
+ * minted by the agent at runtime inside its own state, so nothing outside can know to send it, and a github turn
+ * has no replay to reconstruct.
  */
 export const CRON_CAN_BE_EXTERNAL: ResidencyReason = "schedules";
 

@@ -277,7 +277,7 @@ Cron schedules fire only while a serving process is up:
   not start the scheduler,
 - a run missed while the process was down is caught up once on the next start, not once per missed
   slot,
-- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or drive [`POST /trigger`](api-reference.md#schedule-authoring) from your own clock, which is the point of that route (see
+- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or keep the time in a scheduler you own and let it call [`POST /trigger`](api-reference.md#post-trigger) (see
   [Deploy](deploy.md)).
 
 Diagnose with commands that exit:

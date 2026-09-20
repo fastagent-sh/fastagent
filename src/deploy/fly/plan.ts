@@ -45,8 +45,9 @@ function flyToml(appName: string, port: number, residency: Residency | undefined
   // `min_machines_running = 1` and wondering what it costs them is looking.
   const alternative =
     residency?.reason === CRON_CAN_BE_EXTERNAL
-      ? `  # …or set this to 0 and drive \`POST /trigger\` from your own clock (a crontab, a CI cron), one call per\n` +
-        `  # schedule — see docs/api-reference.md#schedule-authoring.\n`
+      ? `  # …or keep the time somewhere else and set this to 0: a scheduler you own (Fly Cron Manager,\n` +
+        `  # supercronic, GitHub Actions) calls \`POST /trigger\`, which runs one declared unit of work by name.\n` +
+        `  # It is an API, not a clock: read its contract first — docs/api-reference.md#post-trigger.\n`
       : "";
   // Suspend, not stop: a resume is fast enough that a webhook does not time out. Edit the line to change it.
   const stopLine = `  auto_stop_machines = "suspend"   # suspend on idle (fast resume on the next webhook)`;

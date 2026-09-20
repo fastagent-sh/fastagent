@@ -39,8 +39,20 @@ export interface AgentcoreAdapterOptions {
   stateRoot: string;
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
   isBusy: () => boolean;
-  /** The `POST /trigger` handler bound to this workspace's schedules; undefined when it declares none. */
-  trigger?: (req: Request) => Promise<Response>;
+  /**
+   * Fire ONE declared schedule for the occurrence EventBridge named — the claim/run/settle the resident clock uses,
+   * not the `POST /trigger` API.
+   *
+   * THIS IS WHERE OCCURRENCE SEMANTICS LIVE ON THIS HOST, and it is separate from that route on purpose. `deploy`
+   * wrote the rule, injected `<aws.scheduler.scheduled-time>` and the forwarder relays it behind the ingress
+   * secret, so this caller is one we produced and authenticated: the instant it names really is a grid point of
+   * that schedule, which is what makes a claim (and therefore dedup across EventBridge's redeliveries, a fire
+   * history and the overlap policy) mean anything. `POST /trigger` has none of that — it is an unauthenticated API
+   * whose caller cannot be told which occurrence it means, so it does not pretend to (schedule/trigger.ts).
+   *
+   * Undefined when the definition declares no schedules.
+   */
+  fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */
   ingressSecret?: string;
   /** Runs once on activation, after accepting the current forwarder callback URL. */
@@ -102,7 +114,7 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, agent, stateRoot, isBusy, trigger, ingressSecret, onStateReady } = options;
+  const { channels, agent, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
   const invokeHandler = createInvokeHandler(agent);
 
@@ -195,24 +207,17 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       }
       case "schedule-fire": {
         const { name, occurrence } = envelope;
-        if (typeof name !== "string" || typeof occurrence !== "string") {
+        if (typeof name !== "string" || typeof occurrence !== "string" || Number.isNaN(Date.parse(occurrence))) {
           return text('schedule-fire envelope needs { "name": string, "occurrence": ISO-date }\n', 400);
         }
-        // No schedules in this definition: nothing to fire, and no route was built for it either.
-        if (!trigger) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
-        // The SAME handler the `POST /trigger` route is, reached the way `invoke` reaches its own — this envelope is
-        // a transport for that request, not a second implementation of it. Unknown names, claim-state faults and the
-        // outcome shape are all decided once, in schedule/trigger.ts.
-        const inner = new Request("http://agentcore.local/trigger", {
-          method: "POST",
-          headers: jsonHeaders,
-          body: JSON.stringify({ name, occurrence }),
-        });
+        // No schedules in this definition: nothing to fire, and no rule should have survived a deploy that removed
+        // them either.
+        if (!fireSchedule) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
         // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may time out and drop
         // the connection while the turn keeps running server-side.
         const workDone = beginWork();
         try {
-          return await trigger(inner);
+          return await fireSchedule(name, new Date(occurrence));
         } finally {
           workDone();
         }

@@ -274,9 +274,9 @@ export async function preflightDeploy(input: {
     messages.push({
       level: "note",
       text:
-        `schedules/ present — a GENERATED plan keeps one machine running (a cron instant has no external wake-up ` +
-        `here). To scale to zero instead, drive \`POST /trigger\` from your own clock — one line per schedule, ` +
-        `\`{"name":"<schedule>"}\` (docs/api-reference.md#schedule-authoring).`,
+        `schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
+        `instant). To scale to zero instead, keep the time in a scheduler you own and let it call ` +
+        `\`POST /trigger\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-trigger).`,
     });
   }
 

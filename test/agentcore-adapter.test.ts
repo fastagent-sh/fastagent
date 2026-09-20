@@ -28,7 +28,7 @@ interface AdapterOverrides {
   channels?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
   agent?: Agent;
   isBusy?: () => boolean;
-  trigger?: (req: Request) => Promise<Response>;
+  fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
   ingressSecret?: string;
   onStateReady?: () => void;
 }
@@ -45,7 +45,7 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
-    trigger: over.trigger,
+    fireSchedule: over.fireSchedule,
     ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
     onStateReady: over.onStateReady,
   });
@@ -143,7 +143,7 @@ describe("agentcore adapter: lazy channel construction", () => {
       return Response.json({ fired: true, ms: 5 });
     });
     const routes = adapter({
-      trigger: fire,
+      fireSchedule: fire,
       channels: () => {
         order.push("construct");
         return { routes: health };
@@ -157,7 +157,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     // unrelated channel misconfiguration must not turn one fault into two.
     const fire2 = vi.fn(async () => Response.json({ fired: true, ms: 5 }));
     const broken = adapter({
-      trigger: fire2,
+      fireSchedule: fire2,
       channels: () => {
         throw new Error("channels/lark.ts is broken");
       },
@@ -305,28 +305,24 @@ describe("agentcore adapter: webhook envelope", () => {
 describe("agentcore adapter: schedule-fire envelope", () => {
   const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", occurrence: OCCURRENCE };
 
-  it("relays the envelope to the trigger handler as the POST /trigger request it is", async () => {
+  it("hands the envelope's name and INSTANT to the occurrence path, not to the /trigger API", async () => {
     // Not a second fire path: the same handler the route mounts, reached the way `invoke` reaches its
-    // own. Unknown names, claim faults and the outcome shape are decided once, in schedule/trigger.ts.
-    const seen: { url: string; contentType: string | null; body: unknown }[] = [];
+    // THIS host's clock is ours: `deploy` wrote the rule and injected `<aws.scheduler.scheduled-time>`,
+    // and the forwarder relays it behind the ingress secret. So the instant really is a grid point and
+    // a claim means something — dedup across EventBridge's redeliveries, a fire history, the overlap
+    // policy. `POST /trigger` is the OTHER contract (an unauthenticated API with no occurrence) and is
+    // not served on this host at all.
+    const seen: { name: string; occurrence: string }[] = [];
     const routes = adapter({
-      trigger: async (req) => {
-        seen.push({ url: req.url, contentType: req.headers.get("content-type"), body: await req.json() });
+      fireSchedule: async (name, occurrence) => {
+        seen.push({ name, occurrence: occurrence.toISOString() });
         return Response.json({ fired: true, ms: 5 });
       },
     });
     const res = await postEnvelope(routes, fireEnvelope);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ fired: true, ms: 5 });
-    expect(seen).toEqual([
-      {
-        url: "http://agentcore.local/trigger",
-        // The handler's own JSON gate applies to this request like any other; the envelope must satisfy it.
-        contentType: "application/json",
-        // The clock's NAME for this fire travels through untouched — the container dedupes on it.
-        body: { name: "job", occurrence: OCCURRENCE },
-      },
-    ]);
+    expect(seen).toEqual([{ name: "job", occurrence: new Date(OCCURRENCE).toISOString() }]);
   });
 
   it("no schedules in this deployment is a 404 the adapter answers itself", async () => {
@@ -342,7 +338,7 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     const { activeWork } = await import("../src/channels/busy.ts");
     const base = activeWork();
     let release: (r: Response) => void = () => {};
-    const routes = adapter({ trigger: () => new Promise<Response>((r) => (release = r)) });
+    const routes = adapter({ fireSchedule: () => new Promise<Response>((r) => (release = r)) });
     const pending = postEnvelope(routes, fireEnvelope) as Promise<Response>;
     await vi.waitFor(() => expect(activeWork()).toBe(base + 1));
     release(Response.json({ fired: true, ms: 1 }));
@@ -350,10 +346,15 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     expect(activeWork()).toBe(base);
   });
 
-  it("rejects an envelope that names no schedule or no occurrence", async () => {
-    const fire = adapter({ trigger: async () => Response.json({ fired: true, ms: 0 }) });
+  it("rejects an envelope that names no schedule, no occurrence, or one that is not a date", async () => {
+    const fire = adapter({ fireSchedule: async () => Response.json({ fired: true, ms: 0 }) });
     expect((await postEnvelope(fire, { kind: "schedule-fire" } as AgentcoreEnvelope)).status).toBe(400);
     expect((await postEnvelope(fire, { kind: "schedule-fire", name: "job" } as AgentcoreEnvelope)).status).toBe(400);
+    // Parsed HERE because this path claims the instant: an unparseable one would claim `Invalid Date`.
+    expect(
+      (await postEnvelope(fire, { kind: "schedule-fire", name: "job", occurrence: "nope" } as AgentcoreEnvelope))
+        .status,
+    ).toBe(400);
   });
 });
 
@@ -420,7 +421,7 @@ describe("agentcore adapter: the authentication boundary", () => {
   it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
     const fire = vi.fn(async () => Response.json({ fired: true, ms: 1 }));
     const routes = adapter({
-      trigger: fire,
+      fireSchedule: fire,
       channels: { routes: { "POST /hook": () => new Response("must not run") } },
     });
 

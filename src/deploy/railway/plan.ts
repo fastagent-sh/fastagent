@@ -185,8 +185,16 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
     ...(residency?.reason === CRON_CAN_BE_EXTERNAL
       ? [
-          `# To sleep anyway: enable it and drive \`POST /trigger\` from your own clock (a crontab, a CI cron),`,
-          `# one call per schedule — see docs/api-reference.md#schedule-authoring.`,
+          `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
+          `# calls this service's \`POST /trigger\` over the private network — traffic from another service in the`,
+          `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
+          `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
+          `#     AGENT_TRIGGER=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/trigger`,
+          `#     curl --retry 3 -fsS -X POST "$AGENT_TRIGGER" -H 'content-type: application/json' \\`,
+          `#       -d '{"name":"<schedule>","idempotencyKey":"'"$(date -u +%FT%H:%MZ)"'"}'`,
+          `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it),`,
+          `#   and the key makes that retry safe.`,
+          `# \`POST /trigger\` is an API, not a clock: read its contract — docs/api-reference.md#post-trigger.`,
         ]
       : []),
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,
