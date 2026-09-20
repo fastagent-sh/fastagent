@@ -144,6 +144,10 @@ Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundr
 
 **Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 
+**One of those reasons has a way out: `schedules/`.** An external clock can fire a declared schedule through [`POST /trigger`](api-reference.md#schedule-authoring), so if you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and drive the route yourself — a crontab line or a CI cron per schedule. `deploy` prints this next to the setting it applies.
+
+`selfSchedule` is different and pre-flight says so: a wake-up is minted by the agent *at runtime*, so no external clock can know to send it. There, one machine staying up is the only option. The same goes for a GitHub channel (its turns have no replay) and a long-connection channel (it cannot reconnect from zero).
+
 ## Railway
 
 Prereqs: the [Railway CLI](https://docs.railway.com/guides/cli) and `railway login`.
@@ -167,7 +171,7 @@ Or:
 fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries .secrets/.env's values
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, time triggers, or a long-connection channel; a sleeping service cannot hold an outbound connection.
+`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, `selfSchedule`, or a long-connection channel; a sleeping service cannot hold an outbound connection. With `schedules/` alone you may enable it, provided you drive [`POST /trigger`](api-reference.md#schedule-authoring) from your own clock — the runbook prints that alternative.
 
 ## AWS Bedrock AgentCore
 

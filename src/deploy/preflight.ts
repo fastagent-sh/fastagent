@@ -46,8 +46,14 @@ interface DeployFacts {
   messages: DeployMessage[];
   /** Every declared channel with the ingress its module shape says it has, custom ones included. */
   channels: DeclaredChannel[];
-  /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). */
-  hasTimeTriggers: boolean;
+  /**
+   * `schedules/` declares at least one cron. KEPT APART from {@link hasWakeups} because only this one has an
+   * external substitute: `POST /trigger` lets someone else's clock fire a declared schedule, so an operator who
+   * wants scale-to-zero has an option here and none for a wake-up.
+   */
+  hasCron: boolean;
+  /** The agent may schedule ITSELF (`selfSchedule`, the wake tool) — minted at runtime, so nothing can stand in. */
+  hasWakeups: boolean;
   /**
    * The deployed environment's declaration, read ONCE here so the plan side and the run side cannot disagree about
    * what this deployment carries. The environment running `deploy` is deliberately absent from it (§9).
@@ -242,8 +248,10 @@ export async function preflightDeploy(input: {
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
-  const hasTimeTriggers =
-    loadedSchedules.schedules.length + loadedSchedules.failures.length > 0 || !!config.selfSchedule;
+  // A FAILED schedule file still counts: it declares the intent, and the deployed process reports the failure —
+  // a plan that scaled to zero because the file did not parse would hide it behind silence instead.
+  const hasCron = loadedSchedules.schedules.length + loadedSchedules.failures.length > 0;
+  const hasWakeups = !!config.selfSchedule;
   if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({
       level: "note",
@@ -252,12 +260,23 @@ export async function preflightDeploy(input: {
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     });
   }
-  if (hasTimeTriggers && !externalClock) {
+  // THE TWO HALVES SAY DIFFERENT THINGS, which is the whole reason they are separate facts. A cron has an external
+  // substitute and an operator who is paying for an idle box should be told so; a wake-up has none, and offering
+  // the same way out would be advice that silently drops turns.
+  if (hasWakeups && !externalClock) {
     messages.push({
       level: "note",
       text:
-        `schedules/self-scheduling present — a GENERATED plan keeps one machine running (cron/wake has ` +
-        `no external wake-up; scale-to-zero would sleep through them).`,
+        `selfSchedule is on — a GENERATED plan keeps one machine running, and there is no way around it: a wake-up ` +
+        `is minted by the agent at runtime, so no external clock can know to send it.`,
+    });
+  } else if (hasCron && !externalClock) {
+    messages.push({
+      level: "note",
+      text:
+        `schedules/ present — a GENERATED plan keeps one machine running (a cron instant has no external wake-up ` +
+        `here). To scale to zero instead, drive \`POST /trigger\` from your own clock — one line per schedule, ` +
+        `\`{"name":"<schedule>"}\` (docs/api-reference.md#schedule-authoring).`,
     });
   }
 
@@ -542,7 +561,8 @@ export async function preflightDeploy(input: {
     ok: true,
     messages,
     channels,
-    hasTimeTriggers,
+    hasCron,
+    hasWakeups,
     values,
     valueFile,
     modelAuth,

@@ -15,7 +15,8 @@ const base = {
   runtime: "node",
   hasLockfile: true,
   version: "9.9.9",
-  hasTimeTriggers: false,
+  hasCron: false,
+  hasWakeups: false,
 } as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
@@ -183,7 +184,8 @@ describe("deploy/railway: planRailwayDeploy", () => {
           ...base,
           modelAuth: undefined,
           channels: declaredChannels(["telegram"]),
-          hasTimeTriggers: true,
+          hasCron: true,
+          hasWakeups: false,
         }),
       ),
     ).toContain("do NOT enable App Sleeping");
