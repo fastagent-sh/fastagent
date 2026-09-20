@@ -168,9 +168,10 @@ effort does not: a served turn takes it from `thinkingLevel` in `fastagent.confi
 does too, and a `defaultThinkingLevel` you saved for coding does not quietly make this the one posture that answers
 at a different effort than your deployment.
 
-The rest of pi's turn-shaping settings — `compaction`, `retry`, `thinkingBudgets`, `transport`, the HTTP timeouts —
-still come from your machine in `chat` while `dev`/`start` read them from the definition (`<workspace>/.fastagent/pi/`).
-Set them in either place and the two postures can compact or retry differently. They are not split today because pi
+The rest of pi's turn-shaping settings — `compaction`, `retry`, `cacheWarming`, `thinkingBudgets`, `transport`, the
+HTTP timeouts — still come from your machine in `chat` while `dev`/`start` read them from the definition
+(`<workspace>/.fastagent/pi/`, see [Engine settings](configuration.md#engine-settings-fastagentpisettingsjson)).
+Set them in either place and the two postures can compact, retry or warm the prompt cache differently. They are not split today because pi
 re-reads its settings from storage on every resource reload, which discards any per-key override applied on top.
 
 ## `fastagent invoke`

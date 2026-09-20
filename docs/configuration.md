@@ -227,6 +227,39 @@ FastAgent:
 `fastagent models` lists the built-in catalog only — it answers "what does FastAgent support", not
 "what does this agent use". To confirm what an agent resolved, run `fastagent info`.
 
+## Engine settings: `.fastagent/pi/settings.json`
+
+The knobs that shape a turn rather than the agent — compaction, retries, prompt-cache warming, transport
+timeouts — belong to pi, not to `fastagent.config.ts`. `dev`/`start` point pi at
+`<workspace>/.fastagent/pi/`, so they travel with the definition: a threshold someone saved on their
+laptop cannot change what a deployed turn does. The file is pi's own settings format; the ones worth
+knowing here:
+
+| Setting | Default | Why it matters to an agent |
+|---|---|---|
+| `cacheWarming` | `"streaming"` | While a long tool call runs, pi re-sends the last request with a one-token budget to keep the provider's prompt cache alive. Each refresh is billed as a cache read of the full context, and one is only sent when the expected saving clears $0.05. Set `"off"` to never spend that, `"idle"` to also warm between turns. |
+| `compaction` | pi's defaults | `reserveTokens` / `keepRecentTokens`, and per-model overrides through `compaction.modelOverrides` — useful when one agent serves a cheap channel model and an expensive one. |
+| `retry` | pi's defaults | Provider and agent retry budgets. `retry.maxAgentDelayMs` (60s) caps how long a turn can sit in backoff during a provider outage. |
+
+```json
+{
+  "cacheWarming": "off",
+  "compaction": { "modelOverrides": { "anthropic/claude-fable-5": { "keepRecentTokens": 40000 } } }
+}
+```
+
+`fastagent chat` is the exception: it reads these from your machine (`~/.pi/agent/settings.json`), so
+the two postures can compact, retry or warm differently. See [CLI](cli.md#fastagent-chat).
+
+### The prompt lives in the session record
+
+pi records the assembled system prompt as the transcript's leading message, and a later change arrives
+as a patch to the sections that changed rather than a fresh prompt. Two consequences: editing
+`persona.md` or `AGENTS.md` under `dev` no longer invalidates the provider's cached prefix on the next
+turn, and a long-lived conversation accumulates one small patch entry per edit. The prompt is not
+published — the [session control plane](design/session-control.md) reports that entry with an empty
+payload.
+
 ## Auth and secrets
 
 FastAgent resolves model credentials through the model provider layer. Common options:
