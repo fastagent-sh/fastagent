@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { claimSlot, type Fire, readFires } from "../../src/schedule/state.ts";
-import { startSchedules } from "../../src/service.ts";
+import { loadServingSchedules, startSchedules } from "../../src/service.ts";
 import { requireEnv } from "./env.ts";
 
 // Node's fetch ignores HTTPS_PROXY; the library opener deliberately leaves this to its caller.
@@ -66,7 +66,7 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.
-    const { schedules, stop } = await startSchedules(dir, agent, stateRoot, false);
+    const { schedules, stop } = startSchedules(agent, stateRoot, false, await loadServingSchedules(dir));
     cleanups.push(stop);
     expect(
       schedules.map((s) => s.name),

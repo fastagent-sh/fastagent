@@ -188,7 +188,7 @@ describe("deploy agentcore: the plan", () => {
     expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
   });
 
-  it("schedules become EventBridge rules with tz + slot-carrying input; untranslatable ones warn", () => {
+  it("schedules become EventBridge rules carrying the clock's own name for each fire; untranslatable ones warn", () => {
     const schedules: ScheduleFact[] = [
       { name: "digest", cron: "0 9 * * 1-5", tz: "Asia/Shanghai" },
       { name: "impossible", cron: "0 9 1 * 1" },
@@ -198,7 +198,10 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("ScheduleDigest:");
     expect(template).toContain("ScheduleExpression: cron(0 9 ? * 2-6 *)");
     expect(template).toContain("ScheduleExpressionTimezone: Asia/Shanghai");
-    expect(template).toContain('\'{"scheduleFire":{"name":"digest","slot":"<aws.scheduler.scheduled-time>"}}\'');
+    // THE CLOCK NAMES THE FIRE. `<aws.scheduler.scheduled-time>` is what EventBridge repeats
+    // byte-identically on every redelivery (measured: 3 attempts, one payload), which is the only thing
+    // that lets the container tell a retry from a new occurrence (schedule/trigger.ts).
+    expect(template).toContain('\'{"scheduleFire":{"name":"digest","occurrence":"<aws.scheduler.scheduled-time>"}}\'');
     expect(template).not.toContain("impossible");
     expect(plan.untranslatableSchedules).toEqual([
       { name: "impossible", reason: expect.stringMatching(/BOTH day-of-month/) },
@@ -244,7 +247,9 @@ describe("deploy agentcore: the plan", () => {
   it("a schedule name with a quote cannot break the EventBridge Input YAML/JSON", () => {
     const plan = planAgentcoreDeploy(baseInput({ schedules: [{ name: "it's-daily", cron: "0 9 * * *" }] }));
     const template = plan.artifacts[0]!.content;
-    expect(template).toContain(`'{"scheduleFire":{"name":"it''s-daily","slot":"<aws.scheduler.scheduled-time>"}}'`);
+    expect(template).toContain(
+      `'{"scheduleFire":{"name":"it''s-daily","occurrence":"<aws.scheduler.scheduled-time>"}}'`,
+    );
   });
 
   it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {

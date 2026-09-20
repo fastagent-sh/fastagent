@@ -29,9 +29,10 @@ const BIND: FlagSpec = {
 const NO_INVOKE: FlagSpec = {
   flags: "--no-invoke",
   description:
-    "do not serve POST /invoke on this run — the data plane is unauthenticated and runs a turn with the agent's " +
-    "full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it " +
-    "(fastagent.config.ts http.invoke: false is the same choice, but it travels into a deployed image)",
+    "do not serve POST /invoke on this run, nor POST /trigger — both are unauthenticated and run a turn with the " +
+    "agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold " +
+    "them (fastagent.config.ts http.invoke: false is the same choice, but it travels into a deployed image; this " +
+    "flag outranks http.trigger: true, because a flag is what a definition you cannot edit still answers to)",
 };
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",
@@ -208,6 +209,8 @@ const start: CommandSpec = {
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > fastagent.config.ts http.host > all interfaces\n" +
     "  /invoke:  --no-invoke > fastagent.config.ts http.invoke > served\n" +
+    "  /trigger: --no-invoke > fastagent.config.ts http.trigger > http.invoke\n" +
+    "            (only mounted when the definition declares schedules/)\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +

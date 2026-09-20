@@ -505,6 +505,7 @@ describe("schedule/scheduler: fire algorithm", () => {
       ]),
     );
     const logs: string[] = [];
+    // Every level goes through console.error (log.ts); the LEVEL is in the formatted line.
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const { agent, calls } = recordingAgent([
       { type: "failed", retryable: true, code: "session_busy", details: "busy" },
@@ -516,7 +517,8 @@ describe("schedule/scheduler: fire algorithm", () => {
     // — a recurring has a next occurrence by definition.
     expect(listWakeups(root)).toHaveLength(1);
     expect(listWakeups(root)[0]).toMatchObject({ id: "rec2", fireAt: "2026-07-08T09:00:00.000Z" });
-    await vi.waitFor(() => expect(logs.some((l) => /occurrence skipped/.test(l))).toBe(true));
+    await vi.waitFor(() => expect(logs.some((l) => /INFO.*occurrence skipped \(session busy\)/.test(l))).toBe(true));
+    expect(logs.join("\n")).not.toMatch(/ERROR/); // a busy recurring occurrence is a policy outcome, not a fault
     s.stop();
   });
 
@@ -559,6 +561,57 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(lastFire(root, "job")).toBe("2026-07-07T10:00:03.000Z");
     expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
     expect(readFires(root, "job")).toMatchObject([{ firedAt: "2026-07-07T10:00:03.000Z", outcome: "completed" }]);
+  });
+
+  it("OVERLAP is `skipped`, not `failed` — the previous turn still running is a policy, not a fault", async () => {
+    // A schedule's turns share one `schedule:<name>` session, so an occurrence arriving while the
+    // previous one runs is refused by that session. Recording it as `failed` made "the last run was
+    // still going" indistinguishable from "the model call died" in `fastagent schedule history`, and
+    // handed a public `POST /trigger` caller a `failed` that is not one. Every scheduler names this
+    // instead: k8s `concurrencyPolicy: Forbid`, Temporal's `Skip` overlap policy.
+    const root = await freshRoot();
+    const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+
+    expect(outcome).toMatchObject({ fired: false, skipped: true });
+    expect(outcome.failed).toBeUndefined();
+    expect(String(outcome.skippedReason)).toContain("still running");
+    // The claim STANDS — this occurrence is decided and will not be retried — it just did not fail.
+    expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "skipped" }]);
+  });
+
+  it("…and the LOG says so too — the line an operator reads first is not an error", async () => {
+    // The claim file said `skipped` and the reply said `skipped: true`, while `docker logs` /
+    // CloudWatch still printed `ERROR [schedule] job failed (1ms): busy`. That line is the first place
+    // anyone looks, so until it changed, the distinction this outcome exists for did not exist where
+    // it is used. `failed` rides along on a busy rejection only because that is the SPEC's one
+    // terminal event shape — a wire detail, not a verdict.
+    const root = await freshRoot();
+    const lines: string[] = [];
+    // Every level goes through console.error (log.ts); the LEVEL is in the formatted line, which is
+    // exactly what this asserts.
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")));
+    const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
+    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+
+    expect(lines.join("\n")).toMatch(/INFO.*job: occurrence skipped \(session busy\)/);
+    expect(lines.join("\n")).not.toMatch(/ERROR/);
+    expect(lines.join("\n")).not.toMatch(/failed/);
+  });
+
+  it("a turn that really fails is `failed`, and its occurrence is spent either way", async () => {
+    // The boundary this pair draws. The claim is the DECISION, so a failed turn is not retried: an
+    // agent turn has external side effects (a message sent, a file written) and nothing here can tell
+    // a failure before them from one after. The engine's own retry budget is what covers a transient
+    // model error; by the time a `failed` event arrives, that budget is spent.
+    const root = await freshRoot();
+    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "upstream 500" }]);
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+
+    expect(outcome).toMatchObject({ fired: true, failed: "upstream 500" });
+    expect(outcome.skipped).toBeUndefined();
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "failed" }]);
   });
 
   it("what the turn SAID is neither logged nor stored — it is already in the session", async () => {

@@ -24,6 +24,46 @@ describe("serving surface", () => {
     expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
   });
 
+  it("mounts POST /trigger only where there is something to trigger, and reserves that path too", async () => {
+    // It rides the unverified table for the reason that table exists: the JSON gate, the cross-origin
+    // policy, the reserved path and the startup report's account of what is open all follow from being
+    // in it — none of which this route had to ask for.
+    const dir = await mkdtemp(join(tmpdir(), "fa-trigger-surface-"));
+    const none = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
+    expect(Object.keys(none.unverified)).not.toContain("POST /trigger");
+
+    const schedules = [{ name: "digest", cron: "0 * * * *", tz: "UTC", prompt: "go" }];
+    const withTrigger = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { schedules });
+    expect(Object.keys(withTrigger.unverified)).toContain("POST /trigger");
+
+    // It FOLLOWS `serveInvoke`: `http.invoke: false` means "the channels' signature checks are the only
+    // way in", and a second anonymous turn-starter appearing behind that choice would reverse it.
+    const invokeOff = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      schedules,
+      serveInvoke: false,
+    });
+    expect(Object.keys(invokeOff.unverified)).toEqual(["GET /health"]);
+    // …with one explicit exception, which is the combination this route exists for: no `/invoke`, but
+    // an external clock driving the schedules.
+    const clockOnly = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      schedules,
+      serveInvoke: false,
+      serveTrigger: true,
+    });
+    expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "POST /trigger"]);
+
+    // Reserved like /invoke: a channel taking the path would answer for a route every runbook names.
+    const taken = await mkdtemp(join(tmpdir(), "fa-trigger-taken-"));
+    await mkdir(join(taken, "channels"));
+    await writeFile(
+      join(taken, "channels", "mine.mjs"),
+      `export default () => ({ "POST /trigger": () => new Response("mine") });\n`,
+    );
+    await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, { schedules })).rejects.toThrow(
+      /channel route\(s\) "POST \/trigger" take a path this serve answers on itself/,
+    );
+  });
+
   it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-invoke-surface-"));
     await mkdir(join(dir, "channels"));
@@ -120,16 +160,14 @@ describe("mountAgentcore", () => {
     // routing (see the adapter's authentication boundary), so the mount must carry it.
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const routes = mountAgentcore({ agent, stateRoot: dir, schedules: [schedule], channels: () => ({ routes: {} }) });
+    // The clock's name for this fire. Recent, because `POST /trigger` refuses an occurrence older than
+    // one period of the schedule that declares it (schedule/trigger.ts).
+    const occurrence = new Date().toISOString();
     const fire = (name: string): Promise<Response> | Response =>
       routes["POST /invocations"]!(
         new Request("http://x/invocations", {
           method: "POST",
-          body: JSON.stringify({
-            auth: "ingress-s3cret",
-            kind: "schedule-fire",
-            name,
-            slot: "2026-07-07T10:00:00Z",
-          }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name, occurrence }),
         }),
       );
     expect((await fire("nope")).status).toBe(404);
@@ -202,6 +240,13 @@ describe("cli: the assembled serving surface", () => {
     const configuredOff = { ...opened, serveInvoke: false } as MountableAgent;
     expect(withRunOverrides(configuredOff, {}).serveInvoke).toBe(false);
     expect(withRunOverrides(configuredOff, { invoke: true }).serveInvoke).toBe(false);
+
+    // It takes `POST /trigger` with it, over a definition that asked for it. Both routes start a turn
+    // for an anonymous caller, and `dev --tunnel --no-invoke` leaving the other one on the tunnel URL
+    // would be the flag failing at the job it exists for.
+    const triggerOn = { ...opened, serveTrigger: true } as MountableAgent;
+    expect(withRunOverrides(triggerOn, { invoke: false }).serveTrigger).toBe(false);
+    expect(withRunOverrides(triggerOn, {}).serveTrigger).toBe(true); // no flag, the definition stands
   });
 
   it("the cross-origin grant is said at EVERY boot, loopback included", async () => {
@@ -216,6 +261,15 @@ describe("cli: the assembled serving surface", () => {
       expect(said).toMatch(/any web page your browser visits can call this serve cross-origin/);
       expect(said).toContain("POST /invoke");
       expect(said).toContain("http.cors");
+
+      // `POST /trigger` is on the same table and is named the same way: it runs a turn too, from a
+      // prompt the definition wrote down rather than one the caller sent.
+      warn.mockClear();
+      announceControl(
+        { unverifiedRoutes: ["POST /invoke", "POST /trigger", "GET /health"] },
+        { host: "127.0.0.1", tunnel: false },
+      );
+      expect(warn.mock.calls.flat().join(" ")).toContain("POST /trigger (fire any schedule this agent has)");
 
       // …and NOT once `http.cors` has taken it back — then the operator named the origins themselves.
       warn.mockClear();

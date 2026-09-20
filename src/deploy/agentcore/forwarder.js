@@ -97,19 +97,38 @@ async function syncAlarms(alarms, ctx) {
   return failed;
 }
 
+/**
+ * Invoke the container, and leave ONE line under `label` whichever way it ends — including the way that never came
+ * back at all.
+ *
+ * Lambda already logs an unhandled throw, so the failure is not invisible; what it is not is ATTRIBUTABLE. An
+ * operator (or a probe) filtering this log group for `schedule-fire <name>` sees nothing and concludes the clock
+ * never fired, when what actually happened is that the clock fired and the call died. Those need different fixes
+ * and looked identical from outside — that mistake cost a real debugging session.
+ */
+async function invokeLogged(label, envelope) {
+  try {
+    return await invoke(envelope);
+  } catch (e) {
+    console.log(`${label}: invoke failed: ${e?.message || e}`);
+    throw e; // the miss still lands as a Lambda error, which is what makes EventBridge retry it
+  }
+}
+
 exports.handler = async (event, ctx) => {
   // EventBridge wake-up poke: the invocation itself wakes the container; its pump does the rest.
   if (event?.wakePoke) {
-    const r = await invoke({ kind: "wake-poke" });
+    const r = await invokeLogged("wake-poke", { kind: "wake-poke" });
     console.log(`wake-poke: ${r.status}`);
     return { status: r.status };
   }
   // EventBridge Scheduler fire — throw on failure so the miss lands in CloudWatch, never silently.
   if (event?.scheduleFire) {
-    const { name, slot } = event.scheduleFire;
-    const r = await invoke({ kind: "schedule-fire", name, slot });
+    const { name, occurrence } = event.scheduleFire;
+    const label = `schedule-fire ${name} (${occurrence})`;
+    const r = await invokeLogged(label, { kind: "schedule-fire", name, occurrence });
     const out = r.body.toString();
-    console.log(`schedule-fire ${name} (${slot}): ${r.status} ${out}`);
+    console.log(`${label}: ${r.status} ${out}`);
     if (r.status >= 400) throw new Error(`schedule-fire ${name} failed: ${r.status} ${out}`);
     return { status: r.status };
   }

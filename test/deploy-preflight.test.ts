@@ -18,7 +18,10 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
   await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
-  for (const [name, content] of Object.entries(files)) await writeFile(join(dir, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    await mkdir(join(dir, name, ".."), { recursive: true }); // a fixture may name a nested file (schedules/…)
+    await writeFile(join(dir, name), content);
+  }
   return dir;
 }
 
@@ -698,6 +701,30 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // nothing left to warn about.
     const withheld = await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false } });
     expect(unauthenticated(withheld)).toEqual([]);
+    // A declared schedule mounts `POST /trigger`, so the list names it on the same condition the
+    // assembly uses. The combination this protects is the last line: `http.invoke: false` +
+    // `http.trigger: true` leaves that route as the ONLY anonymous turn endpoint on a public URL, and
+    // it used to produce an empty list, i.e. no warning at all.
+    const withSchedule = await workspace({
+      "schedules/daily.ts": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
+    });
+    const bothOn = unauthenticated(await call(withSchedule, { model: "openai/gpt-4o-mini" }));
+    expect(bothOn).toHaveLength(1);
+    expect(bothOn[0]?.text).toContain("POST /invoke");
+    expect(bothOn[0]?.text).toContain("POST /trigger (fire any schedule this agent declares)");
+
+    const triggerOnly = unauthenticated(
+      await call(withSchedule, { model: "openai/gpt-4o-mini", http: { invoke: false, trigger: true } }),
+    );
+    expect(triggerOnly).toHaveLength(1);
+    expect(triggerOnly[0]?.text).toContain("POST /trigger");
+    expect(triggerOnly[0]?.text).not.toContain("POST /invoke");
+
+    // …and `http.trigger` follows `http.invoke` when unset, so turning the data plane off takes it too.
+    expect(unauthenticated(await call(withSchedule, { model: "openai/gpt-4o-mini", http: { invoke: false } }))).toEqual(
+      [],
+    );
+
     // With the control plane on, the warning stands — naming only what is actually served.
     const controlOnly = unauthenticated(
       await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false }, sessionControl: true }),

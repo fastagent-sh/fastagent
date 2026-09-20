@@ -33,6 +33,7 @@ import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { isEnvKey } from "./secrets.ts";
+import { shouldServeTrigger } from "../service.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -175,13 +176,29 @@ export async function preflightDeploy(input: {
   }
   const modelSpec = model.spec;
 
+  // Time triggers (static schedules or self-scheduling) need a machine kept running, and a declared schedule also
+  // decides whether `POST /trigger` mounts — so the load happens HERE, before the warning that has to name it.
+  // Loaded, not just listed: the same load answers "are there time triggers" AND "what did they declare they need".
+  // A file that FAILED to load still counts as a trigger — the author will fix it, and a plan that scaled to zero
+  // because a cron was broken on deploy day would sleep through it afterwards.
+  const loadedSchedules = await loadSchedules(agentDir);
+
   // What the PUBLIC host URL answers with no authentication of ours in front of it — NAMED FROM WHAT WILL ACTUALLY
   // MOUNT, never from the host alone. `POST /invoke` is on by default whatever channels a definition declares (so
   // this is not conditioned on `sessionControl`, which is how a telegram-only agent used to publish "run a turn with
   // my tools" in silence), but `http.invoke: false` withholds it. Listing an endpoint this deployment does not serve
   // is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
+  //
+  // `POST /trigger` follows the SAME condition the assembly uses, through the same function
+  // (`shouldServeTrigger`). Leaving it out had the two failures this list exists to prevent —
+  // one missing endpoint in the ordinary case, and complete silence for `http.invoke: false` + `http.trigger: true`,
+  // which is a public URL whose ONLY anonymous turn endpoint went unmentioned.
+  const servesTrigger =
+    loadedSchedules.schedules.length > 0 &&
+    shouldServeTrigger({ serveInvoke: config.http?.invoke, serveTrigger: config.http?.trigger });
   const unauthenticated = [
     ...(config.http?.invoke === false ? [] : ["POST /invoke (run a turn with this agent's tools)"]),
+    ...(servesTrigger ? ["POST /trigger (fire any schedule this agent declares)"] : []),
     ...(config.sessionControl === true ? ["/control/* (read, steer or delete any session)"] : []),
   ];
   if (publicUrl && unauthenticated.length > 0) {
@@ -225,11 +242,6 @@ export async function preflightDeploy(input: {
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
-  // Time triggers (static schedules or self-scheduling) need a machine kept running.
-  // Loaded, not just listed: the same load answers "are there time triggers" AND "what did they declare they need".
-  // A file that FAILED to load still counts as a trigger — the author will fix it, and a plan that scaled to zero
-  // because a cron was broken on deploy day would sleep through it afterwards.
-  const loadedSchedules = await loadSchedules(agentDir);
   const hasTimeTriggers =
     loadedSchedules.schedules.length + loadedSchedules.failures.length > 0 || !!config.selfSchedule;
   if (longConnectionChannels.length > 0 && !externalClock) {

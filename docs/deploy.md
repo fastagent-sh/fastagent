@@ -203,7 +203,7 @@ AgentCore differs from the resident-box hosts in kind — the platform has **no 
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
 - a **forwarder Lambda** with a public Function URL fronting the webhooks (channels verify signatures exactly as on every host);
-- **EventBridge Scheduler rules** delivering each `schedules/*.ts` cron slot (the container arms no resident timers; delivery is slot-idempotent). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
+- **EventBridge Scheduler rules** firing each `schedules/*.ts` cron (the container arms no resident timers; the rule carries `<aws.scheduler.scheduled-time>`, which EventBridge repeats unchanged on a redelivery, so the container dedupes on it). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
 - with `selfSchedule: true`, the **wake-alarm wiring**: pending wake-ups are mirrored (via the forwarder, authenticated by a minted shared secret) into self-deleting one-shot EventBridge schedules that wake the container at the right instant.
 
 What to know before choosing it:
