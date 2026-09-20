@@ -82,6 +82,20 @@ export function stripDeferredMarker(tool: MountedTool): MountedTool {
   return active;
 }
 
+/**
+ * Ask the provider to constrain sampling to the tool's schema, the posture pi's own built-ins take. `"prefer"`
+ * rather than `"require"`: a schema pi cannot express strictly, or a provider without strict mode, silently falls
+ * back to an ordinary function tool instead of failing the turn.
+ *
+ * Nothing here has to undo pi's strict rewrite. To express "optional" strictly, pi marks every property required and
+ * unions the optional ones with `null`, so a constrained model emits `null` where it would have omitted the key — and
+ * pi-ai's `validateToolArguments` drops those nulls (`normalizeOptionalNulls`) before `execute` is called. It drops
+ * one only where the author's OWN schema rejects null, so any nullable property keeps its `null`, and a
+ * `.nullable().optional()` property can no longer distinguish "absent" from "null" — the one place this changes
+ * what an author's `execute` receives.
+ */
+const CONSTRAINED_SAMPLING = { type: "json_schema", strict: "prefer" } as const;
+
 /** Wrap a plain return value into pi's tool-result shape; pass a full result through unchanged. */
 function wrapResult(value: unknown): AgentToolResult<unknown> {
   if (value && typeof value === "object" && Array.isArray((value as { content?: unknown }).content)) {
@@ -104,6 +118,7 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
     label: options.name ?? "",
     description: options.description,
     parameters,
+    constrainedSampling: CONSTRAINED_SAMPLING,
     ...(options.deferred ? { deferred: true } : {}),
     ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     ...(options.secrets?.length ? { secrets: options.secrets } : {}),
