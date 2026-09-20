@@ -195,6 +195,17 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(said).toContain("x".repeat(64));
     expect(said).not.toContain("x".repeat(65));
     expect(said).toContain("this deployment has: digest"); // listing OUR names is the deliberate part
+
+    // …and the future-slot refusal quotes nothing at all. `Date.parse` is V8's lenient parser, so a
+    // caller can smuggle most of MAX_TRIGGER_BODY_BYTES through a "valid date" — what it gets back is
+    // our clock, which is the half of the comparison it does not already have.
+    const smuggled = `Dec 25 2999 (${"B".repeat(3000)})`;
+    expect(Number.isNaN(Date.parse(smuggled))).toBe(false); // the premise, not an assumption
+    const ahead = await trigger(handle!, { name: "digest", slot: smuggled });
+    expect(ahead.status).toBe(400);
+    const refusal = await ahead.text();
+    expect(refusal).not.toContain("B");
+    expect(refusal).toContain("ahead of this machine's clock (now 2026-07-07T10:30:00.000Z)");
   });
 
   it("an OLD occurrence is reported, not fired — history is not a queue of turns to buy", async () => {

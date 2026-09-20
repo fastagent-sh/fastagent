@@ -31,7 +31,11 @@ const runFire = (agent: Agent, stateRoot: string, schedule: LoadedSchedule, slot
 /** A trigger body is a name and an optional instant; the cap only has to admit that. */
 const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 
-/** How much of a caller's `name` a 404 will quote back. Long enough to recognise a typo, short enough not to be a page. */
+/**
+ * How much of a caller's `name` a 404 will quote back — the ONE thing this route echoes, because telling a typo
+ * from a stale clock rule needs the name and nothing else does. Long enough to recognise one, short enough not to
+ * be a page.
+ */
 const MAX_ECHOED_NAME = 64;
 
 /**
@@ -132,8 +136,12 @@ export function createTriggerHandler(options: {
     const now = new Date();
     if (typeof slot === "string" && Date.parse(slot) > now.getTime()) {
       return text(
-        `"slot" ${slot} is ahead of this machine's clock — a slot names an occurrence that has already arrived, ` +
-          `and claiming one early would refuse every real occurrence after it as stale. Retry, or omit "slot"\n`,
+        // NOT QUOTED BACK. `Date.parse` is V8's lenient parser — `Dec 25 2999 (${"A".repeat(3000)})` parses — so
+        // echoing it would hand an unauthenticated caller most of MAX_TRIGGER_BODY_BYTES back in a `text/plain`
+        // reply. Our clock is the half of the comparison the caller does NOT have, and the only half it can act on.
+        `"slot" is ahead of this machine's clock (now ${now.toISOString()}) — a slot names an occurrence that has ` +
+          `already arrived, and claiming one early would refuse every real occurrence after it as stale. Retry, ` +
+          `or omit "slot"\n`,
         400,
       );
     }

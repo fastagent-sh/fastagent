@@ -624,14 +624,14 @@ credential:
 | Endpoint | What an anonymous caller gets |
 |---|---|
 | `POST /invoke` | A turn with this agent's full tool authority, on any session id, billed to your model account. Always served. |
-| `POST /trigger` | A turn from a prompt the definition wrote down, for any schedule it declares. Served when there is at least one. |
+| `POST /trigger` | A turn from a prompt the definition wrote down, for any schedule it declares. Served when there is at least one AND the data plane is on — `http.trigger` defaults to `http.invoke`. |
 | `GET /control/sessions` | Every conversation on the deployment |
 | `GET /control/sessions/{id}/entries`, `.../events` | The full contents of any one of them |
 | `POST /control/sessions/{id}/actions` | Steer, abort or compact a running turn |
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`POST /trigger` appears only where `schedules/` declares something. `/control/*` appears only under
+`POST /trigger` appears only where `schedules/` declares something, and follows `http.invoke` unless `http.trigger` says otherwise. `/control/*` appears only under
 `sessionControl: true`, and **not at all on AgentCore**. That host has
 two doors, and this plane fits neither:
 
