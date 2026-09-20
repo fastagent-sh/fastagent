@@ -207,6 +207,30 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     expect(systemPrompt).toContain("You are terse. Answer in one word.");
   });
 
+  it("the record carries that prompt as a system entry — the shape two readers filter on", async () => {
+    // `isConversationMessage` (and therefore branch-hint search and the session-list count) is built on pi
+    // writing the assembled prompt as a `type: "message"` / `role: "system"` entry, with the text in
+    // `sections` rather than `content`. Both of those callers are tested against hand-written entries, so
+    // this is the one place a REAL run pins the shape: if pi stops writing it, they go silently wrong.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const agent = await agentWith([fauxAssistantMessage("ok")], {
+      sessions: store,
+      readDefinition: () => ({ systemPrompt: "MARKER_PERSONA", skills: [] }),
+    });
+
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    const record = await store.openOrCreate("s");
+    const system = record
+      .getBranch()
+      .filter((e) => (e as { type?: string }).type === "message")
+      .map((e) => (e as { message: { role?: string; content?: unknown; sections?: Record<string, string> } }).message)
+      .filter((m) => m.role === "system");
+    expect(system).toHaveLength(1);
+    expect(system[0]?.content).toBe("");
+    expect(Object.values(system[0]?.sections ?? {}).join("\n")).toContain("MARKER_PERSONA");
+  });
+
   it("a mounted tool executes, and sees the turn's session through the tool context", async () => {
     let seenSessionId: string | undefined;
     const agent = await agentWith(

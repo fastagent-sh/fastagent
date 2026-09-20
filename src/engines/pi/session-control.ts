@@ -127,7 +127,9 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
         },
       };
     }
-    // A custom AgentMessage role (channel/extension-defined): open-set kind, skippable.
+    // Not a conversation turn (`isConversationMessage`): the engine's own `system` bookkeeping, or a custom
+    // AgentMessage role a channel/extension defined. Open-set kind with an EMPTY payload, skippable by contract —
+    // which is also what keeps the assembled prompt out of everything this plane publishes.
     return { ...base, kind: `message:${(m as { role: string }).role}`, data: {} };
   }
   return { ...base, kind: entry.type, data: {} };

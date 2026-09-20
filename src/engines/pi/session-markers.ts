@@ -23,6 +23,20 @@ export function isPlaneMarker(entry: { type?: string; customType?: string }): bo
 }
 
 /**
+ * An entry that is a TURN IN THE CONVERSATION — what a reader counting, previewing or searching the history means
+ * by "a message".
+ *
+ * The exclusion that needs a name: since pi 0.86 the engine writes its OWN `system` message entries into the same
+ * log, carrying the assembled prompt (persona, project context, skill and tool descriptions) plus one more per
+ * prompt or tool-set change. They are the engine's bookkeeping, not something anyone said, and every reader of the
+ * journal has to decide about them. Deciding once, here, is the point: the first reader that forgot cut inheritance
+ * above every exchange and handed a new thread an empty history, with no diagnostic.
+ */
+export function isConversationMessage(entry: { type?: string; message?: { role?: string } }): boolean {
+  return entry.type === "message" && entry.message?.role !== "system";
+}
+
+/**
  * Every position a client may move the branch head to, and everything `entries()` publishes — ONE predicate, so
  * "anything published is navigable" holds by construction.
  */

@@ -32,6 +32,22 @@ describe("defineTool", () => {
     expect(JSON.stringify(bad)).toMatch(/Invalid arguments|expected number/);
   });
 
+  it("passes executionMode through to pi — the author's only way to serialize a batch", async () => {
+    // Nothing inside fastagent sets this any more (the search_tools loader stopped needing it), so without
+    // an assertion the passthrough is a line nobody would notice losing.
+    expect(
+      defineTool({ name: "a", description: "d", input: z.object({}), execute: async () => "" }),
+    ).not.toHaveProperty("executionMode");
+    const serial = defineTool({
+      name: "b",
+      description: "d",
+      input: z.object({}),
+      executionMode: "sequential",
+      execute: async () => "",
+    });
+    expect(serial.executionMode).toBe("sequential");
+  });
+
   it("uses the unified ToolContext without a duplicate session id", async () => {
     let context: Record<string, unknown> | undefined;
     const tool = defineTool({

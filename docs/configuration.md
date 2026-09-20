@@ -254,10 +254,14 @@ the two postures can compact, retry or warm differently. See [CLI](cli.md#fastag
 ### The prompt lives in the session record
 
 pi records the assembled system prompt as the transcript's leading message, and a later change arrives
-as a patch to the sections that changed rather than a fresh prompt. Two consequences: editing
-`persona.md` or `AGENTS.md` under `dev` no longer invalidates the provider's cached prefix on the next
-turn, and a long-lived conversation accumulates one small patch entry per edit. The prompt is not
-published — the [session control plane](design/session-control.md) reports that entry with an empty
+as a patch to the sections that changed rather than a fresh prompt. On a model that accepts system
+messages mid-conversation, editing `persona.md` or `AGENTS.md` under `dev` therefore no longer
+invalidates the provider's cached prefix on the next turn. On one that does not, pi collapses the
+patches back into a single leading prompt and the edit still costs a cache miss — the capability is
+per model (pi's `supportsMidConvoSystemMessages`), so treat the saving as a bonus, not a budget.
+
+Either way a long-lived conversation accumulates one small patch entry per edit, and the prompt is not
+published: the [session control plane](design/session-control.md) reports that entry with an empty
 payload.
 
 ## Auth and secrets

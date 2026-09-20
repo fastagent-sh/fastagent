@@ -273,6 +273,15 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
+### Running a tool alone in its batch
+
+A model can call several tools in one assistant message, and pi executes that batch concurrently.
+`defineTool({ ..., executionMode: "sequential" })` opts out: pi runs any batch containing this tool one
+call at a time. Reach for it when a tool's work cannot safely overlap another's — it writes a file the
+other reads, holds an exclusive resource, or drives something single-session. The default (`"parallel"`,
+inherited when the option is omitted) is right for anything that only reads or only touches its own
+state.
+
 ### Declaring the secrets a tool needs
 
 A tool that needs an env var says so where it is defined:
