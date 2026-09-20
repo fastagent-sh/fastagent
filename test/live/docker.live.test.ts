@@ -15,10 +15,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { exists } from "../../src/paths.ts";
-import { CLI, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, installSpec, invoke, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
-const VERSION = await liveVersion();
 const COMPOSE = "fastagent/fastagent.compose.yml";
 
 let workspace = "";
@@ -58,7 +57,11 @@ beforeAll(async () => {
   await writeFile(
     join(agent, "package.json"),
     `${JSON.stringify(
-      { name: "live-docker-probe", private: true, dependencies: { "@fastagent-sh/fastagent": VERSION } },
+      {
+        name: "live-docker-probe",
+        private: true,
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agent) },
+      },
       null,
       2,
     )}\n`,

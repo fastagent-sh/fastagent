@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toRailwayName } from "../../src/deploy/railway/plan.ts";
-import { CLI, RAILWAY_PROBE_PROJECT, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, RAILWAY_PROBE_PROJECT, answerOf, expectCompleted, invoke, installSpec, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("RAILWAY_API_TOKEN", "an ACCOUNT-scoped Railway token — this probe creates and destroys a project");
@@ -53,7 +53,11 @@ beforeAll(async () => {
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
-      { name: "live-railway-probe", private: true, dependencies: { "@fastagent-sh/fastagent": await liveVersion() } },
+      {
+        name: "live-railway-probe",
+        private: true,
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agentDir) },
+      },
       null,
       2,
     )}\n`,
