@@ -568,7 +568,13 @@ function template(
         `      Target:`,
         `        Arn: !GetAtt Forwarder.Arn`,
         `        RoleArn: !GetAtt SchedulerRole.Arn`,
-        `        Input: ${yamlSingleQuote(JSON.stringify({ scheduleFire: { name: fact.name } } satisfies ScheduleFireEvent))}`,
+        `        # <aws.scheduler.scheduled-time> is the clock's NAME for this occurrence: EventBridge repeats it`,
+        `        # byte-identical on every redelivery, which is what makes the container's dedup work.`,
+        `        Input: ${yamlSingleQuote(
+          JSON.stringify({
+            scheduleFire: { name: fact.name, occurrence: "<aws.scheduler.scheduled-time>" },
+          } satisfies ScheduleFireEvent),
+        )}`,
       );
     }
   }

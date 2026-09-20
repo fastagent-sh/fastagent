@@ -56,6 +56,12 @@ export type AgentcoreEnvelope = {
   | {
       kind: "schedule-fire";
       name: string;
+      /**
+       * The instant EventBridge scheduled this fire for — the clock's NAME for the occurrence, stable across its
+       * redeliveries (measured: 3 attempts of one fire, byte-identical payload). The container dedupes on it and
+       * never recomputes it.
+       */
+      occurrence: string;
     }
   | { kind: "invoke"; session: string; text: string }
   /**
@@ -93,10 +99,10 @@ export interface WakeAlarmRequest {
 }
 
 /**
- * What EventBridge hands the forwarder when a cron rule fires. The NAME only: which occurrence it is for is the
- * container's own reading of its clock against that schedule's grid (schedule/trigger.ts), not a number carried
- * across the wire from a machine whose clock we would then have to police.
+ * What EventBridge hands the forwarder when a cron rule fires: which schedule, and which occurrence of it.
+ * `occurrence` is `<aws.scheduler.scheduled-time>` — the clock names its own fire, which is the only thing that
+ * survives a retry (schedule/trigger.ts).
  */
 export interface ScheduleFireEvent {
-  scheduleFire: { name: string };
+  scheduleFire: { name: string; occurrence: string };
 }

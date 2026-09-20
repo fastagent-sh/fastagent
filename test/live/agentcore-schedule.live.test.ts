@@ -3,35 +3,34 @@
  * envelope the container has to accept.
  *
  * WHY THIS NEEDS A LIVE PROBE. Offline, everything about this delivery is ours — a fake clock, a
- * faked EventBridge, a handler called directly. Here the timer, the forwarder and the container's
- * clock are all AWS's, and two beliefs about them are load-bearing and untestable anywhere else:
+ * faked EventBridge, a handler called directly. Here the timer, the forwarder and the container are
+ * all AWS's, and one belief about them is load-bearing and untestable anywhere else:
  *
- *   1. The envelope names a schedule and NOTHING ELSE, so the container decides which occurrence the
- *      delivery is for by snapping its OWN clock to the grid (schedule/trigger.ts). That is only
- *      correct if the delivery lands inside the occurrence it was scheduled for — late enough to be
- *      past the instant, early enough not to have fallen into the next one. Whether that holds is a
- *      fact about a clock and a delivery path we do not own.
- *   2. The container accepts the delivery at all: a cold start, an opened definition and a model turn
- *      all happen inside the forwarder's call, and a non-200 here would be invisible from inside an
- *      agent that simply never ran.
+ *   The container accepts the delivery at all, END TO END. A cold start, an opened definition, a
+ *   model turn and the forwarder's own timeout all happen inside one invocation, and a non-200 would
+ *   be invisible from inside an agent that simply never ran.
+ *
+ * WHAT IT NO LONGER HAS TO PROVE, and why. The design's other load-bearing fact — that EventBridge
+ * repeats `<aws.scheduler.scheduled-time>` byte-identically across a redelivery, which is what lets
+ * the container tell a retry from a new occurrence — was measured directly by a standalone spike
+ * (EventBridge Scheduler → a Lambda that failed on purpose): 17 deliveries over 7 occurrences, up to 3
+ * per occurrence, every redelivery carrying an identical payload, backoff at +60s and +186s. That is a
+ * property of the SERVICE, not of this deployment, so it does not belong in a probe that also builds
+ * a container. The numbers are recorded in schedule/trigger.ts, where the design reads them.
  *
  * WHAT IT OBSERVES, and from where. The forwarder logs one line per delivery —
- * `schedule-fire <name>: <status> <body>` (deploy/agentcore/forwarder.js) — and the body carries the
- * slot the CONTAINER chose. That is the whole point of reading CloudWatch rather than the container.
+ * `schedule-fire <name> (<occurrence>): <status> <body>` (deploy/agentcore/forwarder.js). That is the
+ * whole point of reading CloudWatch rather than the container.
  *
- * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute. It is
- * also the tightest possible version of belief (1): with a 60-second occurrence, a delivery more than
- * a minute late would visibly land on the wrong grid point. Anything coarser would hide that.
+ * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
  *
  * WHAT IT MEASURED, ap-southeast-1, 2026-09-19 — recorded so the next reader does not have to deploy
- * to learn it. (Measured against the earlier wire, which carried the instant; the numbers are facts
- * about the delivery path, not about the envelope.)
+ * to learn it:
  *
  *     schedule-fire tick (2026-09-19T13:04:00Z): 200 {"fired":true,"ms":2017}
  *     …logged at 13:04:09.372Z
  *
- * NINE SECONDS after the instant it was scheduled for, and 51 seconds before the next one — the
- * margin belief (1) needs, on both sides.
+ * NINE SECONDS from the scheduled instant to a completed turn, cold start included.
  *
  * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and an EventBridge
  * rule) and one real model turn per minute it is up. Teardown is the shared
@@ -46,7 +45,6 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { previousRun } from "../../src/schedule/cron.ts";
 import { CLI, aws, destroyAgentcoreDeployment, liveVersion, requireAwsAccount, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -101,11 +99,14 @@ afterAll(async () => {
   }
 }, 900_000);
 
-/** `schedule-fire <name>: <status> <body>` — the forwarder's one line per delivery. */
-const FIRE_LINE = new RegExp(`schedule-fire ${SCHEDULE}: (\\d+) (.*)$`);
+/** `schedule-fire <name> (<occurrence>): <status> <body>` — the forwarder's one line per delivery. */
+const FIRE_LINE = new RegExp(`schedule-fire ${SCHEDULE} \\(([^)]+)\\): (\\d+) (.*)$`);
 
 /** Poll the forwarder's log group until it has said something about a fire, or the budget runs out. */
-async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ body: string; status: number; raw: string }> {
+async function waitForFire(
+  sinceMs: number,
+  budgetMs: number,
+): Promise<{ occurrence: string; body: string; status: number; raw: string }> {
   const group = forwarderLogGroup(NAME);
   const deadline = Date.now() + budgetMs;
   let lastError = "no forwarder log group yet";
@@ -126,7 +127,12 @@ async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ body: s
       for (const event of (JSON.parse(events.stdout) as { events?: { message?: string }[] }).events ?? []) {
         const matched = FIRE_LINE.exec(event.message ?? "");
         if (matched)
-          return { status: Number(matched[1]), body: matched[2] as string, raw: (event.message ?? "").trim() };
+          return {
+            occurrence: matched[1] as string,
+            status: Number(matched[2]),
+            body: matched[3] as string,
+            raw: (event.message ?? "").trim(),
+          };
       }
       lastError = "the forwarder log group exists but has logged no schedule-fire";
     } else {
@@ -138,8 +144,8 @@ async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ body: s
   throw new Error(`no schedule-fire delivery within ${Math.round(budgetMs / 1000)}s — ${lastError}`);
 }
 
-describe("agentcore schedules: EventBridge holds the clock, the container names the occurrence", () => {
-  it("delivers a fire the container accepts, and lands inside the occurrence it was scheduled for", async () => {
+describe("agentcore schedules: EventBridge holds the clock and names each fire", () => {
+  it("delivers a fire the container accepts, and runs the occurrence the clock named", async () => {
     const deployedAt = Date.now();
     try {
       await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
@@ -169,27 +175,16 @@ describe("agentcore schedules: EventBridge holds the clock, the container names 
     // and opens the definition, and CloudWatch is eventually consistent about the group itself.
     const fire = await waitForFire(deployedAt, 360_000);
 
-    // (1) The container ACCEPTED it. A non-200 is a cold start, an opened definition or a model turn
-    // failing inside the forwarder's call — invisible from inside an agent that would simply never run.
+    // (1) THE assertion this probe exists for. A non-200 is a cold start, an opened definition, a model
+    // turn or the forwarder's timeout failing — invisible from inside an agent that would never run.
     expect(fire.status, `the forwarder's delivery was refused: ${fire.raw}`).toBe(200);
 
-    // (2) THE assertion this probe exists for. The envelope carries no instant, so the slot in the
-    // reply is the container's own clock snapped to this schedule's grid. It has to be a grid point,
-    // and it has to be the one the rule fired for — which, for a one-minute cron, means the delivery
-    // landed inside its own 60-second occurrence. Late by more than that and this reads the NEXT
-    // point; early (a container clock ahead of AWS's) and it reads the previous one.
+    // (2) The occurrence the container ran is the one the CLOCK named — it does not recompute it, and
+    // the reply is what the forwarder (and an operator) reads back.
     const reply = JSON.parse(fire.body) as { slot?: string; fired?: boolean };
-    expect(reply.slot, `no slot in the container's reply: ${fire.raw}`).toBeTruthy();
-    const slot = new Date(reply.slot as string);
-    expect(Number.isNaN(slot.getTime()), `unparseable slot in: ${fire.raw}`).toBe(false);
-    expect(
-      previousRun(CRON, undefined, slot)?.toISOString(),
-      `the container's chosen slot is not on the grid "${CRON}" produces (${fire.raw})`,
-    ).toBe(slot.toISOString());
-    // Within one occurrence of when this probe started waiting — the delivery is not hours stale.
-    expect(
-      Math.abs(slot.getTime() - deployedAt) < 6 * 60_000 + 60_000,
-      `the chosen slot ${slot.toISOString()} is not near this probe's deploy (${fire.raw})`,
-    ).toBe(true);
+    expect(reply.fired, `the delivery was accepted but nothing ran: ${fire.raw}`).toBe(true);
+    expect(new Date(reply.slot as string).toISOString(), `container ran a different occurrence: ${fire.raw}`).toBe(
+      new Date(fire.occurrence).toISOString(),
+    );
   }, 1_800_000);
 });

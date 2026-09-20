@@ -526,52 +526,74 @@ curl -sS -X POST https://your-agent/trigger \
   -H 'content-type: application/json' -d '{"name":"daily-digest"}'
 ```
 
+```bash
+# a crontab line: the clock's schedule is the crontab's own, and it names nothing
+0 9 * * * curl -sS -X POST https://your-agent/trigger \
+  -H 'content-type: application/json' -d '{"name":"daily-digest"}'
+```
+
 The body is a REFERENCE, never a prompt: the turn's content stays in `schedules/<name>.ts`, which is
-what makes this different from driving `POST /invoke` from a crontab line. It names a schedule and
-nothing else — **the caller does not say which occurrence**. This serve reads its own clock, snaps it
-to that schedule's grid, and claims the occurrence it landed in.
+what makes this different from driving `POST /invoke` from a crontab line.
 
-That snap is what makes redelivery idempotent. A delivery never arrives at the instant: cron wakes, a
-process starts, a Lambda forwards, a retry lands. All of those arrivals fall inside one occurrence and
-therefore produce one claim name, and `claimSlot` is an `O_EXCL` create, so the first one runs the turn
-and the rest read `fired: false`. It is also the name the resident clock uses (the exact cron instant),
-so the two clocks race for one file and exactly one of them wins.
+**The division of labour.** This is the standard at-least-once + idempotent-receiver shape, and the
+split is the one every scheduler converges on:
 
-**A caller-named instant was tried and removed.** It asked two machines to agree on what time it is —
-a consistency problem this system does not have — to buy an idempotency guarantee `claimSlot` already
-provides. What it cost was a defence for every way that number could be wrong: an instant ahead of
-this clock poisons the claim gate (`wanted < newest` has no ceiling, so every later occurrence sorts
-stale, permanently, across restarts), an off-grid one mints a claim no occurrence will ever match, and
-an old on-grid one replays history one turn at a time on an anonymous route. None of those are fixed
-defects now; there is no number on the wire to be wrong.
+| | owns |
+|---|---|
+| **your clock** | the grid (deploy projects the definition's cron into it), **liveness** — retry until it gets a 200 — and **naming the occurrence**, because only it knows which of its attempts are retries of one fire |
+| **fastagent** | running the turn **at most once per name**, refusing what is too stale to be worth running, and reporting which of those happened |
 
-**What it gives up:** a delivery late by more than one period is credited to the occurrence it lands
-in, not the one it was sent for — a retry at 10:01 fires 10:01, not the 10:00 it missed. The turn
-count per occurrence is unchanged, and catch-up was never this route's job: an external clock's
-redelivery is a fire, not a backfill. (The resident clock's own one-shot catch-up on restart is a
-different mechanism, described above.)
+Composed: **exactly once per occurrence, for as long as your clock delivers at least once.** A clock
+that does not retry (a bare `curl` in a crontab) gives at-most-once — that is a property of that
+crontab line, not of this route.
 
-**On a host that also runs the resident clock, `POST /trigger` is TAKEOVER, not drive.** Both clocks
-name the same occurrence, and the resident one gets there first, so a crontab pointed at a `dev`/
-`start` serve reads `fired: false` almost every time — it fires only when the resident clock did not
-(the process was down, or the turn never settled). That is worth having as redundancy; it is not a way
-to drive a schedule that is already being driven. A deployment whose whole point is the external clock
-is one with no resident clock to race — AgentCore today, and a scaled-to-zero host once
-[#557](https://github.com/fastagent-sh/fastagent/issues/557) lands.
+`occurrence` is the clock's name for the fire: an ISO instant, repeated unchanged on every retry.
+AWS EventBridge Scheduler sends `<aws.scheduler.scheduled-time>` (`fastagent deploy agentcore` writes
+that into the rule for you); Cloudflare Workers would send `controller.scheduledTime`. It is compared
+for equality and for age, never snapped and never checked against the grid.
 
-The occurrence is cached per schedule until the grid moves past it, so a repeated delivery costs no
-cron evaluation at all — the route is anonymous, and computing a grid point is ~6ms of synchronous work
-on the thread that also answers every channel webhook and `/health`.
+**fastagent does not recompute which occurrence a delivery is for**, and that is deliberate.
+EventBridge's redelivery backoff was measured at +60s and +186s after a first attempt — for any
+schedule with a period under about five minutes, that lands in a *later* occurrence than the one
+being retried. A receiver that snapped its own clock to the grid would give that retry a different
+name and run the turn again, which is the exact duplicate this route exists to prevent. A retry is a
+retry because the clock says so.
+
+**A delivery with no `occurrence` still works** and is credited to the window it landed in: the
+current period of that schedule, floored. A crontab's `curl` has nothing to name and does not retry,
+so it needs no key — but the route is anonymous, so an unnamed caller is capped at the schedule's own
+declared rate rather than being allowed to mint a fire per request.
+
+**Freshness: one period.** An occurrence older than one period of the schedule that declares it is
+reported as `fired: false` and not run. This is not a defence bolted on — a scheduled *agent turn* is
+tied to when it runs, and "summarise today" executed six hours late is not a late digest, it is a
+wrong one. (Kubernetes says the same thing with `startingDeadlineSeconds`: "a backup taken any later
+wouldn't be useful: you would instead prefer to wait for the next scheduled run.") One period is
+self-balancing: a daily digest gets 24 hours, a minute cron gets 60 seconds, and those are the
+budgets each one wants. The cost is explicit — **a minute-level schedule whose container is briefly
+down loses that minute rather than catching it up on a retry**, which is what the next minute is for.
+
+An `occurrence` ahead of this machine's clock is refused with a 400. Not a skew tolerance question:
+an occurrence that has not arrived cannot have been delivered, so the two clocks disagree and only one
+of them can be believed here. Refusing is self-healing *because* the name belongs to the clock — the
+retry carries the same one, by which time this clock has moved.
+
+**One clock per state root.** Two clocks are safe together only if they name occurrences the same
+way, and the claim is an `O_EXCL` create so exactly one of them wins. A resident `dev`/`start` loop
+and an EventBridge rule both name grid instants and do collide correctly; a crontab that names nothing
+does not, so pointing one at a serve that already runs its own clock will fire twice. A deployment
+whose whole point is the external clock is one with no resident clock to race — AgentCore today, and
+a scaled-to-zero host once [#557](https://github.com/fastagent-sh/fastagent/issues/557) lands.
 
 The route follows `http.invoke`: turning the anonymous turn endpoint off takes this one with it, since
 that is what `http.invoke: false` means. `http.trigger: true` is the exception for a port that has no
 `/invoke` but does have an external clock.
 
-The reply is the fire's outcome — `{ slot, fired, skippedReason?, failed?, ms }`, where `slot` reports
-which occurrence this serve decided the delivery was for. `fired: false` with a `skippedReason` means
-no work was needed: the occurrence was already claimed (a duplicate delivery, or the resident clock got
-there first), or the state root has moved past it. Both are successful DELIVERIES, which is why they
-are 200 — a clock that kept retrying a 4xx would hammer the route over an occurrence that is gone. A 404 names the
+The reply is the fire's outcome — `{ slot, fired, skippedReason?, failed?, ms }`, where `slot` is the
+occurrence that was claimed. `fired: false` with a `skippedReason` means no work was needed: the
+occurrence was already claimed (a redelivery, or the resident clock got there first), the state root
+has moved past it, or it is past its freshness window. All are successful DELIVERIES, which is why
+they are 200 — a clock that kept retrying a 4xx would hammer the route over an occurrence that is gone. A 404 names the
 schedules this deployment does have, so a stale rule is distinguishable from a typo. **The route is
 unauthenticated like everything else fastagent serves** — see [design §14](design/session-control.md).
 
@@ -906,7 +928,7 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
-POST   /trigger                                {name} — fire a schedule this agent declares
+POST   /trigger                                {name, occurrence?} — fire a schedule this agent declares
 ```
 
 The data plane is a root verb endpoint, not part of this prefix: `/control/*` is REST over session

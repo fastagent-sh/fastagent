@@ -61,6 +61,9 @@ const postEnvelope = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Resp
 const postUntrusted = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Response> | Response =>
   post(routes, JSON.stringify(envelope));
 
+/** What `<aws.scheduler.scheduled-time>` expands to: the clock's name for one fire. */
+const OCCURRENCE = "2026-07-07T10:00:00Z";
+
 describe("agentcore adapter: lazy channel construction", () => {
   const health: Routes = { "GET /health": () => new Response("ok\n") };
 
@@ -146,7 +149,7 @@ describe("agentcore adapter: lazy channel construction", () => {
         return { routes: health };
       },
     });
-    const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job" };
+    const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", occurrence: OCCURRENCE };
     expect((await postEnvelope(routes, env)).status).toBe(200);
     expect(order).toEqual(["construct", "fire"]); // cold start woken by cron still replays turn intent
 
@@ -300,7 +303,7 @@ describe("agentcore adapter: webhook envelope", () => {
 });
 
 describe("agentcore adapter: schedule-fire envelope", () => {
-  const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job" };
+  const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", occurrence: OCCURRENCE };
 
   it("relays the envelope to the trigger handler as the POST /trigger request it is", async () => {
     // Not a second fire path: the same handler the route mounts, reached the way `invoke` reaches its
@@ -320,8 +323,8 @@ describe("agentcore adapter: schedule-fire envelope", () => {
         url: "http://agentcore.local/trigger",
         // The handler's own JSON gate applies to this request like any other; the envelope must satisfy it.
         contentType: "application/json",
-        // NAME ONLY: which occurrence this fire is for is the container's own reading of its clock.
-        body: { name: "job" },
+        // The clock's NAME for this fire travels through untouched — the container dedupes on it.
+        body: { name: "job", occurrence: OCCURRENCE },
       },
     ]);
   });
@@ -347,11 +350,10 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     expect(activeWork()).toBe(base);
   });
 
-  it("rejects an envelope with no name", async () => {
-    const res = await postEnvelope(adapter({ trigger: async () => Response.json({ fired: true, ms: 0 }) }), {
-      kind: "schedule-fire",
-    } as AgentcoreEnvelope);
-    expect(res.status).toBe(400);
+  it("rejects an envelope that names no schedule or no occurrence", async () => {
+    const fire = adapter({ trigger: async () => Response.json({ fired: true, ms: 0 }) });
+    expect((await postEnvelope(fire, { kind: "schedule-fire" } as AgentcoreEnvelope)).status).toBe(400);
+    expect((await postEnvelope(fire, { kind: "schedule-fire", name: "job" } as AgentcoreEnvelope)).status).toBe(400);
   });
 });
 
@@ -423,7 +425,7 @@ describe("agentcore adapter: the authentication boundary", () => {
     });
 
     for (const envelope of [
-      { kind: "schedule-fire", name: "digest" },
+      { kind: "schedule-fire", name: "digest", occurrence: OCCURRENCE },
       { kind: "webhook", method: "POST", path: "/hook" },
       { kind: "wake-poke" },
     ] as AgentcoreEnvelope[]) {
