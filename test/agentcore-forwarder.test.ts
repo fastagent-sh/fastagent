@@ -247,11 +247,30 @@ describe("agentcore forwarder (executed)", () => {
 
   it("schedule fires throw on a failed container outcome (the miss must land in CloudWatch)", async () => {
     const ok = loadForwarder();
-    await ok.handler({ scheduleFire: { name: "digest", slot: "2026-07-28T09:00:00Z" } });
+    await ok.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } });
     expect(ok.envelopes[0]).toMatchObject({ kind: "schedule-fire", name: "digest" });
 
     const failing = loadForwarder({ containerReply: () => ({ statusCode: 500, body: "nope" }) });
-    await expect(failing.handler({ scheduleFire: { name: "digest", slot: "x" } })).rejects.toThrow(/digest failed/);
+    await expect(failing.handler({ scheduleFire: { name: "digest", occurrence: "x" } })).rejects.toThrow(
+      /digest failed/,
+    );
+  });
+
+  it("a fire whose invoke never came back is still ATTRIBUTABLE to that schedule", async () => {
+    // Lambda logs an unhandled throw, so this failure was never invisible — it was unattributable.
+    // Filtering the group for `schedule-fire digest` returned nothing whether the clock had not fired
+    // or the call had died, which are different bugs. One live run was diagnosed wrong on exactly that.
+    const dead = loadForwarder({
+      containerReply: () => {
+        throw new Error("runtime unavailable");
+      },
+    });
+    await expect(
+      dead.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } }),
+    ).rejects.toThrow(/runtime unavailable/); // still thrown: that is what makes EventBridge retry
+    expect(dead.logs.mock.calls.flat().join("\n")).toContain(
+      "schedule-fire digest (2026-07-28T09:00:00Z): invoke failed: runtime unavailable",
+    );
   });
 
   it("a wakePoke event forwards a wake-poke envelope (the invocation itself is the payload)", async () => {
@@ -347,7 +366,7 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
   it("stamps the ingress secret on EVERY envelope — the runtime cannot otherwise tell it from any IAM caller", async () => {
     const f = loadForwarder();
     await f.handler(webhookEvent());
-    await f.handler({ scheduleFire: { name: "digest", slot: "2026-07-28T09:00:00Z" } });
+    await f.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } });
     await f.handler({ wakePoke: true });
     expect(f.envelopes.map((e) => e.auth)).toEqual(["ingress-s3cret", "ingress-s3cret", "ingress-s3cret"]);
   });
