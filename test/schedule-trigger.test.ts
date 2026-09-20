@@ -15,9 +15,9 @@ vi.mock("../src/schedule/cron.ts", async (real) => {
   const actual = await real<typeof import("../src/schedule/cron.ts")>();
   return {
     ...actual,
-    occurrencePeriodMs: (...args: Parameters<typeof actual.occurrencePeriodMs>) => {
+    nextRun: (...args: Parameters<typeof actual.nextRun>) => {
       searches.n += 1;
-      return actual.occurrencePeriodMs(...args);
+      return actual.nextRun(...args);
     },
   };
 });
@@ -131,62 +131,99 @@ describe("schedule/trigger: POST /trigger", () => {
     };
 
     expect(late.fired).toBe(false);
-    expect(late.skippedReason).toContain("freshness window");
+    expect(late.skippedReason).toContain("was superseded at");
     expect(late.slot).toBe("2026-07-07T10:30:00.000Z"); // still ITS occurrence, not the one it landed in
     expect(calls).toEqual([]);
     expect(readFires(root, "digest")).toEqual([]); // nothing claimed, so nothing burned
   });
 
-  it("an UNNAMED delivery is credited to the window it landed in, and cannot mint more than one per window", async () => {
-    // A crontab's `curl` has no occurrence to name and does not retry, so it needs no key. But this
-    // route is anonymous, so an unnamed caller must not be able to buy an unbounded number of turns:
-    // flooring to the period caps it at the schedule's own declared rate — the same ceiling a named
-    // caller has, without this process pretending to know which grid point the caller meant.
+  it("an UNNAMED delivery is its own occurrence, and the second one in the same interval is not", async () => {
+    // A crontab's `curl` has nothing to name, so the delivery IS the occurrence. What keeps that from
+    // being a blank cheque on an anonymous route is the same ceiling a named caller meets.
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
 
-    for (const t of ["2026-07-07T10:00:03Z", "2026-07-07T10:17:31Z", "2026-07-07T10:59:59Z"]) {
+    vi.setSystemTime(new Date("2026-07-07T10:00:03Z"));
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({ fired: true });
+    for (const t of ["2026-07-07T10:17:31Z", "2026-07-07T10:59:59Z"]) {
       vi.setSystemTime(new Date(t));
-      expect((await trigger(handle!, { name: "digest" })).status).toBe(200);
+      const again = (await (await trigger(handle!, { name: "digest" })).json()) as { skippedReason?: string };
+      expect(String(again.skippedReason)).toContain("is not a new occurrence");
     }
     expect(calls).toHaveLength(1);
-    expect(readFires(root, "digest").map((f) => f.slot)).toEqual(["2026-07-07T10:00:00.000Z"]);
+    expect(readFires(root, "digest").map((f) => f.slot)).toEqual(["2026-07-07T10:00:03.000Z"]);
 
-    // The next window is a new fire.
+    // Past the next occurrence, it is a new fire again.
     vi.setSystemTime(new Date("2026-07-07T11:00:02Z"));
-    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({
-      fired: true,
-      slot: "2026-07-07T11:00:00.000Z",
-    });
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({ fired: true });
     expect(calls).toHaveLength(2);
   });
 
-  it("an occurrence older than one period is reported, not run — a stale turn is a WRONG turn", async () => {
-    // Freshness is not a defence bolted on, it is what a scheduled agent turn needs: "summarise today"
-    // six hours late is not a late digest, it is a wrong one (k8s says it with startingDeadlineSeconds).
-    // ONE PERIOD, because that is self-balancing — a daily digest gets 24h, a minute cron gets 60s, and
-    // those are exactly the budgets each wants.
+  it("a NAMED occurrence cannot be walked forward a millisecond at a time to buy turns", async () => {
+    // The hole this closes. `claimSlot` refuses only a name it already holds or one older than its
+    // newest, so incrementing `occurrence` by 1ms minted a fresh name every time: 20 requests to a
+    // `0 9 * * *` schedule ran 20 full model turns. The route is anonymous, and the posture this
+    // feature recommends (`http.invoke: false` + `http.trigger: true`) makes it the ONLY anonymous way
+    // to start one, so its ceiling has to be the schedule's own rate.
+    const { agent, calls } = recordingAgent();
+    const { root, handle } = await handlerFor([hourly({ cron: "0 9 * * *" })], agent);
+    const base = Date.parse("2026-07-07T09:00:00Z");
+    for (let i = 0; i < 20; i++) {
+      const res = await trigger(handle!, { name: "digest", occurrence: new Date(base + i).toISOString() });
+      expect(res.status).toBe(200);
+    }
+    expect(calls).toHaveLength(1);
+    expect(readFires(root, "digest")).toHaveLength(1);
+  });
+
+  it("ONE STEP ON THE GRID, not a duration — an uneven cron gets each gap right", async () => {
+    // `0 9 * * 1-5`: Friday's occurrence is followed by Monday's (three days), Monday's by Tuesday's
+    // (one). A single measured period would be wrong for one of them in both directions — letting a
+    // Friday fire again on Saturday, or refusing Tuesday because Monday's gap was read as three days.
+    const { agent, calls } = recordingAgent();
+    const weekday = hourly({ cron: "0 9 * * 1-5" });
+    const { handle } = await handlerFor([weekday], agent);
+
+    vi.setSystemTime(new Date("2026-07-10T09:00:04Z")); // Friday
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({ fired: true });
+    // Saturday and Sunday are inside Friday's occurrence — no new fire.
+    vi.setSystemTime(new Date("2026-07-11T09:00:04Z"));
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({ fired: false });
+    expect(calls).toHaveLength(1);
+    // Monday is.
+    vi.setSystemTime(new Date("2026-07-13T09:00:04Z"));
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({ fired: true });
+    // …and so is Tuesday, one day later, which a three-day period would have refused.
+    vi.setSystemTime(new Date("2026-07-14T09:00:04Z"));
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({ fired: true });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("an occurrence the next one has already superseded is reported, not run — a stale turn is WRONG", async () => {
+    // Not a defence bolted on: a scheduled agent turn is tied to when it runs, and "summarise today"
+    // six hours late is a wrong digest, not a late one (k8s says it with startingDeadlineSeconds).
+    // "Superseded" rather than a duration, because the duration differs per occurrence on an uneven cron.
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
 
-    // Inside the window (the previous occurrence, 90 minutes… no: exactly one period back is the edge).
-    expect(await (await trigger(handle!, { name: "digest", occurrence: "2026-07-07T10:00:00Z" })).json()).toMatchObject(
-      { fired: true },
-    );
-
-    // Two periods back is outside it.
     const stale = (await (await trigger(handle!, { name: "digest", occurrence: "2026-07-07T08:00:00Z" })).json()) as {
       fired: boolean;
       skippedReason?: string;
     };
     expect(stale.fired).toBe(false);
-    expect(stale.skippedReason).toContain("freshness window");
-    expect(calls).toHaveLength(1);
-    expect(readFires(root, "digest").map((f) => f.slot)).toEqual(["2026-07-07T10:00:00.000Z"]);
+    expect(stale.skippedReason).toContain("was superseded at");
+    expect(calls).toEqual([]);
+    expect(readFires(root, "digest")).toEqual([]); // nothing claimed, so nothing burned
 
-    // The window is the SCHEDULE's period, not a constant: a daily schedule still accepts 6 hours late.
+    // The current occurrence is not superseded — the clock has not reached the next one.
+    expect(await (await trigger(handle!, { name: "digest", occurrence: "2026-07-07T10:00:00Z" })).json()).toMatchObject(
+      { fired: true },
+    );
+
+    // The window is the SCHEDULE's own gap, not a constant: the same 90-minute lateness that supersedes
+    // an hourly occurrence leaves a daily one with 22 hours to spare.
     const { handle: daily, root: dailyRoot } = await handlerFor([hourly({ cron: "0 9 * * *" })], agent);
-    expect(await (await trigger(daily!, { name: "digest", occurrence: "2026-07-07T04:30:00Z" })).json()).toMatchObject({
+    expect(await (await trigger(daily!, { name: "digest", occurrence: "2026-07-07T09:00:00Z" })).json()).toMatchObject({
       fired: true,
     });
     expect(readFires(dailyRoot, "digest")).toHaveLength(1);
@@ -214,21 +251,16 @@ describe("schedule/trigger: POST /trigger", () => {
     );
   });
 
-  it("reads the grid at most once per period, and never per request", async () => {
-    // `occurrencePeriodMs` is two croner evaluations, on the one thread that also answers every channel
-    // webhook, `/control/*` and `/health`. Repeating a delivery is free for an anonymous caller, so it
-    // has to be free here.
+  it("a refused delivery costs no cron evaluation — the ceiling is cached against the claim it came from", async () => {
+    // croner is synchronous and this route is anonymous, so how often it reads the grid is part of the
+    // contract. The flood the ceiling exists to refuse must be the cheap path, not the expensive one.
     const { agent } = recordingAgent();
     const { handle } = await handlerFor([hourly()], agent);
+    expect((await trigger(handle!, { name: "digest" })).status).toBe(200);
 
     searches.n = 0;
     for (let i = 0; i < 50; i++) expect((await trigger(handle!, { name: "digest" })).status).toBe(200);
-    expect(searches.n).toBe(1);
-
-    searches.n = 0;
-    vi.setSystemTime(new Date("2026-07-07T11:30:00Z"));
-    for (let i = 0; i < 10; i++) await trigger(handle!, { name: "digest" });
-    expect(searches.n).toBe(1);
+    expect(searches.n).toBe(0);
   });
 
   it("clips the name it quotes back — the one place this route echoes an unauthenticated caller", async () => {
@@ -273,7 +305,7 @@ describe("schedule/trigger: POST /trigger", () => {
     expect((await handle!(new Request("http://h/trigger"))).status).toBe(405);
   });
 
-  it("409s when the schedule has no further occurrences to measure a period against", async () => {
+  it("409s when the schedule has no further occurrences", async () => {
     const { handle } = await handlerFor([hourly({ cron: "0 0 9 * * * 2020" })], recordingAgent().agent);
     const res = await trigger(handle!, { name: "digest" });
     expect(res.status).toBe(409);

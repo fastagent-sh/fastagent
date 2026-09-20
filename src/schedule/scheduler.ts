@@ -110,7 +110,13 @@ function runTurn(agent: Agent, label: string, session: string, prompt: string) {
     }).pipe(
       Effect.match({
         onSuccess: (result) => {
-          if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${oneLine(result.failed)}`);
+          // BUSY IS NOT A FAILURE, and this line is where that distinction has to land: the claim file and the
+          // route's reply both say `skipped`, but `docker logs` / CloudWatch is the first place anyone looks, and
+          // it kept saying `ERROR … failed: busy`. "The previous turn is still running" and "the model call died"
+          // need different reactions — a session-busy rejection carries `failed` only because that is the SPEC's
+          // one terminal event shape, which is a wire detail, not a verdict.
+          if (result.busy) log.info(`[schedule] ${label}: occurrence skipped (session busy) (${elapsed()}ms)`);
+          else if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${oneLine(result.failed)}`);
           else log.info(`[schedule] ${label} completed (${elapsed()}ms)`);
           return { ...result, ms: elapsed() };
         },
@@ -282,7 +288,9 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
               if (kept) log.info(`[schedule] ${label}: session busy — retrying next poll`);
               else log.error(`[schedule] ${label}: dropped after too many busy retries`);
             } else if (r.busy && w.cron) {
-              log.error(`[schedule] ${label}: occurrence skipped (session busy); next fires per cron`);
+              // `runTurn` already said it was skipped for a busy session; this adds the one thing it cannot know —
+              // that a recurring wake has a next occurrence, so nothing is deferred and nothing is lost.
+              log.info(`[schedule] ${label}: next fires per cron`);
             }
             // A wake-up has no claim to settle (it is removed from the store before the turn starts), so its whole
             // record is the log lines above and `runTurn`'s — deferred, dropped, failed, completed.

@@ -110,7 +110,7 @@ async function invokeLogged(label, envelope) {
   try {
     return await invoke(envelope);
   } catch (e) {
-    console.log(`${label}: invoke failed: ${(e && e.message) || e}`);
+    console.log(`${label}: invoke failed: ${e?.message || e}`);
     throw e; // the miss still lands as a Lambda error, which is what makes EventBridge retry it
   }
 }

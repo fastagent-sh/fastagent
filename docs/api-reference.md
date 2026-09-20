@@ -559,19 +559,28 @@ being retried. A receiver that snapped its own clock to the grid would give that
 name and run the turn again, which is the exact duplicate this route exists to prevent. A retry is a
 retry because the clock says so.
 
-**A delivery with no `occurrence` still works** and is credited to the window it landed in: the
-current period of that schedule, floored. A crontab's `curl` has nothing to name and does not retry,
-so it needs no key — but the route is anonymous, so an unnamed caller is capped at the schedule's own
-declared rate rather than being allowed to mint a fire per request.
+**A delivery with no `occurrence` still works** — a crontab's `curl` has nothing to name, so the
+delivery *is* its own occurrence.
 
-**Freshness: one period.** An occurrence older than one period of the schedule that declares it is
-reported as `fired: false` and not run. This is not a defence bolted on — a scheduled *agent turn* is
-tied to when it runs, and "summarise today" executed six hours late is not a late digest, it is a
-wrong one. (Kubernetes says the same thing with `startingDeadlineSeconds`: "a backup taken any later
-wouldn't be useful: you would instead prefer to wait for the next scheduled run.") One period is
-self-balancing: a daily digest gets 24 hours, a minute cron gets 60 seconds, and those are the
-budgets each one wants. The cost is explicit — **a minute-level schedule whose container is briefly
-down loses that minute rather than catching it up on a retry**, which is what the next minute is for.
+**One fire per occurrence, whoever asks.** A delivery naming an instant between the last fire and the
+schedule's next occurrence is not a new fire: it answers `fired: false` with a reason. The bar is one
+step forward on the schedule's own grid, not a duration, so it stays right for a cron whose gaps
+differ (`0 9 * * 1-5`: Friday's next occurrence is Monday's, Monday's is Tuesday's). This is the
+route's cost ceiling, and it applies to named and unnamed deliveries alike: an anonymous caller can
+never buy more turns than the schedule itself declares. The receiver still never computes *which*
+occurrence a delivery is for — the clock names that; this only asks whether the name could be a new
+one.
+
+**Freshness: superseded.** An occurrence whose successor has already arrived is reported as
+`fired: false` and not run. That is not a defence bolted on — a scheduled **agent turn** is tied to
+when it runs, and "summarise today" executed six hours late is a wrong digest, not a late one.
+Kubernetes says the same with `startingDeadlineSeconds`: *"a backup taken any later wouldn't be
+useful: you would instead prefer to wait for the next scheduled run."* Measured from the occurrence
+forward on the grid, so a daily digest has 24 hours and a minute cron has 60 seconds without anyone
+choosing a number.
+
+**The accepted cost, and it is tested:** a minute-level schedule whose container is briefly down loses
+that minute rather than catching it up on a retry. That is what the next minute is for.
 
 An `occurrence` ahead of this machine's clock is refused with a 400. Not a skew tolerance question:
 an occurrence that has not arrived cannot have been delivered, so the two clocks disagree and only one
@@ -581,7 +590,8 @@ retry carries the same one, by which time this clock has moved.
 **One clock per state root.** Two clocks are safe together only if they name occurrences the same
 way, and the claim is an `O_EXCL` create so exactly one of them wins. A resident `dev`/`start` loop
 and an EventBridge rule both name grid instants and do collide correctly; a crontab that names nothing
-does not, so pointing one at a serve that already runs its own clock will fire twice. A deployment
+does not, so pointing one at a serve that already runs its own clock will fire twice — once per
+occurrence each, since the ceiling above is per clock only insofar as they share the claim set. A deployment
 whose whole point is the external clock is one with no resident clock to race — AgentCore today, and
 a scaled-to-zero host once [#557](https://github.com/fastagent-sh/fastagent/issues/557) lands.
 
@@ -592,7 +602,7 @@ that is what `http.invoke: false` means. `http.trigger: true` is the exception f
 The reply is the fire's outcome — `{ slot, fired, skippedReason?, skipped?, failed?, ms }`, where
 `slot` is the occurrence that was claimed. `fired: false` with a `skippedReason` means no turn ran:
 the occurrence was already claimed (a redelivery, or the resident clock got there first), the state
-root has moved past it, it is past its freshness window, or the previous turn of this schedule is
+root has moved past it, it is not a new occurrence, it has been superseded, or the previous turn is
 still running (`skipped: true` — the overlap policy, recorded as `skipped` rather than `failed`, since
 "the last run was still going" and "the model call died" are not the same event).
 

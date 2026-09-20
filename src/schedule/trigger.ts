@@ -39,9 +39,10 @@ import type { Agent } from "../agent.ts";
 import { readBodyCapped, refuseNonJsonBody } from "../channels/body.ts";
 import { text } from "../channels/respond.ts";
 import { log } from "../log.ts";
-import { occurrencePeriodMs } from "./cron.ts";
+import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
 import { fireScheduleOnce } from "./scheduler.ts";
+import { latestFire } from "./state.ts";
 
 /** The Effect boundary, in one place: a `PortFailure` becomes the rejection the handler translates. */
 const runFire = (agent: Agent, stateRoot: string, schedule: LoadedSchedule, slot: Date) =>
@@ -58,33 +59,48 @@ const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 const MAX_ECHOED_NAME = 64;
 
 /**
- * How late an occurrence may arrive and still be worth running: ONE PERIOD of the schedule that declares it.
+ * The first occurrence STRICTLY AFTER the last one this schedule fired — the bar a delivery must clear to be a
+ * different fire rather than another name for the same one.
  *
- * A freshness bound is not a defence bolted on, it is what a scheduled AGENT TURN needs. The turn's output is tied
- * to when it runs — "summarise today" executed six hours late is not a late digest, it is a wrong one. Kubernetes
- * says the same thing with `startingDeadlineSeconds` ("a backup taken any later wouldn't be useful: you would
- * instead prefer to wait for the next scheduled run").
+ * THIS IS THE RATE CEILING, and without it the route had none. `claimSlot` refuses only a name it already holds or
+ * one older than its newest, so an unauthenticated caller naming `occurrence` could walk it forward a millisecond
+ * at a time and buy a full model turn per request: 20 requests to a `0 9 * * *` schedule ran 20 turns. The route is
+ * anonymous, and the posture this feature recommends (`http.invoke: false` + `http.trigger: true`) makes it the
+ * ONLY anonymous way to start one.
  *
- * ONE PERIOD, because it is self-balancing rather than a number someone has to guess: a daily digest gets 24 hours,
- * a minute cron gets 60 seconds, and those are exactly the budgets each one wants. Losing a minute from a
- * minute-cron is what the next minute is for; losing a day from a daily one would not be.
+ * ONE STEP FORWARD ON THE GRID, not a duration, because that is what "a different occurrence" means and it stays
+ * right for a cron whose occurrences are not evenly spaced (`0 9 * * 1-5`: Friday's next is Monday, Monday's is
+ * Tuesday). The receiver still does not compute WHICH occurrence a delivery is for — the clock names that. It only
+ * asks whether the name it was given could be a new one.
  *
- * It is also the RETENTION rule for the dedup set. `claimSlot` keeps a bounded number of claims, and a key may only
- * be forgotten once no honest clock will send it again — so "too late to run" and "safe to forget" have to be the
- * same duration, and here they are one function.
- *
- * Cached until the period could change (`until`), which is the next occurrence: two `nextRun` calls per schedule
- * per period, on a route that is anonymous and must stay cheap to repeat.
+ * Cached per schedule against the claim it was computed from, so a flood that the ceiling refuses costs no cron
+ * evaluation at all.
  */
-function freshnessFactory(): (schedule: LoadedSchedule, now: Date) => number | undefined {
-  const cache = new Map<string, { until: number; periodMs: number | undefined }>();
-  return (schedule, now) => {
+function nextAfterFactory(): (schedule: LoadedSchedule, newest: Date) => Date | undefined {
+  const cache = new Map<string, { after: number; next: Date | undefined }>();
+  return (schedule, newest) => {
     const cached = cache.get(schedule.name);
-    if (cached && now.getTime() < cached.until) return cached.periodMs;
-    const periodMs = occurrencePeriodMs(schedule.cron, schedule.tz, now);
-    cache.set(schedule.name, { until: now.getTime() + (periodMs ?? Number.POSITIVE_INFINITY), periodMs });
-    return periodMs;
+    if (cached && cached.after === newest.getTime()) return cached.next;
+    const next = nextRun(schedule.cron, schedule.tz, newest);
+    cache.set(schedule.name, { after: newest.getTime(), next });
+    return next;
   };
+}
+
+/**
+ * The ONE answer to "this container could not read or write its own claim state".
+ *
+ * Both readings of that state — the newest claim, and the `O_EXCL` create — fail the same way and BEFORE any claim
+ * exists, so the occurrence is unburned and the clock's retry is the right answer. Translated rather than thrown so
+ * the message reaches the external clock's own log, which is where a cron box's operator looks; the router's
+ * boundary would answer a bare `internal error`.
+ *
+ * The CAUSE goes to the log and only there: it is an fs error carrying absolute paths inside this container, and
+ * the caller is unauthenticated (the rule `refuseNonJsonBody` follows by not echoing what arrived).
+ */
+function claimStateUnavailable(name: string, at: Date, cause: unknown): Response {
+  log.error(`[schedule] firing schedule "${name}" for ${at.toISOString()} failed: ${String(cause)}`);
+  return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
 }
 
 /**
@@ -100,7 +116,7 @@ export function createTriggerHandler(options: {
 }): ((req: Request) => Promise<Response>) | undefined {
   const { agent, stateRoot, schedules } = options;
   if (schedules.length === 0) return undefined;
-  const freshnessFor = freshnessFactory();
+  const nextAfter = nextAfterFactory();
 
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -138,18 +154,10 @@ export function createTriggerHandler(options: {
     }
 
     const now = new Date();
-    const periodMs = freshnessFor(schedule, now);
-    if (periodMs === undefined) {
-      return text(`schedule "${name}" (cron "${schedule.cron}") has no further occurrences\n`, 409);
-    }
-
-    // AN UNNAMED DELIVERY still works, and is credited to the window it landed in. A crontab's `curl` has no
-    // occurrence to name and does not retry, so it needs no key of its own — but it cannot be allowed to mint an
-    // unbounded number of fires either, because this route is anonymous. Flooring to the period caps an unnamed
-    // caller at the schedule's own declared rate, which is the same ceiling a named one has, WITHOUT this process
-    // pretending to know which grid point the caller meant.
-    const at =
-      typeof occurrence === "string" ? new Date(occurrence) : new Date(Math.floor(now.getTime() / periodMs) * periodMs);
+    // AN UNNAMED DELIVERY still works: a crontab's `curl` has nothing to name, so this delivery IS its own
+    // occurrence. What keeps that from being a blank cheque is the ceiling below, which an unnamed caller meets on
+    // its second request just as a named one does — the route never has to guess which grid point was meant.
+    const at = typeof occurrence === "string" ? new Date(occurrence) : now;
 
     // AHEAD OF THIS CLOCK is refused rather than run. It is not a defence against skew — it is that an occurrence
     // which has not arrived cannot have been delivered, so the caller and this container disagree about the time
@@ -166,19 +174,59 @@ export function createTriggerHandler(options: {
       );
     }
 
-    // TOO LATE, and a 200 rather than an error: the delivery SUCCEEDED, the occurrence is simply not worth running
-    // any more, and a clock that kept retrying a 4xx would hammer this route over a turn nobody wants.
-    const ageMs = now.getTime() - at.getTime();
-    if (ageMs > periodMs) {
-      return Response.json({
-        slot: at.toISOString(),
-        fired: false,
-        skippedReason:
-          `occurrence ${at.toISOString()} is ${Math.round(ageMs / 1000)}s old, past this schedule's ` +
-          `${Math.round(periodMs / 1000)}s freshness window — a turn this stale would produce the wrong answer, ` +
-          `so the next occurrence is the one to wait for`,
-        ms: 0,
-      });
+    // THE CEILING, and it runs FIRST because it is the cheap one: a name between the last fire and the next
+    // occurrence after it cannot be a new fire, whatever instant it carries. `at` at or before the newest claim
+    // falls through instead — `claimSlot` tells a redelivery (`duplicate`) from a clock that moved backwards
+    // (`stale`) precisely, and those readings are worth keeping.
+    let newest: string | undefined;
+    try {
+      newest = latestFire(stateRoot, name)?.slot;
+    } catch (cause) {
+      // The claims directory could not be READ (EACCES, ENOTDIR on a broken state root). Nothing was claimed, so
+      // the occurrence is unburned and the clock's retry is the right answer — the same fault, and the same
+      // answer, as the fire below.
+      return claimStateUnavailable(name, at, cause);
+    }
+    if (newest !== undefined && at.getTime() > Date.parse(newest)) {
+      const bar = nextAfter(schedule, new Date(newest));
+      if (bar === undefined || at.getTime() < bar.getTime()) {
+        return Response.json({
+          slot: at.toISOString(),
+          fired: false,
+          skippedReason:
+            `${at.toISOString()} is not a new occurrence of "${name}": this schedule last fired ${newest} and its ` +
+            `next occurrence is ${bar?.toISOString() ?? "never"}, so nothing between them is a fire of its own`,
+          ms: 0,
+        });
+      }
+    }
+
+    // SUPERSEDED, which is what "too stale to run" means exactly: the occurrence AFTER this one has already
+    // arrived. Measured from `at` on the grid, so it is right for a cron whose gaps differ — Friday's occurrence of
+    // `0 9 * * 1-5` owns three days, Monday's owns one — where any single duration would be wrong for one of them.
+    //
+    // Only for a delivery that could actually claim. At or before the newest claim it cannot: `claimSlot` will read
+    // it as a duplicate or a stale replay either way, and a redelivery is the commonest repeat there is — it should
+    // not pay for a cron evaluation to be told what the claim file already says.
+    if (newest === undefined || at.getTime() > Date.parse(newest)) {
+      const supersededBy = nextRun(schedule.cron, schedule.tz, at);
+      if (supersededBy === undefined) {
+        return text(`schedule "${name}" (cron "${schedule.cron}") has no further occurrences\n`, 409);
+      }
+      // A 200 rather than an error: the delivery SUCCEEDED, the occurrence is simply not worth running any more,
+      // and a clock that kept retrying a 4xx would hammer this route over a turn nobody wants. It is what a
+      // scheduled AGENT TURN needs — "summarise today" six hours late is a wrong digest, not a late one, which is
+      // the same reason Kubernetes has `startingDeadlineSeconds`.
+      if (supersededBy.getTime() <= now.getTime()) {
+        return Response.json({
+          slot: at.toISOString(),
+          fired: false,
+          skippedReason:
+            `occurrence ${at.toISOString()} was superseded at ${supersededBy.toISOString()} — a turn this stale ` +
+            `would produce the wrong answer, so the next occurrence is the one to wait for`,
+          ms: 0,
+        });
+      }
     }
 
     // THE boundary. `fireScheduleOnce`'s only failure is a claim-state fault — the slot could not be read or
@@ -189,12 +237,7 @@ export function createTriggerHandler(options: {
     try {
       outcome = await runFire(agent, stateRoot, schedule, at);
     } catch (cause) {
-      // The CAUSE goes to the log and only there: it is an fs error carrying absolute paths inside this container,
-      // and the caller is unauthenticated. What an external clock needs from a 500 is "this delivery failed and is
-      // worth retrying", which the status and this wording already say — the same rule `refuseNonJsonBody` follows
-      // by not echoing what arrived.
-      log.error(`[schedule] firing schedule "${name}" for ${at.toISOString()} failed: ${String(cause)}`);
-      return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
+      return claimStateUnavailable(name, at, cause);
     }
     return Response.json({ slot: at.toISOString(), ...outcome });
   };
