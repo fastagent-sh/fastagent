@@ -13,6 +13,9 @@
  * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+// The L0 rendering payload reads message text the way the engine does — ONE reading, joined without a
+// separator because this payload is a transcript, not a preview line.
+import { contentText } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -95,17 +98,6 @@ function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number)
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
-/** Concatenated plain text of a message's content blocks (the L0 rendering payload). A custom
- *  AgentMessage role may carry no `content` at all — that reads as empty, not a crash. */
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return (content as Array<{ type: string; text?: string }>)
-    .filter((b) => b.type === "text" && typeof b.text === "string")
-    .map((b) => b.text as string)
-    .join("");
-}
-
 /**
  * pi `PiSessionEntry` → neutral {@link SessionEntry}. Message entries map onto the guaranteed
  * kind vocabulary (user/assistant/tool) with a minimal render payload; every other engine record
@@ -120,12 +112,12 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
   };
   if (entry.type === "message") {
     const m = entry.message;
-    if (m.role === "user") return { ...base, kind: "user", data: { text: textOf(m.content) } };
+    if (m.role === "user") return { ...base, kind: "user", data: { text: contentText(m.content, "") } };
     if (m.role === "assistant") {
       const toolCalls = (m.content as Array<{ type: string; id?: string; name?: string }>)
         .filter((b) => b.type === "toolCall")
         .map((b) => ({ id: b.id ?? "", name: b.name ?? "" }));
-      const data: Json = { text: textOf(m.content) };
+      const data: Json = { text: contentText(m.content, "") };
       if (toolCalls.length > 0) (data as { toolCalls?: Json }).toolCalls = toolCalls;
       return { ...base, kind: "assistant", data };
     }
@@ -137,7 +129,7 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
           toolCallId: m.toolCallId,
           toolName: m.toolName,
           isError: m.isError ?? false,
-          text: textOf(m.content),
+          text: contentText(m.content, ""),
         },
       };
     }
