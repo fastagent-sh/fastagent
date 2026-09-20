@@ -2,38 +2,36 @@
  * A cron on a host with NO resident clock: EventBridge holds the timer, and the fire arrives as an
  * envelope the container has to accept.
  *
- * WHY THIS NEEDS A LIVE PROBE. Offline, the instant is ours — a fake clock, a literal ISO string in a
- * test fixture. Here it is AWS's, and two beliefs about it are load-bearing and untestable anywhere
- * else:
+ * WHY THIS NEEDS A LIVE PROBE. Offline, everything about this delivery is ours — a fake clock, a
+ * faked EventBridge, a handler called directly. Here the timer, the forwarder and the container's
+ * clock are all AWS's, and two beliefs about them are load-bearing and untestable anywhere else:
  *
- *   1. `POST /trigger` refuses any slot ahead of this machine's clock, with NO tolerance
- *      (schedule/trigger.ts). That refusal is what stops an anonymous caller from claiming a future
- *      slot and starving the schedule for good — but it also means a container whose clock lags the
- *      instant EventBridge computed would 400 every real fire. Whether that happens is a fact about
- *      two clocks we do not own, and the only way to learn it is to let them both run.
- *   2. `<aws.scheduler.scheduled-time>` lands on the same grid our own cron expression produces
- *      (`toEventBridgeCron` translates the pattern; `previousRun` reads it back). Nothing requires
- *      that today — the route deliberately does not validate the grid, precisely because this
- *      agreement was unverified. This probe records whether it holds, so a later decision to depend
- *      on it starts from a measurement rather than an assumption.
+ *   1. The envelope names a schedule and NOTHING ELSE, so the container decides which occurrence the
+ *      delivery is for by snapping its OWN clock to the grid (schedule/trigger.ts). That is only
+ *      correct if the delivery lands inside the occurrence it was scheduled for — late enough to be
+ *      past the instant, early enough not to have fallen into the next one. Whether that holds is a
+ *      fact about a clock and a delivery path we do not own.
+ *   2. The container accepts the delivery at all: a cold start, an opened definition and a model turn
+ *      all happen inside the forwarder's call, and a non-200 here would be invisible from inside an
+ *      agent that simply never ran.
  *
  * WHAT IT OBSERVES, and from where. The forwarder logs one line per delivery —
- * `schedule-fire <name> (<slot>): <status> <body>` (deploy/agentcore/forwarder.js) — which carries
- * both facts above and is readable from outside the deployment. That is the whole point of reading
- * CloudWatch rather than the container: a 400 here would be invisible from inside an agent that
- * simply never ran.
+ * `schedule-fire <name>: <status> <body>` (deploy/agentcore/forwarder.js) — and the body carries the
+ * slot the CONTAINER chose. That is the whole point of reading CloudWatch rather than the container.
  *
- * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
+ * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute. It is
+ * also the tightest possible version of belief (1): with a 60-second occurrence, a delivery more than
+ * a minute late would visibly land on the wrong grid point. Anything coarser would hide that.
  *
  * WHAT IT MEASURED, ap-southeast-1, 2026-09-19 — recorded so the next reader does not have to deploy
- * to learn it:
+ * to learn it. (Measured against the earlier wire, which carried the instant; the numbers are facts
+ * about the delivery path, not about the envelope.)
  *
  *     schedule-fire tick (2026-09-19T13:04:00Z): 200 {"fired":true,"ms":2017}
  *     …logged at 13:04:09.372Z
  *
- * The instant is on the minute, i.e. on the grid `* * * * *` produces. And it reached the container
- * NINE SECONDS after it had passed — an order of magnitude more margin than any plausible NTP skew,
- * which is the number the no-tolerance rule in trigger.ts was an open question against.
+ * NINE SECONDS after the instant it was scheduled for, and 51 seconds before the next one — the
+ * margin belief (1) needs, on both sides.
  *
  * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and an EventBridge
  * rule) and one real model turn per minute it is up. Teardown is the shared
@@ -103,11 +101,11 @@ afterAll(async () => {
   }
 }, 900_000);
 
-/** `schedule-fire <name> (<slot>): <status> <body>` — the forwarder's one line per delivery. */
-const FIRE_LINE = new RegExp(`schedule-fire ${SCHEDULE} \\(([^)]+)\\): (\\d+)`);
+/** `schedule-fire <name>: <status> <body>` — the forwarder's one line per delivery. */
+const FIRE_LINE = new RegExp(`schedule-fire ${SCHEDULE}: (\\d+) (.*)$`);
 
 /** Poll the forwarder's log group until it has said something about a fire, or the budget runs out. */
-async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ slot: string; status: number; raw: string }> {
+async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ body: string; status: number; raw: string }> {
   const group = forwarderLogGroup(NAME);
   const deadline = Date.now() + budgetMs;
   let lastError = "no forwarder log group yet";
@@ -128,7 +126,7 @@ async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ slot: s
       for (const event of (JSON.parse(events.stdout) as { events?: { message?: string }[] }).events ?? []) {
         const matched = FIRE_LINE.exec(event.message ?? "");
         if (matched)
-          return { slot: matched[1] as string, status: Number(matched[2]), raw: (event.message ?? "").trim() };
+          return { status: Number(matched[1]), body: matched[2] as string, raw: (event.message ?? "").trim() };
       }
       lastError = "the forwarder log group exists but has logged no schedule-fire";
     } else {
@@ -140,8 +138,8 @@ async function waitForFire(sinceMs: number, budgetMs: number): Promise<{ slot: s
   throw new Error(`no schedule-fire delivery within ${Math.round(budgetMs / 1000)}s — ${lastError}`);
 }
 
-describe("agentcore schedules: EventBridge holds the clock and the container accepts its instant", () => {
-  it("delivers a fire the trigger route ACCEPTS, on the grid our own expression produces", async () => {
+describe("agentcore schedules: EventBridge holds the clock, the container names the occurrence", () => {
+  it("delivers a fire the container accepts, and lands inside the occurrence it was scheduled for", async () => {
     const deployedAt = Date.now();
     try {
       await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
@@ -171,19 +169,27 @@ describe("agentcore schedules: EventBridge holds the clock and the container acc
     // and opens the definition, and CloudWatch is eventually consistent about the group itself.
     const fire = await waitForFire(deployedAt, 360_000);
 
-    // (1) THE assertion this probe exists for. A 400 here is `POST /trigger` refusing the instant as
-    // ahead of the container's clock — the zero-tolerance rule meeting a real clock pair. It would be
-    // invisible from inside the agent, which would simply never run.
+    // (1) The container ACCEPTED it. A non-200 is a cold start, an opened definition or a model turn
+    // failing inside the forwarder's call — invisible from inside an agent that would simply never run.
     expect(fire.status, `the forwarder's delivery was refused: ${fire.raw}`).toBe(200);
 
-    // (2) Recorded, not depended on: whether AWS's instant is one our own expression would produce.
-    // The route does not validate this today, and this is the measurement a later decision would need.
-    const slot = new Date(fire.slot);
+    // (2) THE assertion this probe exists for. The envelope carries no instant, so the slot in the
+    // reply is the container's own clock snapped to this schedule's grid. It has to be a grid point,
+    // and it has to be the one the rule fired for — which, for a one-minute cron, means the delivery
+    // landed inside its own 60-second occurrence. Late by more than that and this reads the NEXT
+    // point; early (a container clock ahead of AWS's) and it reads the previous one.
+    const reply = JSON.parse(fire.body) as { slot?: string; fired?: boolean };
+    expect(reply.slot, `no slot in the container's reply: ${fire.raw}`).toBeTruthy();
+    const slot = new Date(reply.slot as string);
     expect(Number.isNaN(slot.getTime()), `unparseable slot in: ${fire.raw}`).toBe(false);
     expect(
       previousRun(CRON, undefined, slot)?.toISOString(),
-      `EventBridge's scheduled-time is NOT on the grid "${CRON}" produces — a future decision to ` +
-        `validate the grid in POST /trigger would reject every real fire on this host (${fire.raw})`,
+      `the container's chosen slot is not on the grid "${CRON}" produces (${fire.raw})`,
     ).toBe(slot.toISOString());
+    // Within one occurrence of when this probe started waiting — the delivery is not hours stale.
+    expect(
+      Math.abs(slot.getTime() - deployedAt) < 6 * 60_000 + 60_000,
+      `the chosen slot ${slot.toISOString()} is not near this probe's deploy (${fire.raw})`,
+    ).toBe(true);
   }, 1_800_000);
 });

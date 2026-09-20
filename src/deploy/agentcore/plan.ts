@@ -568,9 +568,7 @@ function template(
         `      Target:`,
         `        Arn: !GetAtt Forwarder.Arn`,
         `        RoleArn: !GetAtt SchedulerRole.Arn`,
-        `        # <aws.scheduler.scheduled-time> = the slot instant — the container's idempotency key`,
-        `        # (EventBridge delivery is at-least-once; a duplicate slot must not double-fire).`,
-        `        Input: ${yamlSingleQuote(JSON.stringify({ scheduleFire: { name: fact.name, slot: "<aws.scheduler.scheduled-time>" } } satisfies ScheduleFireEvent))}`,
+        `        Input: ${yamlSingleQuote(JSON.stringify({ scheduleFire: { name: fact.name } } satisfies ScheduleFireEvent))}`,
       );
     }
   }

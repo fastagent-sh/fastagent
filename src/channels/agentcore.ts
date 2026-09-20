@@ -194,9 +194,9 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         return json(reply, 200);
       }
       case "schedule-fire": {
-        const { name, slot } = envelope;
-        if (typeof name !== "string" || typeof slot !== "string" || Number.isNaN(Date.parse(slot))) {
-          return text('schedule-fire envelope needs { "name": string, "slot": ISO-date }\n', 400);
+        const { name } = envelope;
+        if (typeof name !== "string") {
+          return text('schedule-fire envelope needs { "name": string }\n', 400);
         }
         // No schedules in this definition: nothing to fire, and no route was built for it either.
         if (!trigger) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
@@ -206,7 +206,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         const inner = new Request("http://agentcore.local/trigger", {
           method: "POST",
           headers: jsonHeaders,
-          body: JSON.stringify({ name, slot }),
+          body: JSON.stringify({ name }),
         });
         // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may time out and drop
         // the connection while the turn keeps running server-side.

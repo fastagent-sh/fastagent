@@ -188,7 +188,7 @@ describe("deploy agentcore: the plan", () => {
     expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
   });
 
-  it("schedules become EventBridge rules with tz + slot-carrying input; untranslatable ones warn", () => {
+  it("schedules become EventBridge rules naming the schedule and its tz; untranslatable ones warn", () => {
     const schedules: ScheduleFact[] = [
       { name: "digest", cron: "0 9 * * 1-5", tz: "Asia/Shanghai" },
       { name: "impossible", cron: "0 9 1 * 1" },
@@ -198,7 +198,11 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("ScheduleDigest:");
     expect(template).toContain("ScheduleExpression: cron(0 9 ? * 2-6 *)");
     expect(template).toContain("ScheduleExpressionTimezone: Asia/Shanghai");
-    expect(template).toContain('\'{"scheduleFire":{"name":"digest","slot":"<aws.scheduler.scheduled-time>"}}\'');
+    // THE NAME ONLY. The rule says which schedule fired, never WHEN: the container reads its own clock
+    // against that schedule's grid (schedule/trigger.ts), so there is no instant crossing the wire for
+    // this deployment to have to trust.
+    expect(template).toContain('\'{"scheduleFire":{"name":"digest"}}\'');
+    expect(template).not.toContain("aws.scheduler.scheduled-time");
     expect(template).not.toContain("impossible");
     expect(plan.untranslatableSchedules).toEqual([
       { name: "impossible", reason: expect.stringMatching(/BOTH day-of-month/) },
@@ -244,7 +248,7 @@ describe("deploy agentcore: the plan", () => {
   it("a schedule name with a quote cannot break the EventBridge Input YAML/JSON", () => {
     const plan = planAgentcoreDeploy(baseInput({ schedules: [{ name: "it's-daily", cron: "0 9 * * *" }] }));
     const template = plan.artifacts[0]!.content;
-    expect(template).toContain(`'{"scheduleFire":{"name":"it''s-daily","slot":"<aws.scheduler.scheduled-time>"}}'`);
+    expect(template).toContain(`'{"scheduleFire":{"name":"it''s-daily"}}'`);
   });
 
   it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {

@@ -25,7 +25,12 @@ vi.mock("../src/schedule/cron.ts", async (real) => {
 /**
  * `POST /trigger` — the external clock's half of a time trigger. The FIRE itself is `fireScheduleOnce`
  * and is covered in scheduler.test.ts; what belongs here is the wire: what the body may say, which
- * instant an omitted slot means, and what each outcome looks like to the clock that called.
+ * occurrence a delivery is for, and what each outcome looks like to the clock that called.
+ *
+ * The body names a schedule and NOTHING ELSE. A caller-named instant was tried and removed — the
+ * cases that used to live here (a future slot poisoning `claimSlot`'s gate, an off-grid one minting a
+ * claim no occurrence matches, an old one replaying history, and the grid searches all three needed)
+ * are not fixed defects but absent ones: there is no longer a number on the wire to be wrong.
  */
 
 const hourly = (over: Partial<LoadedSchedule> = {}): LoadedSchedule => ({
@@ -70,19 +75,18 @@ const trigger = (handle: (req: Request) => Promise<Response>, body: unknown, ini
 const NOW = "2026-07-07T10:30:00.000Z";
 
 describe("schedule/trigger: POST /trigger", () => {
-  // PINNED, because the route now has a floor under the past (the current occurrence and the one
-  // before it). A fixture naming a fixed instant while the clock runs free would pass today and start
-  // reporting `too old` tomorrow.
+  // PINNED, because THIS serve's clock is what picks the occurrence — every expectation below is a
+  // grid point measured from it.
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(NOW));
   });
   afterEach(() => vi.useRealTimers());
 
-  it("fires the schedule the definition wrote down, for the slot the caller named", async () => {
+  it("fires the schedule the definition wrote down, for the occurrence its own clock is in", async () => {
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
-    const res = await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" });
+    const res = await trigger(handle!, { name: "digest" });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true, slot: "2026-07-07T10:00:00.000Z" });
@@ -128,63 +132,61 @@ describe("schedule/trigger: POST /trigger", () => {
     }
   });
 
-  it("an OFF-GRID slot folds onto the occurrence it falls in, not into a claim of its own", async () => {
-    // The starvation path the future-slot refusal does NOT close, reached from the past side. Every
-    // off-grid instant is a new claim name, so each one runs a turn AND raises `newest` — and the real
-    // occurrence that follows is then refused as stale (`wanted < newest`). It matters most under the
-    // combination the docs recommend, `http.invoke: false` + `http.trigger: true`, whose whole point is
-    // that an anonymous caller cannot start a turn.
+  it("every delivery inside one occurrence is that occurrence — jitter is not a second claim", async () => {
+    // Deliveries do not arrive at the instant: cron wakes, a process starts, a Lambda forwards, a
+    // retry lands. The slot is an IDENTITY (`claimSlot` keys on it), so if each arrival named its own
+    // moment, each would be a fresh claim that ran its own turn AND raised `newest` — after which the
+    // resident clock's real occurrence is refused as stale. Snapping to the grid is what makes the
+    // spread of arrival times collapse onto the one occurrence they all belong to.
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
-    for (const off of ["2026-07-07T10:09:00Z", "2026-07-07T10:17:31Z", "2026-07-07T10:29:12Z"]) {
-      expect((await trigger(handle!, { name: "digest", slot: off })).status).toBe(200);
+    for (const arrival of ["2026-07-07T10:00:09Z", "2026-07-07T10:17:31Z", "2026-07-07T10:29:12Z"]) {
+      vi.setSystemTime(new Date(arrival));
+      expect((await trigger(handle!, { name: "digest" })).status).toBe(200);
     }
-    // ONE turn, ONE claim: they are three deliveries of the 10:00 occurrence, whatever they were called.
+    // ONE turn, ONE claim: three deliveries of the 10:00 occurrence, whenever they happened to land.
     expect(calls).toHaveLength(1);
     expect(readFires(root, "digest").map((f) => f.slot)).toEqual(["2026-07-07T10:00:00.000Z"]);
 
-    // …and the real instant is then an ordinary duplicate, not something the state root has moved past.
-    const real = (await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()) as {
+    // …and they read as ordinary duplicates, not as something the state root has moved past.
+    const again = (await (await trigger(handle!, { name: "digest" })).json()) as {
       slot: string;
       skippedReason?: string;
     };
-    expect(real.slot).toBe("2026-07-07T10:00:00.000Z");
-    expect(real.skippedReason).toContain("already claimed");
-    expect(real.skippedReason).not.toContain("stale");
+    expect(again.slot).toBe("2026-07-07T10:00:00.000Z");
+    expect(again.skippedReason).toContain("already claimed");
+    expect(again.skippedReason).not.toContain("stale");
+
+    // The NEXT occurrence still fires — the claim gate was never poisoned by any of it.
+    vi.setSystemTime(new Date("2026-07-07T11:00:04Z"));
+    expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({
+      fired: true,
+      slot: "2026-07-07T11:00:00.000Z",
+    });
+    expect(calls).toHaveLength(2);
   });
 
-  it("does not pay for a grid search per request — no request repeats one, whatever it asks for", async () => {
-    // The amplification this closes: one 404 lists every schedule name, after which an anonymous
-    // caller repeats a request for free while this process pays ~6ms of blocking croner per search —
-    // before any claim, with no turn to rate-limit against, on the one thread that also answers every
-    // channel webhook, `/control/*` and `/health`. That is the very posture (`http.invoke: false` +
-    // `http.trigger: true`) whose premise is that such a caller cannot make this process work.
+  it("does not pay for a grid search per request — the occurrence is cached until the grid moves", async () => {
+    // The route is anonymous, and `previousRun` is ~40 synchronous croner evaluations (~6ms measured)
+    // on the one thread that also answers every channel webhook, `/control/*` and `/health`. Repeating
+    // the request is free for the caller, so it has to be free here too.
     const { agent, calls } = recordingAgent();
     const { handle } = await handlerFor([hourly()], agent);
 
     searches.n = 0;
-    expect(await (await trigger(handle!, { name: "digest", slot: "2020-01-01T00:00:00Z" })).json()).toMatchObject({
-      fired: false,
-    });
-    expect(searches.n).toBeLessThanOrEqual(2); // the window: the current occurrence and the one before it
+    expect((await trigger(handle!, { name: "digest" })).status).toBe(200);
+    expect(searches.n).toBe(1); // the cold read of this schedule's current occurrence
 
-    // THE CHEAPEST REQUEST TO CONSTRUCT is the one with no slot at all — nothing to guess, nothing to
-    // format. It used to search on every single delivery, because the cache held only the floor and
-    // the snap ran unconditionally above it.
     searches.n = 0;
-    for (let i = 0; i < 20; i++) {
-      const res = await trigger(handle!, { name: "digest" });
-      expect(res.status).toBe(200);
-    }
+    for (let i = 0; i < 50; i++) expect((await trigger(handle!, { name: "digest" })).status).toBe(200);
     expect(searches.n).toBe(0);
-    expect(calls).toHaveLength(1); // the first one fired; `claimSlot` made the other 19 duplicates
+    expect(calls).toHaveLength(1); // one turn; `claimSlot` made the other 50 duplicates
 
-    // …and neither does an old slot, an off-grid one, or the occurrence before the current one.
+    // It recomputes once when the grid moves past it, and not again.
     searches.n = 0;
-    for (const slot of ["2020-01-01T00:00:00Z", "2026-07-07T10:17:31Z", "2026-07-07T09:00:00Z"]) {
-      await trigger(handle!, { name: "digest", slot });
-    }
-    expect(searches.n).toBe(0);
+    vi.setSystemTime(new Date("2026-07-07T11:30:00Z"));
+    for (let i = 0; i < 10; i++) await trigger(handle!, { name: "digest" });
+    expect(searches.n).toBe(1);
   });
 
   it("clips the name it quotes back — the one place this route echoes an unauthenticated caller", async () => {
@@ -195,57 +197,6 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(said).toContain("x".repeat(64));
     expect(said).not.toContain("x".repeat(65));
     expect(said).toContain("this deployment has: digest"); // listing OUR names is the deliberate part
-
-    // …and the future-slot refusal quotes nothing at all. `Date.parse` is V8's lenient parser, so a
-    // caller can smuggle most of MAX_TRIGGER_BODY_BYTES through a "valid date" — what it gets back is
-    // our clock, which is the half of the comparison it does not already have.
-    const smuggled = `Dec 25 2999 (${"B".repeat(3000)})`;
-    expect(Number.isNaN(Date.parse(smuggled))).toBe(false); // the premise, not an assumption
-    const ahead = await trigger(handle!, { name: "digest", slot: smuggled });
-    expect(ahead.status).toBe(400);
-    const refusal = await ahead.text();
-    expect(refusal).not.toContain("B");
-    expect(refusal).toContain("ahead of this machine's clock (now 2026-07-07T10:30:00.000Z)");
-  });
-
-  it("an OLD occurrence is reported, not fired — history is not a queue of turns to buy", async () => {
-    // `claimSlot` only judges `wanted < newest`, so walking history FORWARDS beats it every time: each
-    // occurrence is newer than the last claim, so each one claims and runs. An hourly schedule has
-    // ~100k enumerable occurrences, and nothing serialises requests naming different ones.
-    //
-    // The second injury is the fixed `schedule:<name>` session: a caller holding it busy makes the
-    // resident clock's real occurrence fail with SESSION_BUSY_CODE after its claim is already taken,
-    // which settles as `failed` and loses that occurrence silently.
-    const { agent, calls } = recordingAgent();
-    const { root, handle } = await handlerFor([hourly()], agent);
-    const old = ["2020-01-01T00:00:00Z", "2020-01-01T01:00:00Z", "2020-01-01T02:00:00Z"];
-    for (const slot of old) {
-      const body = (await (await trigger(handle!, { name: "digest", slot })).json()) as {
-        fired: boolean;
-        skippedReason?: string;
-      };
-      expect({ slot, fired: body.fired }).toEqual({ slot, fired: false });
-      expect(body.skippedReason).toContain("too old");
-    }
-    expect(calls).toEqual([]);
-    expect(readFires(root, "digest")).toEqual([]); // nothing claimed, so nothing is burned either
-    // The window is the current occurrence and the one before it, which is what a late or retried
-    // delivery names — EventBridge re-sends a fire it could not deliver, and that is not an attack.
-    // Oldest first, because once the current occurrence is claimed the prior one is ordinarily stale:
-    // the floor decides what may be ASKED for, `claimSlot` still decides what runs.
-    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T09:00:00Z" })).json()).toMatchObject({
-      fired: true,
-    });
-    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
-      fired: true,
-    });
-    // One occurrence further back is outside the window, and says so rather than being judged stale.
-    const outside = (await (await trigger(handle!, { name: "digest", slot: "2026-07-07T08:00:00Z" })).json()) as {
-      fired: boolean;
-      skippedReason?: string;
-    };
-    expect(outside.fired).toBe(false);
-    expect(outside.skippedReason).toContain("too old");
   });
 
   it("a slot the state root has moved past is reported, not fired", async () => {
@@ -254,7 +205,7 @@ describe("schedule/trigger: POST /trigger", () => {
     const newer = new Date("2026-07-07T12:00:00Z");
     claimSlot(root, "digest", newer, newer);
 
-    const res = await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" });
+    const res = await trigger(handle!, { name: "digest" });
     expect(res.status).toBe(200); // the DELIVERY succeeded; the occurrence is what was skipped
     expect(await res.json()).toMatchObject({ fired: false });
     expect(calls).toEqual([]);
@@ -269,48 +220,23 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(await res.text()).toContain('no schedule named "digets" (this deployment has: digest, weekly)');
   });
 
-  it("refuses ANY slot ahead of the clock — a tolerance would still starve the resident clock", async () => {
-    // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so a claim ahead of the wall clock
-    // makes every real occurrence after it sort before the newest and be refused as stale — forever,
-    // across restarts, for the resident clock too, recoverable only by deleting files in the container.
-    //
-    // A tolerance does not fix that, it prices it: with a window of T, a caller waits until the next
-    // occurrence is within T and names it, starving the schedule for one cheap request per period.
-    // This route is the only place a slot arrives from a caller we do not trust, so the window is zero.
-    const { agent, calls } = recordingAgent();
-    const { root, handle } = await handlerFor([hourly()], agent);
-    for (const ahead of ["2999-01-01T00:00:00Z", new Date(Date.now() + 30_000).toISOString()]) {
-      const res = await trigger(handle!, { name: "digest", slot: ahead });
-      expect({ ahead, status: res.status }).toEqual({ ahead, status: 400 });
-      expect(await res.text()).toContain("ahead of this machine's clock");
-    }
-    expect(readFires(root, "digest")).toEqual([]); // nothing was written
-    expect(calls).toEqual([]);
-
-    // …and a real occurrence still fires afterwards, which is the property the refusal protects.
-    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
-      fired: true,
-    });
-  });
-
-  it("refuses a body that does not say which schedule, or says it with a bad slot", async () => {
+  it("refuses a body that does not say which schedule", async () => {
     const { handle } = await handlerFor([hourly()], recordingAgent().agent);
     expect((await trigger(handle!, {})).status).toBe(400);
     expect((await trigger(handle!, { name: "" })).status).toBe(400);
     expect((await trigger(handle!, "{not json")).status).toBe(400);
-    expect((await trigger(handle!, { name: "digest", slot: "not-a-date" })).status).toBe(400);
     // The JSON gate every unverified route carries (channels/body.ts), here too.
     expect((await trigger(handle!, { name: "digest" }, { headers: {} })).status).toBe(415);
     expect((await handle!(new Request("http://h/trigger"))).status).toBe(405);
   });
 
-  it("409s when there is no occurrence to snap to", async () => {
-    // A schedule whose first occurrence is still ahead: an omitted slot has nothing to name, and
-    // inventing one would be a claim for an instant the schedule has never had (cron.ts previousRun).
+  it("409s when the schedule has not come due yet", async () => {
+    // Armed, but the grid has not reached its first occurrence. There is nothing to claim, and
+    // inventing an instant would claim one the schedule has never had (cron.ts previousRun).
     const { handle } = await handlerFor([hourly({ cron: "0 0 9 * * * 2099" })], recordingAgent().agent);
     const res = await trigger(handle!, { name: "digest" });
     expect(res.status).toBe(409);
-    expect(await res.text()).toContain("has no occurrence at or before");
+    expect(await res.text()).toContain("has not come due yet");
   });
 
   it("is not built at all when the definition declares no schedules", async () => {
@@ -332,7 +258,7 @@ describe("schedule/trigger: POST /trigger", () => {
     const logged: string[] = [];
     const spy = vi.spyOn(log, "error").mockImplementation((line: string) => void logged.push(line));
     try {
-      const res = await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" });
+      const res = await trigger(handle!, { name: "digest" });
       expect(res.status).toBe(500);
       const body = await res.text();
       expect(body).toContain("claim state unavailable, nothing was claimed — retry");

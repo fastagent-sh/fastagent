@@ -56,8 +56,6 @@ export type AgentcoreEnvelope = {
   | {
       kind: "schedule-fire";
       name: string;
-      /** The cron instant this fire is FOR (ISO) — the slot-idempotency key. */
-      slot: string;
     }
   | { kind: "invoke"; session: string; text: string }
   /**
@@ -94,7 +92,11 @@ export interface WakeAlarmRequest {
   alarms: WakeAlarm[];
 }
 
-/** What EventBridge hands the forwarder for a cron slot; `slot` is `<aws.scheduler.scheduled-time>`. */
+/**
+ * What EventBridge hands the forwarder when a cron rule fires. The NAME only: which occurrence it is for is the
+ * container's own reading of its clock against that schedule's grid (schedule/trigger.ts), not a number carried
+ * across the wire from a machine whose clock we would then have to police.
+ */
 export interface ScheduleFireEvent {
-  scheduleFire: { name: string; slot: string };
+  scheduleFire: { name: string };
 }

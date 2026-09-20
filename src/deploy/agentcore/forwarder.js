@@ -106,10 +106,10 @@ exports.handler = async (event, ctx) => {
   }
   // EventBridge Scheduler fire — throw on failure so the miss lands in CloudWatch, never silently.
   if (event?.scheduleFire) {
-    const { name, slot } = event.scheduleFire;
-    const r = await invoke({ kind: "schedule-fire", name, slot });
+    const { name } = event.scheduleFire;
+    const r = await invoke({ kind: "schedule-fire", name });
     const out = r.body.toString();
-    console.log(`schedule-fire ${name} (${slot}): ${r.status} ${out}`);
+    console.log(`schedule-fire ${name}: ${r.status} ${out}`);
     if (r.status >= 400) throw new Error(`schedule-fire ${name} failed: ${r.status} ${out}`);
     return { status: r.status };
   }

@@ -11,6 +11,20 @@
  * path segment would mean percent-encoding it — the cost the control plane pays for session ids and this route has
  * no reason to. It also keeps the shape of `POST /invoke`, whose scope rides in the body for the same reason.
  *
+ * AND NO INSTANT ON THE WIRE EITHER — this serve decides which occurrence the delivery is for, by snapping its own
+ * clock to the schedule's grid. A caller-named slot was tried and removed: it asks two machines to agree on which
+ * moment it is, which is a consistency problem we do not have, to get an idempotency guarantee `claimSlot` already
+ * gives by `O_EXCL` alone. What it cost was a defence for every way that number could be wrong — a future instant
+ * poisons `claimSlot`'s `wanted < newest` gate forever, an off-grid one mints a claim no occurrence matches, an old
+ * on-grid one replays history a turn at a time, and computing the bounds for all three was ~6ms of synchronous
+ * croner per request on an anonymous route. Removing the field removed all four: the only instants that now reach
+ * `claimSlot` come from the resident loop's `nextRun` or this route's `previousRun(now)`, and both are grid points
+ * in the past BY CONSTRUCTION.
+ *
+ * WHAT IT GIVES UP is a delivery late by more than one period being credited to the occurrence it was sent for: a
+ * retry at 10:01 fires 10:01, not the 10:00 it missed. Turn count per occurrence is unchanged, and catch-up was
+ * never this route's job — an external clock's redelivery is a fire, not a backfill.
+ *
  * ONE SEMANTIC, ONE IMPLEMENTATION: the fire itself is `fireScheduleOnce`, the same claim/run/settle the resident
  * cron loop uses. Two clocks over one state root is safe by construction — `claimSlot` is an `O_EXCL` create, so the
  * slot is taken by exactly one of them (schedule/state.ts).
@@ -39,33 +53,26 @@ const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 const MAX_ECHOED_NAME = 64;
 
 /**
- * The two occurrences this route will fire for a schedule — the current one and the one before it — recomputed only
- * when the grid moves past them.
+ * The occurrence a delivery arriving NOW is for: this serve's clock, snapped to the schedule's grid.
  *
- * CACHED BECAUSE THE SEARCH IS THE WHOLE COST OF THIS ROUTE. `previousRun` is ~40 synchronous croner evaluations
- * (~6ms measured), and croner is pure JS on the one thread that also answers every channel webhook, `/control/*`
- * and `/health`. An anonymous caller needs one 404 to learn a schedule name, after which `{"name":"digest"}` — no
- * slot, no format to guess — repeats for free on their side, before any claim and with no turn to rate-limit
- * against. Warm, that request now searches ZERO times.
+ * SNAPPED, because the slot is an IDENTITY — `claimSlot` keys on it, so a redelivery must name the same instant as
+ * the first attempt or the turn runs twice. `now` itself never repeats; its occurrence does, for as long as the
+ * occurrence lasts. It is also what the resident loop claims (`slot: due`, the exact `nextRun` instant), so the two
+ * clocks collide on one name and `O_EXCL` settles it.
  *
- * This PAIR rather than the floor alone is what makes the snap free too. A request that survives the floor asks for
- * an instant in `[prior, now]`, and the only occurrences in that span are these two, so snapping is a comparison
- * rather than a search.
- *
- * Keyed by schedule name and bounded by the declared schedules; `until` is the next occurrence, which is exactly
- * when the answer changes.
+ * CACHED until the grid moves past it, because this is the only expensive thing the route does: `previousRun` is
+ * ~40 synchronous croner evaluations (~6ms measured) on the one thread that also answers every channel webhook,
+ * `/control/*` and `/health`, and the route is anonymous. `until` is the next occurrence — exactly when the answer
+ * changes. Keyed by schedule name, bounded by the declared schedules.
  */
-type Window = { current: Date; prior?: Date };
-function windowFactory(): (schedule: LoadedSchedule, now: Date) => Window | undefined {
-  const cache = new Map<string, { until: number; window: Window | undefined }>();
+function occurrenceFactory(): (schedule: LoadedSchedule, now: Date) => Date | undefined {
+  const cache = new Map<string, { until: number; at: Date | undefined }>();
   return (schedule, now) => {
     const cached = cache.get(schedule.name);
-    if (cached && now.getTime() < cached.until) return cached.window;
-    const current = previousRun(schedule.cron, schedule.tz, now);
-    const prior = current && previousRun(schedule.cron, schedule.tz, new Date(current.getTime() - 1));
-    const window = current ? { current, ...(prior ? { prior } : {}) } : undefined;
-    cache.set(schedule.name, { until: nextRun(schedule.cron, schedule.tz, now)?.getTime() ?? Infinity, window });
-    return window;
+    if (cached && now.getTime() < cached.until) return cached.at;
+    const at = previousRun(schedule.cron, schedule.tz, now);
+    cache.set(schedule.name, { until: nextRun(schedule.cron, schedule.tz, now)?.getTime() ?? Infinity, at });
+    return at;
   };
 }
 
@@ -82,7 +89,7 @@ export function createTriggerHandler(options: {
 }): ((req: Request) => Promise<Response>) | undefined {
   const { agent, stateRoot, schedules } = options;
   if (schedules.length === 0) return undefined;
-  const windowFor = windowFactory();
+  const occurrenceFor = occurrenceFactory();
 
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -97,103 +104,31 @@ export function createTriggerHandler(options: {
     } catch {
       return text("invalid json\n", 400);
     }
-    const { name, slot } = (payload ?? {}) as { name?: unknown; slot?: unknown };
+    const { name } = (payload ?? {}) as { name?: unknown };
     if (typeof name !== "string" || name === "") {
-      return text('need { "name": string, "slot"?: ISO-date } — e.g. {"name":"daily"}\n', 400);
+      return text('need { "name": string } — e.g. {"name":"daily"}\n', 400);
     }
     const schedule = schedules.find((s) => s.name === name);
     // Deploy drift: an external clock rule outliving the schedule it fires for. The names are listed so the operator
     // can see whether it is a typo or a stale rule without shelling in.
     if (!schedule) {
       return text(
-        // The name is CLIPPED before it goes back out. Listing this deployment's own schedules is deliberate (the
-        // operator needs to see typo vs stale rule), but quoting an unauthenticated caller's 4 KiB of body into a
-        // `text/plain` reply is the one place on this route that echoes what arrived — see `refuseNonJsonBody`.
+        // The name is CLIPPED before it goes back out — the one thing this route echoes. Listing this deployment's
+        // own schedules is deliberate; quoting an unauthenticated caller's 4 KiB of body is not (`refuseNonJsonBody`
+        // states the same rule for the same table).
         `no schedule named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${schedules
           .map((s) => s.name)
           .join(", ")})\n`,
         404,
       );
     }
-    if (slot !== undefined && (typeof slot !== "string" || Number.isNaN(Date.parse(slot)))) {
-      return text('"slot" must be an ISO date\n', 400);
-    }
-    // NO TOLERANCE, and the zero is the point. A slot names an occurrence that has ARRIVED: the resident loop only
-    // claims one once `now()` has reached it, and an external clock sends the instant it just fired for.
-    //
-    // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so a claim ahead of the wall clock refuses
-    // every real occurrence after it. ANY tolerance leaves that open — with a window of T, a caller need only wait
-    // until the next occurrence is within T and name it, which starves the resident clock permanently for the price
-    // of one cheap request per period. This refusal closes the FUTURE side of that; the past side is closed by
-    // snapping below, without which any off-grid past instant was a fresh claim name that ran its own turn and
-    // raised `newest` all the same.
-    //
-    // The cost is a container whose clock lags the caller's: its slot reads as future and is refused. That is
-    // self-healing rather than lost — a 4xx makes the forwarder throw, EventBridge retries, and our clock has moved
-    // by then (deploy/agentcore/forwarder.js). A crontab's `curl` should omit `slot` and let this serve snap it.
-    // ONE clock read for the whole decision. Two would let an occurrence boundary fall between them, and the
-    // window below would then be judged against a different instant than `asked` was.
-    const now = new Date();
-    if (typeof slot === "string" && Date.parse(slot) > now.getTime()) {
-      return text(
-        // NOT QUOTED BACK. `Date.parse` is V8's lenient parser — `Dec 25 2999 (${"A".repeat(3000)})` parses — so
-        // echoing it would hand an unauthenticated caller most of MAX_TRIGGER_BODY_BYTES back in a `text/plain`
-        // reply. Our clock is the half of the comparison the caller does NOT have, and the only half it can act on.
-        `"slot" is ahead of this machine's clock (now ${now.toISOString()}) — a slot names an occurrence that has ` +
-          `already arrived, and claiming one early would refuse every real occurrence after it as stale. Retry, ` +
-          `or omit "slot"\n`,
-        400,
-      );
-    }
 
-    const asked = slot === undefined ? now : new Date(slot);
-
-    // A FLOOR UNDER THE PAST, which neither the future refusal nor the snapping below provides. `claimSlot` judges
-    // only `wanted < newest`, so walking history FORWARDS beats it every time: each older occurrence is newer than
-    // the last claim, so each one claims and runs a turn. An hourly schedule has ~100k enumerable occurrences, and
-    // that is a turn apiece — which is the premise of `http.invoke: false` + `http.trigger: true` ("an anonymous
-    // caller cannot start a turn") collapsing. It also starves the real fire a second way: the fixed
-    // `schedule:<name>` session held busy makes the resident clock's occurrence fail AFTER its claim is taken.
-    //
-    // THE CURRENT OCCURRENCE AND THE ONE BEFORE IT. The window is in occurrences, not minutes, because the grid is
-    // the domain — and two of them is what a late or retried delivery names: EventBridge re-sends a fire it could
-    // not deliver, and on a host with no resident clock that retry is the fire. Older than that is reported rather
-    // than refused, so a clock whose retry finally lands stops retrying instead of hammering a 4xx.
-    //
-    // JUDGED ON WHAT THE CALLER ASKED FOR, BEFORE THE SNAP, which is the same decision reached without paying for
-    // it: snapping only ever moves an instant backwards, so `asked < floor` and `snap(asked) < floor` agree, and
-    // the floor itself is `floorFor`'s cached answer. The rejected request therefore does no grid search at all.
-    const window = windowFor(schedule, now);
-    if (window === undefined) {
-      return text(`schedule "${name}" (cron "${schedule.cron}") has no occurrence at or before now\n`, 409);
+    const at = occurrenceFor(schedule, new Date());
+    // Armed but not yet due: the definition declares it, the grid has simply not reached its first occurrence. The
+    // caller is early rather than wrong, so this says which grid it was measured against.
+    if (at === undefined) {
+      return text(`schedule "${name}" (cron "${schedule.cron}") has not come due yet\n`, 409);
     }
-    const floor = window.prior ?? window.current;
-    if (asked.getTime() < floor.getTime()) {
-      return Response.json({
-        slot: asked.toISOString(),
-        fired: false,
-        skippedReason:
-          `slot ${asked.toISOString()} is too old — this route fires the current occurrence or the one before it ` +
-          `(from ${floor.toISOString()}), so that history cannot be replayed one turn at a time`,
-        ms: 0,
-      });
-    }
-
-    // The slot is an IDENTITY, not a timestamp: `claimSlot` keys on it, so two deliveries of one occurrence must
-    // name the same instant or the turn runs twice. SNAPPED, therefore, whether the caller named an instant or not
-    // — the schedule's own grid is what decides which occurrence a moment belongs to, and letting a caller name a
-    // point between two of them would mint a claim no occurrence will ever match. A caller that computed the same
-    // grid (EventBridge sends `<aws.scheduler.scheduled-time>`) lands on itself and nothing changes; anything else
-    // folds onto the occurrence it fell in, so repeated off-grid deliveries are duplicates rather than turns.
-    //
-    // SNAP RATHER THAN REFUSE off-grid input, though refusing is the stricter rule. Refusing would make this route
-    // depend on `toEventBridgeCron`'s translation reading identically through croner for every pattern, and the
-    // live probe has measured exactly one (`* * * * *`). A divergence would then reject every real fire on that
-    // host; under snapping the worst case is a claim named for the previous occurrence, which is still idempotent.
-    //
-    // A COMPARISON, not a search: `asked` survived the floor, so it is in `[prior, now]`, and the grid has exactly
-    // two occurrences there.
-    const at = asked.getTime() >= window.current.getTime() ? window.current : floor;
 
     // THE boundary. `fireScheduleOnce`'s only failure is a claim-state fault — the slot could not be read or
     // created — which happens BEFORE any claim exists, so the occurrence is still unburned and the caller's retry

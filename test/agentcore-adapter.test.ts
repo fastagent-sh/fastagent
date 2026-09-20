@@ -146,7 +146,7 @@ describe("agentcore adapter: lazy channel construction", () => {
         return { routes: health };
       },
     });
-    const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", slot: "2026-07-07T10:00:00Z" };
+    const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job" };
     expect((await postEnvelope(routes, env)).status).toBe(200);
     expect(order).toEqual(["construct", "fire"]); // cold start woken by cron still replays turn intent
 
@@ -300,7 +300,7 @@ describe("agentcore adapter: webhook envelope", () => {
 });
 
 describe("agentcore adapter: schedule-fire envelope", () => {
-  const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", slot: "2026-07-07T10:00:00Z" };
+  const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job" };
 
   it("relays the envelope to the trigger handler as the POST /trigger request it is", async () => {
     // Not a second fire path: the same handler the route mounts, reached the way `invoke` reaches its
@@ -320,7 +320,8 @@ describe("agentcore adapter: schedule-fire envelope", () => {
         url: "http://agentcore.local/trigger",
         // The handler's own JSON gate applies to this request like any other; the envelope must satisfy it.
         contentType: "application/json",
-        body: { name: "job", slot: "2026-07-07T10:00:00Z" },
+        // NAME ONLY: which occurrence this fire is for is the container's own reading of its clock.
+        body: { name: "job" },
       },
     ]);
   });
@@ -346,12 +347,10 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     expect(activeWork()).toBe(base);
   });
 
-  it("rejects a malformed slot", async () => {
+  it("rejects an envelope with no name", async () => {
     const res = await postEnvelope(adapter({ trigger: async () => Response.json({ fired: true, ms: 0 }) }), {
       kind: "schedule-fire",
-      name: "job",
-      slot: "not-a-date",
-    });
+    } as AgentcoreEnvelope);
     expect(res.status).toBe(400);
   });
 });
@@ -424,7 +423,7 @@ describe("agentcore adapter: the authentication boundary", () => {
     });
 
     for (const envelope of [
-      { kind: "schedule-fire", name: "digest", slot: "2026-07-28T09:00:00Z" },
+      { kind: "schedule-fire", name: "digest" },
       { kind: "webhook", method: "POST", path: "/hook" },
       { kind: "wake-poke" },
     ] as AgentcoreEnvelope[]) {
@@ -435,10 +434,7 @@ describe("agentcore adapter: the authentication boundary", () => {
 
     // And a WRONG secret is not a secret, whatever its byte length or type.
     for (const auth of ["guessed", "x".repeat(Buffer.byteLength(SECRET)), 123]) {
-      const res = await post(
-        routes,
-        JSON.stringify({ auth, kind: "schedule-fire", name: "d", slot: "2026-07-28T09:00:00Z" }),
-      );
+      const res = await post(routes, JSON.stringify({ auth, kind: "schedule-fire", name: "d" }));
       expect(res.status, String(auth)).toBe(403);
     }
     expect(fire).not.toHaveBeenCalled();
