@@ -52,6 +52,13 @@ export interface PiAgentSessionFactoryOptions {
 /**
  * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred tools a loader
  * activated in that call.
+ *
+ * Not replaceable by pi's own transcript record. Since 0.86 the journal carries `toolsAdded` system messages and
+ * `getCurrentTools()` replays them, but that answers a different question: it reports every tool ever DECLARED to
+ * the model, which cannot tell a tool this conversation DISCOVERED from one that merely happened to be in the
+ * initial set at the time. Restoring from it would keep a tool later flipped to `deferred` active in sessions that
+ * never discovered it. This entry holds only what a loader activated, which is what makes the restore below
+ * "today's non-deferred tools PLUS what this conversation found".
  */
 const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
 

@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { contentText } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import type { SessionSummary, SessionUpdateField } from "../../session.ts";
@@ -390,16 +391,9 @@ function firstUserText(messages: { message?: unknown }[]): string | undefined {
   for (const entry of messages) {
     const message = entry.message as { role?: string; content?: unknown } | undefined;
     if (message?.role !== "user") continue;
-    const content = message.content;
-    const text =
-      typeof content === "string"
-        ? content
-        : Array.isArray(content)
-          ? content
-              .filter((block) => (block as { type?: string }).type === "text")
-              .map((block) => (block as { text?: string }).text ?? "")
-              .join(" ")
-          : "";
+    // The engine's own reading of message text, on a SPACE: this is a one-line preview, where adjacent
+    // blocks running together would read as one word.
+    const text = contentText(message.content as Parameters<typeof contentText>[0], " ");
     // Cut to UTF-16 units FIRST: a pasted megabyte would otherwise become a million-element array on the way to
     // keeping 200 of them.
     if (text.trim()) return [...text.slice(0, PREVIEW_CHARS * 2)].slice(0, PREVIEW_CHARS).join("");
