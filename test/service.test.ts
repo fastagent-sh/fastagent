@@ -50,6 +50,37 @@ describe("createAgentService", () => {
     }
   });
 
+  it("a schedules/ directory reaches POST /trigger — the only wiring dev and start actually use", async () => {
+    // THE WIRE, not the route: `loadServingSchedules(agentDir)` → `routesFor({ schedules })` is the
+    // only path from a real `schedules/` file to this route, and every other test bypasses it (one
+    // hands `routesFor` a literal, the other calls `createTriggerHandler` directly). Cutting it —
+    // `schedules: []` at the call site — left all 128 test files green while the feature was dead on
+    // the delivery path.
+    const dir = await agentDir({
+      "schedules/daily.mjs": `export default { cron: "0 9 * * *", prompt: "summarise the day" };\n`,
+    });
+    const service = await createAgentService(dir);
+    try {
+      // 415, like `/invoke` above: mounted, and refusing a body it was not told is JSON.
+      expect((await service.handler(new Request("http://h/trigger", { method: "POST" }))).status).toBe(415);
+      expect(service.unverifiedRoutes).toContain("POST /trigger");
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("no schedules/ directory means no POST /trigger at all", async () => {
+    // A route that can only ever answer 404 is not a route, and the startup report names what is
+    // actually mounted.
+    const service = await createAgentService(await agentDir({}));
+    try {
+      expect((await service.handler(new Request("http://h/trigger", { method: "POST" }))).status).toBe(404);
+      expect(service.unverifiedRoutes).not.toContain("POST /trigger");
+    } finally {
+      await service.close();
+    }
+  });
+
   it("http.invoke: false withholds the data plane, and frees its path for a channel", async () => {
     // The OFF switch. Without it, upgrading published an anonymous, fully-tooled POST /invoke on the
     // public URL of every deployment that had previously only exposed a signed webhook.

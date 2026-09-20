@@ -135,6 +135,12 @@ export async function mountAgentcoreService(
         "contract instead of our own /invoke, and reaching it already requires bedrock-agentcore:InvokeAgentRuntime.",
     );
   }
+  if (opened.serveTrigger !== undefined) {
+    log.warn(
+      "[fastagent] agentcore: http.trigger has no effect here — schedules fire through the forwarder's " +
+        "schedule-fire envelope, which is gated by the ingress secret rather than served as an anonymous route.",
+    );
+  }
   if (opened.publishControl) {
     log.warn(
       "[fastagent] agentcore: sessionControl is ON but /control/* is NOT served here — this host's only public " +

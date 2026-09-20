@@ -194,14 +194,19 @@ describe("mountAgentcoreService", () => {
   it("names every config key that cannot mean anything here, not just sessionControl", async () => {
     // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
     // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.invoke`
-    // has no `/invoke` to withhold (this host serves `POST /invocations`).
-    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false } }`);
+    // has no `/invoke` to withhold (this host serves `POST /invocations`); `http.trigger` has no
+    // anonymous route to withhold either, because schedules fire through the ingress-gated envelope.
+    const dir = await agentDir(
+      {},
+      `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false, trigger: false } }`,
+    );
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const service = await mountAgentcoreService(await open(dir));
     try {
       const said = warn.mock.calls.flat().join(" ");
       expect(said).toMatch(/http\.cors has no effect here/);
       expect(said).toMatch(/http\.invoke has no effect here/);
+      expect(said).toMatch(/http\.trigger has no effect here/);
     } finally {
       warn.mockRestore();
       await service.close();

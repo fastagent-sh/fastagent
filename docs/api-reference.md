@@ -557,7 +557,8 @@ occurrence and the one before it, and reports anything older as `fired: false` w
 `skippedReason`** — because history is otherwise a queue of turns to buy: walking occurrences forward
 beats the `wanted < newest` gate every time, and an hourly schedule has ~100k of them. Two occurrences
 is what a late or retried delivery names, which is the case that must keep working: on a host with no
-resident clock, EventBridge's retry IS the fire. A container whose clock lags its caller therefore
+resident clock, EventBridge's retry IS the fire. A slot below the floor is judged on what the caller
+asked for, before any grid search runs, so repeating one costs this process nothing. A container whose clock lags its caller therefore
 sees a 4xx, which is self-healing: the AgentCore forwarder throws on it and EventBridge retries, by
 which time the clock has moved. A crontab should omit `slot` and let the serve snap it.
 

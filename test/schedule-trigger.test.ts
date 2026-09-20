@@ -8,6 +8,20 @@ import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 import { claimSlot, readFires } from "../src/schedule/state.ts";
 import { createTriggerHandler } from "../src/schedule/trigger.ts";
 
+// Counted, not faked: `previousRun` is ~40 synchronous croner evaluations on the one thread this
+// process has, and how OFTEN this route runs it is the difference between ~30 req/s and ~30k.
+const searches = vi.hoisted(() => ({ n: 0 }));
+vi.mock("../src/schedule/cron.ts", async (real) => {
+  const actual = await real<typeof import("../src/schedule/cron.ts")>();
+  return {
+    ...actual,
+    previousRun: (...args: Parameters<typeof actual.previousRun>) => {
+      searches.n += 1;
+      return actual.previousRun(...args);
+    },
+  };
+});
+
 /**
  * `POST /trigger` — the external clock's half of a time trigger. The FIRE itself is `fireScheduleOnce`
  * and is covered in scheduler.test.ts; what belongs here is the wire: what the body may say, which
@@ -137,6 +151,35 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(real.slot).toBe("2026-07-07T10:00:00.000Z");
     expect(real.skippedReason).toContain("already claimed");
     expect(real.skippedReason).not.toContain("stale");
+  });
+
+  it("does not pay for a grid search per request — the floor is cached, and it judges before the snap", async () => {
+    // The amplification this closes: one 404 lists every schedule name, after which repeating a slot
+    // that is refused anyway used to run the search TWICE per request (the floor) plus once more for
+    // the snap — ~18ms of blocking CPU, before any claim, with no turn to rate-limit against. That is
+    // ~30 req/s to saturate the loop that also answers every channel webhook, `/control/*` and
+    // `/health` — against the very posture (`http.invoke: false` + `http.trigger: true`) whose premise
+    // is that an anonymous caller cannot make this process work.
+    const { agent, calls } = recordingAgent();
+    const { handle } = await handlerFor([hourly()], agent);
+    const old = { name: "digest", slot: "2020-01-01T00:00:00Z" };
+
+    searches.n = 0;
+    expect(await (await trigger(handle!, old)).json()).toMatchObject({ fired: false });
+    const warmUp = searches.n; // the floor: the current occurrence and the one before it
+    expect(warmUp).toBeLessThanOrEqual(2);
+
+    searches.n = 0;
+    for (let i = 0; i < 50; i++) await trigger(handle!, old);
+    expect(searches.n).toBe(0); // cached floor, and `asked` is judged before it would be snapped
+    expect(calls).toEqual([]);
+
+    // An accepted slot still snaps, and that is the one search a real delivery pays for.
+    searches.n = 0;
+    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
+      fired: true,
+    });
+    expect(searches.n).toBe(1);
   });
 
   it("an OLD occurrence is reported, not fired — history is not a queue of turns to buy", async () => {
