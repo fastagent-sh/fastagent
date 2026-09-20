@@ -186,11 +186,15 @@ Reopening is faithful to the whole record, not just the messages. `piAgentSessio
 active-tool set itself: the union of the initial set (every non-deferred tool *currently* mounted) and
 the session's accumulated activation *deltas* — `fastagent:tool-activation` entries carrying exactly
 the names that call activated. pi has its own answer — since 0.86 an `AgentSession` can restore a tool
-set from the transcript's `toolsAdded` declarations — and it does not participate here: pi runs that
-restore only for a session built without an explicit initial active set, and the SDK entry every bind
-goes through always passes one. That is what keeps a definition change reaching an old conversation:
-the initial set is read from TODAY's mounted tools, not from what the transcript declared. A tool added
-to the definition joins existing sessions (`agent-session-factory.test.ts`), and a tool flipped to
+set from the transcript's `toolsAdded` declarations — and it does not participate here. It has two triggers.
+At construction it is guarded: pi restores only for a session built without an explicit initial active set, and
+the SDK entry every bind goes through always passes one. On branch navigation (`AgentSession.navigateTree`)
+it is unconditional — out of reach only because the control plane moves a leaf with `SessionManager.branch()`
+and never through an `AgentSession`. Re-routing that write is the change that would break this.
+
+Resolving the set ourselves is what keeps a definition change reaching an old conversation: the initial set is
+read from TODAY's mounted tools, not from what the transcript declared. A tool added to the definition
+joins existing sessions (`agent-session-factory.test.ts`), and a tool flipped to
 `deferred` drops out of sessions that never discovered it. Corollary: *narrowing* the active set is not
 representable in this record.
 

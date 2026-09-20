@@ -421,8 +421,12 @@ const PREVIEW_CHARS = 200;
  * It APPENDS the missing result, so a caller must run it on the record it is allowed to write.
  */
 function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
-  // Conversation messages only: a system entry carries no toolCall to pair, and leaving it in would make a
-  // tail-position one read as an unrepairable leaf (`isConversationMessage`).
+  // Conversation messages only (`isConversationMessage`), for consistency with the journal's other readers rather
+  // than against an observable failure: a system entry carries no toolCall to pair, and pi writes its prompt
+  // patches only at a request boundary, so the order is always `assistant(toolCall) -> toolResult... ->
+  // system(patch)` and the "unpaired leaf followed by a system entry" this would rule out cannot be constructed.
+  // Untested for that reason. What it does buy is that a future pi writing a system entry mid-batch degrades to
+  // "no repair needed" instead of silently reading the leaf as unrepairable.
   const messages = record.getBranch().flatMap((raw) => {
     const entry = raw as { type?: string; message?: AgentMessage };
     return isConversationMessage(entry) && entry.message ? [entry.message] : [];

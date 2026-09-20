@@ -10,6 +10,7 @@ import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxTo
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
+import { collect } from "../src/collect.ts";
 
 import {
   SUBSCRIBER_BUFFER_CAP,
@@ -2081,8 +2082,13 @@ describe("session control: boundary mutations", () => {
   it("nothing-to-compact is a pre-acceptance rejection, not a finished{error} dressed as failure", async () => {
     // The preparation is a cheap local computation — it belongs to admission: the client gets the
     // answer in the dispatch, and started/finished never fire for work that never begins.
-    const { control, sessions } = await makeBoundary([]);
-    await sessions.openOrCreate("sEmpty"); // exists but has no compactable history
+    //
+    // On a record a REAL turn wrote, not a hand-appended one: since pi 0.86 the journal leads with the
+    // assembled prompt as a `system` entry, and it sits before the first cut point — so a hand-written
+    // record is the one shape that cannot observe the admission gate counting it as history (ok: true,
+    // followed by pi refusing the work it was just admitted for).
+    const { control, agent } = await makeBoundary([fauxAssistantMessage("short answer")]);
+    await collect(agent.invoke({ session: "sEmpty" }, { text: "hi" }));
     const seen: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.sessions.get("sEmpty").events()) {

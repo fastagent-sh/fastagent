@@ -63,8 +63,17 @@ import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-s
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 
-/** Admission uses coding-agent's cut point and context rules, including a split-turn prefix.
- *  Its prepareCompaction is private; agent-core's namesake uses a different journal format. */
+/**
+ * Admission uses coding-agent's cut point and context rules, including a split-turn prefix.
+ * Its prepareCompaction is private; agent-core's namesake uses a different journal format.
+ *
+ * So this is a MIRROR of pi's own refusal, and `compact` being accept-fast is why it has to exist: pi decides
+ * "nothing to compact" inside `AgentSession.compact()`, after the dispatch has already answered. Every clause here
+ * therefore tracks one of pi's — including the system exclusion below (pi's `getMessageFromEntryForCompaction`:
+ * "System messages are prompt state, not conversation"). Mirroring is the cost of the private function; the test
+ * that keeps it honest runs a REAL turn, so the next pi release that changes the journal shape fails loudly here
+ * instead of answering `ok` for work pi then refuses.
+ */
 function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number): boolean {
   if (path.at(-1)?.type === "compaction") return false;
   const previous = getLatestCompactionEntry(path);
@@ -74,9 +83,13 @@ function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number)
     start = kept >= 0 ? kept : path.indexOf(previous) + 1;
   }
   const { firstKeptEntryIndex } = findCutPoint(path, start, path.length, keepRecentTokens);
-  return path
-    .slice(start, firstKeptEntryIndex)
-    .some((entry) => entry.type !== "compaction" && sessionEntryToContextMessages(entry).length > 0);
+  return path.slice(start, firstKeptEntryIndex).some(
+    (entry) =>
+      entry.type !== "compaction" &&
+      // NOT isConversationMessage: a `custom_message` is model-visible history pi DOES summarize, and only the
+      // engine's `system` entries are excluded — the assembled prompt is not a turn anyone can summarize.
+      sessionEntryToContextMessages(entry).some((message) => message.role !== "system"),
+  );
 }
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
