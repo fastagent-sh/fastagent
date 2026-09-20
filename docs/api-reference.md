@@ -525,8 +525,7 @@ of work by name**:
 
 ```bash
 curl -sS -X POST https://your-agent/trigger \
-  -H 'content-type: application/json' \
-  -d '{"name":"daily-digest","idempotencyKey":"2026-07-07-run"}'
+  -H 'content-type: application/json' -d '{"name":"daily-digest"}'
 ```
 
 **It is not a time trigger, and that distinction is the design.** Occurrence semantics — a slot, a
@@ -551,11 +550,18 @@ own text, and with it the agent's behaviour. The name rides in the body rather t
 declared name is a filename (`每日简报`, `my schedule` are both legal) and a path segment would mean
 percent-encoding it.
 
-**`idempotencyKey` is optional and opaque.** Repeat it to make a retry safe; omit it and every call is
-a call. Nothing parses it — an instant, a UUID and a word are all just bytes, which is why none of the
-failure modes above exist here. The key is claimed with an `O_EXCL` create, so two retries arriving at
-once run the turn once, and the set is bounded per name (512 keys): a retry old enough to have fallen
-out of the window runs again. Keys longer than 200 characters are refused.
+**There is no idempotency key, and the reply is why.** One was built here and removed: it deduplicated
+the *call*, not the *work*. A turn that sent one message and then died would answer a keyed retry with
+"already ran" — safety exactly where it is absent, which is the same reason [a failed fire is not
+retried](#post-trigger). It was also a bounded window, so the guarantee came with an asterisk, and
+`POST /invoke` offers none of it on the same port under the same exposure. **Retry policy is yours,
+because only you know whether your work tolerates running twice** — and what makes a retry safe is
+idempotent work, which only the author can arrange.
+
+What the reply gives you instead is *where to look*: `session` is the session the turn ran in, and its
+journal is where that turn's output actually is (`fastagent schedule history <name>`, or
+`/control/sessions/<id>/events` where the observation plane is served). An id minted per call would
+appear nowhere else.
 
 **It is exactly as exposed as `POST /invoke`**: unauthenticated, with the agent's full tool authority.
 `http.invoke: false` withholds both; `http.trigger: true` keeps this one for a port whose only other
@@ -565,12 +571,12 @@ framework authenticates nothing — [design §14](design/session-control.md).
 The route follows `http.invoke`: turning the anonymous turn endpoint off takes this one with it, since
 that is what `http.invoke: false` means.
 
-**Replies.** `200 { name, ran: true, failed?, ms }` — the call was accepted and the work ran; `failed`
-means the turn itself did not finish, and retrying the call would re-run a turn whose side effects may
-already have landed. `200 { name, ran: false, reason }` — this `idempotencyKey` already ran. `400` is a
-malformed body; `404` names the work this deployment does have, so a stale caller is distinguishable
-from a typo (the name you sent is clipped to 64 characters in the reply, and nothing else you sent is
-echoed); `500` means the key could not be recorded and **nothing ran** — retry.
+**Replies.** `200 { name, session, ran: true, failed?, ms }` — the call was accepted and the work ran;
+`failed` means the turn itself did not finish, and retrying would re-run a turn whose side effects may
+already have landed. `200 { name, session, ran: false, reason, ms }` — the previous turn of this work
+is still running and holds its session; try later. `400` is a malformed body; `404` names the work this
+deployment does have, so a stale caller is distinguishable from a typo (the name you sent is clipped to
+64 characters in the reply, and nothing else you sent is echoed).
 
 **Where the time should live instead.** A scaled-to-zero deployment needs its clock outside the
 process, and every host has its own: [Fly](https://fly.io/docs/blueprints/task-scheduling/) offers

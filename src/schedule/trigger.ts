@@ -17,12 +17,18 @@
  *
  *   - the body names WHAT to run and nothing else — the prompt stays in the definition, which is the whole reason
  *     this exists beside `POST /invoke`, whose caller brings its own text and therefore its own behaviour
- *   - `idempotencyKey` is OPTIONAL and OPAQUE. Repeat it to make a retry safe; omit it and every call is a call.
- *     Nothing here parses it (schedule/idempotency.ts)
+ *   - the reply says what happened and WHERE TO LOOK (the session the turn ran in). Retry policy is the caller's,
+ *     because only the caller knows whether its work tolerates running twice
  *   - it is exactly as exposed as `POST /invoke`: unauthenticated, full tool authority, `http.invoke: false` and a
  *     gateway in front are the answers. The framework authenticates nothing (docs/design/session-control.md §14),
  *     and the previous version's per-occurrence rate ceiling was a bound that looked like a security property
  *     while `/invoke` sat open on the same port
+ *
+ * AND NO IDEMPOTENCY KEY. One was built here and removed: it deduplicated the CALL, not the WORK. A turn that sent
+ * one message and then died would answer a keyed retry with "already ran" — safety exactly where it is absent,
+ * which is the same reason a failed fire is not retried (schedule/scheduler.ts). It was also a bounded window, so
+ * the guarantee came with an asterisk, and `POST /invoke` offers none of it on the same port under the same
+ * exposure. What makes a retry safe is idempotent WORK, which only the author can arrange.
  *
  * NAME IN THE BODY, not the path. A declared name is a filename (`每日简报`, `my schedule` are both legal), and a
  * path segment would mean percent-encoding it — the cost the control plane pays for session ids and this route has
@@ -32,12 +38,10 @@ import * as Effect from "effect/Effect";
 import type { Agent } from "../agent.ts";
 import { readBodyCapped, refuseNonJsonBody } from "../channels/body.ts";
 import { text } from "../channels/respond.ts";
-import { log } from "../log.ts";
-import { claimIdempotencyKey } from "./idempotency.ts";
 import { type LoadedSchedule, scheduleSession } from "./schedule.ts";
 import { runTurn } from "./scheduler.ts";
 
-/** A trigger body is a name and an optional key; the cap only has to admit that. */
+/** A trigger body is a name; the cap only has to admit that. */
 const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 
 /**
@@ -46,9 +50,6 @@ const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
  * page.
  */
 const MAX_ECHOED_NAME = 64;
-
-/** Long enough for a UUID, a delivery id or `<aws.scheduler.scheduled-time>`; short enough not to be a payload. */
-const MAX_KEY_LENGTH = 200;
 
 /** The Effect boundary, in one place: the turn runs, and its outcome is what the caller reads. */
 const runOnce = (agent: Agent, schedule: LoadedSchedule) =>
@@ -62,10 +63,9 @@ const runOnce = (agent: Agent, schedule: LoadedSchedule) =>
  */
 export function createTriggerHandler(options: {
   agent: Agent;
-  stateRoot: string;
   schedules: readonly LoadedSchedule[];
 }): ((req: Request) => Promise<Response>) | undefined {
-  const { agent, stateRoot, schedules } = options;
+  const { agent, schedules } = options;
   if (schedules.length === 0) return undefined;
 
   return async (req) => {
@@ -81,9 +81,9 @@ export function createTriggerHandler(options: {
     } catch {
       return text("invalid json\n", 400);
     }
-    const { name, idempotencyKey } = (payload ?? {}) as { name?: unknown; idempotencyKey?: unknown };
+    const { name } = (payload ?? {}) as { name?: unknown };
     if (typeof name !== "string" || name === "") {
-      return text('need { "name": string, "idempotencyKey"?: string } — e.g. {"name":"daily"}\n', 400);
+      return text('need { "name": string } — e.g. {"name":"daily"}\n', 400);
     }
     const schedule = schedules.find((s) => s.name === name);
     // Drift: a caller outliving the thing it calls. The names are listed so an operator can see whether it is a
@@ -99,33 +99,23 @@ export function createTriggerHandler(options: {
         404,
       );
     }
-    // CAPPED, not parsed. A length is the only property of an opaque token this route has an opinion about, and
-    // without one the key is a way to write 4 KiB of caller bytes into this container's state per call.
-    if (idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || idempotencyKey.length === 0)) {
-      return text('"idempotencyKey" must be a non-empty string\n', 400);
+    const session = scheduleSession(schedule.name);
+    const { busy, failed, ms } = await runOnce(agent, schedule);
+    // BUSY IS NOT A FAILURE and it is the one "did not run" this route has: a declared unit of work has ONE
+    // session, so a call arriving while the previous turn holds it is refused by that session. Reported as itself,
+    // with what the caller needs in order to decide — try later — rather than as an error it would retry blindly.
+    if (busy) {
+      return Response.json({
+        name,
+        session,
+        ran: false,
+        reason: `the previous turn of "${name}" is still running`,
+        ms,
+      });
     }
-    if (typeof idempotencyKey === "string" && idempotencyKey.length > MAX_KEY_LENGTH) {
-      return text(`"idempotencyKey" is longer than ${MAX_KEY_LENGTH} characters\n`, 400);
-    }
-
-    if (typeof idempotencyKey === "string") {
-      let first: boolean;
-      try {
-        first = claimIdempotencyKey(stateRoot, name, idempotencyKey);
-      } catch (cause) {
-        // The key could not be RECORDED (EACCES, ENOSPC, a broken state root). Running anyway would turn the
-        // caller's next retry into a second turn, which is the one thing the key was sent to prevent — so nothing
-        // runs and the caller retries. The cause goes to the log alone: it carries absolute paths inside this
-        // container and the caller is unauthenticated.
-        log.error(`[trigger] recording the idempotency key for "${name}" failed: ${String(cause)}`);
-        return text(`"${name}": could not record the idempotency key, nothing ran — retry\n`, 500);
-      }
-      if (!first) {
-        return Response.json({ name, ran: false, reason: "this idempotencyKey already ran", ms: 0 });
-      }
-    }
-
-    const outcome = await runOnce(agent, schedule);
-    return Response.json({ name, ran: true, ...outcome });
+    // `session` is the WHERE TO LOOK: the turn's own output lives in that session's journal, readable with
+    // `fastagent schedule history` or over `/control/*` when it is served. An id minted here would appear nowhere
+    // else, which is decoration rather than a handle.
+    return Response.json({ name, session, ran: true, ...(failed !== undefined ? { failed } : {}), ms });
   };
 }

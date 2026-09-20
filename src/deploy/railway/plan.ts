@@ -190,10 +190,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
           `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
           `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
           `#     AGENT_TRIGGER=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/trigger`,
-          `#     curl --retry 3 -fsS -X POST "$AGENT_TRIGGER" -H 'content-type: application/json' \\`,
-          `#       -d '{"name":"<schedule>","idempotencyKey":"'"$(date -u +%FT%H:%MZ)"'"}'`,
-          `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it),`,
-          `#   and the key makes that retry safe.`,
+          `#     curl --retry 3 -fsS -X POST "$AGENT_TRIGGER" -H 'content-type: application/json' -d '{"name":"<schedule>"}'`,
+          `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
+          `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
           `# \`POST /trigger\` is an API, not a clock: read its contract — docs/api-reference.md#post-trigger.`,
         ]
       : []),
