@@ -53,6 +53,13 @@ export interface AgentcoreAdapterOptions {
    * Undefined when the definition declares no schedules.
    */
   fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
+  /**
+   * Run a declared routine BY NAME — the `POST /run` contract, for the host that publishes no routes.
+   *
+   * Undefined when the definition declares none. Note what this does NOT do: no occurrence, no claim, no fire
+   * history. Those belong to {@link fireSchedule}, whose caller is a clock we wrote.
+   */
+  runRoutine?: (name: string) => Promise<Response>;
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */
   ingressSecret?: string;
   /** Runs once on activation, after accepting the current forwarder callback URL. */
@@ -114,7 +121,7 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, agent, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady } = options;
+  const { channels, agent, stateRoot, isBusy, fireSchedule, runRoutine, ingressSecret, onStateReady } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
   const invokeHandler = createInvokeHandler(agent);
 
@@ -133,7 +140,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     // The forwarder, or another IAM principal? See `fromForwarder` for what that actually decides.
     const trusted = fromForwarder(envelope, ingressSecret);
     if (!trusted) {
-      if (envelope.kind !== "invoke") {
+      // The IAM door's kinds: AWS authenticated this caller, so no ingress secret is expected or wanted.
+      if (envelope.kind !== "invoke" && envelope.kind !== "routine-run") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);
         return text("forbidden\n", 403);
       }
@@ -218,6 +226,20 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         const workDone = beginWork();
         try {
           return await fireSchedule(name, new Date(occurrence));
+        } finally {
+          workDone();
+        }
+      }
+      case "routine-run": {
+        const { name } = envelope;
+        if (typeof name !== "string" || name === "") {
+          return text('routine-run envelope needs { "name": string }\n', 400);
+        }
+        if (!runRoutine) return text(`no routines in this deployment (routine-run "${name}")\n`, 404);
+        // The whole agent turn runs inside this request; the caller may time out while it keeps running.
+        const workDone = beginWork();
+        try {
+          return await runRoutine(name);
         } finally {
           workDone();
         }

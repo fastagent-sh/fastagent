@@ -90,15 +90,10 @@ export const agentcoreHost: HostDeploy = {
       idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
-    // UNREACHABLE HERE, and only here: this host publishes no `POST /run`, and the forwarder's envelope names a
-    // schedule and an occurrence. A cron-less routine has neither, so nothing on this deployment can ask for it.
-    for (const r of loaded.routines.filter((r) => r.cron === undefined)) {
-      console.error(
-        `[fastagent] warn: routine "${r.name}" declares no cron — on AgentCore nothing can reach it (this host ` +
-          `serves no POST /run, and the clock's envelope names a cron occurrence). Give it a cron, or run it on a ` +
-          `host that publishes the route.`,
-      );
-    }
+    // A CRON-LESS ROUTINE IS NOT UNREACHABLE HERE, it just has a different door: this host publishes no
+    // `POST /run`, so it is reached by the IAM-gated `routine-run` envelope (channels/agentcore.ts) rather than an
+    // anonymous route. Nothing to warn about — an earlier version of this warned, which was a gap being reported
+    // instead of closed.
     for (const u of plan.untranslatableSchedules) {
       // Same discipline as Fly's kept-toml time-trigger gate: a deploy whose schedule silently never fires is worse
       // than a stopped deploy.

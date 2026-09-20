@@ -55,6 +55,42 @@ const MAX_ECHOED_NAME = 64;
 const runOnce = (agent: Agent, routine: LoadedRoutine) =>
   Effect.runPromise(runTurn(agent, routine.name, routineSession(routine.name), routine.prompt));
 
+/** The reply shape both doors answer with — one for the route, one for a host that has no route (AgentCore). */
+export interface RoutineRunReply {
+  name: string;
+  /** WHERE TO LOOK: the turn's output lives in this session's journal (`fastagent routine history`, `/control/*`). */
+  session: string;
+  ran: boolean;
+  /** Present when `ran: false` — today, the previous turn still holding this routine's one session. */
+  reason?: string;
+  /** Present when the turn RAN and did not finish. */
+  failed?: string;
+  ms: number;
+}
+
+/**
+ * Run one routine and say what happened. THE one implementation, because there are two doors and only one
+ * contract: `POST /run` on any host that publishes routes, and AgentCore's IAM-gated `routine-run` envelope on the
+ * host that publishes none. A second copy is how the two would come to answer differently.
+ */
+export async function runRoutineByName(agent: Agent, routine: LoadedRoutine): Promise<RoutineRunReply> {
+  const session = routineSession(routine.name);
+  const { busy, failed, ms } = await runOnce(agent, routine);
+  // BUSY IS NOT A FAILURE and it is the one "did not run" this has: a declared unit of work has ONE session, so a
+  // call arriving while the previous turn holds it is refused by that session. Reported as itself, with what the
+  // caller needs in order to decide — try later — rather than as an error it would retry blindly.
+  if (busy) {
+    return {
+      name: routine.name,
+      session,
+      ran: false,
+      reason: `the previous turn of "${routine.name}" is still running`,
+      ms,
+    };
+  }
+  return { name: routine.name, session, ran: true, ...(failed !== undefined ? { failed } : {}), ms };
+}
+
 /**
  * Build the handler for `POST /run`, bound to what this serve loaded.
  *
@@ -99,23 +135,6 @@ export function createRunHandler(options: {
         404,
       );
     }
-    const session = routineSession(routine.name);
-    const { busy, failed, ms } = await runOnce(agent, routine);
-    // BUSY IS NOT A FAILURE and it is the one "did not run" this route has: a declared unit of work has ONE
-    // session, so a call arriving while the previous turn holds it is refused by that session. Reported as itself,
-    // with what the caller needs in order to decide — try later — rather than as an error it would retry blindly.
-    if (busy) {
-      return Response.json({
-        name,
-        session,
-        ran: false,
-        reason: `the previous turn of "${name}" is still running`,
-        ms,
-      });
-    }
-    // `session` is the WHERE TO LOOK: the turn's own output lives in that session's journal, readable with
-    // `fastagent routine history` or over `/control/*` when it is served. An id minted here would appear nowhere
-    // else, which is decoration rather than a handle.
-    return Response.json({ name, session, ran: true, ...(failed !== undefined ? { failed } : {}), ms });
+    return Response.json(await runRoutineByName(agent, routine));
   };
 }

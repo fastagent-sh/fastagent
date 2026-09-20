@@ -325,7 +325,38 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("reports loaded schedules, and close() is safe to call twice", async () => {
+  it("runs a routine BY NAME on the IAM door — the contract POST /run has, where there is no route", async () => {
+    // The other half of the split. `routine-fire` names an occurrence our own clock produced and claims
+    // it; this names only the work. It is on the IAM door (no ingress secret) for the same reason
+    // `invoke` is: the forwarder never emits it, so it can only come from a direct InvokeAgentRuntime
+    // call — which makes by-name running STRICTER here than the anonymous route other hosts publish,
+    // not absent. A cron-less routine is reachable ONLY this way here, which is why nothing warns.
+    const dir = await agentDir({ "routines/reindex.ts": `export default { prompt: "refresh" };` });
+    const service = await mountAgentcoreService(await open(dir));
+    const call = (name: string) =>
+      service.handler(
+        new Request("http://h/invocations", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ kind: "routine-run", name }), // NO ingress secret
+        }),
+      );
+    try {
+      const res = await call("reindex");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ name: "reindex", session: "routine:reindex", ran: true });
+      // No occurrence means no claim, and therefore no fire history — that is `routine-fire`'s job.
+      const { readFires } = await import("../src/schedule/state.ts");
+      const { resolveStateRoot } = await import("../src/paths.ts");
+      expect(readFires(resolveStateRoot(dir), "reindex")).toEqual([]);
+      expect((await call("reindex")).status).toBe(200); // every call is a call: an API, not a clock
+      expect((await call("nope")).status).toBe(404);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("reports loaded routines, and close() is safe to call twice", async () => {
     const dir = await agentDir(
       { "routines/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
       `{ model: "openai-codex/gpt-5.5" }`,

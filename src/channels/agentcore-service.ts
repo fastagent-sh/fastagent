@@ -7,6 +7,7 @@ import type { LoadedRoutine } from "../schedule/routine.ts";
 import { type AgentService, loadServingRoutines, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
 import * as Effect from "effect/Effect";
+import { runRoutineByName } from "../schedule/run.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { text } from "./respond.ts";
 import { activeWork, beginWork } from "./busy.ts";
@@ -239,6 +240,19 @@ export function mountAgentcore(options: {
     }
     return Response.json({ slot: occurrence.toISOString(), ...outcome });
   };
+  // BY NAME, on the IAM door. `POST /run`'s contract, through the only ingress this host has for a caller AWS has
+  // already identified — which makes it stricter here than the anonymous route other hosts publish. A routine
+  // without a cron is reachable ONLY this way on this host, and that is the point: nothing is unreachable.
+  const runRoutine = async (name: string): Promise<Response> => {
+    const routine = routines.find((r) => r.name === name);
+    if (!routine) {
+      return text(
+        `no declared work named "${name.slice(0, 64)}" (this deployment has: ${routines.map((r) => r.name).join(", ")})\n`,
+        404,
+      );
+    }
+    return Response.json(await runRoutineByName(agent, routine));
+  };
   return agentcoreRoutes({
     channels,
     agent,
@@ -247,6 +261,6 @@ export function mountAgentcore(options: {
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
-    ...(routines.length > 0 ? { fireSchedule } : {}),
+    ...(routines.length > 0 ? { fireSchedule, runRoutine } : {}),
   });
 }

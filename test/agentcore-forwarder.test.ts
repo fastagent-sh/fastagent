@@ -425,10 +425,15 @@ describe("the forwarder speaks the protocol module's spelling", () => {
     for (const path of Object.values(RESERVED_PATHS)) expect(src).toContain(`"${path}"`);
   });
 
-  it("emits every envelope kind except the public invoke data plane", () => {
+  it("emits every FORWARDER kind, and none of the IAM door's", () => {
+    // The split this asserts is the adapter's authentication boundary: the forwarder mints the ingress
+    // secret, so a kind it can emit is a kind an anonymous caller can reach. `invoke` and `routine-run`
+    // are therefore NOT emitted here — they exist only for a direct InvokeAgentRuntime call, where AWS
+    // has already said who the caller is.
+    const iamDoor = new Set(["invoke", "routine-run"]);
     for (const kind of ENVELOPE_KINDS) {
-      if (kind === "invoke") continue;
-      expect(src).toContain(`kind: "${kind}"`);
+      if (iamDoor.has(kind)) expect(src).not.toContain(`kind: "${kind}"`);
+      else expect(src).toContain(`kind: "${kind}"`);
     }
   });
 

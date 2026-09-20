@@ -10,7 +10,7 @@ export const RESERVED_PATHS = {
 } as const;
 
 /** Every kind the container's `POST /invocations` dispatches on. */
-export const ENVELOPE_KINDS = ["webhook", "routine-fire", "invoke", "wake-poke", "probe"] as const;
+export const ENVELOPE_KINDS = ["webhook", "routine-fire", "routine-run", "invoke", "wake-poke", "probe"] as const;
 
 /**
  * Did this envelope come from the FORWARDER, rather than from some other principal holding
@@ -62,6 +62,21 @@ export type AgentcoreEnvelope = {
        * never recomputes it.
        */
       occurrence: string;
+    }
+  | {
+      /**
+       * Run a declared routine BY NAME — the `POST /run` contract on the host that publishes no routes.
+       *
+       * On the IAM door, like `invoke`, and for the same reason: the forwarder never emits this, so it can only
+       * come from a direct `InvokeAgentRuntime` call, where AWS has already said who the caller is. That makes
+       * by-name running STRICTER here than on a host with a public URL, where the same route is anonymous.
+       *
+       * Separate from `routine-fire` because they are different contracts, not two spellings: a fire names an
+       * OCCURRENCE our own clock produced and claims it (dedup across redeliveries, a fire history, the overlap
+       * policy); this names only the work (schedule/run.ts).
+       */
+      kind: "routine-run";
+      name: string;
     }
   | { kind: "invoke"; session: string; text: string }
   /**

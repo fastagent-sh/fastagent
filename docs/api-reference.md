@@ -603,7 +603,11 @@ process, and every host has its own: [Fly](https://fly.io/docs/blueprints/task-s
 Cron Manager, supercronic or scheduled Machines; Railway offers a **cron service** (Settings → Cron
 Schedule, 5-minute floor) which can call this route over the private network, and traffic from another
 service in the project is what wakes a slept one. On AgentCore none of this applies — `deploy` already
-registered the rules, and `http.run` is inert there and says so at startup.
+registered the rules, and `http.run` is inert there and says so at startup. **By name is still
+reachable there**, through the IAM-gated `routine-run` envelope rather than a public route: that host
+publishes none of ours, so `aws bedrock-agentcore invoke-agent-runtime` with
+`{"kind":"routine-run","name":"reindex"}` is the door. It is the same contract as `POST /run` and a
+stricter one — AWS has already said who the caller is.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
 capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
