@@ -273,6 +273,14 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
+The Zod schema is also declared to the provider for **constrained sampling** (`strict: "prefer"`, the
+posture pi's own built-in tools take): on a model that supports it, arguments are sampled against the
+schema instead of validated after the fact, so a malformed call costs nothing to correct. A schema that
+cannot be expressed strictly, or a provider without strict mode, falls back to an ordinary function tool
+— nothing to configure either way. One consequence worth knowing when reading a transcript: a strict
+schema has no "absent" for an optional field, so a constrained model sends `null` there; pi drops those
+before your `execute` runs, and a field you declared required AND nullable keeps its `null`.
+
 ### Running a tool alone in its batch
 
 A model can call several tools in one assistant message, and pi executes that batch concurrently.

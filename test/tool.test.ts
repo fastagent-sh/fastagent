@@ -1,3 +1,6 @@
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAgent } from "./agent.ts";
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -77,6 +80,57 @@ describe("defineTool", () => {
     const r = await tool.execute("c", {});
     expect(r.details).toBe(42);
     expect(r.content[0]).toMatchObject({ text: "hi" });
+  });
+
+  it("asks the provider to constrain sampling to the tool's schema", async () => {
+    const tool = defineTool({
+      name: "search",
+      description: "d",
+      input: z.object({
+        query: z.string(),
+        limit: z.number().optional(),
+        cursor: z.string().nullable(),
+        page: z.object({ size: z.number().optional() }).optional(),
+      }),
+      async execute(input) {
+        return input;
+      },
+    });
+
+    expect(tool.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+    // Not a no-op: pi can express THIS schema strictly, so the request really is constrained. A schema it
+    // cannot (and a provider without strict mode) falls back to an ordinary function tool under "prefer".
+    expect(() => makeStrictJsonSchema(tool.parameters as never)).not.toThrow();
+  });
+
+  it("through a real turn: an argument the strict schema forces to null reaches execute as absent", async () => {
+    // What constrained sampling costs, and why it costs nothing here: a model sampling against pi's strict
+    // form of the schema must send `limit: null` rather than omit the key, and the author's Zod schema
+    // rejects null for an optional number. pi-ai normalizes it away before execute. This is the assumption
+    // CONSTRAINED_SAMPLING rests on, so it is asserted through the real turn rather than trusted.
+    let seen: unknown;
+    const tool = defineTool({
+      name: "search",
+      description: "d",
+      input: z.object({ query: z.string(), limit: z.number().optional() }),
+      async execute(input) {
+        seen = input;
+        return "ok";
+      },
+    });
+    const { agent } = fauxAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("search", { query: "q", limit: null }, { id: "c1" })),
+        fauxAssistantMessage("done"),
+      ],
+      { tools: [tool] },
+    );
+
+    const events: { type: string }[] = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+
+    expect(events.at(-1)?.type).toBe("completed");
+    expect(seen).toEqual({ query: "q" });
   });
 });
 
