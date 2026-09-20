@@ -88,9 +88,11 @@ export function stripDeferredMarker(tool: MountedTool): MountedTool {
  * back to an ordinary function tool instead of failing the turn.
  *
  * Nothing here has to undo pi's strict rewrite. To express "optional" strictly, pi marks every property required and
- * unions the optional ones with `null`, so a constrained model emits `null` where it would have omitted the key \u2014 and
- * pi-ai's `validateToolArguments` drops exactly those nulls (`normalizeOptionalNulls`) before `execute` is called,
- * keyed on the same `required` list. A property the author made required AND nullable keeps its `null`.
+ * unions the optional ones with `null`, so a constrained model emits `null` where it would have omitted the key — and
+ * pi-ai's `validateToolArguments` drops those nulls (`normalizeOptionalNulls`) before `execute` is called. It drops
+ * one only where the author's OWN schema rejects null, so any nullable property keeps its `null`, and a
+ * `.nullable().optional()` property can no longer distinguish "absent" from "null" — the one place this changes
+ * what an author's `execute` receives.
  */
 const CONSTRAINED_SAMPLING = { type: "json_schema", strict: "prefer" } as const;
 

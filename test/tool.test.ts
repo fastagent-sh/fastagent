@@ -103,16 +103,22 @@ describe("defineTool", () => {
     expect(() => makeStrictJsonSchema(tool.parameters as never)).not.toThrow();
   });
 
-  it("through a real turn: an argument the strict schema forces to null reaches execute as absent", async () => {
-    // What constrained sampling costs, and why it costs nothing here: a model sampling against pi's strict
-    // form of the schema must send `limit: null` rather than omit the key, and the author's Zod schema
-    // rejects null for an optional number. pi-ai normalizes it away before execute. This is the assumption
-    // CONSTRAINED_SAMPLING rests on, so it is asserted through the real turn rather than trusted.
+  it("through a real turn: a strict-schema null is dropped only where the author's schema rejects it", async () => {
+    // What constrained sampling costs, and the exact rule for it. A model sampling against pi's strict form of
+    // the schema must send every key, so an omitted optional arrives as `null`; pi-ai normalizes those away
+    // before execute, but only where the author's own schema rejects null. So `limit` (optional number) is
+    // dropped and `note` (nullable AND optional) is NOT — that field can no longer tell "absent" from "null",
+    // which is the one behavior change this carries for an author. Asserted through a real turn because pi
+    // validates against the UNrewritten schema before execute, which a unit call would not exercise.
     let seen: unknown;
     const tool = defineTool({
       name: "search",
       description: "d",
-      input: z.object({ query: z.string(), limit: z.number().optional() }),
+      input: z.object({
+        query: z.string(),
+        limit: z.number().optional(),
+        note: z.string().nullable().optional(),
+      }),
       async execute(input) {
         seen = input;
         return "ok";
@@ -120,7 +126,7 @@ describe("defineTool", () => {
     });
     const { agent } = fauxAgent(
       [
-        fauxAssistantMessage(fauxToolCall("search", { query: "q", limit: null }, { id: "c1" })),
+        fauxAssistantMessage(fauxToolCall("search", { query: "q", limit: null, note: null }, { id: "c1" })),
         fauxAssistantMessage("done"),
       ],
       { tools: [tool] },
@@ -130,7 +136,7 @@ describe("defineTool", () => {
     for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
 
     expect(events.at(-1)?.type).toBe("completed");
-    expect(seen).toEqual({ query: "q" });
+    expect(seen).toEqual({ query: "q", note: null });
   });
 });
 

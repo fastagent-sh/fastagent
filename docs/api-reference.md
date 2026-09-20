@@ -277,9 +277,14 @@ The Zod schema is also declared to the provider for **constrained sampling** (`s
 posture pi's own built-in tools take): on a model that supports it, arguments are sampled against the
 schema instead of validated after the fact, so a malformed call costs nothing to correct. A schema that
 cannot be expressed strictly, or a provider without strict mode, falls back to an ordinary function tool
-— nothing to configure either way. One consequence worth knowing when reading a transcript: a strict
-schema has no "absent" for an optional field, so a constrained model sends `null` there; pi drops those
-before your `execute` runs, and a field you declared required AND nullable keeps its `null`.
+— nothing to configure either way, and nothing reports which tools fell back. If one of yours keeps
+receiving malformed arguments, check whether its schema uses a construct pi cannot express strictly:
+`z.record(...)`, a union of objects or arrays, `z.tuple(...)`, or `z.looseObject(...)`. Enums, literals,
+scalar unions, nested objects and arrays of objects are all fine. One consequence to know: a strict schema has no "absent", so a constrained
+model sends `null` for an optional field. pi drops those before your `execute` runs, but only where your own
+schema rejects `null` — so any nullable field keeps its `null`, and a `.nullable().optional()` field arrives as
+`null` where it used to be absent. If a tool distinguishes the two (patch semantics: absent means "leave it",
+`null` means "clear it"), spell the two cases out some other way.
 
 ### Running a tool alone in its batch
 
