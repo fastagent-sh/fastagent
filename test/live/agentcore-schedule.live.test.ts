@@ -33,7 +33,8 @@
  *     …five more, all 200, all `fired: true`, every slot identical to the occurrence EventBridge named
  *
  * The first is the cold one: container start, definition open and a model turn inside one invocation.
- * Steady state is ~23.5s from the scheduled instant to a completed turn, of which ~2.5s is the turn.
+ * Steady state is 23.5–24.5s from the scheduled instant to a completed turn, of which ~2.5s is the
+ * turn — i.e. the delivery itself lands some 21s after the instant, never before it.
  * Every `slot` in the reply equals the `<aws.scheduler.scheduled-time>` the rule sent, which is the
  * design's whole claim — the clock names the occurrence and the container does not recompute it.
  *
@@ -189,12 +190,18 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
     ).toBeTruthy();
 
-    // 15 minutes, and the margin is measured rather than guessed: the stack's schedule fires from the
-    // minute AFTER it is created, that first invocation cold-starts the container, opens the definition
-    // and runs a model turn (61.4s end to end, against 23.5s steady state), and CloudWatch is
-    // eventually consistent about a brand-new stream on top of all of it. Six minutes lost that race
-    // in a run where every delivery succeeded.
-    const fire = await waitForFire(deployedAt, 900_000);
+    // SIX MINUTES, which the header's own measurement supports and nothing observed contradicts. The
+    // schedule fires from the minute after the stack is created, so the first delivery's instant is
+    // within 60s of this point; the cold invocation then took 61.4s end to end (container start,
+    // definition open, model turn), and the poll interval is 10s — about 130s to the first match,
+    // against a 360s budget.
+    //
+    // It was briefly raised to 900s, which was a second patch on a symptom the line above had already
+    // explained: the run that timed out had delivered every fire ON TIME and logged them, and what hid
+    // them was `--filter-pattern`, not the clock. The budget is a cost ceiling here — one real model
+    // turn per minute of it — so it stays at the measured number until something is observed to exceed
+    // it. It also has to fit inside this test's own timeout alongside the deploy (~7 minutes measured).
+    const fire = await waitForFire(deployedAt, 360_000);
 
     // (1) THE assertion this probe exists for. A non-200 is a cold start, an opened definition, a model
     // turn or the forwarder's timeout failing — invisible from inside an agent that would never run.
