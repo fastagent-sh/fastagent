@@ -6,6 +6,7 @@ import type { Agent } from "../src/agent.ts";
 import { announceControl, reportServing, withRunOverrides } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
 import { type MountableAgent, mountSessionControl, routesFor } from "../src/service.ts";
+import { previousRun } from "../src/schedule/cron.ts";
 import { log } from "../src/log.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
@@ -160,16 +161,15 @@ describe("mountAgentcore", () => {
     // routing (see the adapter's authentication boundary), so the mount must carry it.
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const routes = mountAgentcore({ agent, stateRoot: dir, schedules: [schedule], channels: () => ({ routes: {} }) });
+    // The slot is the occurrence this cron most recently had, because `POST /trigger` fires only the
+    // current occurrence and the one before it — a fixed instant would have started reporting
+    // `too old` the day after it was written (schedule/trigger.ts).
+    const slot = previousRun(schedule.cron, schedule.tz, new Date())!.toISOString();
     const fire = (name: string): Promise<Response> | Response =>
       routes["POST /invocations"]!(
         new Request("http://x/invocations", {
           method: "POST",
-          body: JSON.stringify({
-            auth: "ingress-s3cret",
-            kind: "schedule-fire",
-            name,
-            slot: "2026-07-07T10:00:00Z",
-          }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name, slot }),
         }),
       );
     expect((await fire("nope")).status).toBe(404);

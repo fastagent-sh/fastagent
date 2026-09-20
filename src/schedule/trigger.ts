@@ -115,6 +115,31 @@ export function createTriggerHandler(options: {
       );
     }
 
+    // AND A FLOOR UNDER THE PAST, which neither the future refusal nor the snapping provides. `claimSlot` judges
+    // only `wanted < newest`, so walking history FORWARDS beats it every time: each older occurrence is newer than
+    // the last claim, so each one claims and runs a turn. An hourly schedule has ~100k enumerable occurrences, and
+    // that is a turn apiece — which is the premise of `http.invoke: false` + `http.trigger: true` ("an anonymous
+    // caller cannot start a turn") collapsing. It also starves the real fire a second way: the fixed
+    // `schedule:<name>` session held busy makes the resident clock's occurrence fail AFTER its claim is taken.
+    //
+    // THE CURRENT OCCURRENCE AND THE ONE BEFORE IT. The window is in occurrences, not minutes, because the grid is
+    // the domain — and two of them is what a late or retried delivery names: EventBridge re-sends a fire it could
+    // not deliver, and on a host with no resident clock that retry is the fire. Older than that is reported rather
+    // than refused, so a clock whose retry finally lands stops retrying instead of hammering a 4xx.
+    const current = previousRun(schedule.cron, schedule.tz, new Date());
+    const prior = current && previousRun(schedule.cron, schedule.tz, new Date(current.getTime() - 1));
+    const floor = prior ?? current;
+    if (floor && at.getTime() < floor.getTime()) {
+      return Response.json({
+        slot: at.toISOString(),
+        fired: false,
+        skippedReason:
+          `slot ${at.toISOString()} is too old — this route fires the current occurrence or the one before it ` +
+          `(from ${floor.toISOString()}), so that history cannot be replayed one turn at a time`,
+        ms: 0,
+      });
+    }
+
     // THE boundary. `fireScheduleOnce`'s only failure is a claim-state fault — the slot could not be read or
     // created — which happens BEFORE any claim exists, so the occurrence is still unburned and the caller's retry
     // is the right answer. It is translated rather than thrown so the message reaches the external clock's own log,

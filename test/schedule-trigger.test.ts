@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
@@ -52,7 +52,19 @@ const trigger = (handle: (req: Request) => Promise<Response>, body: unknown, ini
     }),
   );
 
+/** The instant every fixture's clock reads unless a case moves it: half past the `hourly()` occurrence. */
+const NOW = "2026-07-07T10:30:00.000Z";
+
 describe("schedule/trigger: POST /trigger", () => {
+  // PINNED, because the route now has a floor under the past (the current occurrence and the one
+  // before it). A fixture naming a fixed instant while the clock runs free would pass today and start
+  // reporting `too old` tomorrow.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(NOW));
+  });
+  afterEach(() => vi.useRealTimers());
+
   it("fires the schedule the definition wrote down, for the slot the caller named", async () => {
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
@@ -72,8 +84,7 @@ describe("schedule/trigger: POST /trigger", () => {
     // milliseconds and then subtracting a second, so without flooring, every `0 * * * *` trigger
     // fired by a crontab resolved to the PREVIOUS hour — permanently one occurrence behind, and
     // silently skipped outright once the resident clock had claimed that slot.
-    vi.useFakeTimers();
-    try {
+    {
       const { agent } = recordingAgent();
       const { handle } = await handlerFor([hourly()], agent);
       for (const offsetMs of [0, 1, 300, 999, 1000, 59_999]) {
@@ -81,17 +92,14 @@ describe("schedule/trigger: POST /trigger", () => {
         const body = (await (await trigger(handle!, { name: "digest" })).json()) as { slot: string };
         expect({ offsetMs, slot: body.slot }).toEqual({ offsetMs, slot: "2026-07-07T10:00:00.000Z" });
       }
-    } finally {
-      vi.useRealTimers();
     }
   });
 
   it("an omitted slot snaps to the occurrence this schedule most recently had", async () => {
     // A crontab line firing `curl` cannot compute the cron instant, and the slot is an IDENTITY:
     // sending `now` would mint a different claim name on every retry and run the turn twice.
-    vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-07T10:17:42.391Z"));
-    try {
+    {
       const { agent } = recordingAgent();
       const { root, handle } = await handlerFor([hourly()], agent);
       expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({
@@ -103,8 +111,6 @@ describe("schedule/trigger: POST /trigger", () => {
       expect(retry).toMatchObject({ fired: false, slot: "2026-07-07T10:00:00.000Z" });
       expect(String((retry as { skippedReason: string }).skippedReason)).toContain("already claimed");
       expect(readFires(root, "digest")).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
     }
   });
 
@@ -116,7 +122,7 @@ describe("schedule/trigger: POST /trigger", () => {
     // that an anonymous caller cannot start a turn.
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
-    for (const off of ["2026-07-07T10:09:00Z", "2026-07-07T10:17:31Z", "2026-07-07T10:41:12Z"]) {
+    for (const off of ["2026-07-07T10:09:00Z", "2026-07-07T10:17:31Z", "2026-07-07T10:29:12Z"]) {
       expect((await trigger(handle!, { name: "digest", slot: off })).status).toBe(200);
     }
     // ONE turn, ONE claim: they are three deliveries of the 10:00 occurrence, whatever they were called.
@@ -131,6 +137,46 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(real.slot).toBe("2026-07-07T10:00:00.000Z");
     expect(real.skippedReason).toContain("already claimed");
     expect(real.skippedReason).not.toContain("stale");
+  });
+
+  it("an OLD occurrence is reported, not fired — history is not a queue of turns to buy", async () => {
+    // `claimSlot` only judges `wanted < newest`, so walking history FORWARDS beats it every time: each
+    // occurrence is newer than the last claim, so each one claims and runs. An hourly schedule has
+    // ~100k enumerable occurrences, and nothing serialises requests naming different ones.
+    //
+    // The second injury is the fixed `schedule:<name>` session: a caller holding it busy makes the
+    // resident clock's real occurrence fail with SESSION_BUSY_CODE after its claim is already taken,
+    // which settles as `failed` and loses that occurrence silently.
+    const { agent, calls } = recordingAgent();
+    const { root, handle } = await handlerFor([hourly()], agent);
+    const old = ["2020-01-01T00:00:00Z", "2020-01-01T01:00:00Z", "2020-01-01T02:00:00Z"];
+    for (const slot of old) {
+      const body = (await (await trigger(handle!, { name: "digest", slot })).json()) as {
+        fired: boolean;
+        skippedReason?: string;
+      };
+      expect({ slot, fired: body.fired }).toEqual({ slot, fired: false });
+      expect(body.skippedReason).toContain("too old");
+    }
+    expect(calls).toEqual([]);
+    expect(readFires(root, "digest")).toEqual([]); // nothing claimed, so nothing is burned either
+    // The window is the current occurrence and the one before it, which is what a late or retried
+    // delivery names — EventBridge re-sends a fire it could not deliver, and that is not an attack.
+    // Oldest first, because once the current occurrence is claimed the prior one is ordinarily stale:
+    // the floor decides what may be ASKED for, `claimSlot` still decides what runs.
+    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T09:00:00Z" })).json()).toMatchObject({
+      fired: true,
+    });
+    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
+      fired: true,
+    });
+    // One occurrence further back is outside the window, and says so rather than being judged stale.
+    const outside = (await (await trigger(handle!, { name: "digest", slot: "2026-07-07T08:00:00Z" })).json()) as {
+      fired: boolean;
+      skippedReason?: string;
+    };
+    expect(outside.fired).toBe(false);
+    expect(outside.skippedReason).toContain("too old");
   });
 
   it("a slot the state root has moved past is reported, not fired", async () => {

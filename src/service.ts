@@ -85,6 +85,22 @@ export interface ServingSurface {
 }
 
 /**
+ * Does this definition serve `POST /trigger`, given a schedule to fire?
+ *
+ * It FOLLOWS `invoke` by default, because `http.invoke: false` is documented as "the channels' signature checks are
+ * meant to be the only way in" and a second anonymous turn-starter appearing behind that choice would reverse it
+ * silently. `trigger` is the explicit exception, and it is a real one: a port with no `/invoke` but an external
+ * clock driving its schedules is exactly what this route exists for.
+ *
+ * ONE function, because two readers need the same answer and they are not near each other: the assembly mounts the
+ * route, and `preflightDeploy` names it in the list of what a public URL answers unauthenticated. A default spelled
+ * twice is a default that moves once.
+ */
+export function shouldServeTrigger(serve: { serveInvoke?: boolean; serveTrigger?: boolean }): boolean {
+  return serve.serveTrigger ?? serve.serveInvoke !== false;
+}
+
+/**
  * The surface this deployment serves: the DATA plane (`POST /invoke`), `GET /health`, and the discovered channels.
  *
  * `/invoke` is the framework's interface, so it is always there — it used to appear only when a definition declared
@@ -141,12 +157,7 @@ export async function routesFor(
   // exists: it authenticates nobody, so it inherits the JSON body gate, the cross-origin policy, the reserved path
   // and the startup report's account of what is open — none of which it had to ask for.
   //
-  // It FOLLOWS `serveInvoke` by default, because `http.invoke: false` is documented as "the channels' signature
-  // checks are meant to be the only way in" and a second anonymous turn-starter appearing behind that choice would
-  // reverse it silently. `serveTrigger` is the explicit exception, and it is a real one: a port with no `/invoke`
-  // but an external clock driving its schedules is exactly what this route exists for.
-  const serveTrigger = options.serveTrigger ?? options.serveInvoke !== false;
-  const trigger = serveTrigger
+  const trigger = shouldServeTrigger(options)
     ? createTriggerHandler({ agent, stateRoot, schedules: options.schedules ?? [] })
     : undefined;
   if (trigger) unverified["POST /trigger"] = trigger;

@@ -548,9 +548,16 @@ A `slot` ahead of this machine's clock is refused (400), with no tolerance at al
 occurrence that has ARRIVED, and the claim gate has no ceiling — a claim dated ahead makes every real
 occurrence after it sort before the newest and be refused as stale, for the resident clock too, across
 restarts. A tolerance would only price that attack rather than close it (wait until the next
-occurrence is inside the window, name it, repeat). The same starvation from the past side is what the
-snapping above closes: without it every off-grid instant was a fresh claim that both ran a turn and
-raised the bar the next real occurrence has to clear. A container whose clock lags its caller therefore
+occurrence is inside the window, name it, repeat).
+
+The past side has two defences, because it had two holes. Snapping closes the off-grid one: without
+it every instant between two occurrences was a fresh claim that both ran a turn and raised the bar the
+next real occurrence has to clear. A FLOOR closes the other — **this route fires the current
+occurrence and the one before it, and reports anything older as `fired: false` with a
+`skippedReason`** — because history is otherwise a queue of turns to buy: walking occurrences forward
+beats the `wanted < newest` gate every time, and an hourly schedule has ~100k of them. Two occurrences
+is what a late or retried delivery names, which is the case that must keep working: on a host with no
+resident clock, EventBridge's retry IS the fire. A container whose clock lags its caller therefore
 sees a 4xx, which is self-healing: the AgentCore forwarder throws on it and EventBridge retries, by
 which time the clock has moved. A crontab should omit `slot` and let the serve snap it.
 
@@ -559,8 +566,10 @@ that is what `http.invoke: false` means. `http.trigger: true` is the exception f
 `/invoke` but does have an external clock.
 
 The reply is the fire's outcome — `{ slot, fired, skippedReason?, failed?, ms }`. `fired: false` with
-a `skippedReason` means the occurrence was already claimed (a duplicate delivery, or the resident
-clock got there first), which is a successful delivery of a slot that needed no work. A 404 names the
+a `skippedReason` means no work was needed or allowed: the occurrence was already claimed (a duplicate
+delivery, or the resident clock got there first), the state root has moved past it, or it is older
+than the window above. All of them are successful DELIVERIES, which is why they are 200 — a clock that
+kept retrying a 4xx would hammer the route over an occurrence that is gone. A 404 names the
 schedules this deployment does have, so a stale rule is distinguishable from a typo. **The route is
 unauthenticated like everything else fastagent serves** — see [design §14](design/session-control.md).
 

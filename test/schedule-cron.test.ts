@@ -31,6 +31,24 @@ describe("schedule/cron", () => {
     );
   });
 
+  it("previousRun reads a pattern croner's own backward stepper cannot", () => {
+    // `previousRuns` throws `Cannot read properties of undefined (reading '0')` on a day-of-month that
+    // does not occur every month. `0 0 29 2 *` is a LEGAL leap-day schedule — `cronError` accepts it
+    // and `nextRun` reads it — so it loaded fine and then turned every `POST /trigger` that had to snap
+    // (an omitted slot: the ordinary crontab path) into an unexplained 500. On AgentCore, where there
+    // is no resident clock, that schedule would simply never have fired.
+    expect(cronError("0 0 29 2 *", "UTC")).toBeUndefined();
+    expect(previousRun("0 0 29 2 *", "UTC", new Date("2026-07-07T00:00:00Z"))?.toISOString()).toBe(
+      "2024-02-29T00:00:00.000Z",
+    );
+    // Landing exactly on one still means that one.
+    expect(previousRun("0 0 29 2 *", "UTC", new Date("2028-02-29T00:00:00Z"))?.toISOString()).toBe(
+      "2028-02-29T00:00:00.000Z",
+    );
+    // A day-of-month that never occurs reads as "no occurrence", not as a throw.
+    expect(previousRun("0 0 30 2 *", "UTC", new Date("2026-07-07T00:00:00Z"))).toBeUndefined();
+  });
+
   it("previousRun is undefined when the expression has never fired by then", () => {
     // The branch `POST /trigger` answers 409 on: a caller omitted the slot, and there is no occurrence
     // to snap to. Reachable with croner's 7-field form (sec min hour dom mon dow year) — this schedule
