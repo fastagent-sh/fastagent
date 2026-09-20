@@ -283,7 +283,13 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     // shows drifts with pi's internal accounting.
     const store = piInMemorySessionRecordStore();
     const record = await store.openOrCreate("room");
-    record.appendMessage({ role: "system", content: "You are a bot.", timestamp: 0 } as never);
+    record.appendMessage({
+      role: "system",
+      content: "", // pi's shape: the prompt is in `sections`, the tool declarations in `toolsAdded`
+      sections: { preamble: "You are a bot." },
+      toolsAdded: [{ name: "read", description: "Read a file.", parameters: { type: "object", properties: {} } }],
+      timestamp: 0,
+    } as never);
     record.appendMessage({ role: "user", content: "a question", timestamp: 1 });
     record.appendMessage(fauxAssistantMessage("an answer"));
 

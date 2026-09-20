@@ -27,7 +27,8 @@ export function agentSessionManager(session: AgentSession, sessionId: string): R
 /**
  * The turn's tool-activation bridge — narrow closures over the CURRENT session (bound per turn), so a loader tool can
  * activate deferred tools mid-turn without tool.ts importing the engine. pi anchors the addition in the transcript
- * (a system message carrying `toolsAdded` at the load point), so providers with native deferred loading keep their
+ * (a system message carrying `toolsAdded`, written after the batch of tool results the activating call belongs to),
+ * so providers with native deferred loading keep their
  * prompt-cache prefix; that message describes the run that wrote it, so what carries an activation into LATER turns
  * is fastagent's own `fastagent:tool-activation` entry, replayed by the per-invoke restore
  * (agent-session-factory.ts).

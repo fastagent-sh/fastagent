@@ -114,11 +114,14 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect(JSON.stringify(ended.content)).toContain("lookup_weather");
 
     // …and pi 0.86 anchors the addition in the transcript itself: a system message carrying `toolsAdded`,
-    // right after the activating result. That position is the prompt-cache prefix native deferred-loading
-    // providers keep.
+    // written after the batch of tool results the activating call belongs to. That position is the
+    // prompt-cache prefix native deferred-loading providers keep. Located by the declaration, not by an
+    // offset from the result: the message follows the whole BATCH, so an offset only holds for one call.
     const messages = recordedMessages(await sessions.openOrCreate("s1"));
-    const activating = messages.findIndex((m) => (m as { role?: string }).role === "toolResult");
-    expect(toolsAddedNames(messages[activating + 1])).toEqual(["lookup_weather"]);
+    const declaring = messages.filter((m) => toolsAddedNames(m)?.includes("lookup_weather"));
+    expect(declaring).toHaveLength(1);
+    const results = messages.findIndex((m) => (m as { role?: string }).role === "toolResult");
+    expect(messages.indexOf(declaring[0])).toBeGreaterThan(results);
     // That the activation SURVIVES into the next turn is asserted where it is observable — against
     // the tools the model is offered (agent-session-factory.test.ts).
   });

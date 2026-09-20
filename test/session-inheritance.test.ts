@@ -190,7 +190,16 @@ describe("inheritance edges", () => {
     // every exchange and hand the thread an empty history with no diagnostic.
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const room = await store.openOrCreate("room");
-    room.appendMessage({ role: "system", content: "You are ZEBRA_PERSONA bot.", timestamp: 0 } as never);
+    // pi's actual shape, not a convenient one: `content` is empty, the assembled prompt lives in `sections`,
+    // and the tool declarations in `toolsAdded`. A double that put the prompt in `content` would not be
+    // standing in for the record this fix is about.
+    room.appendMessage({
+      role: "system",
+      content: "",
+      sections: { preamble: "You are ZEBRA_PERSONA bot.", cwd: "<cwd>\n/tmp/room\n</cwd>" },
+      toolsAdded: [{ name: "read", description: "Read a file.", parameters: { type: "object", properties: {} } }],
+      timestamp: 0,
+    } as never);
     room.appendMessage({ role: "user", content: "first question", timestamp: 1 });
     room.appendMessage(fauxAssistantMessage("first answer"));
 

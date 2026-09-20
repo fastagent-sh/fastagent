@@ -664,6 +664,40 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     expect(offered[1]).toContain("weather_forecast"); // and restored for the next turn
   });
 
+  it("a tool added to the definition later joins an EXISTING conversation", async () => {
+    // pi 0.86 can restore a session's tool set from the transcript's `toolsAdded` declarations, which would
+    // pin an old conversation to the tools it started with. fastagent pins the initial active set instead
+    // (`noTools: "builtin"` makes pi's `initialActiveToolNames` an explicit list), so that restore never runs
+    // \u2014 and there is no warning to notice if it ever does.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const alpha = () =>
+      defineTool({ name: "alpha", description: "The first tool.", input: z.object({}), execute: async () => "" });
+    const before = await agentWith([fauxAssistantMessage("first")], { sessions: store, tools: [alpha()] });
+    await collect(before.invoke({ session: "grows" }, { text: "hello" }));
+
+    let offered: string[] = [];
+    const after = await agentWith(
+      [
+        (context) => {
+          offered = sentTools(context);
+          return fauxAssistantMessage("second");
+        },
+      ],
+      {
+        sessions: store,
+        tools: [
+          alpha(),
+          defineTool({ name: "beta", description: "Added later.", input: z.object({}), execute: async () => "" }),
+        ],
+      },
+    );
+
+    await collect(after.invoke({ session: "grows" }, { text: "and now?" }));
+
+    expect(offered).toContain("beta");
+    expect(offered).toContain("alpha");
+  });
+
   it("a recorded activation whose tool is gone is dropped, not replayed into a throw", async () => {
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const withTool = await agentWith(
