@@ -242,6 +242,13 @@ describe("cli: the assembled serving surface", () => {
     const configuredOff = { ...opened, serveInvoke: false } as MountableAgent;
     expect(withRunOverrides(configuredOff, {}).serveInvoke).toBe(false);
     expect(withRunOverrides(configuredOff, { invoke: true }).serveInvoke).toBe(false);
+
+    // It takes `POST /trigger` with it, over a definition that asked for it. Both routes start a turn
+    // for an anonymous caller, and `dev --tunnel --no-invoke` leaving the other one on the tunnel URL
+    // would be the flag failing at the job it exists for.
+    const triggerOn = { ...opened, serveTrigger: true } as MountableAgent;
+    expect(withRunOverrides(triggerOn, { invoke: false }).serveTrigger).toBe(false);
+    expect(withRunOverrides(triggerOn, {}).serveTrigger).toBe(true); // no flag, the definition stands
   });
 
   it("the cross-origin grant is said at EVERY boot, loopback included", async () => {

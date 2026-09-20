@@ -529,10 +529,12 @@ curl -sS -X POST https://your-agent/trigger \
 The body is a REFERENCE, never a prompt: the turn's content stays in `schedules/<name>.ts`, which is
 what makes this different from driving `POST /invoke` from a crontab line. `slot` is optional and is
 an IDENTITY rather than a timestamp — `claimSlot` keys on it, so two deliveries of one occurrence must
-name the same instant or the turn runs twice. A caller that computed the cron grid itself sends it
-(AWS EventBridge sends `<aws.scheduler.scheduled-time>`); a `curl` in a crontab omits it and the serve
-snaps to the occurrence that schedule most recently had. Either way the resident clock and the
-external one are safe together: the slot claim is an `O_EXCL` create, so exactly one of them runs it.
+name the same instant or the turn runs twice. **It is snapped to the schedule's own grid either way**:
+a caller that computed the same grid (AWS EventBridge sends `<aws.scheduler.scheduled-time>`) lands on
+itself, a `curl` in a crontab omits it, and anything in between folds onto the occurrence it fell in —
+so an instant between two occurrences cannot mint a claim no occurrence will ever match. Either way
+the resident clock and the external one are safe together: the slot claim is an `O_EXCL` create, so
+exactly one of them runs it.
 
 **On a host that also runs the resident clock, an omitted `slot` is TAKEOVER, not drive.** Both clocks
 name the same occurrence, and the resident one gets there first, so a crontab pointed at a `dev`/
@@ -546,7 +548,9 @@ A `slot` ahead of this machine's clock is refused (400), with no tolerance at al
 occurrence that has ARRIVED, and the claim gate has no ceiling — a claim dated ahead makes every real
 occurrence after it sort before the newest and be refused as stale, for the resident clock too, across
 restarts. A tolerance would only price that attack rather than close it (wait until the next
-occurrence is inside the window, name it, repeat). A container whose clock lags its caller therefore
+occurrence is inside the window, name it, repeat). The same starvation from the past side is what the
+snapping above closes: without it every off-grid instant was a fresh claim that both ran a turn and
+raised the bar the next real occurrence has to clear. A container whose clock lags its caller therefore
 sees a 4xx, which is self-healing: the AgentCore forwarder throws on it and EventBridge retries, by
 which time the clock has moved. A crontab should omit `slot` and let the serve snap it.
 

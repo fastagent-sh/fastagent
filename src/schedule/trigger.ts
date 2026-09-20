@@ -80,7 +80,9 @@ export function createTriggerHandler(options: {
     // `claimSlot`'s stale gate is `wanted < newest` with no ceiling, so a claim ahead of the wall clock refuses
     // every real occurrence after it. ANY tolerance leaves that open — with a window of T, a caller need only wait
     // until the next occurrence is within T and name it, which starves the resident clock permanently for the price
-    // of one cheap request per period. Only refusing the future at all closes it.
+    // of one cheap request per period. This refusal closes the FUTURE side of that; the past side is closed by
+    // snapping below, without which any off-grid past instant was a fresh claim name that ran its own turn and
+    // raised `newest` all the same.
     //
     // The cost is a container whose clock lags the caller's: its slot reads as future and is refused. That is
     // self-healing rather than lost — a 4xx makes the forwarder throw, EventBridge retries, and our clock has moved
@@ -93,13 +95,24 @@ export function createTriggerHandler(options: {
       );
     }
 
-    // The slot is an IDENTITY, not a timestamp: `claimSlot` keys on it, so two deliveries of the same occurrence
-    // must name the same instant or the turn runs twice. A caller that computed the cron grid itself (EventBridge
-    // sends `<aws.scheduler.scheduled-time>`) says so; a crontab line that just fires `curl` cannot, so an omitted
-    // slot is snapped to the occurrence this schedule most recently had.
-    const at = slot === undefined ? previousRun(schedule.cron, schedule.tz, new Date()) : new Date(slot);
+    // The slot is an IDENTITY, not a timestamp: `claimSlot` keys on it, so two deliveries of one occurrence must
+    // name the same instant or the turn runs twice. SNAPPED, therefore, whether the caller named an instant or not
+    // — the schedule's own grid is what decides which occurrence a moment belongs to, and letting a caller name a
+    // point between two of them would mint a claim no occurrence will ever match. A caller that computed the same
+    // grid (EventBridge sends `<aws.scheduler.scheduled-time>`) lands on itself and nothing changes; anything else
+    // folds onto the occurrence it fell in, so repeated off-grid deliveries are duplicates rather than turns.
+    //
+    // SNAP RATHER THAN REFUSE off-grid input, though refusing is the stricter rule. Refusing would make this route
+    // depend on `toEventBridgeCron`'s translation reading identically through croner for every pattern, and the
+    // live probe has measured exactly one (`* * * * *`). A divergence would then reject every real fire on that
+    // host; under snapping the worst case is a claim named for the previous occurrence, which is still idempotent.
+    const asked = slot === undefined ? new Date() : new Date(slot);
+    const at = previousRun(schedule.cron, schedule.tz, asked);
     if (at === undefined) {
-      return text(`schedule "${name}" (cron "${schedule.cron}") has no occurrence at or before now\n`, 409);
+      return text(
+        `schedule "${name}" (cron "${schedule.cron}") has no occurrence at or before ${asked.toISOString()}\n`,
+        409,
+      );
     }
 
     // THE boundary. `fireScheduleOnce`'s only failure is a claim-state fault — the slot could not be read or
@@ -110,9 +123,12 @@ export function createTriggerHandler(options: {
     try {
       outcome = await runFire(agent, stateRoot, schedule, at);
     } catch (cause) {
-      const detail = `firing schedule "${name}" for slot ${at.toISOString()} failed: ${String(cause)}`;
-      log.error(`[schedule] ${detail}`);
-      return text(`${detail}\n`, 500);
+      // The CAUSE goes to the log and only there: it is an fs error carrying absolute paths inside this container,
+      // and the caller is unauthenticated. What an external clock needs from a 500 is "this delivery failed and is
+      // worth retrying", which the status and this wording already say — the same rule `refuseNonJsonBody` follows
+      // by not echoing what arrived.
+      log.error(`[schedule] firing schedule "${name}" for slot ${at.toISOString()} failed: ${String(cause)}`);
+      return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
     }
     return Response.json({ slot: at.toISOString(), ...outcome });
   };

@@ -50,9 +50,14 @@ export function resolveBindHost(
  * `--no-invoke` outranks `http.invoke`, for the same reason `--bind` outranks `http.host`: a config value travels
  * into a deployed image, so "do not publish a turn endpoint on this tunnel" has to be sayable without editing the
  * definition.
+ *
+ * It takes `POST /trigger` WITH it, including over a definition that said `http.trigger: true`. Both routes start a
+ * turn for an anonymous caller, and the flag's whole reason for existing is the case where the definition cannot be
+ * edited — `dev --tunnel --no-invoke` leaving the other one published at the tunnel URL would be the flag failing at
+ * exactly the job it was added for.
  */
 export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
-  return run.invoke === false ? { ...opened, serveInvoke: false } : opened;
+  return run.invoke === false ? { ...opened, serveInvoke: false, serveTrigger: false } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */

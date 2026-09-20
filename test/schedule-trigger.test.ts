@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 import { claimSlot, readFires } from "../src/schedule/state.ts";
@@ -107,6 +108,31 @@ describe("schedule/trigger: POST /trigger", () => {
     }
   });
 
+  it("an OFF-GRID slot folds onto the occurrence it falls in, not into a claim of its own", async () => {
+    // The starvation path the future-slot refusal does NOT close, reached from the past side. Every
+    // off-grid instant is a new claim name, so each one runs a turn AND raises `newest` — and the real
+    // occurrence that follows is then refused as stale (`wanted < newest`). It matters most under the
+    // combination the docs recommend, `http.invoke: false` + `http.trigger: true`, whose whole point is
+    // that an anonymous caller cannot start a turn.
+    const { agent, calls } = recordingAgent();
+    const { root, handle } = await handlerFor([hourly()], agent);
+    for (const off of ["2026-07-07T10:09:00Z", "2026-07-07T10:17:31Z", "2026-07-07T10:41:12Z"]) {
+      expect((await trigger(handle!, { name: "digest", slot: off })).status).toBe(200);
+    }
+    // ONE turn, ONE claim: they are three deliveries of the 10:00 occurrence, whatever they were called.
+    expect(calls).toHaveLength(1);
+    expect(readFires(root, "digest").map((f) => f.slot)).toEqual(["2026-07-07T10:00:00.000Z"]);
+
+    // …and the real instant is then an ordinary duplicate, not something the state root has moved past.
+    const real = (await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()) as {
+      slot: string;
+      skippedReason?: string;
+    };
+    expect(real.slot).toBe("2026-07-07T10:00:00.000Z");
+    expect(real.skippedReason).toContain("already claimed");
+    expect(real.skippedReason).not.toContain("stale");
+  });
+
   it("a slot the state root has moved past is reported, not fired", async () => {
     const { agent, calls } = recordingAgent();
     const { root, handle } = await handlerFor([hourly()], agent);
@@ -169,7 +195,7 @@ describe("schedule/trigger: POST /trigger", () => {
     const { handle } = await handlerFor([hourly({ cron: "0 0 9 * * * 2099" })], recordingAgent().agent);
     const res = await trigger(handle!, { name: "digest" });
     expect(res.status).toBe(409);
-    expect(await res.text()).toContain("has no occurrence at or before now");
+    expect(await res.text()).toContain("has no occurrence at or before");
   });
 
   it("is not built at all when the definition declares no schedules", async () => {
@@ -178,17 +204,28 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(createTriggerHandler({ agent: recordingAgent().agent, stateRoot: "/x", schedules: [] })).toBeUndefined();
   });
 
-  it("translates a claim-state fault into the caller's own log, and leaves the slot unburned", async () => {
+  it("translates a claim-state fault into a retryable 500 that leaks nothing about this container", async () => {
     // `fireScheduleOnce`'s only failure happens BEFORE a claim exists, so the occurrence is still
-    // available and the clock's retry is the right answer — which it can only decide if the message
-    // reaches its logs rather than the server's alone.
+    // available and the clock's retry is the right answer — which is all the reply has to convey. The
+    // cause is an fs error carrying absolute container paths, and the caller is unauthenticated, so it
+    // goes to the log alone (the rule `refuseNonJsonBody` already follows by not echoing what arrived).
     const { agent } = recordingAgent();
     // A state root under a FILE: `mkdirSync` on the claims directory fails with ENOTDIR.
     const notADir = join(await stateRoot(), "file-not-a-dir");
     await (await import("node:fs/promises")).writeFile(notADir, "x");
     const handle = createTriggerHandler({ agent, stateRoot: notADir, schedules: [hourly()] });
-    const res = await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" });
-    expect(res.status).toBe(500);
-    expect(await res.text()).toContain('firing schedule "digest" for slot 2026-07-07T10:00:00.000Z failed');
+    const logged: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation((line: string) => void logged.push(line));
+    try {
+      const res = await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" });
+      expect(res.status).toBe(500);
+      const body = await res.text();
+      expect(body).toContain("claim state unavailable, nothing was claimed — retry");
+      expect(body).not.toContain(notADir); // no container path in a reply nobody authenticated
+      // …and the operator still gets the whole thing, where it is safe to put it.
+      expect(logged.join("\n")).toContain(notADir);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
