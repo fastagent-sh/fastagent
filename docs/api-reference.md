@@ -378,8 +378,11 @@ Costs and behavior to know:
   is pi's (see its Dynamic Tool Loading docs) and evolves with pi releases — fastagent adds no
   restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
-  loader can use; `activate` is additive, ignores unknown names, and is a synchronous read-modify-write,
-  so parallel loader calls in one batch cannot race it.
+  loader can use; `activate` is additive, ignores unknown names, and returns ONLY the names it actually
+  activated. Report from that return value, and count your own activation cap against it: `activate` is
+  atomic, but a loader's own `active()` -> decide -> `await` -> `activate()` sequence interleaves with a
+  sibling call in the same batch, so two parallel calls can otherwise both claim one activation (and each
+  spend a full cap). Declare `executionMode: "sequential"` to serialize the batch instead.
   Both types are exported: `ToolActivation`, and `FastagentTool` (`AgentTool` + the `deferred` marker —
   the type `config.tools` and the L1/L2 `tools` options accept, so a raw object literal with
   `deferred: true` type-checks).

@@ -95,12 +95,16 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     return fauxAgent(responses, { sessions, tools: withSearchTool([echo(), weather()]) });
   }
 
-  it("search_tools activates a deferred tool and the transcript records the load point", async () => {
+  it("search_tools activates a deferred tool: the model is offered it, and the transcript records the load point", async () => {
     const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    let offeredSameRun: string[] = [];
     const { agent } = makeAgent(
       [
         fauxAssistantMessage(fauxToolCall("search_tools", { query: "weather forecast" }, { id: "c1" })),
-        fauxAssistantMessage("found it"),
+        (context) => {
+          offeredSameRun = sentTools(context);
+          return fauxAssistantMessage("found it");
+        },
       ],
       sessions,
     );
@@ -108,6 +112,13 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s1" }, { text: "what's the weather?" })) events.push(e);
     expect(events.at(-1)?.type).toBe("completed");
+
+    // The point of activating, and the only assertion in the repo that observes it: the very next request of
+    // the SAME run offers the tool. The other two assertions below read what the loader SAID and what the
+    // journal RECORDED; since 0.86 the request's tool list is derived separately, by pi reconciling
+    // `context.tools` against the transcript's declarations at each turn boundary, and nothing else here
+    // watches the output of that step.
+    expect(offeredSameRun).toContain("lookup_weather");
 
     // The loader's tool result reports the activation to the model…
     const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;

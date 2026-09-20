@@ -54,7 +54,7 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { forkProvenance, isEnginePromptMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
@@ -86,9 +86,10 @@ function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number)
   return path.slice(start, firstKeptEntryIndex).some(
     (entry) =>
       entry.type !== "compaction" &&
-      // NOT isConversationMessage: a `custom_message` is model-visible history pi DOES summarize, and only the
-      // engine's `system` entries are excluded — the assembled prompt is not a turn anyone can summarize.
-      sessionEntryToContextMessages(entry).some((message) => message.role !== "system"),
+      // `isEnginePromptMessage`, not `isConversationMessage`: this reader works on the CONTEXT MESSAGES pi
+      // projects entries into, and a `custom_message` is model-visible history pi does summarize. Only the
+      // assembled prompt is excluded — it is not a turn anyone can summarize.
+      sessionEntryToContextMessages(entry).some((message) => !isEnginePromptMessage(message)),
   );
 }
 

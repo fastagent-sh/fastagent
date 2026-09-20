@@ -38,7 +38,11 @@ export interface ToolActivation {
   active(): string[];
   /** Every registered tool (active or not) — the discovery corpus for a loader like `search_tools`. */
   registered(): Array<{ name: string; description: string }>;
-  /** ADDITIVE activation. */
+  /**
+   * ADDITIVE activation. Returns ONLY the names this call actually added — a name a batch sibling activated first
+   * is not in it. That return value is the caller's truth for both what to report and what to charge an activation
+   * cap: the call is atomic, but an `active()` -> await -> `activate()` sequence around it is not.
+   */
   activate(names: string[]): string[];
 }
 

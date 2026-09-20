@@ -272,8 +272,11 @@ unknown names filtered). pi records the addition in the transcript at that posit
 carrying `toolsAdded`, written after the batch of tool results the activating call belongs to — the
 load point that lets providers with
 native deferred loading add definitions without invalidating the cached prompt prefix. `activate` is a
-synchronous read-modify-write over the session's active set, so a batch's parallel calls cannot race
-it: one activates, the rest report already-active. The base prompt lists only non-deferred tools plus a discovery
+synchronous read-modify-write over the session's active set and returns only the names it actually added — that
+return value, not the attempt, is what the built-in loader reports and counts its cap against, which is why two
+parallel calls matching the same tool yield one "Activated" and one "already active". The atomicity stops at
+`activate`: a loader that awaits between `active()` and `activate()` interleaves with its batch siblings and owes
+itself `executionMode: "sequential"`. The base prompt lists only non-deferred tools plus a discovery
 note, computed from the static mounted set, so activation never rewrites the prompt. The shared session
 builder (`session-builder.ts`, which `chat` consumes) emulates the same behavior over pi's
 AgentSession through `sessionToolActivation`, so the author debugs exactly what serves.

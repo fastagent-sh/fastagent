@@ -26,17 +26,26 @@ export function isPlaneMarker(entry: { type?: string; customType?: string }): bo
 }
 
 /**
- * An entry that is a TURN IN THE CONVERSATION — what a reader counting, previewing or searching the history means
- * by "a message".
+ * How the ENGINE marks its own prompt state. Since pi 0.86 it writes `system` messages into the same log the
+ * conversation lives in, carrying the assembled prompt (persona, project context, skill and tool descriptions)
+ * plus one more per prompt or tool-set change. They are bookkeeping, not something anyone said, and every reader
+ * of the journal has to decide about them. Deciding once, here, is the point: the first reader that forgot cut
+ * inheritance above every exchange and handed a new thread an empty history, with no diagnostic.
  *
- * The exclusion that needs a name: since pi 0.86 the engine writes its OWN `system` message entries into the same
- * log, carrying the assembled prompt (persona, project context, skill and tool descriptions) plus one more per
- * prompt or tool-set change. They are the engine's bookkeeping, not something anyone said, and every reader of the
- * journal has to decide about them. Deciding once, here, is the point: the first reader that forgot cut inheritance
- * above every exchange and handed a new thread an empty history, with no diagnostic.
+ * Takes a MESSAGE rather than an entry, because the two readers hold different things: one has journal entries,
+ * the compaction gate has the context messages pi projects them into. The mark is the same in both.
+ */
+export function isEnginePromptMessage(message: { role?: string } | undefined): boolean {
+  return message?.role === "system";
+}
+
+/**
+ * An entry that is a TURN IN THE CONVERSATION — what a reader counting, previewing or searching the history means
+ * by "a message". Not every reader can use it: one that projects entries into context messages first wants
+ * {@link isEnginePromptMessage} directly, since a `custom_message` is model-visible history too.
  */
 export function isConversationMessage(entry: { type?: string; message?: { role?: string } }): boolean {
-  return entry.type === "message" && entry.message?.role !== "system";
+  return entry.type === "message" && !isEnginePromptMessage(entry.message);
 }
 
 /**
