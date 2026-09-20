@@ -158,7 +158,7 @@ export async function routesFor(
   // and the startup report's account of what is open — none of which it had to ask for.
   //
   const trigger = shouldServeTrigger(options)
-    ? createTriggerHandler({ agent, stateRoot, schedules: options.schedules ?? [] })
+    ? createTriggerHandler({ agent, schedules: options.schedules ?? [] })
     : undefined;
   if (trigger) unverified["POST /trigger"] = trigger;
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone

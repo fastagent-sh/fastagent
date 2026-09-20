@@ -19,7 +19,8 @@ const base = {
   runtime: "node",
   hasLockfile: true,
   version: "9.9.9",
-  hasTimeTriggers: false,
+  hasCron: false,
+  hasWakeups: false,
 } as const;
 
 describe("deploy/fly: planFlyDeploy", () => {
@@ -37,7 +38,9 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["github"]) }))).toContain(
       "min_machines_running = 1",
     );
-    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasTimeTriggers: true }))).toContain(
+    expect(
+      flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasCron: true, hasWakeups: false })),
+    ).toContain(
       "min_machines_running = 1", // schedules/wake need a running machine — no external wake-up for a cron instant
     );
     expect(
@@ -54,7 +57,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     const toml = flyToml(plan);
     const out = runbook(plan);
     expect(toml).toContain("min_machines_running = 1");
-    expect(toml).toContain("long-connection channel needs a running machine");
+    expect(toml).toContain("long-connection channel must stay connected"); // residency.ts words it once
     expect(out).toContain("FEISHU_APP_ID=<value>");
     expect(out).toContain("FEISHU_APP_SECRET=<value>");
     expect(out).not.toContain("FEISHU_VERIFICATION_TOKEN");

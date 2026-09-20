@@ -6,7 +6,9 @@ import type { Routes } from "../channel.ts";
 import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { type AgentService, loadServingSchedules, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
-import { createTriggerHandler } from "../schedule/trigger.ts";
+import * as Effect from "effect/Effect";
+import { fireScheduleOnce } from "../schedule/scheduler.ts";
+import { text } from "./respond.ts";
 import { activeWork, beginWork } from "./busy.ts";
 import type { ChannelHandler } from "../channel.ts";
 import { router } from "./serve.ts";
@@ -212,7 +214,31 @@ export function mountAgentcore(options: {
   channels: AgentcoreAdapterOptions["channels"];
 }): Routes {
   const { agent, stateRoot, schedules, onStateReady, channels } = options;
-  const trigger = createTriggerHandler({ agent, stateRoot, schedules });
+  // OCCURRENCE SEMANTICS, because this host's clock is ours: `deploy` wrote the EventBridge rule and the forwarder
+  // relays its instant behind the ingress secret, so the slot is a real grid point of that schedule and a claim
+  // means something (dedup across redeliveries, a fire history, the overlap policy). `POST /trigger` — the
+  // unauthenticated API — is NOT this and is not served here at all.
+  const fireSchedule = async (name: string, occurrence: Date): Promise<Response> => {
+    const schedule = schedules.find((s) => s.name === name);
+    if (!schedule) {
+      return text(
+        `no schedule named "${name}" (this deployment has: ${schedules.map((s) => s.name).join(", ")})\n`,
+        404,
+      );
+    }
+    const outcome = await Effect.runPromise(
+      fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
+    ).catch((cause: unknown) => {
+      // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
+      // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
+      log.error(`[schedule] firing "${name}" for ${occurrence.toISOString()} failed: ${String(cause)}`);
+      return undefined;
+    });
+    if (outcome === undefined) {
+      return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
+    }
+    return Response.json({ slot: occurrence.toISOString(), ...outcome });
+  };
   return agentcoreRoutes({
     channels,
     agent,
@@ -221,7 +247,6 @@ export function mountAgentcore(options: {
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
-    // The route's handler, not a second fire path: the envelope is a transport for `POST /trigger`.
-    ...(trigger ? { trigger } : {}),
+    ...(schedules.length > 0 ? { fireSchedule } : {}),
   });
 }

@@ -521,28 +521,42 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("detects time triggers: schedules/ files OR config.selfSchedule → hasTimeTriggers + a keep-1 note", async () => {
+  it("detects the two halves of a time trigger separately — only one of them has a way out", async () => {
     // Neither → false, no note.
     const none = await call(await workspace(), { model: "openai/gpt-4o-mini" });
-    expect(none.ok && !none.hasTimeTriggers).toBe(true);
+    expect(none.ok && !none.hasCron && !none.hasWakeups).toBe(true);
 
-    // A schedules/ file → true + note (cron has no external wake-up).
+    // A schedules/ file → hasCron, and the note names `POST /trigger`: someone else's clock CAN fire a declared
+    // schedule, so an operator paying for an idle box has a real option and should be told it exists.
     const dir = await workspace();
     const { mkdir, writeFile: wf } = await import("node:fs/promises");
     await mkdir(join(dir, "schedules"), { recursive: true });
     await wf(join(dir, "schedules", "daily.ts"), "export default {};\n"); // discovery counts files, not validity
     const withCron = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(withCron.ok && withCron.hasTimeTriggers).toBe(true);
+    expect(withCron.ok && withCron.hasCron && !withCron.hasWakeups).toBe(true);
     if (withCron.ok) {
-      expect(withCron.messages).toContainEqual({
-        level: "note",
-        text: expect.stringMatching(/keeps one machine running/),
-      });
+      const note = withCron.messages.find((m) => /keeps one machine running/.test(m.text));
+      expect(note?.level).toBe("note");
+      expect(note?.text).toContain("POST /trigger");
     }
 
-    // selfSchedule alone (the wake tool) → true: a wake-up needs the box awake just like a cron.
+    // selfSchedule alone → hasWakeups, and the note offers NO way out: a wake-up is minted at runtime, so no
+    // external clock can know to send it. Offering the same advice here would quietly drop turns.
     const wake = await call(await workspace(), { model: "openai/gpt-4o-mini", selfSchedule: true });
-    expect(wake.ok && wake.hasTimeTriggers).toBe(true);
+    expect(wake.ok && wake.hasWakeups && !wake.hasCron).toBe(true);
+    if (wake.ok) {
+      const note = wake.messages.find((m) => /keeps one machine running/.test(m.text));
+      expect(note?.text).toContain("no way around it");
+      expect(note?.text).not.toContain("POST /trigger");
+    }
+
+    // BOTH → the wake-up is what gets reported, because it is the one with no substitute.
+    const both = await call(dir, { model: "openai/gpt-4o-mini", selfSchedule: true });
+    expect(both.ok && both.hasCron && both.hasWakeups).toBe(true);
+    if (both.ok) {
+      expect(both.messages.filter((m) => /keeps one machine running/.test(m.text))).toHaveLength(1);
+      expect(both.messages.find((m) => /keeps one machine running/.test(m.text))?.text).not.toContain("POST /trigger");
+    }
   });
 
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {

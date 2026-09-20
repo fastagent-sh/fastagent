@@ -2,6 +2,7 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { CRON_CAN_BE_EXTERNAL, type Residency, residencyFor } from "../residency.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
@@ -21,11 +22,10 @@ export interface FlyPlanInput extends ContainerInput {
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
    *  attributed to the file that declared it. */
   extraSecrets?: readonly DeclaredSecret[];
-  /**
-   * Time triggers present (schedules/ or selfSchedule) — forces one machine up: cron/wake has no external wake-up, so
-   * a scaled-to-zero box would sleep through them.
-   */
-  hasTimeTriggers: boolean;
+  /** `schedules/` declares a cron — one of the things that forces a machine up (deploy/residency.ts). */
+  hasCron: boolean;
+  /** `selfSchedule` is on — the wake tool, which forces a machine up with no external substitute. */
+  hasWakeups: boolean;
 }
 
 export interface FlyPlan {
@@ -35,22 +35,20 @@ export interface FlyPlan {
   runbook: string[];
 }
 
-function flyToml(
-  appName: string,
-  port: number,
-  hasGithub: boolean,
-  hasTimeTriggers: boolean,
-  hasLongConnectionChannel: boolean,
-): string {
-  // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, or a
-  // long connection does. Anything else is an edit to the generated file, which is the artifact's job.
-  const min = hasGithub
-    ? `  min_machines_running = 1         # github turns have no replay — don't scale to zero (an in-flight review would be lost)`
-    : hasTimeTriggers
-      ? `  min_machines_running = 1         # schedules/wake-ups need a running machine (no external wake-up for a cron instant)`
-      : hasLongConnectionChannel
-        ? `  min_machines_running = 1         # long-connection channel needs a running machine (cannot wake from zero)`
-        : `  min_machines_running = 0         # scale to zero`;
+function flyToml(appName: string, port: number, residency: Residency | undefined): string {
+  // WHY is residency.ts's to decide; the SETTING and its wording are Fly's. Anything else is an edit to the
+  // generated file, which is the artifact's job.
+  const min = residency
+    ? `  min_machines_running = 1         # ${residency.why}`
+    : `  min_machines_running = 0         # scale to zero`;
+  // The one reason with a way out gets it stated NEXT TO the line it is about, which is where an operator reading
+  // `min_machines_running = 1` and wondering what it costs them is looking.
+  const alternative =
+    residency?.reason === CRON_CAN_BE_EXTERNAL
+      ? `  # …or keep the time somewhere else and set this to 0: a scheduler you own (Fly Cron Manager,\n` +
+        `  # supercronic, GitHub Actions) calls \`POST /trigger\`, which runs one declared unit of work by name.\n` +
+        `  # It is an API, not a clock: read its contract first — docs/api-reference.md#post-trigger.\n`
+      : "";
   // Suspend, not stop: a resume is fast enough that a webhook does not time out. Edit the line to change it.
   const stopLine = `  auto_stop_machines = "suspend"   # suspend on idle (fast resume on the next webhook)`;
   return `${GENERATED_FLY_TOML_MARKER}. Edit freely — it is not regenerated unless you pass --force.
@@ -70,7 +68,7 @@ primary_region = "iad"  # set your region (list: \`fly platform regions\`)
 ${stopLine}
   auto_start_machines = true
 ${min}
-
+${alternative}
 [mounts]
   source = "data"
   destination = "/data"            # workspace, state and credentials survive stop/suspend/redeploy
@@ -98,13 +96,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
-      content: flyToml(
-        appName,
-        port,
-        channels.some((channel) => channel.name === "github"),
-        input.hasTimeTriggers,
-        channels.some((channel) => channel.ingress === "long-connection"),
-      ),
+      content: flyToml(appName, port, residencyFor({ channels, hasCron: input.hasCron, hasWakeups: input.hasWakeups })),
     },
     ...containerArtifacts(input),
   ];

@@ -11,6 +11,7 @@ import {
 import { deployFlyRun } from "../../../deploy/fly/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { type ResolvedPlacement, readTextIfExists } from "../../../paths.ts";
+import { residencyFor } from "../../../deploy/residency.ts";
 import { failStartup } from "../../fail.ts";
 import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
@@ -18,9 +19,10 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, channels, longConnectionChannels, pre, write } = ctx;
+    const { opts, agentDir, workspace, channels, pre, write } = ctx;
     const {
-      hasTimeTriggers,
+      hasCron,
+      hasWakeups,
       modelAuth,
       modelKeyInDefinition,
       authPath,
@@ -50,19 +52,19 @@ export const flyHost: HostDeploy = {
         `[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`,
       );
     }
-    // KEEP mode + time triggers: the kept fly.toml may still scale to zero — which would sleep through every cron
-    // instant / wake-up.
-    if (flyTomlKept && (hasTimeTriggers || longConnectionChannels.length > 0)) {
+    // KEEP mode: the kept fly.toml may still scale to zero — which would sleep through the very thing the
+    // GENERATED one keeps a machine up for. Same question, same answer: `residencyFor` decides, here too, so the
+    // kept-file gate and the generated setting cannot disagree (they did — this branch used to ask a different
+    // question from flyToml's and skip the github case entirely).
+    const residency = residencyFor({ channels, hasCron, hasWakeups });
+    if (flyTomlKept && residency) {
       const min = parseFlyMinMachines(flyToml as string);
       if ((min ?? 0) === 0) {
         // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a hand-written
         // fly.toml without the line scales to zero exactly like an explicit 0.
-        const reason = hasTimeTriggers
-          ? `schedules/self-scheduling need a running machine (no external wake-up)`
-          : `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) needs an always-on outbound connection`;
         const msg =
           `your kept fly.toml scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
-          `${reason}. Set min_machines_running = 1, or pass --force to regenerate.`;
+          `${residency.why}. Set min_machines_running = 1, or pass --force to regenerate.`;
         if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
         console.error(`[fastagent] warn: ${msg}`);
       }
@@ -73,7 +75,8 @@ export const flyHost: HostDeploy = {
       modelAuth,
       channels,
       extraSecrets,
-      hasTimeTriggers,
+      hasCron,
+      hasWakeups,
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });

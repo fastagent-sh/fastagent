@@ -2,6 +2,7 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { CRON_CAN_BE_EXTERNAL, residencyFor } from "../residency.ts";
 import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 
@@ -21,11 +22,10 @@ export interface RailwayPlanInput extends ContainerInput {
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
    *  attributed to the file that declared it. */
   extraSecrets?: readonly DeclaredSecret[];
-  /**
-   * Time triggers present (schedules/ or selfSchedule) — the runbook forbids App Sleeping: cron/wake has no external
-   * wake-up, so a sleeping service sleeps through them.
-   */
-  hasTimeTriggers: boolean;
+  /** `schedules/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
+  hasCron: boolean;
+  /** `selfSchedule` is on — the wake tool, which forbids it with no external substitute. */
+  hasWakeups: boolean;
 }
 
 export interface RailwayPlan {
@@ -175,16 +175,27 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
 
-  // Scale-to-zero: App Sleeping is dashboard-only (no CLI/API) — a manual step, not a generated setting.
+  // Scale-to-zero: App Sleeping is dashboard-only (no CLI/API) — a manual step, not a generated setting. WHY it is
+  // forbidden is residency.ts's to decide; the SETTING and the path through the dashboard are Railway's.
+  const residency = residencyFor({ channels, hasCron: input.hasCron, hasWakeups: input.hasWakeups });
   runbook.push(
     ``,
-    channels.some((channel) => channel.name === "github")
-      ? `# Scale-to-zero: do NOT enable App Sleeping — github turns have no replay, a sleep mid-review is lost.`
-      : input.hasTimeTriggers
-        ? `# Scale-to-zero: do NOT enable App Sleeping — schedules/wake-ups have no external wake-up; a sleeping service sleeps through them.`
-        : channels.some((channel) => channel.ingress === "long-connection")
-          ? `# Scale-to-zero: do NOT enable App Sleeping — a long-connection channel must remain connected.`
-          : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
+    residency
+      ? `# Scale-to-zero: do NOT enable App Sleeping — ${residency.why}.`
+      : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
+    ...(residency?.reason === CRON_CAN_BE_EXTERNAL
+      ? [
+          `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
+          `# calls this service's \`POST /trigger\` over the private network — traffic from another service in the`,
+          `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
+          `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
+          `#     AGENT_TRIGGER=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/trigger`,
+          `#     curl --retry 3 -fsS -X POST "$AGENT_TRIGGER" -H 'content-type: application/json' -d '{"name":"<schedule>"}'`,
+          `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
+          `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
+          `# \`POST /trigger\` is an API, not a clock: read its contract — docs/api-reference.md#post-trigger.`,
+        ]
+      : []),
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,
   );
 

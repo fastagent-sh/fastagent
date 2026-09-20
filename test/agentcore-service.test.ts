@@ -279,6 +279,52 @@ describe("mountAgentcoreService", () => {
     }
   });
 
+  it("OCCURRENCE SEMANTICS live here, on the authenticated envelope — a redelivery claims nothing twice", async () => {
+    // This is the half of the split that keeps a slot, a claim, a fire history and the overlap policy:
+    // `deploy` wrote the EventBridge rule and injected `<aws.scheduler.scheduled-time>`, the forwarder
+    // relays it behind the ingress secret, so the instant IS a grid point of that schedule and the
+    // claim means something. `POST /trigger` is the other contract — an unauthenticated API with no
+    // occurrence — and is not served on this host at all (asserted above).
+    const dir = await agentDir({ "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` });
+    process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
+    const service = await mountAgentcoreService(await open(dir));
+    const occurrence = "2026-07-07T09:00:00.000Z";
+    const fire = () =>
+      service.handler(
+        new Request("http://h/invocations", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "digest", occurrence }),
+        }),
+      );
+    try {
+      const first = (await (await fire()).json()) as { slot: string; fired: boolean };
+      expect(first).toMatchObject({ slot: occurrence, fired: true });
+      // EventBridge redelivers a fire it could not deliver, byte-identical (measured). The CLAIM is
+      // what makes that one fire rather than two.
+      const retry = (await (await fire()).json()) as { fired: boolean; skippedReason?: string };
+      expect(retry.fired).toBe(false);
+      expect(retry.skippedReason).toContain("already claimed");
+      // …and the fire is on the record, which is what `fastagent schedule history` reads.
+      const { readFires } = await import("../src/schedule/state.ts");
+      const { resolveStateRoot } = await import("../src/paths.ts");
+      expect(readFires(resolveStateRoot(dir), "digest").map((f) => f.slot)).toEqual([occurrence]);
+
+      // A name no schedule declares is the deploy-drift case: answered, never crashed.
+      const unknown = await service.handler(
+        new Request("http://h/invocations", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "gone", occurrence }),
+        }),
+      );
+      expect(unknown.status).toBe(404);
+    } finally {
+      process.env.FASTAGENT_INGRESS_SECRET = undefined;
+      await service.close();
+    }
+  });
+
   it("reports loaded schedules, and close() is safe to call twice", async () => {
     const dir = await agentDir(
       { "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },

@@ -82,11 +82,15 @@ function oneLine(text: string): string {
  *
  * WHAT THE TURN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
  * (`schedule:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
+ * EXPORTED for the API path (`POST /trigger`), which runs the same turn without a claim: it has no occurrence to
+ * claim, because nobody's grid produced it (schedule/trigger.ts). The resident clock's own claim/run/settle is
+ * {@link fireScheduleOnce}.
+ *
  * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
  * unstructured, in a stream with a wider audience and a bound that differs per host — which is the growth #546 asked
  * us to stop, relocated rather than removed.
  */
-function runTurn(agent: Agent, label: string, session: string, prompt: string) {
+export function runTurn(agent: Agent, label: string, session: string, prompt: string) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const startedAt = clock.currentTimeMillisUnsafe();
