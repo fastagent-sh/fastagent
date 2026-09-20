@@ -49,11 +49,10 @@ beforeAll(async () => {
     join(agent, "fastagent.config.ts"),
     `export default { model: ${JSON.stringify(MODEL)}, http: { port: ${port} } };\n`,
   );
-  // The agent declares the fastagent version it runs, so the image installs the SAME artifact the
-  // registry probe does. Without this the generated Dockerfile takes the markdown-agent path and
-  // bakes `npm i -g @fastagent-sh/fastagent@<this checkout>` (src/deploy/container.ts), which no
-  // environment variable can redirect: a dispatch pinning FASTAGENT_LIVE_VERSION would then move the
-  // registry probe alone, and the two would report on two different artifacts.
+  // The agent declares the fastagent it runs, which is what puts the CHECKOUT in the image. Without a
+  // package.json the generated Dockerfile takes the markdown-agent path and bakes
+  // `npm i -g @fastagent-sh/fastagent@<this version>` (src/deploy/container.ts) — a registry install,
+  // so the container would be the last published release while the CLI driving it is this tree.
   await writeFile(
     join(agent, "package.json"),
     `${JSON.stringify(

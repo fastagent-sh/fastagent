@@ -58,17 +58,20 @@ removes must match what the fixture's branch actually creates.
 
 ## What a probe deploys
 
-`installSpec(agentDir)` decides, and the answer differs by who is asking:
+`installSpec(agentDir)` answers it, and the answer is always the same one: **the tarball of this
+checkout**, packed once per run by the `globalSetup` in `vitest.live.config.ts`.
 
-| | fixture depends on |
-|---|---|
-| CI (`FASTAGENT_LIVE_VERSION` set) | that published version — release verification is what CI's live run is for |
-| a local run | `file:./<tarball>` from `npm pack` of this checkout |
+It used to be a version string, which npm resolves from the **registry**. The container then ran the
+last published release while the CLI, the generated template and the forwarder all came from the
+working tree — a pair that exists nowhere, and a probe that cannot fail on the code under review. A
+`POST /trigger` branch shipped a forwarder speaking a newer envelope than the container it deployed,
+and the only symptom was "EventBridge never delivered".
 
-It used to be the version string in both cases, which npm resolves from the **registry**. On a branch
-that meant the container ran the last published release while the CLI, the generated template and the
-forwarder all came from the working tree — a pair that exists nowhere, and a probe that cannot fail on
-the code under review. A `POST /trigger` branch shipped a forwarder speaking a newer envelope than the
-container it deployed, and the only symptom was "EventBridge never delivered".
+`FASTAGENT_LIVE_VERSION` no longer reaches a deploy probe, in CI either. Three of the four artifacts
+one exercises — the CLI, the generated template, the forwarder — come from the checkout
+unconditionally, so pinning the fourth produces a mixture rather than "the release under test".
+**Verifying a release means checking out its tag.** The pin still decides `registry.live.test.ts`,
+whose subject IS the registry.
 
-The generated Dockerfile carries `*.tgz` into the install layer for this (`deploy/container.ts`).
+The generated Dockerfile carries `*.tgz` into the install layer so the `file:` dependency survives the
+build (`deploy/container.ts`).

@@ -45,7 +45,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { CLI, aws, destroyAgentcoreDeployment, liveVersion, requireAwsAccount, requireEnv, run } from "./env.ts";
+import { CLI, aws, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 
@@ -83,7 +83,7 @@ beforeAll(async () => {
       {
         name: "live-agentcore-schedule-probe",
         private: true,
-        dependencies: { "@fastagent-sh/fastagent": await liveVersion() },
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agentDir) },
       },
       null,
       2,

@@ -11,6 +11,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/live/*.live.test.ts"],
+    // Packs this checkout ONCE for the whole run, which is the only scope `pool: "forks"` +
+    // `isolate: true` leaves shared (test/live/pack.ts).
+    globalSetup: ["test/live/pack.ts"],
     pool: "forks",
     fileParallelism: false,
     testTimeout: 600_000,

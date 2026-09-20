@@ -10,8 +10,7 @@
  * is genuinely DOWN is a different case — that belongs in the probe that talks to it.)
  */
 import { execFile } from "node:child_process";
-import { copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -19,6 +18,7 @@ import { expect } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
 import { ingressSessionId, deploymentBucketName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { fastagentVersion } from "../../src/version.ts";
+import { TARBALL_ENV } from "./pack.ts";
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`live probes need ${name} (${hint})`);
@@ -73,10 +73,15 @@ export async function requireAwsAccount(minutes: number): Promise<string> {
 }
 
 /**
- * The published version under probe, read the same way by every probe: `FASTAGENT_LIVE_VERSION` when
- * it carries one — CI resolves the registry's current `latest` to an exact version ONCE and exports it
- * (.github/workflows/live.yml), so the registry install and the container image cannot report on two
- * artifacts — else this checkout's version.
+ * The published version `registry.live.test.ts` probes: `FASTAGENT_LIVE_VERSION` when CI pins one
+ * (.github/workflows/live.yml resolves the registry's current `latest` to an exact version), else this
+ * checkout's version.
+ *
+ * ITS ONLY CALLER IS THAT PROBE, because the registry is the only thing a version string can decide.
+ * A deploy probe cannot be a release check whatever it installs: its CLI is `src/cli.ts`, its
+ * CloudFormation comes from this checkout's plan and its forwarder from this checkout's
+ * `forwarder.js`. Pinning only the dependency there does not produce "the release under test", it
+ * produces a mixture — see {@link installSpec}.
  *
  * `||`, never `??`: an exported-but-empty variable is not a pin, and `??` would keep it. That installs
  * `@fastagent-sh/fastagent@` (npm resolves the empty range to `latest`) and then asserts the CLI
@@ -86,42 +91,33 @@ export async function liveVersion(): Promise<string> {
   return process.env.FASTAGENT_LIVE_VERSION || (await fastagentVersion());
 }
 
-/** Packed once per process, however many probes ask: `npm pack` runs a full build. */
-let packedTarball: Promise<string> | undefined;
-
 /**
- * What a probe's fixture depends on — and the answer differs by WHO is asking, which is the bug this
- * replaced.
+ * What a deploy probe's fixture depends on: the tarball of THIS checkout, always.
  *
  * Every deploy probe used to write `dependencies: { "@fastagent-sh/fastagent": <version> }`, and npm resolved that
- * from the REGISTRY. On a branch that meant the container ran the last published release while the CLI, the
- * generated template and the forwarder all came from the working tree: the probe reported on a pair that exists
- * nowhere, and could not fail on a change to the code under review. A `POST /trigger` branch shipped a forwarder
- * speaking a newer envelope than the container it deployed, and the probe's only symptom was "EventBridge never
- * delivered".
+ * from the REGISTRY. The container then ran the last published release while the CLI, the generated template and
+ * the forwarder all came from the working tree: the probe reported on a pair that exists nowhere, and could not
+ * fail on a change to the code under review. A `POST /trigger` branch shipped a forwarder speaking a newer envelope
+ * than the container it deployed, and the probe's only symptom was "EventBridge never delivered".
  *
- * So: CI keeps pinning a published version (`FASTAGENT_LIVE_VERSION`) because release verification is what CI's
- * live run is FOR, and a local run packs the checkout into the agent directory and depends on the tarball. The
- * image build carries `*.tgz` into the install layer for exactly this (deploy/container.ts).
+ * ALWAYS, INCLUDING IN CI, because the mixture is not something a pin can fix. Three of the four artifacts a deploy
+ * probe exercises come from the checkout unconditionally, so honouring `FASTAGENT_LIVE_VERSION` here would keep the
+ * nightly run deploying "published container + this branch's forwarder" — the very pairing this function exists to
+ * end, and one that would have turned `agentcore-wake` red every night after `POST /trigger` merged, at the cost of
+ * two AgentCore deployments each time. Verifying a release means checking out its tag, not pinning one dependency.
+ *
+ * The tarball is built once per run by the `globalSetup` in vitest.live.config.ts; the image build carries `*.tgz`
+ * into the install layer so a `file:` dependency survives it (deploy/container.ts).
  */
 export async function installSpec(agentDir: string): Promise<string> {
-  const pinned = process.env.FASTAGENT_LIVE_VERSION;
-  if (pinned) return pinned;
-  packedTarball ??= packCheckout();
-  const tarball = await packedTarball;
+  const tarball = process.env[TARBALL_ENV];
+  if (!tarball) {
+    throw new Error(
+      `live probes need ${TARBALL_ENV} (set by the globalSetup in vitest.live.config.ts — run them with \`npm run test:live\`)`,
+    );
+  }
   await copyFile(tarball, join(agentDir, basename(tarball)));
   return `file:./${basename(tarball)}`;
-}
-
-/** `npm pack` the checkout into a temp directory, returning the tarball's absolute path. */
-async function packCheckout(): Promise<string> {
-  const repo = fileURLToPath(new URL("../..", import.meta.url));
-  const out = await mkdtemp(join(tmpdir(), "fastagent-live-pack-"));
-  const { stdout } = await run("npm", ["pack", "--pack-destination", out, "--json"], repo);
-  const packed = JSON.parse(stdout) as { filename: string }[];
-  const name = packed[0]?.filename;
-  if (!name) throw new Error(`npm pack reported no tarball:\n${stdout.slice(0, 500)}`);
-  return join(out, name);
 }
 
 /** One spawned command. A container build's log is megabytes; execFile's 1 MB default would abort the
