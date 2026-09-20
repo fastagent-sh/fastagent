@@ -692,7 +692,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     // pi 0.86 can restore a session's tool set from the transcript's `toolsAdded` declarations, which would
     // pin an old conversation to the tools it started with. fastagent pins the initial active set instead
     // (`noTools: "builtin"` makes pi's `initialActiveToolNames` an explicit list), so that restore never runs
-    // \u2014 and there is no warning to notice if it ever does.
+    // — and there is no warning to notice if it ever does.
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const alpha = () =>
       defineTool({ name: "alpha", description: "The first tool.", input: z.object({}), execute: async () => "" });

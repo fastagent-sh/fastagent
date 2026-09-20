@@ -561,7 +561,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(readFires(root, "job")).toMatchObject([{ firedAt: "2026-07-07T10:00:03.000Z", outcome: "completed" }]);
   });
 
-  it("what the turn SAID is neither logged nor stored \u2014 it is already in the session", async () => {
+  it("what the turn SAID is neither logged nor stored — it is already in the session", async () => {
     // #546 asked us to stop storing model output that nothing prunes. The reply is durable exactly once, in the
     // session this fire ran in (`schedule:job`, persisted under `<stateRoot>/sessions/` like any other): the claim
     // carries the outcome, and the log carries the fact that it completed.
@@ -577,7 +577,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(JSON.stringify(stored)).not.toContain("digest");
   });
 
-  it("a multi-line failure detail stays ONE line \u2014 a turn cannot forge a log record", async () => {
+  it("a multi-line failure detail stays ONE line — a turn cannot forge a log record", async () => {
     // `log.ts` prefixes only the first line, so an unfolded newline emits a second line byte-for-byte identical to a
     // real record. A failure detail is the remaining path that carries model or provider text.
     const root = await freshRoot();

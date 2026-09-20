@@ -2,7 +2,7 @@
  * Which journal entries are POSITIONS, which are the control plane's own bookkeeping, and which are turns in the
  * CONVERSATION. pi's journal has one shape for everything, so the plane writes what it needs to remember into the
  * same log the conversation lives in (what fork a record is, and the anchor that makes a leaf move survive a
- * reopen) \u2014 and since 0.86 the ENGINE writes its own bookkeeping there too, as the `system` entries carrying the
+ * reopen) — and since 0.86 the ENGINE writes its own bookkeeping there too, as the `system` entries carrying the
  * assembled prompt. Three questions, one file: a reader of the journal answers them here or it answers them alone,
  * which is how one reader came to count the prompt as history.
  */
