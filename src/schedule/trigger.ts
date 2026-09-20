@@ -31,29 +31,37 @@ const runFire = (agent: Agent, stateRoot: string, schedule: LoadedSchedule, slot
 /** A trigger body is a name and an optional instant; the cap only has to admit that. */
 const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
 
+/** How much of a caller's `name` a 404 will quote back. Long enough to recognise a typo, short enough not to be a page. */
+const MAX_ECHOED_NAME = 64;
+
 /**
- * The oldest occurrence this route will fire for a schedule — the one BEFORE the current one — recomputed only when
- * the grid moves past it.
+ * The two occurrences this route will fire for a schedule — the current one and the one before it — recomputed only
+ * when the grid moves past them.
  *
- * CACHED BECAUSE THE SEARCH IS THE EXPENSIVE PART OF THIS ROUTE. `previousRun` is ~40 synchronous croner
- * evaluations (~6ms measured), and croner is pure JS on the one thread that also answers every channel webhook,
- * `/control/*` and `/health`. An anonymous caller needs one 404 to learn a schedule name, after which repeating a
- * slot that is refused anyway would have paid that cost twice per request, before any claim and with no turn to
- * rate-limit against. Warm, a refused request now searches zero times and an accepted one exactly once.
+ * CACHED BECAUSE THE SEARCH IS THE WHOLE COST OF THIS ROUTE. `previousRun` is ~40 synchronous croner evaluations
+ * (~6ms measured), and croner is pure JS on the one thread that also answers every channel webhook, `/control/*`
+ * and `/health`. An anonymous caller needs one 404 to learn a schedule name, after which `{"name":"digest"}` — no
+ * slot, no format to guess — repeats for free on their side, before any claim and with no turn to rate-limit
+ * against. Warm, that request now searches ZERO times.
+ *
+ * This PAIR rather than the floor alone is what makes the snap free too. A request that survives the floor asks for
+ * an instant in `[prior, now]`, and the only occurrences in that span are these two, so snapping is a comparison
+ * rather than a search.
  *
  * Keyed by schedule name and bounded by the declared schedules; `until` is the next occurrence, which is exactly
  * when the answer changes.
  */
-function floorFactory(): (schedule: LoadedSchedule, now: Date) => Date | undefined {
-  const cache = new Map<string, { until: number; floor: Date | undefined }>();
+type Window = { current: Date; prior?: Date };
+function windowFactory(): (schedule: LoadedSchedule, now: Date) => Window | undefined {
+  const cache = new Map<string, { until: number; window: Window | undefined }>();
   return (schedule, now) => {
     const cached = cache.get(schedule.name);
-    if (cached && now.getTime() < cached.until) return cached.floor;
+    if (cached && now.getTime() < cached.until) return cached.window;
     const current = previousRun(schedule.cron, schedule.tz, now);
     const prior = current && previousRun(schedule.cron, schedule.tz, new Date(current.getTime() - 1));
-    const floor = prior ?? current;
-    cache.set(schedule.name, { until: nextRun(schedule.cron, schedule.tz, now)?.getTime() ?? Infinity, floor });
-    return floor;
+    const window = current ? { current, ...(prior ? { prior } : {}) } : undefined;
+    cache.set(schedule.name, { until: nextRun(schedule.cron, schedule.tz, now)?.getTime() ?? Infinity, window });
+    return window;
   };
 }
 
@@ -70,7 +78,7 @@ export function createTriggerHandler(options: {
 }): ((req: Request) => Promise<Response>) | undefined {
   const { agent, stateRoot, schedules } = options;
   if (schedules.length === 0) return undefined;
-  const floorFor = floorFactory();
+  const windowFor = windowFactory();
 
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -94,7 +102,12 @@ export function createTriggerHandler(options: {
     // can see whether it is a typo or a stale rule without shelling in.
     if (!schedule) {
       return text(
-        `no schedule named "${name}" (this deployment has: ${schedules.map((s) => s.name).join(", ")})\n`,
+        // The name is CLIPPED before it goes back out. Listing this deployment's own schedules is deliberate (the
+        // operator needs to see typo vs stale rule), but quoting an unauthenticated caller's 4 KiB of body into a
+        // `text/plain` reply is the one place on this route that echoes what arrived — see `refuseNonJsonBody`.
+        `no schedule named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${schedules
+          .map((s) => s.name)
+          .join(", ")})\n`,
         404,
       );
     }
@@ -114,7 +127,10 @@ export function createTriggerHandler(options: {
     // The cost is a container whose clock lags the caller's: its slot reads as future and is refused. That is
     // self-healing rather than lost — a 4xx makes the forwarder throw, EventBridge retries, and our clock has moved
     // by then (deploy/agentcore/forwarder.js). A crontab's `curl` should omit `slot` and let this serve snap it.
-    if (typeof slot === "string" && Date.parse(slot) > Date.now()) {
+    // ONE clock read for the whole decision. Two would let an occurrence boundary fall between them, and the
+    // window below would then be judged against a different instant than `asked` was.
+    const now = new Date();
+    if (typeof slot === "string" && Date.parse(slot) > now.getTime()) {
       return text(
         `"slot" ${slot} is ahead of this machine's clock — a slot names an occurrence that has already arrived, ` +
           `and claiming one early would refuse every real occurrence after it as stale. Retry, or omit "slot"\n`,
@@ -122,7 +138,7 @@ export function createTriggerHandler(options: {
       );
     }
 
-    const asked = slot === undefined ? new Date() : new Date(slot);
+    const asked = slot === undefined ? now : new Date(slot);
 
     // A FLOOR UNDER THE PAST, which neither the future refusal nor the snapping below provides. `claimSlot` judges
     // only `wanted < newest`, so walking history FORWARDS beats it every time: each older occurrence is newer than
@@ -139,10 +155,11 @@ export function createTriggerHandler(options: {
     // JUDGED ON WHAT THE CALLER ASKED FOR, BEFORE THE SNAP, which is the same decision reached without paying for
     // it: snapping only ever moves an instant backwards, so `asked < floor` and `snap(asked) < floor` agree, and
     // the floor itself is `floorFor`'s cached answer. The rejected request therefore does no grid search at all.
-    const floor = floorFor(schedule, new Date());
-    if (floor === undefined) {
+    const window = windowFor(schedule, now);
+    if (window === undefined) {
       return text(`schedule "${name}" (cron "${schedule.cron}") has no occurrence at or before now\n`, 409);
     }
+    const floor = window.prior ?? window.current;
     if (asked.getTime() < floor.getTime()) {
       return Response.json({
         slot: asked.toISOString(),
@@ -165,15 +182,10 @@ export function createTriggerHandler(options: {
     // depend on `toEventBridgeCron`'s translation reading identically through croner for every pattern, and the
     // live probe has measured exactly one (`* * * * *`). A divergence would then reject every real fire on that
     // host; under snapping the worst case is a claim named for the previous occurrence, which is still idempotent.
-    const at = previousRun(schedule.cron, schedule.tz, asked);
-    // Unreachable: `floor` IS an occurrence and `asked >= floor`, so one exists at or before `asked`. Thrown rather
-    // than defaulted, because the only way here is the grid reading differently than it did a moment ago, and a
-    // quiet `?? floor` would fire a turn on top of that contradiction instead of reporting it.
-    if (at === undefined) {
-      throw new Error(
-        `schedule "${name}" (cron "${schedule.cron}"): no occurrence at or before ${asked.toISOString()}, yet ${floor.toISOString()} is one`,
-      );
-    }
+    //
+    // A COMPARISON, not a search: `asked` survived the floor, so it is in `[prior, now]`, and the grid has exactly
+    // two occurrences there.
+    const at = asked.getTime() >= window.current.getTime() ? window.current : floor;
 
     // THE boundary. `fireScheduleOnce`'s only failure is a claim-state fault — the slot could not be read or
     // created — which happens BEFORE any claim exists, so the occurrence is still unburned and the caller's retry

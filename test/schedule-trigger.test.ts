@@ -153,33 +153,48 @@ describe("schedule/trigger: POST /trigger", () => {
     expect(real.skippedReason).not.toContain("stale");
   });
 
-  it("does not pay for a grid search per request — the floor is cached, and it judges before the snap", async () => {
-    // The amplification this closes: one 404 lists every schedule name, after which repeating a slot
-    // that is refused anyway used to run the search TWICE per request (the floor) plus once more for
-    // the snap — ~18ms of blocking CPU, before any claim, with no turn to rate-limit against. That is
-    // ~30 req/s to saturate the loop that also answers every channel webhook, `/control/*` and
-    // `/health` — against the very posture (`http.invoke: false` + `http.trigger: true`) whose premise
-    // is that an anonymous caller cannot make this process work.
+  it("does not pay for a grid search per request — no request repeats one, whatever it asks for", async () => {
+    // The amplification this closes: one 404 lists every schedule name, after which an anonymous
+    // caller repeats a request for free while this process pays ~6ms of blocking croner per search —
+    // before any claim, with no turn to rate-limit against, on the one thread that also answers every
+    // channel webhook, `/control/*` and `/health`. That is the very posture (`http.invoke: false` +
+    // `http.trigger: true`) whose premise is that such a caller cannot make this process work.
     const { agent, calls } = recordingAgent();
     const { handle } = await handlerFor([hourly()], agent);
-    const old = { name: "digest", slot: "2020-01-01T00:00:00Z" };
 
     searches.n = 0;
-    expect(await (await trigger(handle!, old)).json()).toMatchObject({ fired: false });
-    const warmUp = searches.n; // the floor: the current occurrence and the one before it
-    expect(warmUp).toBeLessThanOrEqual(2);
-
-    searches.n = 0;
-    for (let i = 0; i < 50; i++) await trigger(handle!, old);
-    expect(searches.n).toBe(0); // cached floor, and `asked` is judged before it would be snapped
-    expect(calls).toEqual([]);
-
-    // An accepted slot still snaps, and that is the one search a real delivery pays for.
-    searches.n = 0;
-    expect(await (await trigger(handle!, { name: "digest", slot: "2026-07-07T10:00:00Z" })).json()).toMatchObject({
-      fired: true,
+    expect(await (await trigger(handle!, { name: "digest", slot: "2020-01-01T00:00:00Z" })).json()).toMatchObject({
+      fired: false,
     });
-    expect(searches.n).toBe(1);
+    expect(searches.n).toBeLessThanOrEqual(2); // the window: the current occurrence and the one before it
+
+    // THE CHEAPEST REQUEST TO CONSTRUCT is the one with no slot at all — nothing to guess, nothing to
+    // format. It used to search on every single delivery, because the cache held only the floor and
+    // the snap ran unconditionally above it.
+    searches.n = 0;
+    for (let i = 0; i < 20; i++) {
+      const res = await trigger(handle!, { name: "digest" });
+      expect(res.status).toBe(200);
+    }
+    expect(searches.n).toBe(0);
+    expect(calls).toHaveLength(1); // the first one fired; `claimSlot` made the other 19 duplicates
+
+    // …and neither does an old slot, an off-grid one, or the occurrence before the current one.
+    searches.n = 0;
+    for (const slot of ["2020-01-01T00:00:00Z", "2026-07-07T10:17:31Z", "2026-07-07T09:00:00Z"]) {
+      await trigger(handle!, { name: "digest", slot });
+    }
+    expect(searches.n).toBe(0);
+  });
+
+  it("clips the name it quotes back — the one place this route echoes an unauthenticated caller", async () => {
+    const { handle } = await handlerFor([hourly()], recordingAgent().agent);
+    const res = await trigger(handle!, { name: "x".repeat(4000) });
+    expect(res.status).toBe(404);
+    const said = await res.text();
+    expect(said).toContain("x".repeat(64));
+    expect(said).not.toContain("x".repeat(65));
+    expect(said).toContain("this deployment has: digest"); // listing OUR names is the deliberate part
   });
 
   it("an OLD occurrence is reported, not fired — history is not a queue of turns to buy", async () => {
