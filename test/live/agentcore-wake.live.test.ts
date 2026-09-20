@@ -55,7 +55,7 @@ import {
   aws,
   destroyAgentcoreDeployment,
   invokeAgentcore,
-  liveVersion,
+  installSpec,
   requireAwsAccount,
   requireEnv,
   run,
@@ -106,7 +106,7 @@ beforeAll(async () => {
       {
         name: "live-agentcore-wake-probe",
         private: true,
-        dependencies: { "@fastagent-sh/fastagent": await liveVersion() },
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agentDir) },
       },
       null,
       2,

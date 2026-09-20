@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toFlyAppName } from "../../src/deploy/fly/plan.ts";
 import { listHasName } from "../../src/deploy/fly/run.ts";
-import { CLI, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, invoke, installSpec, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("FLY_API_TOKEN", "a Fly API token WITH write scope — this probe creates and destroys an app");
@@ -46,7 +46,11 @@ beforeAll(async () => {
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
-      { name: "live-fly-probe", private: true, dependencies: { "@fastagent-sh/fastagent": await liveVersion() } },
+      {
+        name: "live-fly-probe",
+        private: true,
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agentDir) },
+      },
       null,
       2,
     )}\n`,

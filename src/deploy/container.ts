@@ -110,10 +110,15 @@ ${apt}WORKDIR /app
 ${deployment}${pin}`;
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on) needs its
   // full toolchain.
+  //
+  // `*.tgz` RIDES ALONG with the manifest, because the install layer runs BEFORE `COPY . .` and a
+  // `"dep": "file:./something.tgz"` resolves against the directory it is installing in. Without this the file is
+  // not there yet and the build fails on a dependency the author can see sitting in the agent directory. It is
+  // also what lets a live probe deploy the CHECKOUT (`npm pack` output) rather than the published release.
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it.
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
-    return `${head}COPY ${into("package.json")} ${into("bun.lock*")} ./${prefix}
+    return `${head}COPY ${into("package.json")} ${into("bun.lock*")} ${into("*.tgz")} ./${prefix}
 RUN ${at(install)}
 COPY . .
 CMD ${bunCmd}
@@ -122,7 +127,7 @@ CMD ${bunCmd}
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent); fall back to `npm
   // install` when there is none so the build never breaks.
   const install = input.hasLockfile ? "npm ci" : "npm install";
-  return `${head}COPY ${into("package.json")} ${into("package-lock.json*")} ./${prefix}
+  return `${head}COPY ${into("package.json")} ${into("package-lock.json*")} ${into("*.tgz")} ./${prefix}
 RUN ${at(install)}
 COPY . .
 CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]

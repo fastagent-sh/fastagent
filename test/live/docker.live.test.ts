@@ -15,10 +15,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { exists } from "../../src/paths.ts";
-import { CLI, answerOf, expectCompleted, invoke, liveVersion, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, installSpec, invoke, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
-const VERSION = await liveVersion();
 const COMPOSE = "fastagent/fastagent.compose.yml";
 
 let workspace = "";
@@ -50,15 +49,18 @@ beforeAll(async () => {
     join(agent, "fastagent.config.ts"),
     `export default { model: ${JSON.stringify(MODEL)}, http: { port: ${port} } };\n`,
   );
-  // The agent declares the fastagent version it runs, so the image installs the SAME artifact the
-  // registry probe does. Without this the generated Dockerfile takes the markdown-agent path and
-  // bakes `npm i -g @fastagent-sh/fastagent@<this checkout>` (src/deploy/container.ts), which no
-  // environment variable can redirect: a dispatch pinning FASTAGENT_LIVE_VERSION would then move the
-  // registry probe alone, and the two would report on two different artifacts.
+  // The agent declares the fastagent it runs, which is what puts the CHECKOUT in the image. Without a
+  // package.json the generated Dockerfile takes the markdown-agent path and bakes
+  // `npm i -g @fastagent-sh/fastagent@<this version>` (src/deploy/container.ts) — a registry install,
+  // so the container would be the last published release while the CLI driving it is this tree.
   await writeFile(
     join(agent, "package.json"),
     `${JSON.stringify(
-      { name: "live-docker-probe", private: true, dependencies: { "@fastagent-sh/fastagent": VERSION } },
+      {
+        name: "live-docker-probe",
+        private: true,
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agent) },
+      },
       null,
       2,
     )}\n`,

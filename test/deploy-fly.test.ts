@@ -180,7 +180,10 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(rootIgnore).toMatch(/^\*\*\/node_modules$/m);
     expect(rootIgnore).not.toMatch(/^\.git$/m);
     const df = p.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
-    expect(df).toContain("COPY fastagent/package.json fastagent/package-lock.json* ./fastagent/"); // workspace deps…
+    expect(df).toContain("COPY fastagent/package.json fastagent/package-lock.json* fastagent/*.tgz ./fastagent/");
+    // `*.tgz` rides with the manifest because the install layer runs BEFORE `COPY . .`, and a
+    // `"dep": "file:./x.tgz"` resolves against the directory being installed in. Without it the build
+    // fails on a dependency the author can see sitting right there in the agent directory.
     expect(df).toContain("cd fastagent && npm ci");
     expect(df).toContain("COPY . ."); // …then the whole workspace
     // The npm entrypoint needs NO shell: assert the property (the binary path resolves from the image's
@@ -214,7 +217,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     });
     const bunDf = bun.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
-    expect(bunDf).toContain("COPY fastagent/package.json fastagent/bun.lock* ./fastagent/");
+    expect(bunDf).toContain("COPY fastagent/package.json fastagent/bun.lock* fastagent/*.tgz ./fastagent/");
     expect(bunDf).toContain("cd fastagent && bun install --frozen-lockfile");
     // Bun DOES need a cwd (it resolves the script from the package.json beside it), so a shell — with
     // `exec`, or sh stays PID 1 and swallows SIGTERM.

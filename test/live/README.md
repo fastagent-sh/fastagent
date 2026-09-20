@@ -55,3 +55,23 @@ removes must match what the fixture's branch actually creates.
 | `agentcore-deploy` | a REAL stack + ECR repo + S3 bucket provisioned and destroyed. No public URL exists, so it proves the deployment works through `InvokeAgentRuntime`. Teardown is THREE places because the repo and runtime-created wake alarms live outside the stack on purpose, and it is ONE shared function in `env.ts` because a second copy of cleanup code drifts where nobody looks |
 | `agentcore-schedule` | a REAL EventBridge cron delivering to the container: that AWS's `<aws.scheduler.scheduled-time>` lands on the grid our own expression produces, and that it arrives AFTER the instant has passed — the number `POST /trigger`'s no-tolerance future-slot rule was an open question against (measured: 9s of margin) |
 | `agentcore-wake` | an agent SCHEDULING ITSELF on a host with no resident process: the wake tool's write becomes a POST to the forwarder becomes an EventBridge one-shot — three systems that must be simultaneously right and all silent from inside the agent when they are not. The FIRE is only weakly checked, via a self-deleting alarm's disappearance |
+
+## What a probe deploys
+
+`installSpec(agentDir)` answers it, and the answer is always the same one: **the tarball of this
+checkout**, packed once per run by the `globalSetup` in `vitest.live.config.ts`.
+
+It used to be a version string, which npm resolves from the **registry**. The container then ran the
+last published release while the CLI, the generated template and the forwarder all came from the
+working tree — a pair that exists nowhere, and a probe that cannot fail on the code under review. A
+`POST /trigger` branch shipped a forwarder speaking a newer envelope than the container it deployed,
+and the only symptom was "EventBridge never delivered".
+
+`FASTAGENT_LIVE_VERSION` no longer reaches a deploy probe, in CI either. Three of the four artifacts
+one exercises — the CLI, the generated template, the forwarder — come from the checkout
+unconditionally, so pinning the fourth produces a mixture rather than "the release under test".
+**Verifying a release means checking out its tag.** The pin still decides `registry.live.test.ts`,
+whose subject IS the registry.
+
+The generated Dockerfile carries `*.tgz` into the install layer so the `file:` dependency survives the
+build (`deploy/container.ts`).

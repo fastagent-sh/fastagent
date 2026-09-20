@@ -45,7 +45,7 @@ import {
   aws,
   destroyAgentcoreDeployment,
   invokeAgentcore,
-  liveVersion,
+  installSpec,
   requireAwsAccount,
   requireEnv,
   run,
@@ -79,7 +79,11 @@ beforeAll(async () => {
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
-      { name: "live-agentcore-probe", private: true, dependencies: { "@fastagent-sh/fastagent": await liveVersion() } },
+      {
+        name: "live-agentcore-probe",
+        private: true,
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agentDir) },
+      },
       null,
       2,
     )}\n`,
