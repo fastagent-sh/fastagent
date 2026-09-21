@@ -16,7 +16,9 @@
  * an error — a teardown that stops at the first miss is one that cannot finish a half-deleted deployment.
  */
 import type { CliRunner } from "../runner.ts";
+import { parseLogGroupNames, runtimeIdFromArn } from "./logs.ts";
 import { deploymentBucketName, forwarderLogGroup, wakeAlarmPrefix } from "./plan.ts";
+import { parseStackOutputs } from "./run.ts";
 
 export interface AgentcoreDestroyPlan {
   /** Deployment base name — stack `fastagent-<name>`, bucket `fa-<name>-<account>`, repo `fastagent/<name>`. */
@@ -26,8 +28,10 @@ export interface AgentcoreDestroyPlan {
 }
 
 export type AgentcoreDestroyOutcome =
+  /** `found` is what the reads saw; `removed` what the writes did; `kept` what this command refused to delete. */
   | { ok: true; found: string[]; removed: string[]; kept: string[] }
-  | { ok: false; gate: string };
+  /** `removed` rides along: a half-finished teardown is exactly when "what is already gone" matters most. */
+  | { ok: false; gate: string; removed: string[] };
 
 /** An AWS CLI failure that means the thing is already gone, which is what a teardown is trying to achieve. */
 const ABSENT = /does not exist|NotFound|not found|NoSuchBucket|NoSuchEntity|ResourceNotFoundException/i;
@@ -55,7 +59,7 @@ export async function destroyAgentcoreDeployment(
   aws: CliRunner,
   announce: (message: string) => void = () => {},
 ): Promise<AgentcoreDestroyOutcome> {
-  const gate = (g: string): AgentcoreDestroyOutcome => ({ ok: false, gate: g });
+  const gate = (g: string, removed: string[] = []): AgentcoreDestroyOutcome => ({ ok: false, gate: g, removed });
   const stack = `fastagent-${plan.name}`;
   const repo = `fastagent/${plan.name}`;
 
@@ -108,25 +112,67 @@ export async function destroyAgentcoreDeployment(
   // in it, and in this account those snapshots were the only copy left of two retired agents.
   const foreign = [...new Set(keys.filter((key) => !key.startsWith("forwarder/")))];
   const repoExists = await exists(["ecr", "describe-repositories", "--repository-names", repo, "--output", "json"]);
-  const logGroup = forwarderLogGroup(plan.name);
-  const groups = await aws(
-    ["logs", "describe-log-groups", "--log-group-name-prefix", logGroup, "--query", "logGroups[].logGroupName"],
-    { capture: true, captureStderr: true },
-  );
-  const logGroupExists = groups.code === 0 && (JSON.parse(groups.stdout || "[]") as string[]).includes(logGroup);
+
+  // BOTH LOG GROUPS, and the runtime's has to be resolved while the stack still stands: its name carries the
+  // runtime id, which only the stack's outputs know. AWS creates each on the first WRITE, so neither is a stack
+  // resource — same reason, twice — and the runtime's holds the agent's own stdout/stderr, i.e. what it said in
+  // every conversation. `deploy`'s runbook already knows there are two: it sets a retention on each.
+  const forwarderGroup = forwarderLogGroup(plan.name);
+  const listLogGroups = async (prefix: string): Promise<string[] | undefined> => {
+    const listed = await aws(
+      [
+        "logs",
+        "describe-log-groups",
+        "--log-group-name-prefix",
+        prefix,
+        "--query",
+        "logGroups[].logGroupName",
+        "--output",
+        "json",
+      ],
+      { capture: true, captureStderr: true },
+    );
+    return listed.code === 0 ? parseLogGroupNames(listed.stdout) : undefined;
+  };
+  const forwarderGroups = await listLogGroups(forwarderGroup);
+  if (forwarderGroups === undefined) {
+    return gate(`could not list log groups under ${forwarderGroup} — check the AWS account/region above`, []);
+  }
+  const logGroups = forwarderGroups.filter((name) => name === forwarderGroup);
+  if (stackExists) {
+    const outputs = await aws(
+      ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
+      { capture: true, captureStderr: true },
+    );
+    const runtimeArn = outputs.code === 0 ? parseStackOutputs(outputs.stdout).RuntimeArn : undefined;
+    const runtimeId = runtimeArn && runtimeIdFromArn(runtimeArn);
+    if (runtimeId) {
+      const runtimeGroups = await listLogGroups(`/aws/bedrock-agentcore/runtimes/${runtimeId}-`);
+      if (runtimeGroups === undefined) {
+        return gate(`could not list log groups for runtime ${runtimeId} — check the AWS account/region above`, []);
+      }
+      logGroups.push(...runtimeGroups);
+    }
+  }
 
   const found: string[] = [];
   if (alarms.length > 0) found.push(`${alarms.length} wake alarm(s) under ${prefix}`);
   if (stackExists) found.push(`stack ${stack}`);
   if (bucketExists) found.push(`bucket ${bucket} (${keys.length} object version(s))`);
   if (repoExists) found.push(`repository ${repo}`);
-  if (logGroupExists) found.push(`log group ${logGroup}`);
+  for (const name of logGroups) found.push(`log group ${name}`);
 
-  const keptOnRead = foreign.length > 0 ? [`bucket ${bucket}: ${foreign.join(", ")}`] : [];
-  if (!plan.run) return { ok: true, found, removed: [], kept: keptOnRead };
+  // The one thing this command refuses: a bucket holding anything but the forwarder's zips.
+  const kept =
+    foreign.length > 0
+      ? [
+          `bucket ${bucket} — it holds ${foreign.join(", ")}, which no deploy of this version writes. Read it, ` +
+            `then \`aws s3 rb s3://${bucket} --force\` if you want it gone`,
+        ]
+      : [];
+  if (!plan.run) return { ok: true, found, removed: [], kept };
 
   const removed: string[] = [];
-  const kept: string[] = [...keptOnRead];
   const failures: string[] = [];
   const attempt = async (label: string, args: string[]): Promise<boolean> => {
     const { code, stderr } = await aws(args, { captureStderr: true });
@@ -139,38 +185,59 @@ export async function destroyAgentcoreDeployment(
     return false;
   };
 
-  for (const alarm of alarms) {
-    await attempt(`wake alarm ${alarm}`, ["scheduler", "delete-schedule", "--name", alarm]);
-  }
+  const swept = new Set<string>();
+  const sweepAlarms = async (names: string[]) => {
+    for (const alarm of names.filter((name) => !swept.has(name))) {
+      swept.add(alarm);
+      await attempt(`wake alarm ${alarm}`, ["scheduler", "delete-schedule", "--name", alarm]);
+    }
+  };
+  await sweepAlarms(alarms);
 
   if (stackExists) {
     announce(`deleting stack ${stack} (this waits for CloudFormation)…`);
     if (await attempt(`stack ${stack}`, ["cloudformation", "delete-stack", "--stack-name", stack])) {
-      // The WAIT is what makes the order real: the runtime and the Lambda have to be gone before the image and
-      // the zip they were created from can be. Not an `attempt` — it reports no resource of its own, and a
-      // stack that reached DELETE_COMPLETE before we asked answers non-zero here.
-      await aws(["cloudformation", "wait", "stack-delete-complete", "--stack-name", stack], { captureStderr: true });
+      // THE WAIT DECIDES whether anything below may run. A DELETE_FAILED stack still holds a billing Bedrock
+      // runtime and Lambda, and the image and the forwarder zip below are what it was created FROM — deleting
+      // those while it stands only makes the operator's retry worse. `run.ts` gates on this same command.
+      const waited = await aws(["cloudformation", "wait", "stack-delete-complete", "--stack-name", stack], {
+        captureStderr: true,
+      });
+      if (waited.code !== 0 && !ABSENT.test(waited.stderr ?? "")) {
+        return gate(
+          `stack ${stack} did not finish deleting: ${(waited.stderr ?? "").trim().slice(0, 300)}\n` +
+            `  its runtime and Lambda are still billing. Nothing else was touched — the image and the ` +
+            `forwarder package it was built from are still in place for a retry.`,
+          removed,
+        );
+      }
+      // AGAIN, NOW. The container served the whole deletion and holds `scheduler:CreateSchedule`, so a wake-up
+      // taken in those minutes minted an alarm after the first sweep read the list — an alarm whose target is
+      // the Lambda we just deleted, retrying into nothing for weeks.
+      const after = await aws(["scheduler", "list-schedules", "--name-prefix", prefix, "--output", "json"], {
+        capture: true,
+        captureStderr: true,
+      });
+      if (after.code !== 0) {
+        failures.push(`re-listing wake alarms under ${prefix}: ${(after.stderr ?? "").trim().slice(0, 300)}`);
+      } else {
+        await sweepAlarms(
+          ((JSON.parse(after.stdout) as { Schedules?: { Name: string }[] }).Schedules ?? []).map((a) => a.Name),
+        );
+      }
     }
   }
 
-  if (bucketExists) {
-    if (foreign.length > 0) {
-      kept[0] =
-        `bucket ${bucket} — it holds ${foreign.join(", ")}, which no deploy of this version writes. Read it, then ` +
-        `\`aws s3 rb s3://${bucket} --force\` if you want it gone`;
-    } else {
-      await purgeBucket(bucket, aws, attempt);
-    }
-  }
+  if (bucketExists && foreign.length === 0) await purgeBucket(bucket, aws, attempt);
   if (repoExists) {
     await attempt(`repository ${repo}`, ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
   }
-  if (logGroupExists) {
-    await attempt(`log group ${logGroup}`, ["logs", "delete-log-group", "--log-group-name", logGroup]);
+  for (const name of logGroups) {
+    await attempt(`log group ${name}`, ["logs", "delete-log-group", "--log-group-name", name]);
   }
 
   if (failures.length > 0) {
-    return gate(`${failures.length} resource(s) survived:\n  ${failures.join("\n  ")}`);
+    return gate(`${failures.length} resource(s) survived:\n  ${failures.join("\n  ")}`, removed);
   }
   return { ok: true, found, removed, kept };
 }

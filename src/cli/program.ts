@@ -469,9 +469,10 @@ const destroy: CommandSpec = {
   summary: "delete every AWS resource `deploy agentcore` created for a workspace",
   description:
     "AgentCore only, and it exists because `aws cloudformation delete-stack` is not enough: the S3 " +
-    "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, the " +
-    "forwarder's log group is created by AWS on first write (so no template mentions it), and a wake " +
-    "alarm is minted at runtime by the container — a schedule that keeps retrying into a deleted Lambda. " +
+    "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, BOTH " +
+    "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
+    "template mentions them, and a wake alarm is minted at runtime by the container — a schedule that " +
+    "keeps retrying into a deleted Lambda. " +
     "Derives the same names from dir that deploy did. Without --run it deletes nothing and reports what " +
     "is out there.",
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, DIR_ARG],

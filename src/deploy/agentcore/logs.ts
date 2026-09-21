@@ -17,14 +17,19 @@ export interface AgentcoreLogsPlan {
 export type AgentcoreLogsOutcome = { ok: true; logGroup: string } | { ok: false; gate: string };
 
 /** Runtime id from `arn:...:runtime/<id>` — the id prefixes AgentCore's per-endpoint log group. */
-function runtimeIdFromArn(arn: string): string | undefined {
+export function runtimeIdFromArn(arn: string): string | undefined {
   const marker = ":runtime/";
   const at = arn.lastIndexOf(marker);
   const id = at === -1 ? "" : arn.slice(at + marker.length);
   return id && !id.includes("/") ? id : undefined;
 }
 
-function parseLogGroupNames(stdout: string): string[] | undefined {
+/**
+ * `logGroups[].logGroupName` as names, or `undefined` when the output is not the JSON we asked for. The AWS CLI
+ * renders `--query` in whatever `output` the caller's config sets, so `--output json` is half the guard and this
+ * is the other half.
+ */
+export function parseLogGroupNames(stdout: string): string[] | undefined {
   try {
     const parsed = JSON.parse(stdout) as unknown;
     return Array.isArray(parsed) && parsed.every((v) => typeof v === "string") ? parsed : undefined;

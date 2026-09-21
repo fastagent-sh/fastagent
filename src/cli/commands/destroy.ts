@@ -27,7 +27,15 @@ export async function runDestroy(host: string, dirArg: string, opts: DestroyOpti
     spawnRunner("aws", placement.workspace),
     (message) => console.error(`[fastagent] destroy: ${message}`),
   );
-  if (!outcome.ok) failStartup(new Error(`destroy stopped: ${outcome.gate}`));
+  if (!outcome.ok) {
+    // WHAT IT MANAGED TO DELETE, before the gate: a half-finished teardown is exactly when an operator needs
+    // to know which resources are already gone and which the retry still has to reach.
+    if (outcome.removed.length > 0) {
+      console.log(`deleted before stopping:`);
+      for (const item of outcome.removed) console.log(`  ${item}`);
+    }
+    failStartup(new Error(`destroy stopped: ${outcome.gate}`));
+  }
 
   if (!opts.run) {
     if (outcome.found.length === 0) {
