@@ -24,17 +24,21 @@ describe("serving surface", () => {
     expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
   });
 
-  it("mounts POST /run only where there is something to trigger, and reserves that path too", async () => {
+  it("mounts POST /run + GET /routines only where there is something to run, and reserves those paths", async () => {
     // It rides the unverified table for the reason that table exists: the JSON gate, the cross-origin
     // policy, the reserved path and the startup report's account of what is open all follow from being
     // in it — none of which this route had to ask for.
     const dir = await mkdtemp(join(tmpdir(), "fa-trigger-surface-"));
     const none = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
     expect(Object.keys(none.unverified)).not.toContain("POST /run");
+    expect(Object.keys(none.unverified)).not.toContain("GET /routines");
 
     const routines = [{ name: "digest", cron: "0 * * * *", tz: "UTC", prompt: "go" }];
     const withRun = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { routines });
     expect(Object.keys(withRun.unverified)).toContain("POST /run");
+    // The CATALOGUE of that route, mounted exactly where it is: listing names nobody can use would be
+    // a catalogue of nothing, and the names were already public (the 404 lists them).
+    expect(Object.keys(withRun.unverified)).toContain("GET /routines");
 
     // It FOLLOWS `serveInvoke`: `http.invoke: false` means "the channels' signature checks are the only
     // way in", and a second anonymous turn-starter appearing behind that choice would reverse it.
@@ -50,7 +54,7 @@ describe("serving surface", () => {
       serveInvoke: false,
       serveRun: true,
     });
-    expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "POST /run"]);
+    expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "GET /routines", "POST /run"]);
 
     // Reserved like /invoke: a channel taking the path would answer for a route every runbook names.
     const taken = await mkdtemp(join(tmpdir(), "fa-trigger-taken-"));
@@ -269,7 +273,7 @@ describe("cli: the assembled serving surface", () => {
         { unverifiedRoutes: ["POST /invoke", "POST /run", "GET /health"] },
         { host: "127.0.0.1", tunnel: false },
       );
-      expect(warn.mock.calls.flat().join(" ")).toContain("POST /run (fire any schedule this agent has)");
+      expect(warn.mock.calls.flat().join(" ")).toContain("POST /run (run any routine this agent declares; GET /routines lists them)");
 
       // …and NOT once `http.cors` has taken it back — then the operator named the origins themselves.
       warn.mockClear();

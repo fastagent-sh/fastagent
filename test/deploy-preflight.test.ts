@@ -725,7 +725,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const bothOn = unauthenticated(await call(withSchedule, { model: "openai/gpt-4o-mini" }));
     expect(bothOn).toHaveLength(1);
     expect(bothOn[0]?.text).toContain("POST /invoke");
-    expect(bothOn[0]?.text).toContain("POST /run (fire any schedule this agent declares)");
+    expect(bothOn[0]?.text).toContain("POST /run (run any routine this agent declares; GET /routines lists them)");
 
     const triggerOnly = unauthenticated(
       await call(withSchedule, { model: "openai/gpt-4o-mini", http: { invoke: false, run: true } }),

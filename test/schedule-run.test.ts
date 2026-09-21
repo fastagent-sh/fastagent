@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedRoutine } from "../src/schedule/routine.ts";
-import { createRunHandler } from "../src/schedule/run.ts";
+import { createRoutineListHandler, createRunHandler } from "../src/schedule/run.ts";
 
 /**
  * `POST /run` — an API, not a time trigger. What belongs here is the wire: what the body may say
@@ -120,6 +120,33 @@ describe("schedule/run: POST /run", () => {
     const said = await long.text();
     expect(said).toContain("x".repeat(64));
     expect(said).not.toContain("x".repeat(65));
+  });
+
+  it("GET /routines says which names exist — and never what they SAY", async () => {
+    // Discovery, because the alternative was a 404: the names were already public (the 404 lists them,
+    // deliberately, so an operator can tell a typo from a stale caller), so the only thing this adds is
+    // not having to guess wrong first.
+    //
+    // NEVER THE PROMPT. What a routine says is the definition's content; handing it to an
+    // unauthenticated caller would publish the agent's behaviour — the one thing keeping the prompt out
+    // of the request body was for. `cron` IS here: "will this run on its own, or is my clock the only
+    // one?" is a caller's question.
+    const list = createRoutineListHandler({
+      routines: [hourly(), { name: "reindex", prompt: "secret instructions" } as LoadedRoutine],
+    })!;
+    const res = await list(new Request("http://h/routines"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([
+      { name: "digest", cron: "0 * * * *", tz: "UTC" },
+      { name: "reindex" }, // no cron: by name only, and the shape says so by omission
+    ]);
+    const said = JSON.stringify(await (await list(new Request("http://h/routines"))).json());
+    expect(said).not.toContain("secret instructions");
+    expect(said).not.toContain("summarise");
+
+    expect((await list(new Request("http://h/routines", { method: "POST" }))).status).toBe(405);
+    // Nothing declared, no catalogue — the same rule POST /run follows.
+    expect(createRoutineListHandler({ routines: [] })).toBeUndefined();
   });
 
   it("is not built at all when the definition declares nothing runnable", async () => {

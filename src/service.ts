@@ -11,7 +11,7 @@ import { text } from "./channels/respond.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadRoutines } from "./schedule/discover.ts";
-import { createRunHandler } from "./schedule/run.ts";
+import { createRoutineListHandler, createRunHandler } from "./schedule/run.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
@@ -157,8 +157,15 @@ export async function routesFor(
   // exists: it authenticates nobody, so it inherits the JSON body gate, the cross-origin policy, the reserved path
   // and the startup report's account of what is open — none of which it had to ask for.
   //
-  const trigger = shouldServeRun(options) ? createRunHandler({ agent, routines: options.routines ?? [] }) : undefined;
-  if (trigger) unverified["POST /run"] = trigger;
+  // `POST /run` exists only where there is something to run, and `GET /routines` exactly where that route does:
+  // it is the catalogue OF that route, so listing names nobody can use would be a catalogue of nothing.
+  if (shouldServeRun(options)) {
+    const routines = options.routines ?? [];
+    const run = createRunHandler({ agent, routines });
+    if (run) unverified["POST /run"] = run;
+    const list = createRoutineListHandler({ routines });
+    if (list) unverified["GET /routines"] = list;
+  }
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.

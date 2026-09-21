@@ -92,6 +92,37 @@ export async function runRoutineByName(agent: Agent, routine: LoadedRoutine): Pr
 }
 
 /**
+ * Build the handler for `GET /routines` — what a caller may ask for by name.
+ *
+ * DISCOVERY, because the alternative was a 404. The names were already public: `POST /run` lists them when a caller
+ * gets one wrong, which is deliberate (an operator has to tell a typo from a stale caller) — so the only thing this
+ * adds is not having to guess wrong first. "Expose a declared prompt as an API" is half a sentence without it.
+ *
+ * NAMES AND SCHEDULES, NEVER PROMPTS. What a routine SAYS is the definition's content; handing it to an
+ * unauthenticated caller would publish the agent's behaviour, which is the one thing keeping the prompt out of the
+ * request body was for. `cron` is here because it answers "will this run on its own, or is my clock the only one?",
+ * which is a caller's question, not the definition's secret.
+ *
+ * Mounted exactly where `POST /run` is: it describes that route, so listing names a caller cannot use would be a
+ * catalogue of nothing.
+ */
+export function createRoutineListHandler(options: {
+  routines: readonly LoadedRoutine[];
+}): ((req: Request) => Promise<Response>) | undefined {
+  const { routines } = options;
+  if (routines.length === 0) return undefined;
+  const body = routines.map((r) => ({
+    name: r.name,
+    ...(r.cron !== undefined ? { cron: r.cron } : {}),
+    ...(r.tz !== undefined ? { tz: r.tz } : {}),
+  }));
+  return async (req) => {
+    if (req.method !== "GET") return text("GET only\n", 405);
+    return Response.json(body);
+  };
+}
+
+/**
  * Build the handler for `POST /run`, bound to what this serve loaded.
  *
  * `undefined` when the definition declares nothing runnable: a route that can only ever answer 404 is not a route,

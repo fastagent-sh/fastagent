@@ -490,7 +490,8 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane (NOT this prefix — see below)
-POST   /run                                fire a declared schedule (also not this prefix)
+GET    /routines                           the catalogue of runnable work (also not this prefix)
+POST   /run                                run one declared routine by name (also not this prefix)
 ```
 
 - **PATCH for properties, POST …/actions for actions.** What a session HAS is a resource field; what
@@ -624,14 +625,15 @@ credential:
 | Endpoint | What an anonymous caller gets |
 |---|---|
 | `POST /invoke` | A turn with this agent's full tool authority, on any session id, billed to your model account. Always served. |
-| `POST /run` | A turn from a prompt the definition wrote down, for any schedule it declares. Served when there is at least one AND the data plane is on — `http.run` defaults to `http.invoke`. |
+| `GET /routines` | The catalogue: which names `POST /run` accepts, with each one's cron if it has one. Never a prompt. |
+| `POST /run` | A turn from a prompt the definition wrote down, for any routine it declares. Both are served when there is at least one AND the data plane is on — `http.run` defaults to `http.invoke`. |
 | `GET /control/sessions` | Every conversation on the deployment |
 | `GET /control/sessions/{id}/entries`, `.../events` | The full contents of any one of them |
 | `POST /control/sessions/{id}/actions` | Steer, abort or compact a running turn |
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`POST /run` appears only where `routines/` declares something, and follows `http.invoke` unless `http.run` says otherwise. `/control/*` appears only under
+`GET /routines` and `POST /run` appear only where `routines/` declares something, and follow `http.invoke` unless `http.run` says otherwise. `/control/*` appears only under
 `sessionControl: true`, and **not at all on AgentCore**. That host has
 two doors, and this plane fits neither:
 

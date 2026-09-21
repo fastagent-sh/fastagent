@@ -48,7 +48,7 @@ interface DeployFacts {
   channels: DeclaredChannel[];
   /**
    * `routines/` declares at least one cron. KEPT APART from {@link hasWakeups} because only this one has an
-   * external substitute: `POST /run` lets someone else's clock fire a declared schedule, so an operator who
+   * external substitute: `POST /run` lets someone else's clock run a declared routine, so an operator who
    * wants scale-to-zero has an option here and none for a wake-up.
    */
   hasCron: boolean;
@@ -204,7 +204,7 @@ export async function preflightDeploy(input: {
     shouldServeRun({ serveInvoke: config.http?.invoke, serveRun: config.http?.run });
   const unauthenticated = [
     ...(config.http?.invoke === false ? [] : ["POST /invoke (run a turn with this agent's tools)"]),
-    ...(servesTrigger ? ["POST /run (fire any schedule this agent declares)"] : []),
+    ...(servesTrigger ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
     ...(config.sessionControl === true ? ["/control/* (read, steer or delete any session)"] : []),
   ];
   if (publicUrl && unauthenticated.length > 0) {

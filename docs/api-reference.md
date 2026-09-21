@@ -538,9 +538,28 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
 The scheduler is started by
 the serve path (`dev`/`start`); `fastagent routine run <name>` runs one schedule's turn immediately for authoring.
 
+### `GET /routines`
+
+What this deployment will answer `POST /run` for:
+
+```bash
+curl -sS https://your-agent/routines
+# [{"name":"daily-digest","cron":"0 9 * * *","tz":"America/New_York"},{"name":"reindex"}]
+```
+
+**Names and schedules, never prompts.** What a routine *says* is the definition's content; handing it
+to an unauthenticated caller would publish the agent's behaviour, which is the one thing keeping the
+prompt out of the request body was for. `cron` is included because *"will this run on its own, or is my
+clock the only one?"* is a caller's question — its absence means by name only.
+
+Mounted exactly where `POST /run` is (same table, same `http.run`): it is the catalogue *of* that route,
+so listing names nobody can use would be a catalogue of nothing. The names were already public — the
+404 below lists them, deliberately, so an operator can tell a typo from a stale caller — so the only
+thing this adds is not having to guess wrong first.
+
 ### `POST /run`
 
-A serve that declares any schedule also answers `POST /run` — **an API that runs one declared unit
+A serve that declares any routine also answers `POST /run` — **an API that runs one declared unit
 of work by name**:
 
 ```bash
@@ -940,7 +959,8 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
-POST   /run                                {name, occurrence?} — fire a schedule this agent declares
+GET    /routines                           what this agent will run by name
+POST   /run                                {name} — run one of them
 ```
 
 The data plane is a root verb endpoint, not part of this prefix: `/control/*` is REST over session
