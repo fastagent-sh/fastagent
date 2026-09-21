@@ -75,3 +75,19 @@ whose subject IS the registry.
 
 The generated Dockerfile carries `*.tgz` into the install layer so the `file:` dependency survives the
 build (`deploy/container.ts`).
+
+## If a deploy probe seems to hang
+
+The `--push` to ECR is the part that stalls, and it stalls **silently at zero CPU** — the VM idles, the
+build steps are all `CACHED` on a manual re-run, and `docker buildx` just sits there. One measurement,
+same image, same minute: **420s and unfinished direct, 48.8s through a proxy.**
+
+`~/.docker/config.json`'s `proxies.default` does NOT fix it. That injects build-time env into containers;
+the push is the **daemon's** registry client, so the proxy has to be in the daemon's environment
+(with colima: `/etc/systemd/system/docker.service.d/http-proxy.conf`, then
+`systemctl daemon-reload && systemctl restart docker`). `docker info | grep -i "HTTP Proxy"` confirms it.
+
+Also: run a probe under `nohup` from a file, not inline in a shell that something else can time out.
+A killed process never reaches `afterAll`, and the teardown is the only thing that removes the stack,
+the ECR repo, the S3 bucket and the forwarder's log group. Two orphaned deployments came from exactly
+that, and `aws s3 ls | grep fa-` is how you find the ones still holding a bill.
