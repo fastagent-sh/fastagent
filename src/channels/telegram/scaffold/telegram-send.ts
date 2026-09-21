@@ -4,7 +4,7 @@ import { basename } from "node:path";
 
 // Send a message or a local file back to a Telegram chat. In a CHAT turn the channel delivers the
 // reply itself — this tool is for files, and for turns NO channel is carrying: a scheduled turn
-// (schedules/<name>.ts) or a self-scheduled wake-up, whose plain reply is not delivered anywhere.
+// (routines/<name>.ts) or a self-scheduled wake-up, whose plain reply is not delivered anywhere.
 // The chatId comes from the [telegram: chat …] context line in a chat turn; a scheduled turn has no
 // such line, so the schedule's prompt must name the target chat id. tools/ is auto-discovered.
 

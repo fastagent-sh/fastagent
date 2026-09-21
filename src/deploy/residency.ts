@@ -13,7 +13,7 @@
 import type { DeclaredChannel } from "../channels/discover.ts";
 
 /** Why one machine has to stay up. Also the order they are checked in. */
-export type ResidencyReason = "github" | "wake-ups" | "schedules" | "long-connection";
+export type ResidencyReason = "github" | "wake-ups" | "cron" | "long-connection";
 
 export interface Residency {
   reason: ResidencyReason;
@@ -27,12 +27,12 @@ export interface Residency {
  * minted by the agent at runtime inside its own state, so nothing outside can know to send it, and a github turn
  * has no replay to reconstruct.
  */
-export const CRON_CAN_BE_EXTERNAL: ResidencyReason = "schedules";
+export const CRON_CAN_BE_EXTERNAL: ResidencyReason = "cron";
 
 /** What forbids scale-to-zero for this deployment, or `undefined` when nothing does. */
 export function residencyFor(facts: {
   channels: readonly DeclaredChannel[];
-  /** `schedules/` declares at least one cron. */
+  /** `routines/` declares at least one cron. */
   hasCron: boolean;
   /** The agent may schedule ITSELF (`selfSchedule`, the wake tool). */
   hasWakeups: boolean;
@@ -48,7 +48,7 @@ export function residencyFor(facts: {
   }
   if (facts.hasCron) {
     return {
-      reason: "schedules",
+      reason: "cron",
       why: "a cron instant has no external wake-up here, so a sleeping box sleeps through it",
     };
   }

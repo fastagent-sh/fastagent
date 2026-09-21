@@ -136,7 +136,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     );
   });
 
-  it("a schedule fire initializes the channels first, and a broken channel does NOT silence the clock", async () => {
+  it("a routine run initializes the channels first, and a broken channel does NOT silence the clock", async () => {
     const order: string[] = [];
     const fire = vi.fn(async (): Promise<Response> => {
       order.push("fire");
@@ -149,7 +149,7 @@ describe("agentcore adapter: lazy channel construction", () => {
         return { routes: health };
       },
     });
-    const env: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", occurrence: OCCURRENCE };
+    const env: AgentcoreEnvelope = { kind: "routine-fire", name: "job", occurrence: OCCURRENCE };
     expect((await postEnvelope(routes, env)).status).toBe(200);
     expect(order).toEqual(["construct", "fire"]); // cold start woken by cron still replays turn intent
 
@@ -302,15 +302,15 @@ describe("agentcore adapter: webhook envelope", () => {
   });
 });
 
-describe("agentcore adapter: schedule-fire envelope", () => {
-  const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", occurrence: OCCURRENCE };
+describe("agentcore adapter: routine-fire envelope", () => {
+  const fireEnvelope: AgentcoreEnvelope = { kind: "routine-fire", name: "job", occurrence: OCCURRENCE };
 
-  it("hands the envelope's name and INSTANT to the occurrence path, not to the /trigger API", async () => {
+  it("hands the envelope's name and INSTANT to the occurrence path, not to the /run API", async () => {
     // Not a second fire path: the same handler the route mounts, reached the way `invoke` reaches its
     // THIS host's clock is ours: `deploy` wrote the rule and injected `<aws.scheduler.scheduled-time>`,
     // and the forwarder relays it behind the ingress secret. So the instant really is a grid point and
     // a claim means something — dedup across EventBridge's redeliveries, a fire history, the overlap
-    // policy. `POST /trigger` is the OTHER contract (an unauthenticated API with no occurrence) and is
+    // policy. `POST /run` is the OTHER contract (an unauthenticated API with no occurrence) and is
     // not served on this host at all.
     const seen: { name: string; occurrence: string }[] = [];
     const routes = adapter({
@@ -348,12 +348,11 @@ describe("agentcore adapter: schedule-fire envelope", () => {
 
   it("rejects an envelope that names no schedule, no occurrence, or one that is not a date", async () => {
     const fire = adapter({ fireSchedule: async () => Response.json({ fired: true, ms: 0 }) });
-    expect((await postEnvelope(fire, { kind: "schedule-fire" } as AgentcoreEnvelope)).status).toBe(400);
-    expect((await postEnvelope(fire, { kind: "schedule-fire", name: "job" } as AgentcoreEnvelope)).status).toBe(400);
+    expect((await postEnvelope(fire, { kind: "routine-fire" } as AgentcoreEnvelope)).status).toBe(400);
+    expect((await postEnvelope(fire, { kind: "routine-fire", name: "job" } as AgentcoreEnvelope)).status).toBe(400);
     // Parsed HERE because this path claims the instant: an unparseable one would claim `Invalid Date`.
     expect(
-      (await postEnvelope(fire, { kind: "schedule-fire", name: "job", occurrence: "nope" } as AgentcoreEnvelope))
-        .status,
+      (await postEnvelope(fire, { kind: "routine-fire", name: "job", occurrence: "nope" } as AgentcoreEnvelope)).status,
     ).toBe(400);
   });
 });
@@ -426,7 +425,7 @@ describe("agentcore adapter: the authentication boundary", () => {
     });
 
     for (const envelope of [
-      { kind: "schedule-fire", name: "digest", occurrence: OCCURRENCE },
+      { kind: "routine-fire", name: "digest", occurrence: OCCURRENCE },
       { kind: "webhook", method: "POST", path: "/hook" },
       { kind: "wake-poke" },
     ] as AgentcoreEnvelope[]) {
@@ -437,7 +436,7 @@ describe("agentcore adapter: the authentication boundary", () => {
 
     // And a WRONG secret is not a secret, whatever its byte length or type.
     for (const auth of ["guessed", "x".repeat(Buffer.byteLength(SECRET)), 123]) {
-      const res = await post(routes, JSON.stringify({ auth, kind: "schedule-fire", name: "d" }));
+      const res = await post(routes, JSON.stringify({ auth, kind: "routine-fire", name: "d" }));
       expect(res.status, String(auth)).toBe(403);
     }
     expect(fire).not.toHaveBeenCalled();

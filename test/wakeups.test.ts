@@ -89,15 +89,15 @@ describe("schedule/wakeups store + guardrails", () => {
     if (!bad.ok) expect(bad.error).toMatch(/invalid cron/);
   });
 
-  it("removeWakeup: session-scoped for the agent's unwake; unscoped for the operator", async () => {
+  it("removeWakeup is session-scoped, with no way around it", async () => {
+    // `unwake` is the ONLY caller: an agent cancels its own alarm. The operator CLI that used to pass no
+    // session is gone — a wake-up fires only while a serve is running, and a running serve is one whose
+    // session can be spoken to, so "the alarm is loose" and "the agent is unreachable" cannot both hold.
     const r = await root();
     const res = addWakeup(r, { session: "mine", prompt: "x", fireAt: at(2 * MIN_WAKE_MS) }, NOW);
     if (!res.ok) throw new Error("setup");
     expect(removeWakeup(r, res.id, "other-session")).toBe(false); // another conversation can't cancel it
     expect(removeWakeup(r, res.id, "mine")).toBe(true); // its own can
-    const res2 = addWakeup(r, { session: "mine", prompt: "x", fireAt: at(2 * MIN_WAKE_MS) }, NOW);
-    if (!res2.ok) throw new Error("setup");
-    expect(removeWakeup(r, res2.id)).toBe(true); // the operator (no session) always can
   });
 
   it("recurring claim = ADVANCE IN PLACE: the entry stays (next instant), the occurrence is returned", async () => {

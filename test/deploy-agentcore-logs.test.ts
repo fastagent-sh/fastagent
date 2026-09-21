@@ -130,7 +130,7 @@ describe("agentcore logs", () => {
 
     const result = await tailAgentcoreLogs({ name: "my-agent", source: "forwarder", follow: false }, aws.cli);
 
-    expect(result).toMatchObject({ ok: false, gate: expect.stringMatching(/deliver one webhook or schedule fire/) });
+    expect(result).toMatchObject({ ok: false, gate: expect.stringMatching(/deliver one webhook or routine run/) });
   });
 
   it("never guesses when an edited stack has several matching Runtime endpoints", async () => {

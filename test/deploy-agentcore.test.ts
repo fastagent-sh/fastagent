@@ -200,7 +200,7 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("ScheduleExpressionTimezone: Asia/Shanghai");
     // THE CLOCK NAMES THE FIRE. `<aws.scheduler.scheduled-time>` is what EventBridge repeats
     // byte-identically on every redelivery (measured: 3 attempts, one payload), which is the only thing
-    // that lets the container tell a retry from a new occurrence (schedule/trigger.ts).
+    // that lets the container tell a retry from a new occurrence (schedule/run.ts).
     expect(template).toContain('\'{"scheduleFire":{"name":"digest","occurrence":"<aws.scheduler.scheduled-time>"}}\'');
     expect(template).not.toContain("impossible");
     expect(plan.untranslatableSchedules).toEqual([

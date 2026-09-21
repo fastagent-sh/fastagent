@@ -59,11 +59,11 @@ src/
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
-├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ schedules/ config
+├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
 ├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared
 │                           # path predicates and the machinery paths that follow (.secrets/.state)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
-│                           # (defineTool/defineChannel/defineSchedule + deploy.secrets): the ONE read of
+│                           # (defineTool/defineChannel/defineRoutine + deploy.secrets): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared
 │                           # them, and what "has no value" means
 ├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load
@@ -176,12 +176,12 @@ src/
 │   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js } # ONE CloudFormation stack: runtime +
 │                             # forwarder Lambda (webhooks) + EventBridge rules (schedules). No public URL,
 │                             # no resident process, no volume — the facts every difference follows from
-├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron
-│   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types
-│   ├── trigger.ts          # POST /trigger: the EXTERNAL clock's form of a fire. The body is a REFERENCE
-│   │                       # (name + optional slot), never a prompt — the turn stays in the definition
+├── schedule/               # the N axis: the unit of work (a ROUTINE) and the clock that fires it
+│   ├── routine.ts          # defineRoutine({ prompt, cron?, tz? }) — the ONLY named unit of work. `cron` is a
+│   │                       # FIELD: without one, the name is the only way in. Not a "schedule" (that named a time)
+│   ├── run.ts              # POST /run: an API, by name. NO occurrence — that lives where we own the clock
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
-│   ├── discover.ts         # schedules/ filesystem discovery; a bad file is isolated
+│   ├── discover.ts         # routines/ filesystem discovery; a bad file is isolated
 │   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules

@@ -67,11 +67,11 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
       join(agentDir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", selfSchedule: true };\n`,
     );
-    // A plain default export, not `defineSchedule(...)`: loadSchedules validates the SHAPE, and this
+    // A plain default export, not `defineRoutine(...)`: loadRoutines validates the SHAPE, and this
     // fixture has no node_modules to import the package's helper from.
-    await mkdir(join(agentDir, "schedules"), { recursive: true });
+    await mkdir(join(agentDir, "routines"), { recursive: true });
     await writeFile(
-      join(agentDir, "schedules", "nightly.mjs"),
+      join(agentDir, "routines", "nightly.mjs"),
       `export default { cron: "0 3 * * *", prompt: "probe" };\n`,
     );
     await writeFile(join(agentDir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);

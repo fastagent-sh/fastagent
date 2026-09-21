@@ -278,33 +278,63 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/routes:.*\/invoke/);
   });
 
-  it("fire on an unknown schedule name exits 1 and lists the available schedules", async () => {
-    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+  it("run on an unknown routine name exits 1 and lists the available routines", async () => {
+    const routineHref = new URL("../src/schedule/routine.ts", import.meta.url).href;
     const dir = await agentWorkspace("fa-fire-", {
-      "schedules/daily.ts": `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "digest" });\n`,
+      "routines/daily.ts": `import { defineRoutine } from ${JSON.stringify(routineHref)};\nexport default defineRoutine({ cron: "0 9 * * *", prompt: "digest" });\n`,
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
     const env = { ...process.env };
     delete env.FASTAGENT_MODEL; // unknown-name exits before any model resolution
-    const { code, stderr } = await run(["schedule", "fire", "nope", dir], undefined, env);
+    const { code, stderr } = await run(["routine", "run", "nope", dir], undefined, env);
     expect(code).toBe(1);
-    expect(stderr).toMatch(/unknown schedule "nope"/);
-    expect(stderr).toMatch(/available: daily/); // found in fastagent/schedules — the same set dev/start serve
-    // The path is REPORTED, not spelled from the nested default — a flat agent's schedules live at its
-    // own root, and pointing at `fastagent/schedules` there would invent a directory.
-    expect(stderr).toMatch(/looked in .*fastagent\/schedules/);
+    expect(stderr).toMatch(/unknown routine "nope"/);
+    expect(stderr).toMatch(/available: daily/); // found in fastagent/routines — the same set dev/start serve
+    // The path is REPORTED, not spelled from the nested default — a flat agent's routines live at its
+    // own root, and pointing at `fastagent/routines` there would invent a directory.
+    expect(stderr).toMatch(/looked in .*fastagent\/routines/);
   });
 
-  it("schedule history refuses an impossible name with exit 1, not an empty history", async () => {
+  it("routine list reads BOTH owners: the declared routines and the agent's own pending wake-ups", async () => {
+    // Cancelling a wake-up is the agent's (`unwake`), and that command is gone on purpose. Reading one is
+    // not: without this, finding out why an agent wakes at 3am means opening
+    // `<stateRoot>/schedule/wakeups.json` by hand.
+    const dir = await agentWorkspace("fa-list-", {
+      "routines/daily.mjs": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
+      "routines/reindex.mjs": `export default { prompt: "refresh" };\n`,
+    });
+    const { addWakeup } = await import("../src/schedule/wakeups.ts");
+    const { resolveStateRoot } = await import("../src/paths.ts");
+    const added = addWakeup(resolveStateRoot(join(dir, "fastagent")), {
+      session: "chat:42",
+      prompt: "check the deploy",
+      fireAt: new Date(Date.now() + 3_600_000),
+    });
+    if (!added.ok) throw new Error(added.error);
+
+    const text = await run(["routine", "list", dir]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toMatch(/daily\s+\S+\s+cron 0 9 \* \* \*/);
+    expect(text.stdout).toMatch(/reindex\s+on demand/); // no cron: the name is the only way in
+    expect(text.stdout).toContain(`wake ${added.id}`); // labelled — a different owner, not a routine
+    expect(text.stdout).toContain("session=chat:42");
+
+    const asJson = await run(["routine", "list", "--json", dir]);
+    const parsed = JSON.parse(asJson.stdout) as { routines: { name: string }[]; wakeups: { id: string }[] };
+    expect(parsed.routines.map((r) => r.name)).toEqual(["daily", "reindex"]);
+    expect(parsed.wakeups.map((w) => w.id)).toEqual([added.id]);
+  });
+
+  it("routine history refuses an impossible name with exit 1, not an empty history", async () => {
     // The difference that matters to a script: a mistyped argument and "this schedule has never fired" must not
     // both look like success with no output — which is exactly what `--json` printing nothing would say.
     const dir = await agentWorkspace("fa-history-");
-    const bad = await run(["schedule", "history", "../escape", dir, "--json"]);
+    const bad = await run(["routine", "history", "../escape", dir, "--json"]);
     expect(bad.code).toBe(1);
     expect(bad.stdout).toBe("");
-    expect(bad.stderr).toMatch(/cannot be a schedule name/);
+    expect(bad.stderr).toMatch(/cannot be a routine name/);
     // A real name that simply has no claims is the other case, and it succeeds with an empty history.
-    const empty = await run(["schedule", "history", "daily", dir, "--json"]);
+    const empty = await run(["routine", "history", "daily", dir, "--json"]);
     expect(empty.code).toBe(0);
     expect(JSON.parse(empty.stdout)).toEqual([]);
 
@@ -312,14 +342,14 @@ describe("cli papercuts", () => {
     // rather than printing the Node stack `readFires` throws for the serving boot's benefit.
     await mkdir(join(dir, "fastagent", ".state", "schedule", "claims"), { recursive: true });
     await writeFile(join(dir, "fastagent", ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
-    const broken = await run(["schedule", "history", "daily", dir, "--json"]);
+    const broken = await run(["routine", "history", "daily", dir, "--json"]);
     expect(broken.code).toBe(1);
     expect(broken.stdout).toBe("");
     expect(broken.stderr).toMatch(/fired-slot claims for "daily" are unreadable/);
     expect(broken.stderr).not.toMatch(/at listClaims/); // no stack
   });
 
-  it("schedule history points at the journal it does NOT print, by the sessions dir the serve writes", async () => {
+  it("routine history points at the journal it does NOT print, by the sessions dir the serve writes", async () => {
     // The rows say a fire happened; what it SAID is a session record this command never opens. The pointer is the
     // only thing standing in for it, so it has to name the directory a serve actually writes (state root, not the
     // agent dir) and enough of the file name to pick it out of that directory.
@@ -328,12 +358,12 @@ describe("cli papercuts", () => {
     await mkdir(claims, { recursive: true });
     await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));
 
-    const { code, stdout, stderr } = await run(["schedule", "history", "daily", dir]);
+    const { code, stdout, stderr } = await run(["routine", "history", "daily", dir]);
     expect(code).toBe(0);
     expect(stdout).toMatch(/2026-01-01T09:00:00.000Z/);
-    expect(stderr).toContain(`session schedule:daily`);
+    expect(stderr).toContain(`session routine:daily`);
     expect(stderr).toContain(join(dir, "fastagent", ".state", "sessions"));
-    // pi cannot name a record `schedule:daily`, so the id is NOT the file name — the schedule name is what survives
+    // pi cannot name a record `routine:daily`, so the id is NOT the file name — the schedule name is what survives
     // the encoding, and it is what the line tells the reader to look for.
     expect(stderr).toMatch(/name carries "daily"/);
   });
@@ -343,35 +373,35 @@ describe("cli papercuts", () => {
     // where the author needs to hear about the import error rather than doubt their spelling.
     const dir = await agentWorkspace("fa-unknown-broken-", {
       "tools/broken.mjs": `throw new Error("boom at import");\n`,
-      "schedules/broken.mjs": `throw new Error("sched boom");\n`,
+      "routines/broken.mjs": `throw new Error("sched boom");\n`,
     });
     const tool = await run(["tool", "nope", "{}", dir]);
     expect(tool.code).toBe(1);
     expect(tool.stderr).toMatch(/tools\/broken\.mjs failed to load/);
     expect(tool.stderr).toMatch(/unknown tool "nope"/);
 
-    const fired = await run(["schedule", "fire", "nope", dir]);
+    const fired = await run(["routine", "run", "nope", dir]);
     expect(fired.code).toBe(1);
-    expect(fired.stderr).toMatch(/schedules\/broken\.mjs failed to load/);
-    expect(fired.stderr).toMatch(/unknown schedule "nope"/);
+    expect(fired.stderr).toMatch(/routines\/broken\.mjs failed to load/);
+    expect(fired.stderr).toMatch(/unknown routine "nope"/);
   });
 
-  it("fire refuses a schedule whose declared secret has no value, instead of running a degraded prompt", async () => {
-    // `defineSchedule` resolves a prompt builder at load, so an unset value would have produced
+  it("run refuses a routine whose declared secret has no value, instead of running a degraded prompt", async () => {
+    // `defineRoutine` resolves a prompt builder at load, so an unset value would have produced
     // "Post the digest to " and `fire` would have sent it — the exact failure the declaration exists
     // to prevent. `fire` runs the schedule, so it takes the serving path's assertion.
-    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+    const routineHref = new URL("../src/schedule/routine.ts", import.meta.url).href;
     const dir = await agentWorkspace("fa-fire-secret-", {
-      "schedules/digest.ts":
-        `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\n` +
-        `export default defineSchedule({ cron: "0 9 * * *", secrets: ["FA_TEST_FIRE_CHANNEL"],\n` +
+      "routines/digest.ts":
+        `import { defineRoutine } from ${JSON.stringify(routineHref)};\n` +
+        `export default defineRoutine({ cron: "0 9 * * *", secrets: ["FA_TEST_FIRE_CHANNEL"],\n` +
         `  prompt: (s) => \`Post the digest to \${s.FA_TEST_FIRE_CHANNEL}\` });\n`,
     });
     const env = { ...process.env };
     delete env.FA_TEST_FIRE_CHANNEL;
-    const { code, stderr } = await run(["schedule", "fire", "digest", dir], undefined, env);
+    const { code, stderr } = await run(["routine", "run", "digest", dir], undefined, env);
     expect(code).toBe(1);
-    expect(stderr).toMatch(/FA_TEST_FIRE_CHANNEL \(schedules\/digest\.ts\)/);
+    expect(stderr).toMatch(/FA_TEST_FIRE_CHANNEL \(routines\/digest\.ts\)/);
     // Through the CLI's failure boundary: the one line that names the file, never a Node stack that
     // buries it (the assertion throws synchronously, so it has no opener promise to ride).
     expect(stderr).toMatch(/^Error: missing required secrets/m);
@@ -424,19 +454,19 @@ describe("cli papercuts", () => {
     // One manual trigger must not require the credentials of the SCHEDULES it is not running: a laptop
     // that has no reason to hold the digest channel can still fire `cleanup`. (The agent it then
     // assembles still gates every mounted tool — a fired turn can call any of them.)
-    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+    const routineHref = new URL("../src/schedule/routine.ts", import.meta.url).href;
     const dir = await agentWorkspace("fa-fire-sibling-", {
-      "schedules/digest.ts":
-        `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\n` +
-        `export default defineSchedule({ cron: "0 9 * * *", secrets: ["FA_TEST_FIRE_CHANNEL"],\n` +
+      "routines/digest.ts":
+        `import { defineRoutine } from ${JSON.stringify(routineHref)};\n` +
+        `export default defineRoutine({ cron: "0 9 * * *", secrets: ["FA_TEST_FIRE_CHANNEL"],\n` +
         `  prompt: (s) => \`Post to \${s.FA_TEST_FIRE_CHANNEL}\` });\n`,
-      "schedules/cleanup.ts":
-        `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\n` +
-        `export default defineSchedule({ cron: "0 3 * * *", prompt: "tidy up" });\n`,
+      "routines/cleanup.ts":
+        `import { defineRoutine } from ${JSON.stringify(routineHref)};\n` +
+        `export default defineRoutine({ cron: "0 3 * * *", prompt: "tidy up" });\n`,
     });
     const env = { ...process.env };
     delete env.FA_TEST_FIRE_CHANNEL;
-    const { stderr } = await run(["schedule", "fire", "cleanup", dir], undefined, env);
+    const { stderr } = await run(["routine", "run", "cleanup", dir], undefined, env);
     expect(stderr).not.toMatch(/FA_TEST_FIRE_CHANNEL/); // got past the gate (it then needs a model/auth)
   });
 
@@ -562,12 +592,12 @@ describe("cli papercuts", () => {
     expect(text.stderr).toMatch(/broken\.ts/); // the reason is a warning on stderr
   });
 
-  it("info loads schedules — a broken one is reported (exit 0), a good one carries its next instant", async () => {
+  it("info loads routines — a broken one is reported (exit 0), a good one carries its next instant", async () => {
     // Same G2 isolation as tools: a broken schedule file (bad cron) is skipped + reported at info time,
     // not first at `dev`; the good schedule still shows, with its next fire instant.
     const dir = await agentWorkspace("fa-info-schedfail-", {
-      "schedules/good.mjs": 'export default { cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
-      "schedules/bad.mjs": 'export default { cron: "not a cron", prompt: "x" };\n',
+      "routines/good.mjs": 'export default { cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
+      "routines/bad.mjs": 'export default { cron: "not a cron", prompt: "x" };\n',
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
     const env = { ...process.env };
@@ -576,17 +606,17 @@ describe("cli papercuts", () => {
     const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
     expect(code).toBe(0); // reported, not fatal
     const info = JSON.parse(stdout);
-    expect(info.schedules).toHaveLength(1);
-    expect(info.schedules[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
-    expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
-    expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
+    expect(info.routines).toHaveLength(1);
+    expect(info.routines[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
+    expect(info.routines[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
+    expect(JSON.stringify(info.routineFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
     expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
     expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]); // omitted = everything
 
-    // text mode: next instant on the schedules line, the failure as a stderr warning
+    // text mode: next instant on the routines line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);
     expect(text.code).toBe(0);
-    expect(text.stdout).toMatch(/schedules:\s+good \(next .*T09:00:00\.000Z\)/);
+    expect(text.stdout).toMatch(/routines:\s+good \(next .*T09:00:00\.000Z\)/);
     expect(text.stdout).toMatch(/selfSchedule: off/);
     expect(text.stderr).toMatch(/bad\.mjs/);
   });

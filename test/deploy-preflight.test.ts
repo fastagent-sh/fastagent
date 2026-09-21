@@ -19,7 +19,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
   await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
   for (const [name, content] of Object.entries(files)) {
-    await mkdir(join(dir, name, ".."), { recursive: true }); // a fixture may name a nested file (schedules/…)
+    await mkdir(join(dir, name, ".."), { recursive: true }); // a fixture may name a nested file (routines/…)
     await writeFile(join(dir, name), content);
   }
   return dir;
@@ -526,18 +526,35 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const none = await call(await workspace(), { model: "openai/gpt-4o-mini" });
     expect(none.ok && !none.hasCron && !none.hasWakeups).toBe(true);
 
-    // A schedules/ file → hasCron, and the note names `POST /trigger`: someone else's clock CAN fire a declared
-    // schedule, so an operator paying for an idle box has a real option and should be told it exists.
-    const dir = await workspace();
+    // A ROUTINE IS NOT A CRON. `cron` is a field, so what pins a machine up is a routine that DECLARES one —
+    // counting routine files answered a different question and made a by-name-only definition pay for an idle
+    // box forever, while printing a note about a cron instant it does not have.
     const { mkdir, writeFile: wf } = await import("node:fs/promises");
-    await mkdir(join(dir, "schedules"), { recursive: true });
-    await wf(join(dir, "schedules", "daily.ts"), "export default {};\n"); // discovery counts files, not validity
+    const byNameOnly = await workspace();
+    await mkdir(join(byNameOnly, "routines"), { recursive: true });
+    await wf(join(byNameOnly, "routines", "reindex.ts"), `export default { prompt: "refresh" };\n`);
+    const onDemand = await call(byNameOnly, { model: "openai/gpt-4o-mini" });
+    expect(onDemand.ok && !onDemand.hasCron && !onDemand.hasWakeups).toBe(true);
+    if (onDemand.ok) {
+      expect(onDemand.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
+    }
+
+    // A routines/ file WITH a cron → hasCron, and the note names `POST /run`: a cron is a time, and a time can
+    // be kept elsewhere, so an operator paying for an idle box has a real option and should be told it exists.
+    const dir = await workspace();
+    await mkdir(join(dir, "routines"), { recursive: true });
+    // A file that fails to LOAD still counts, conservatively: it may well declare a cron, and scaling to zero
+    // because it did not parse would hide that behind silence.
+    await wf(join(dir, "routines", "broken.ts"), "export default {};\n");
+    const broken = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(broken.ok && broken.hasCron).toBe(true);
+    await wf(join(dir, "routines", "daily.ts"), `export default { cron: "0 9 * * *", prompt: "go" };\n`);
     const withCron = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(withCron.ok && withCron.hasCron && !withCron.hasWakeups).toBe(true);
     if (withCron.ok) {
       const note = withCron.messages.find((m) => /keeps one machine running/.test(m.text));
       expect(note?.level).toBe("note");
-      expect(note?.text).toContain("POST /trigger");
+      expect(note?.text).toContain("POST /run");
     }
 
     // selfSchedule alone → hasWakeups, and the note offers NO way out: a wake-up is minted at runtime, so no
@@ -547,7 +564,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (wake.ok) {
       const note = wake.messages.find((m) => /keeps one machine running/.test(m.text));
       expect(note?.text).toContain("no way around it");
-      expect(note?.text).not.toContain("POST /trigger");
+      expect(note?.text).not.toContain("POST /run");
     }
 
     // BOTH → the wake-up is what gets reported, because it is the one with no substitute.
@@ -555,7 +572,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(both.ok && both.hasCron && both.hasWakeups).toBe(true);
     if (both.ok) {
       expect(both.messages.filter((m) => /keeps one machine running/.test(m.text))).toHaveLength(1);
-      expect(both.messages.find((m) => /keeps one machine running/.test(m.text))?.text).not.toContain("POST /trigger");
+      expect(both.messages.find((m) => /keeps one machine running/.test(m.text))?.text).not.toContain("POST /run");
     }
   });
 
@@ -649,14 +666,14 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   it("carries what tools and schedules DECLARED, without a second list to keep in sync", async () => {
     const dir = await workspace();
     await mkdir(join(dir, "tools"), { recursive: true });
-    await mkdir(join(dir, "schedules"), { recursive: true });
+    await mkdir(join(dir, "routines"), { recursive: true });
     await writeFile(
       join(dir, "tools", "x-post.mjs"),
       `export default { name: "x-post", description: "post", parameters: {},
          secrets: ["X_API_KEY", "X_API_SECRET"], execute: async () => ({ content: [] }) };\n`,
     );
     await writeFile(
-      join(dir, "schedules", "digest.mjs"),
+      join(dir, "routines", "digest.mjs"),
       `export default { cron: "0 9 * * *", prompt: "digest", secrets: ["SLACK_DIGEST_CHANNEL"] };\n`,
     );
     const pre = await call(dir, { model: "openai/gpt-4o-mini", deploy: { secrets: ["GH_TOKEN"] } });
@@ -666,7 +683,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       { name: "GH_TOKEN", source: "fastagent.config deploy.secrets" },
       { name: "X_API_KEY", source: "tools/x-post.mjs" },
       { name: "X_API_SECRET", source: "tools/x-post.mjs" },
-      { name: "SLACK_DIGEST_CHANNEL", source: "schedules/digest.mjs" },
+      { name: "SLACK_DIGEST_CHANNEL", source: "routines/digest.mjs" },
     ]);
     // The runbook names the file to open, not a fixed "declared in fastagent.config" sentence.
     const listed = deploymentSecrets(undefined, [], pre.extraSecrets);
@@ -715,26 +732,26 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // nothing left to warn about.
     const withheld = await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false } });
     expect(unauthenticated(withheld)).toEqual([]);
-    // A declared schedule mounts `POST /trigger`, so the list names it on the same condition the
+    // A declared schedule mounts `POST /run`, so the list names it on the same condition the
     // assembly uses. The combination this protects is the last line: `http.invoke: false` +
-    // `http.trigger: true` leaves that route as the ONLY anonymous turn endpoint on a public URL, and
+    // `http.run: true` leaves that route as the ONLY anonymous turn endpoint on a public URL, and
     // it used to produce an empty list, i.e. no warning at all.
     const withSchedule = await workspace({
-      "schedules/daily.ts": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
+      "routines/daily.ts": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
     });
     const bothOn = unauthenticated(await call(withSchedule, { model: "openai/gpt-4o-mini" }));
     expect(bothOn).toHaveLength(1);
     expect(bothOn[0]?.text).toContain("POST /invoke");
-    expect(bothOn[0]?.text).toContain("POST /trigger (fire any schedule this agent declares)");
+    expect(bothOn[0]?.text).toContain("POST /run (run any routine this agent declares; GET /routines lists them)");
 
     const triggerOnly = unauthenticated(
-      await call(withSchedule, { model: "openai/gpt-4o-mini", http: { invoke: false, trigger: true } }),
+      await call(withSchedule, { model: "openai/gpt-4o-mini", http: { invoke: false, run: true } }),
     );
     expect(triggerOnly).toHaveLength(1);
-    expect(triggerOnly[0]?.text).toContain("POST /trigger");
+    expect(triggerOnly[0]?.text).toContain("POST /run");
     expect(triggerOnly[0]?.text).not.toContain("POST /invoke");
 
-    // …and `http.trigger` follows `http.invoke` when unset, so turning the data plane off takes it too.
+    // …and `http.run` follows `http.invoke` when unset, so turning the data plane off takes it too.
     expect(unauthenticated(await call(withSchedule, { model: "openai/gpt-4o-mini", http: { invoke: false } }))).toEqual(
       [],
     );

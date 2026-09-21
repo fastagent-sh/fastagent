@@ -245,10 +245,10 @@ describe("agentcore forwarder (executed)", () => {
     expect(res.statusCode).toBe(502);
   });
 
-  it("schedule fires throw on a failed container outcome (the miss must land in CloudWatch)", async () => {
+  it("routine runs throw on a failed container outcome (the miss must land in CloudWatch)", async () => {
     const ok = loadForwarder();
     await ok.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } });
-    expect(ok.envelopes[0]).toMatchObject({ kind: "schedule-fire", name: "digest" });
+    expect(ok.envelopes[0]).toMatchObject({ kind: "routine-fire", name: "digest" });
 
     const failing = loadForwarder({ containerReply: () => ({ statusCode: 500, body: "nope" }) });
     await expect(failing.handler({ scheduleFire: { name: "digest", occurrence: "x" } })).rejects.toThrow(
@@ -258,7 +258,7 @@ describe("agentcore forwarder (executed)", () => {
 
   it("a fire whose invoke never came back is still ATTRIBUTABLE to that schedule", async () => {
     // Lambda logs an unhandled throw, so this failure was never invisible — it was unattributable.
-    // Filtering the group for `schedule-fire digest` returned nothing whether the clock had not fired
+    // Filtering the group for `routine-fire digest` returned nothing whether the clock had not fired
     // or the call had died, which are different bugs. One live run was diagnosed wrong on exactly that.
     const dead = loadForwarder({
       containerReply: () => {
@@ -269,7 +269,7 @@ describe("agentcore forwarder (executed)", () => {
       dead.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } }),
     ).rejects.toThrow(/runtime unavailable/); // still thrown: that is what makes EventBridge retry
     expect(dead.logs.mock.calls.flat().join("\n")).toContain(
-      "schedule-fire digest (2026-07-28T09:00:00Z): invoke failed: runtime unavailable",
+      "routine-fire digest (2026-07-28T09:00:00Z): invoke failed: runtime unavailable",
     );
   });
 
@@ -425,10 +425,15 @@ describe("the forwarder speaks the protocol module's spelling", () => {
     for (const path of Object.values(RESERVED_PATHS)) expect(src).toContain(`"${path}"`);
   });
 
-  it("emits every envelope kind except the public invoke data plane", () => {
+  it("emits every FORWARDER kind, and none of the IAM door's", () => {
+    // The split this asserts is the adapter's authentication boundary: the forwarder mints the ingress
+    // secret, so a kind it can emit is a kind an anonymous caller can reach. `invoke` and `routine-run`
+    // are therefore NOT emitted here — they exist only for a direct InvokeAgentRuntime call, where AWS
+    // has already said who the caller is.
+    const iamDoor = new Set(["invoke", "routine-run"]);
     for (const kind of ENVELOPE_KINDS) {
-      if (kind === "invoke") continue;
-      expect(src).toContain(`kind: "${kind}"`);
+      if (iamDoor.has(kind)) expect(src).not.toContain(`kind: "${kind}"`);
+      else expect(src).toContain(`kind: "${kind}"`);
     }
   });
 

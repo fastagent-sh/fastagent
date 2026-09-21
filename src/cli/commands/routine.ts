@@ -1,37 +1,42 @@
-/** `fastagent schedule history|list|cancel`. */
+/**
+ * `fastagent routine history|list` — the routines this DEFINITION declares.
+ *
+ * The agent's own pending wake-ups are not here and have no command: they live in the state, not the definition,
+ * and `unwake({ id })` is what cancels one (schedule/wakeups.ts says why).
+ */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { loadSchedules } from "../../schedule/discover.ts";
-import { scheduleSession } from "../../schedule/schedule.ts";
+import { loadRoutines } from "../../schedule/discover.ts";
+import { routineSession } from "../../schedule/routine.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
-import { listWakeups, removeWakeup } from "../../schedule/wakeups.ts";
+import { listWakeups } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 /**
- * `fastagent schedule history <name> [dir]`: print this schedule's fired slots — when each fired, how it ended, how
+ * `fastagent routine history <name> [dir]`: print this routine's fired slots — when each fired, how it ended, how
  * long it took.
  *
  * The history IS the claims (`schedule/claims/<name>/`), so it is bounded by construction and carries no turn text:
- * what the run SAID is in its session (`schedule:<name>`), stored once, like any other turn's, under the state
+ * what the run SAID is in its session (`routine:<name>`), stored once, like any other turn's, under the state
  * root's `sessions/` — which is where this command points rather than copying any of it here.
  *
- * This command does NOT try to say which turn belongs to which fire. Nothing links them: a schedule's fires share
+ * This command does NOT try to say which turn belongs to which fire. Nothing links them: a routine's fires share
  * ONE continuing conversation, so the session id is the same for all of them, and the turn-level identifier would
  * have to cross the engine-neutral contract (no `AgentEvent` carries an entry id) or cost the shared conversation.
  * A claim's timestamp against a time-ordered journal is what an operator reads anyway — matching them HERE only
  * moves a human's judgement into a heuristic that cannot be right about a session other writers also append to.
  */
-export function runScheduleHistory(name: string, dirArg: string, json: boolean): void {
+export function runRoutineHistory(name: string, dirArg: string, json: boolean): void {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
-  // A name that cannot be a schedule is a MISTYPED ARGUMENT, and it must not look like an empty history: exit 1 the
+  // A name that cannot be a routine is a MISTYPED ARGUMENT, and it must not look like an empty history: exit 1 the
   // way every other user-input refusal does, so `--json` printing nothing is never read as "the command succeeded".
   if (!isSafeScheduleName(name)) {
-    failStartup(new Error(`"${name}" cannot be a schedule name (no path separators, "." or "..")`));
+    failStartup(new Error(`"${name}" cannot be a routine name (no path separators, "." or "..")`));
   }
   // `readFires` throws a raw fs error on unreadable state, because its other caller is the serving boot, which must
   // fail rather than arm a schedule it cannot read. This caller is a read-only CLI command: the same fact is an
@@ -69,23 +74,34 @@ export function runScheduleHistory(name: string, dirArg: string, json: boolean):
   // record is one level further down and under a name pi accepts (`piSessionId` escapes the `:`), so the pointer
   // says how to recognise the file rather than claiming a path the reader can paste.
   console.error(
-    `(what these runs said: session ${scheduleSession(name)} — a JSON-lines journal under ${resolveSessionsDir(target)}, ` +
+    `(what these runs said: session ${routineSession(name)} — a JSON-lines journal under ${resolveSessionsDir(target)}, ` +
       `in the file whose name carries "${name}")`,
   );
 }
 
-/** `fastagent schedule list [dir]`: everything that will fire. */
-export async function runScheduleList(dirArg: string, json: boolean): Promise<void> {
+/**
+ * `fastagent routine list [dir]`: every declared routine, and when (or whether) a clock fires it.
+ *
+ * IT ALSO READS the agent's pending wake-ups. They are a different owner (the state, not the definition) but the
+ * same question when an operator is asking it: "what is going to wake this agent up?". Deleting the command that
+ * CANCELLED one was right — `unwake({ id })` covers it, and a serve that can receive the alarm can also be spoken
+ * to — but that argument is about WRITING. Without a read, the only way to learn why an agent wakes at 3am is to
+ * open `<stateRoot>/schedule/wakeups.json` by hand.
+ */
+export async function runRoutineList(dirArg: string, json: boolean): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target);
-  const { schedules, failures } = await loadSchedules(target).catch(failStartup);
+  const { routines, failures } = await loadRoutines(target).catch(failStartup);
   reportModuleLoadFailures(failures);
   const wakeups = listWakeups(resolveStateRoot(target));
   if (json) {
     console.log(
       JSON.stringify(
         {
-          schedules: schedules.map((s) => ({ ...s, next: nextRun(s.cron, s.tz, new Date())?.toISOString() })),
+          routines: routines.map((r) => ({
+            ...r,
+            next: r.cron === undefined ? null : (nextRun(r.cron, r.tz, new Date())?.toISOString() ?? null),
+          })),
           wakeups,
         },
         null,
@@ -94,38 +110,23 @@ export async function runScheduleList(dirArg: string, json: boolean): Promise<vo
     );
     return;
   }
-  if (schedules.length === 0 && wakeups.length === 0) {
-    console.error(`nothing scheduled — no schedules/ files, no pending wake-ups (state: ${resolveStateRoot(target)})`);
+  if (routines.length === 0 && wakeups.length === 0) {
+    console.error(`nothing declared or pending — no routines/ files, no wake-ups (agent: ${target})`);
     return;
   }
-  for (const s of schedules) {
-    const next = nextRun(s.cron, s.tz, new Date())?.toISOString() ?? "(never)";
-    console.log(`schedule  ${s.name.padEnd(20)} ${next}  cron ${s.cron}${s.tz ? ` ${s.tz}` : ""}`);
+  for (const r of routines) {
+    // A routine with no cron is not broken and not idle: it is reached by NAME (`routine run`, `POST /run`), and
+    // saying "on demand" is the difference between that and a cron that will never fire again.
+    const when =
+      r.cron === undefined
+        ? "on demand".padEnd(26)
+        : `${(nextRun(r.cron, r.tz, new Date())?.toISOString() ?? "(never)").padEnd(26)}cron ${r.cron}${r.tz ? ` ${r.tz}` : ""}`;
+    console.log(`${r.name.padEnd(20)} ${when}`);
   }
+  // Labelled, because these two are NOT the same kind of thing: a routine is the author's, a wake-up is the
+  // agent's own and is cancelled with `unwake` rather than a command here.
   for (const w of wakeups) {
     const kind = w.cron ? `cron ${w.cron}${w.tz ? ` ${w.tz}` : ""}` : "one-shot";
-    console.log(`wake      ${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
-  }
-}
-
-/**
- * `fastagent schedule cancel <id> [dir]`: remove a pending wake-up — the operator's kill switch (the agent's own is
- * the `unwake` tool).
- */
-export function runScheduleCancel(id: string, dirArg: string): void {
-  const { agentDir: target } = placementOrExit(resolve(dirArg));
-  enterAgentEnv(target);
-  if (removeWakeup(resolveStateRoot(target), id)) {
-    // ponytail: the store's load→save is lock-free — a serving scheduler's claim-advance can race this write (window
-    // = ms around each fire).
-    console.error(
-      `[fastagent] cancelled wake-up ${id} — if a server is running, verify with \`fastagent schedule list\``,
-    );
-  } else {
-    failStartup(
-      new Error(
-        `no pending wake-up ${id} (state: ${resolveStateRoot(target)}) — \`fastagent schedule list\` shows ids`,
-      ),
-    );
+    console.log(`wake ${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
   }
 }

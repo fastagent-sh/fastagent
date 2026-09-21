@@ -37,10 +37,11 @@ export interface FastagentConfig {
    * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
    * refused, because it reads as "nobody" and would mean the opposite).
    *
-   * `trigger` serves `POST /trigger`, which fires a schedule this definition declares. It follows `invoke` unless
+   * `run` serves `POST /run` (and `GET /routines`), which run a routine this definition declares by name. It
+   * follows `invoke` unless
    * set: turning the anonymous turn endpoint off must not leave a second one open behind it. Set it `true` for the
    * one combination that gets wrong — no `/invoke`, but an external clock (a crontab, a CI job) driving the
-   * schedules. It has no effect where `schedules/` declares nothing; there is no route then.
+   * schedules. It has no effect where `routines/` declares nothing; there is no route then.
    *
    * `invoke` serves the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment
    * that can only be reached through a chat channel is still worth curling. Set it `false` when this port is public
@@ -48,7 +49,7 @@ export interface FastagentConfig {
    * turn with the agent's full tool authority, so "my telegram bot is deployed" should not have to mean "and anyone
    * with the URL can drive it".
    */
-  http?: { port?: number; host?: string; cors?: string[]; invoke?: boolean; trigger?: boolean };
+  http?: { port?: number; host?: string; cors?: string[]; invoke?: boolean; run?: boolean };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
   selfSchedule?: boolean;
   /**
@@ -182,15 +183,15 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http" must be an object`);
   }
   for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke" && key !== "trigger") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke, trigger)`);
+    if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke" && key !== "run") {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke, run)`);
     }
   }
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
     throw new Error(`${path}: "http.invoke" must be a boolean`);
   }
-  if (c.http?.trigger !== undefined && typeof c.http.trigger !== "boolean") {
-    throw new Error(`${path}: "http.trigger" must be a boolean`);
+  if (c.http?.run !== undefined && typeof c.http.run !== "boolean") {
+    throw new Error(`${path}: "http.run" must be a boolean`);
   }
   if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {

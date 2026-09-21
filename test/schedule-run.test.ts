@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
-import type { LoadedSchedule } from "../src/schedule/schedule.ts";
-import { createTriggerHandler } from "../src/schedule/trigger.ts";
+import type { LoadedRoutine } from "../src/schedule/routine.ts";
+import { createRoutineListHandler, createRunHandler } from "../src/schedule/run.ts";
 
 /**
- * `POST /trigger` — an API, not a time trigger. What belongs here is the wire: what the body may say
+ * `POST /run` — an API, not a time trigger. What belongs here is the wire: what the body may say
  * and what each outcome looks like to the caller.
  *
  * NO OCCURRENCE, no claim, no fire history, no freshness window. Those exist where fastagent owns the
@@ -14,8 +14,8 @@ import { createTriggerHandler } from "../src/schedule/trigger.ts";
  * to be wrong.
  */
 
-const hourly = (over: Partial<LoadedSchedule> = {}): LoadedSchedule =>
-  ({ name: "digest", cron: "0 * * * *", tz: "UTC", prompt: "summarise", ...over }) as LoadedSchedule;
+const hourly = (over: Partial<LoadedRoutine> = {}): LoadedRoutine =>
+  ({ name: "digest", cron: "0 * * * *", tz: "UTC", prompt: "summarise", ...over }) as LoadedRoutine;
 
 /** Records each turn and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -29,13 +29,13 @@ function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
   return { agent, calls };
 }
 
-const handlerFor = async (schedules: LoadedSchedule[], agent: Agent) => ({
-  handle: createTriggerHandler({ agent, schedules }),
+const handlerFor = async (routines: LoadedRoutine[], agent: Agent) => ({
+  handle: createRunHandler({ agent, routines }),
 });
 
-const trigger = (handle: (req: Request) => Promise<Response>, body: unknown, init: RequestInit = {}) =>
+const run = (handle: (req: Request) => Promise<Response>, body: unknown, init: RequestInit = {}) =>
   handle(
-    new Request("http://h/trigger", {
+    new Request("http://h/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: typeof body === "string" ? body : JSON.stringify(body),
@@ -43,17 +43,17 @@ const trigger = (handle: (req: Request) => Promise<Response>, body: unknown, ini
     }),
   );
 
-describe("schedule/trigger: POST /trigger", () => {
+describe("schedule/run: POST /run", () => {
   it("runs the work the definition declared, named by the caller and nothing else", async () => {
     const { agent, calls } = recordingAgent();
     const { handle } = await handlerFor([hourly()], agent);
-    const res = await trigger(handle!, { name: "digest" });
+    const res = await run(handle!, { name: "digest" });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ name: "digest", ran: true });
     // The PROMPT came from the definition, not the wire — the whole reason this exists beside
     // `POST /invoke`, whose caller brings its own text and therefore its own behaviour.
-    expect(calls).toEqual([{ session: "schedule:digest", text: "summarise" }]);
+    expect(calls).toEqual([{ session: "routine:digest", text: "summarise" }]);
   });
 
   it("every call is a call, and the reply says WHERE TO LOOK", async () => {
@@ -67,9 +67,9 @@ describe("schedule/trigger: POST /trigger", () => {
     const { agent, calls } = recordingAgent();
     const { handle } = await handlerFor([hourly()], agent);
     for (let i = 0; i < 3; i++) {
-      expect(await (await trigger(handle!, { name: "digest" })).json()).toMatchObject({
+      expect(await (await run(handle!, { name: "digest" })).json()).toMatchObject({
         name: "digest",
-        session: "schedule:digest",
+        session: "routine:digest",
         ran: true,
       });
     }
@@ -84,7 +84,7 @@ describe("schedule/trigger: POST /trigger", () => {
       { type: "failed", retryable: true, code: "session_busy", details: "busy" },
     ]);
     const { handle } = await handlerFor([hourly()], agent);
-    const body = (await (await trigger(handle!, { name: "digest" })).json()) as {
+    const body = (await (await run(handle!, { name: "digest" })).json()) as {
       ran: boolean;
       reason?: string;
       failed?: string;
@@ -97,14 +97,14 @@ describe("schedule/trigger: POST /trigger", () => {
 
   it("refuses a body that names no work", async () => {
     const { handle } = await handlerFor([hourly()], recordingAgent().agent);
-    expect((await trigger(handle!, {})).status).toBe(400);
-    expect((await trigger(handle!, { name: "" })).status).toBe(400);
-    expect((await trigger(handle!, "{not json")).status).toBe(400);
+    expect((await run(handle!, {})).status).toBe(400);
+    expect((await run(handle!, { name: "" })).status).toBe(400);
+    expect((await run(handle!, "{not json")).status).toBe(400);
     // An unknown field is not an error: this body has one required key and no schema to violate.
-    expect((await trigger(handle!, { name: "digest", whatever: 7 })).status).toBe(200);
+    expect((await run(handle!, { name: "digest", whatever: 7 })).status).toBe(200);
     // The JSON gate every unverified route carries (channels/body.ts), here too.
-    expect((await trigger(handle!, { name: "digest" }, { headers: {} })).status).toBe(415);
-    expect((await handle!(new Request("http://h/trigger"))).status).toBe(405);
+    expect((await run(handle!, { name: "digest" }, { headers: {} })).status).toBe(415);
+    expect((await handle!(new Request("http://h/run"))).status).toBe(405);
   });
 
   it("names the work it does have when the caller names work it does not, clipped", async () => {
@@ -112,20 +112,49 @@ describe("schedule/trigger: POST /trigger", () => {
     // typo from a stale job without shelling in — and the ECHO is the one thing clipped, because
     // quoting 4 KiB of an unauthenticated caller's body back is what `refuseNonJsonBody` forbids.
     const { handle } = await handlerFor([hourly(), hourly({ name: "weekly" })], recordingAgent().agent);
-    const res = await trigger(handle!, { name: "digets" });
+    const res = await run(handle!, { name: "digets" });
     expect(res.status).toBe(404);
     expect(await res.text()).toContain('no declared work named "digets" (this deployment has: digest, weekly)');
 
-    const long = await trigger(handle!, { name: "x".repeat(4000) });
+    const long = await run(handle!, { name: "x".repeat(4000) });
     const said = await long.text();
     expect(said).toContain("x".repeat(64));
     expect(said).not.toContain("x".repeat(65));
   });
 
+  it("GET /routines says which names exist — and never what they SAY", async () => {
+    // Discovery, because the alternative was a 404: the names were already public (the 404 lists them,
+    // deliberately, so an operator can tell a typo from a stale caller), so the only thing this adds is
+    // not having to guess wrong first.
+    //
+    // NEVER THE PROMPT. What a routine says is the definition's content; handing it to an
+    // unauthenticated caller would publish the agent's behaviour — the one thing keeping the prompt out
+    // of the request body was for. `cron` IS here: "will this run on its own, or is my clock the only
+    // one?" is a caller's question.
+    const list = createRoutineListHandler({
+      routines: [hourly(), { name: "reindex", prompt: "secret instructions" } as LoadedRoutine],
+    })!;
+    const res = await list(new Request("http://h/routines"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([
+      { name: "digest", cron: "0 * * * *", tz: "UTC" },
+      { name: "reindex" }, // no cron: by name only, and the shape says so by omission
+    ]);
+    const said = JSON.stringify(await (await list(new Request("http://h/routines"))).json());
+    expect(said).not.toContain("secret instructions");
+    expect(said).not.toContain("summarise");
+
+    // NO method check of its own: the router sends only `GET /routines` here, and HEAD is answered by
+    // the GET route on purpose (channels/serve.ts) — a check would break that probe and reach nothing
+    // else. The route table is what refuses a POST. (service.test.ts covers HEAD through the real wire.)
+    // Nothing declared, no catalogue — the same rule POST /run follows.
+    expect(createRoutineListHandler({ routines: [] })).toBeUndefined();
+  });
+
   it("is not built at all when the definition declares nothing runnable", async () => {
     // A route that can only ever answer 404 is not a route, and its absence is what the startup report
     // and the deploy runbook describe.
-    expect(createTriggerHandler({ agent: recordingAgent().agent, schedules: [] })).toBeUndefined();
+    expect(createRunHandler({ agent: recordingAgent().agent, routines: [] })).toBeUndefined();
   });
 
   it("reports a turn that failed, with a 200 — the CALL succeeded", async () => {
@@ -133,8 +162,8 @@ describe("schedule/trigger: POST /trigger", () => {
     // what failed. Retrying the call would re-run a turn whose side effects may already have landed.
     const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "upstream 500" }]);
     const { handle } = await handlerFor([hourly()], agent);
-    const res = await trigger(handle!, { name: "digest" });
+    const res = await run(handle!, { name: "digest" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ran: true, failed: "upstream 500", session: "schedule:digest" });
+    expect(await res.json()).toMatchObject({ ran: true, failed: "upstream 500", session: "routine:digest" });
   });
 });

@@ -41,7 +41,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(
       flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasCron: true, hasWakeups: false })),
     ).toContain(
-      "min_machines_running = 1", // schedules/wake need a running machine — no external wake-up for a cron instant
+      "min_machines_running = 1", // routines/wake need a running machine — no external wake-up for a cron instant
     );
     expect(
       flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) })),

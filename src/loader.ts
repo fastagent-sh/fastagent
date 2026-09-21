@@ -1,5 +1,5 @@
 /**
- * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`, `schedules/`,
+ * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`, `routines/`,
  * config).
  */
 import type { Dirent } from "node:fs";
@@ -11,7 +11,8 @@ import { log } from "./log.ts";
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 
 /** Whether `name` is an importable agent module (a discovery candidate, not a type declaration). */
-function isModuleFile(name: string): boolean {
+/** Does this filename look like a code input? Exported so a caller can ask about a directory it does NOT load. */
+export function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
 }
 
@@ -88,7 +89,7 @@ export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[])
 
 /**
  * THE REFUSAL every path that is about to RUN the agent shares: an enabled file under `tools/`, `channels/` or
- * `schedules/` is a declaration, so one that cannot load means the agent is missing something its author said it
+ * `routines/` is a declaration, so one that cannot load means the agent is missing something its author said it
  * has. Starting anyway announces a ready service over an absent capability — a schedule that never fires, a tool the
  * model simply never gets — with nothing but one warning to find it by. Every failure is reported before this
  * throws, so a boot fixes all of them at once rather than one per restart.

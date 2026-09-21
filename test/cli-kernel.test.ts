@@ -80,9 +80,8 @@ describe("cli kernel: spec conformance", () => {
       [["init"], "never its NAME, so --agent-dir"],
       [["init"], "ALWAYS goes into a subdirectory"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
-      [["schedule", "fire"], "does NOT advance the schedule's fire state"],
-      [["schedule", "history"], "did last night's run silently fail"],
-      [["schedule", "cancel"], "the agent's own is the `unwake` tool"],
+      [["routine", "run"], "does NOT advance its fire state"],
+      [["routine", "history"], "did last night's run silently fail"],
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
       [["start"], "frozen by git"],
@@ -182,9 +181,9 @@ describe("cli kernel: help", () => {
   });
 
   it("nested subcommand help works and shows its flags", async () => {
-    const r = await parse(["schedule", "history", "--help"]);
+    const r = await parse(["routine", "history", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/Usage: fastagent schedule history/);
+    expect(r.out).toMatch(/Usage: fastagent routine history/);
     expect(r.out).toMatch(/--json/);
   });
 
@@ -205,7 +204,7 @@ describe("cli kernel: the top-level surface", () => {
     expect(r.out).not.toMatch(/Author|Verify|Serve & ship|Operate:/);
     // …one flat section, in the original synopsis order.
     expect(r.out).toMatch(/^Commands:$/m);
-    const order = ["init", "models", "info", "tool", "invoke", "schedule", "dev", "chat", "start"];
+    const order = ["init", "models", "info", "tool", "invoke", "routine", "dev", "chat", "start"];
     const at = (name: string) => r.out.search(new RegExp(`^  ${name}`, "m"));
     for (let i = 1; i < order.length; i++) {
       expect(at(order[i - 1] as string), `${order[i - 1]} before ${order[i]}`).toBeLessThan(at(order[i] as string));
@@ -237,32 +236,31 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a missing required argument is a usage error: exit 2", async () => {
-    const r = await parse(["schedule", "cancel"]);
+    const r = await parse(["routine", "history"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/missing required argument 'id'/);
+    expect(r.err).toMatch(/missing required argument 'name'/);
   });
 
   it("a bare group command shows its subcommand help and exits 2", async () => {
-    const r = await parse(["schedule"]);
+    const r = await parse(["routine"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/Usage: fastagent schedule/);
+    expect(r.err).toMatch(/Usage: fastagent routine/);
     expect(r.err).toMatch(/history/);
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {
-    const r = await parse(["schedule", "cancle", "wake-1"]);
+    const r = await parse(["routine", "histry", "digest"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/unknown command 'cancle'/);
-    expect(r.err).toMatch(/cancel/); // did-you-mean
+    expect(r.err).toMatch(/unknown command 'histry'/);
+    expect(r.err).toMatch(/history/); // did-you-mean
   });
 
   it("an empty required argument is a usage error on every command (the old falsy guards, kept)", async () => {
     const cases = [
       ["invoke", ""],
-      ["schedule", "fire", ""],
+      ["routine", "run", ""],
       ["tool", ""],
-      ["schedule", "history", ""],
-      ["schedule", "cancel", ""],
+      ["routine", "history", ""],
     ];
     for (const argv of cases) {
       const r = await parse(argv);
@@ -277,7 +275,7 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     const cases = [
       ["--json", "info"],
       ["--model", "x", "invoke", "hi"],
-      ["schedule", "--json", "list"],
+      ["routine", "--json", "list"],
     ];
     for (const argv of cases) {
       const r = await parse(argv);
@@ -323,19 +321,12 @@ describe("cli end to end: the thin entry", () => {
     expect(stderr).toBe("");
   });
 
-  it("schedule list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
+  it("routine list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
     const dir = await agentWorkspace("fa-kernel-sched-");
-    const { code, stdout, stderr } = await run(["schedule", "list", dir]);
+    const { code, stdout, stderr } = await run(["routine", "list", dir]);
     expect(code).toBe(0);
     expect(stdout).toBe("");
-    expect(stderr).toMatch(/nothing scheduled/);
-  });
-
-  it("schedule cancel on a missing wake-up exits 1 (runtime miss, not usage)", async () => {
-    const dir = await agentWorkspace("fa-kernel-cancel-");
-    const { code, stderr } = await run(["schedule", "cancel", "wake-nope", dir]);
-    expect(code).toBe(1);
-    expect(stderr).toMatch(/no pending wake-up wake-nope/);
+    expect(stderr).toMatch(/nothing declared or pending/);
   });
 
   it("tool with no args is a usage error from the kernel: exit 2", async () => {

@@ -140,7 +140,7 @@ Fixes depend on the channel:
 
 ## Tool, channel or schedule failed to load
 
-An enabled file under `tools/`, `channels/` or `schedules/` is a declaration of what this agent has. If
+An enabled file under `tools/`, `channels/` or `routines/` is a declaration of what this agent has. If
 it cannot import, validate its required environment, or return a valid export, `dev` / `start` fails
 naming every file that failed, instead of running an agent short a tool, dropping an endpoint back to
 `/invoke`, or reporting itself ready with a cron that will never fire.
@@ -273,22 +273,22 @@ version. If the CLI reports a Lark config-API fallback, add the scope manually. 
 
 Cron schedules fire only while a serving process is up:
 
-- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` and `fire` do
+- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` and `routine run` do
   not start the scheduler,
 - a run missed while the process was down is caught up once on the next start, not once per missed
   slot,
-- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or keep the time in a scheduler you own and let it call [`POST /trigger`](api-reference.md#post-trigger) (see
+- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or keep the time in a scheduler you own and let it call [`POST /run`](api-reference.md#post-run) (see
   [Deploy](deploy.md)).
 
 Diagnose with commands that exit:
 
 ```bash
-fastagent schedule list             # everything that will fire, with the next instant
-fastagent schedule history <name>   # did last night's run silently fail?
-fastagent schedule fire <name>      # run the schedule's turn now, without touching cron state
+fastagent routine list             # everything that will fire, with the next instant
+fastagent routine history <name>   # did last night's run silently fail?
+fastagent routine run <name>      # run the schedule's turn now, without touching cron state
 ```
 
-A broken `schedules/<name>.ts` file is reported by `fastagent info` before it ever reaches `dev`.
+A broken `routines/<name>.ts` file is reported by `fastagent info` before it ever reaches `dev`.
 
 ## Deployed agent crash-loops with `missing model`
 

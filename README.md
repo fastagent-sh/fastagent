@@ -181,9 +181,9 @@ you register a custom provider.
 | Mounting | `createInvokeHandler`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
 | Node binding | `nodeListener`, `serveNode` (from `/node`) | The one runtime-specific piece; see below |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
-| Tool/channel authoring | `defineTool`, `z`, `defineSchedule`, `ChannelModule` | Usable now, may tighten before 1.0 |
+| Tool/channel authoring | `defineTool`, `z`, `defineRoutine`, `ChannelModule` | Usable now, may tighten before 1.0 |
 | Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider` | Public because options reference them |
-| Not exported | The assembly's parts — `router`, `createControlPlane`, `loadTools`/`loadChannels`/`loadSchedules`, `createScheduler` — and prompt/config internals | `createAgentService` does this; no compatibility promise |
+| Not exported | The assembly's parts — `router`, `createControlPlane`, `loadTools`/`loadChannels`/`loadRoutines`, `createScheduler` — and prompt/config internals | `createAgentService` does this; no compatibility promise |
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 

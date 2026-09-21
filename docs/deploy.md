@@ -144,7 +144,7 @@ Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundr
 
 **Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 
-**One of those reasons has a way out: `schedules/`.** A cron is a TIME, and a time can be kept elsewhere. If you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and let a scheduler you own call [`POST /trigger`](api-reference.md#post-trigger) — Fly's Cron Manager or supercronic, a Railway **cron service** over the private network (which is also what wakes a slept service), GitHub Actions, a crontab. `deploy` prints the host's own form of this next to the setting it applies. Read that route's contract first: it is an API, not a clock, so retries and their idempotency are yours.
+**One of those reasons has a way out: `routines/`.** A cron is a TIME, and a time can be kept elsewhere. If you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and let a scheduler you own call [`POST /run`](api-reference.md#post-run) — Fly's Cron Manager or supercronic, a Railway **cron service** over the private network (which is also what wakes a slept service), GitHub Actions, a crontab. `deploy` prints the host's own form of this next to the setting it applies. Read that route's contract first: it is an API, not a clock, so retries and their idempotency are yours.
 
 `selfSchedule` is different and pre-flight says so: a wake-up is minted by the agent *at runtime*, so no external clock can know to send it. There, one machine staying up is the only option. The same goes for a GitHub channel (its turns have no replay) and a long-connection channel (it cannot reconnect from zero).
 
@@ -171,7 +171,7 @@ Or:
 fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries .secrets/.env's values
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, `selfSchedule`, or a long-connection channel; a sleeping service cannot hold an outbound connection. With `schedules/` alone you may enable it, provided a **cron service** in the same project calls [`POST /trigger`](api-reference.md#post-trigger) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
+`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, `selfSchedule`, or a long-connection channel; a sleeping service cannot hold an outbound connection. With `routines/` alone you may enable it, provided a **cron service** in the same project calls [`POST /run`](api-reference.md#post-run) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
 
 ## AWS Bedrock AgentCore
 
@@ -207,7 +207,7 @@ AgentCore differs from the resident-box hosts in kind — the platform has **no 
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
 - a **forwarder Lambda** with a public Function URL fronting the webhooks (channels verify signatures exactly as on every host);
-- **EventBridge Scheduler rules** firing each `schedules/*.ts` cron (the container arms no resident timers; the rule carries `<aws.scheduler.scheduled-time>`, which EventBridge repeats unchanged on a redelivery, so the container dedupes on it). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
+- **EventBridge Scheduler rules** firing each `routines/*.ts` cron (the container arms no resident timers; the rule carries `<aws.scheduler.scheduled-time>`, which EventBridge repeats unchanged on a redelivery, so the container dedupes on it). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
 - with `selfSchedule: true`, the **wake-alarm wiring**: pending wake-ups are mirrored (via the forwarder, authenticated by a minted shared secret) into self-deleting one-shot EventBridge schedules that wake the container at the right instant.
 
 What to know before choosing it:

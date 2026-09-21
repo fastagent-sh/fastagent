@@ -27,7 +27,7 @@ export const STATE_DIRNAME = ".state";
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
- * author writes (`tools/`, `channels/`, `schedules/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
+ * author writes (`tools/`, `channels/`, `routines/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
  */
 export const AGENT_CONFIG_FILE = "fastagent.config.ts";
 
@@ -36,7 +36,7 @@ export const AGENT_MODELS_FILE = "models.json";
 
 export interface ResolvedPlacement {
   /**
-   * The AGENT directory — where the definition (persona.md/skills/tools/channels/schedules), the config, and the
+   * The AGENT directory — where the definition (persona.md/skills/tools/channels/routines), the config, and the
    * machinery dirs (`.secrets/`, `.state/`) live.
    */
   agentDir: string;
@@ -48,7 +48,7 @@ export interface ResolvedPlacement {
  * The definition paths an agent LOADS content from — the surface a second agent must not be scaffolded inside
  * ({@link agentDefinitionOwner}), because the outer agent would read it as its own skills/tools.
  */
-const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "schedules"] as const;
+const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "routines"] as const;
 
 function isDir(p: string): boolean {
   return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;

@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { claimSlot, type Fire, readFires } from "../../src/schedule/state.ts";
-import { loadServingSchedules, startSchedules } from "../../src/service.ts";
+import { loadServingRoutines, startSchedules } from "../../src/service.ts";
 import { requireEnv } from "./env.ts";
 
 // Node's fetch ignores HTTPS_PROXY; the library opener deliberately leaves this to its caller.
@@ -36,7 +36,7 @@ afterAll(() => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("schedules: a cron fire reaches the agent, its session, and its claim", () => {
+describe("routines: a cron fire reaches the agent, its session, and its claim", () => {
   it("catches up an overdue slot, runs the turn, and records the outcome", async () => {
     // The fire's own lines go to stderr, the way an operator reads them; what the turn SAID goes to the
     // session, which is the only place it is stored.
@@ -46,13 +46,13 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
     const dir = await mkdtemp(join(tmpdir(), "fa-live-schedule-"));
     await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
-    await mkdir(join(dir, "schedules"), { recursive: true });
-    // A plain default export: `defineSchedule` is an identity function, so this is the shape the
-    // loader gets either way, and the file stays what an author's `schedules/*.ts` looks like rather
+    await mkdir(join(dir, "routines"), { recursive: true });
+    // A plain default export: `defineRoutine` is an identity function, so this is the shape the
+    // loader gets either way, and the file stays what an author's `routines/*.ts` looks like rather
     // than carrying an import path back into this checkout (the spelling schedule-discover.test.ts
     // needs, since that one is testing the loader itself).
     await writeFile(
-      join(dir, "schedules", `${SCHEDULE}.ts`),
+      join(dir, "routines", `${SCHEDULE}.ts`),
       `export default { cron: "* * * * *", prompt: ${JSON.stringify(PROMPT)} };\n`,
     );
 
@@ -66,11 +66,11 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.
-    const { schedules, stop } = startSchedules(agent, stateRoot, false, await loadServingSchedules(dir));
+    const { routines, stop } = startSchedules(agent, stateRoot, false, await loadServingRoutines(dir));
     cleanups.push(stop);
     expect(
-      schedules.map((s) => s.name),
-      "the schedules/ file did not load",
+      routines.map((r) => r.name),
+      "the routines/ file did not load",
     ).toEqual([SCHEDULE]);
 
     // The seeded claim is reconciled first, and correctly: an unsettled claim IS a fire the process was killed in
@@ -99,7 +99,7 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
     expect(fires[0]?.outcome, `the scheduled turn did not complete: ${seen}`).toBe("completed");
     // The session is derived from the schedule's name, not minted per fire — that is what makes a
     // schedule's turns one continuing conversation, and it is where the turn's text lives.
-    expect(logs.join("\n")).toContain(`firing (session=schedule:${SCHEDULE})`);
+    expect(logs.join("\n")).toContain(`firing (session=routine:${SCHEDULE})`);
     // The regression this guards is a completed turn that ANSWERED NOTHING: the claim would still say `completed`
     // while the conversation holds only the prompt. So the prompt is removed from the journal before looking for
     // the answer — asserting on text the scheduler itself wrote would pass with no model output at all.

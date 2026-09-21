@@ -339,7 +339,7 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and re
     const finish = Promise.withResolvers<void>();
     const abort = vi.fn();
     const lease = inProcessLease();
-    const sessionId = kind === "cron" ? "schedule:job" : "conversation";
+    const sessionId = kind === "cron" ? "routine:job" : "conversation";
     const factory = await sessionFactory(
       [fauxAssistantMessage(fauxToolCall("wait", {}, { id: "scheduled-tool" })), fauxAssistantMessage("done")],
       {
@@ -376,7 +376,7 @@ it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and re
       createScheduler({
         agent,
         stateRoot,
-        schedules: kind === "cron" ? [{ name: "job", cron: "0 * * * *", prompt: "go" }] : [],
+        routines: kind === "cron" ? [{ name: "job", cron: "0 * * * *", prompt: "go" }] : [],
         now: () => new Date("2026-07-07T10:30:00Z"),
       }),
     );

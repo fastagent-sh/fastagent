@@ -25,10 +25,9 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
-| `schedule fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
-| `schedule history <name> [dir]` | Print a schedule's recent fires (what they said is in the session). |
-| `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
-| `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
+| `routine run <name> [dir]` | Run one routine's turn immediately (authoring loop), cron or not. |
+| `routine history <name> [dir]` | Print a routine's recent fires (what they said is in the session). |
+| `routine list [dir] [--json]` | Every declared routine (next cron instant, or `on demand`) plus the agent's own pending wake-ups. |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
@@ -71,7 +70,7 @@ Prints the assembled surface without starting a server:
 - channel files that IMPORT cleanly (`info` loads them to read their declarations); one that fails to import is absent from this list and reported instead — as a warning, and as `channelFailures` in `--json`,
 - schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),
 - whether self-scheduling (`selfSchedule`) is on,
-- declared secrets (`defineTool({ secrets })`, `defineChannel({ secrets })`, `defineSchedule({ secrets })`, `config.deploy.secrets`), flagging any that have no value here and which of those block `dev`/`start`,
+- declared secrets (`defineTool({ secrets })`, `defineChannel({ secrets })`, `defineRoutine({ secrets })`, `config.deploy.secrets`), flagging any that have no value here and which of those block `dev`/`start`,
 - session directory.
 
 `info` is read-only: it does not create sessions or modify `.state/`/`.secrets/`.
@@ -126,12 +125,12 @@ fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-wa
 
 Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
 live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
-`tools/`, `channels/`, `schedules/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`.
+`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`.
 
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
 OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
-back to the config (same for `start` / `invoke` / `schedule fire` / `chat` / `deploy`). Pass `--model` or set
+back to the config (same for `start` / `invoke` / `routine run` / `chat` / `deploy`). Pass `--model` or set
 `FASTAGENT_MODEL` to skip the prompt — `deploy` takes no `--model`, so there it is the config value or
 `FASTAGENT_MODEL` in `.secrets/.env`.
 
@@ -155,7 +154,7 @@ stay out — the same rule serving follows, so what you try is what deploys.
 
 Sessions are pi's own per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), so `/resume` finds them
 beside your other chats. A served conversation — a schedule's, a channel thread's — is not opened here: it belongs to
-the process serving it, and `fastagent schedule history` is what reports on one.
+the process serving it, and `fastagent routine history` is what reports on one.
 
 Auth is fastagent's, same as every other command: `FASTAGENT_AUTH_PATH` > the
 agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
@@ -188,29 +187,30 @@ Runs one turn through the same agent assembly and exits:
 
 Use this for smoke tests and scripts.
 
-## `fastagent schedule fire`
+## `fastagent routine run`
 
 ```bash
-fastagent schedule fire <name> [dir] [--model provider/modelId] [--no-input]
+fastagent routine run <name> [dir] [--model provider/modelId] [--no-input]
 ```
 
 Runs ONE schedule's turn immediately — the authoring loop for schedules (like `invoke` is for a
-prompt). Fires `schedules/<name>.ts` now, without waiting for its cron, using the schedule's stable
+prompt). Fires `routines/<name>.ts` now, without waiting for its cron, using the schedule's stable
 session, so you see exactly what the served scheduler would do:
 
 - answer text streams to stdout, tool/diagnostic lines to stderr, a `failed` turn exits non-zero (like `invoke`),
 - no name → usage on stderr, exit 2; an unknown schedule name → exit 1 with the available names,
 - it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
 
-A `schedules/<name>.ts` file default-exports `defineSchedule({ cron, tz?, prompt })`; the scheduler
-fires the agent on that cron when you `dev`/`start`. The filename becomes a directory name in the state
+A `routines/<name>.ts` file default-exports `defineRoutine({ prompt, cron?, tz? })`. With a `cron`, the
+clock fires it when you `dev`/`start`; without one, its name is the only way in (`POST /run`, or this
+command). The filename becomes a directory name in the state
 root, so it cannot be `.`, `..`, or contain a path separator. Output is the agent's tools' job — the scheduler
-only fires and logs. See the [API reference](./api-reference.md#schedule-authoring).
+only fires and logs. See the [API reference](./api-reference.md#routine-authoring).
 
-## `fastagent schedule history`
+## `fastagent routine history`
 
 ```bash
-fastagent schedule history <name> [dir] [--json]
+fastagent routine history <name> [dir] [--json]
 ```
 
 Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`, or
@@ -230,7 +230,7 @@ construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~
 nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
 Read-only.
 
-**WHAT a run said is in its session.** Every fire runs in a session (`schedule:<name>` for a cron) under
+**WHAT a run said is in its session.** Every fire runs in a session (`routine:<name>` for a cron) under
 `<state root>/sessions/`, where the text is stored exactly once, as a JSON-lines journal. This command
 prints that location under the rows.
 
@@ -244,19 +244,22 @@ per-host retention).
 
 These rows say WHEN each fire happened; the session is in time order. Matching them is left to you on
 purpose — a schedule's fires share one continuing conversation, nothing records which turn came from which
-fire, and `fastagent schedule fire`, a wake-up and the control plane append to the same session.
+fire, and `fastagent routine run`, a wake-up and the control plane append to the same session.
 
 Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
 (taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had
 already claimed a later one — that instant will never run, which a clock that moved backwards can produce in
 a row; it is logged as a warning, where an ordinary duplicate delivery is an info line).
 
-`fastagent schedule list [dir]` shows everything that will fire, from BOTH producers: the static
-`schedules/` files (name + next cron instant) and the agent's pending self-scheduled wake-ups (id, next
-fire, one-shot/cron, session, prompt), with `--json` for the machine-readable form;
-`fastagent schedule cancel <id> [dir]` removes one wake-up: the
-operator's kill switch for a runaway recurring wake (the agent's own is the `unwake` tool, which is
-session-scoped).
+`fastagent routine list [dir]` reads both owners. From the DEFINITION: every declared routine with its
+next cron instant, or `on demand` where it declares none (those are reached by name — `POST /run`,
+`routine run`). From the STATE: the agent's own pending wake-ups, prefixed `wake` (id, next fire,
+one-shot/cron, session, prompt). `--json` gives both as `routines` and `wakeups`.
+
+**Reading a wake-up is an operator's; cancelling one is the agent's.** `unwake({ id })` is
+session-scoped and there is no command beside it: a wake-up fires only while a serve is running, and a
+running serve is one whose session can be spoken to, so "the alarm is loose" and "the agent is
+unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedule/wakeups.json`.
 
 ## `fastagent tool`
 
@@ -393,10 +396,10 @@ Recurring per-command options (same meaning everywhere they appear):
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: `127.0.0.1` for `dev`, all interfaces for `start` (containers need it); `--bind 0.0.0.0` opens a dev serve to the LAN. Prefer this flag over `http.host` for a non-wildcard bind — that value travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
-| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run — nor `POST /trigger`, which it takes with it even where the definition set `http.trigger: true` (both start a turn for an anonymous caller, and this flag exists for the run whose definition cannot be edited). The data plane is unauthenticated and runs a turn with the agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it — `dev --tunnel` publishes the port, and that is the case this flag is for. Prefer it over `http.invoke: false` for a one-off, for the same reason `--bind` is preferred over `http.host`: the config value travels into a deployed image. |
-| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
+| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run — nor `POST /run`, which it takes with it even where the definition set `http.run: true` (both start a turn for an anonymous caller, and this flag exists for the run whose definition cannot be edited). The data plane is unauthenticated and runs a turn with the agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it — `dev --tunnel` publishes the port, and that is the case this flag is for. Prefer it over `http.invoke: false` for a one-off, for the same reason `--bind` is preferred over `http.host`: the config value travels into a deployed image. |
+| `--no-input` | `dev`, `start`, `invoke`, `routine run`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
-| `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
+| `--json` | `info`, `routine history`, `routine list` | Machine-readable output. |
 
 ## Exit codes
 

@@ -39,7 +39,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. GitHub is ingress-only. |
-| Clock triggers and deliberate follow-ups | `schedules/` and the opt-in `wake` tool | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
+| Clock triggers and deliberate follow-ups | `routines/` and the opt-in `wake` tool | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
 | Model, serving, and deployment choices | `fastagent.config.ts` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
 | Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, journals, channel state, and scheduling records. Preserve them according to the host. |
 | Business notes and decisions | Existing working files or an explicitly chosen durable store | Record sources, approval decisions, outcomes, and pending work. A session journal is not a business database. |
@@ -153,7 +153,7 @@ Extend `include` when adding other source directories.
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["tools/**/*.ts", "channels/**/*.ts", "schedules/**/*.ts", "lib/**/*.ts", "test/**/*.ts", "fastagent.config.ts"]
+  "include": ["tools/**/*.ts", "channels/**/*.ts", "routines/**/*.ts", "lib/**/*.ts", "test/**/*.ts", "fastagent.config.ts"]
 }
 ```
 
@@ -286,7 +286,7 @@ fastagent dev
 ```
 
 `dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, and skills are read on the next turn.
-With watching enabled, changes under the agent's `tools/`, `channels/`, `schedules/`, and `extensions/`
+With watching enabled, changes under the agent's `tools/`, `channels/`, `routines/`, and `extensions/`
 restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
 `.env` (only when that file is inside the agent directory).
 
@@ -351,12 +351,12 @@ environment-specific, so declare it in `secrets` and build the prompt from it â€
 `OWNER_APPROVED_CHAT_ID` in `.secrets/.env` before running it; no destination is inferred from a
 previous chat.
 
-**`fastagent/schedules/daily-review.ts`**
+**`fastagent/routines/daily-review.ts`**
 
 ```ts
-import { defineSchedule } from "@fastagent-sh/fastagent";
+import { defineRoutine } from "@fastagent-sh/fastagent";
 
-export default defineSchedule({
+export default defineRoutine({
   cron: "0 9 * * *",
   tz: "America/New_York",
   secrets: ["OWNER_APPROVED_CHAT_ID"],
@@ -365,24 +365,25 @@ export default defineSchedule({
 });
 ```
 
-Create `fastagent/schedules/` only when needed. Inspect and test from the workspace:
+Create `fastagent/routines/` only when needed. Inspect and test from the workspace:
 
 ```bash
-fastagent schedule list
-fastagent schedule fire daily-review
-fastagent schedule history daily-review
+fastagent routine list
+fastagent routine run daily-review
+fastagent routine history daily-review
 ```
 
 These commands read the selected local state root, not a deployed host's state.
 
-`fire` runs one real turn immediately and prints its reply without advancing the cron fire state.
+`routine run` runs one real turn immediately and prints its reply without advancing the cron fire state.
 It can still perform real tool side effects and update conversation history; it is not a dry run.
 A serving-time fire records its outcome in the slot it claimed; what it said is in its session, like any other turn.
-`invoke` and `fire` do not mount the serving-time `wake` tool or prove that a future timer fires.
+`invoke` and `routine run` do not mount the serving-time `wake` tool or prove that a future timer fires.
 
 Enable `selfSchedule: true` in the existing config only when autonomous follow-ups are wanted. Then test
-an actual `wake` while serving, including its eventual action and delivery. Use `fastagent schedule list`
-and `fastagent schedule cancel <id>` to inspect or cancel pending local wake-ups.
+an actual `wake` while serving, including its eventual action and delivery. Cancelling one is the
+agent's own job (`unwake({ id })`, session-scoped): a wake-up only fires while a serve is running, and a
+running serve is one whose session can be spoken to.
 
 | Execution posture | Clock and persistence requirements |
 |---|---|
@@ -391,7 +392,7 @@ and `fastagent schedule cancel <id>` to inspect or cancel pending local wake-ups
 | Direct `InvokeAgentRuntime` calls | Reuse the deployment's fixed `runtimeSessionId`; the envelope's `session` selects the conversation. A direct invocation does not verify channel activation or future wake delivery. All entry points share storage that resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
-[schedule authoring](api-reference.md#schedule-authoring) for the exact guarantees.
+[schedule authoring](api-reference.md#routine-authoring) for the exact guarantees.
 
 ## 8. Embed only what the application needs
 
@@ -456,7 +457,7 @@ Keep these checks distinct. Use the smallest relevant ones, and make credentiale
 | Check | What it proves |
 |---|---|
 | Typecheck, unit test, direct tool execution, `info` | Source types, exercised runtime validation/logic, and definition inspection. These do not prove model or channel behavior. |
-| One real `invoke` or `fire` | A provider call and the exercised tool path. It does not verify timers, webhook ingress, or deployment. |
+| One real `invoke` or `routine run` | A provider call and the exercised tool path. It does not verify timers, webhook ingress, or deployment. |
 | URL verification and a real channel conversation | Report registration separately from actual receipt and framework-managed reply delivery. |
 | Proactive message/file and a fired schedule/wake | Verify the intended recipient, observable delivery, and the selected clock path. Check token renewal when applicable. |
 | Generated plan / accepted CloudFormation template | Artifact generation or platform template validation only; neither proves deployed operation. |

@@ -25,7 +25,7 @@ const CHANNEL_IDS = [
   "feishu:oc_a1b2/thread=om_x9",
   "slack:T01/C02/1699999999.000100",
   "github:owner/repo#12",
-  "schedule:nightly-digest",
+  "routine:nightly-digest",
   "中文房间",
   "trailing-",
   "trailing.",

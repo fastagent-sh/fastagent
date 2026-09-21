@@ -281,7 +281,7 @@ owner therefore needs only the owner's user id — declared in `secrets`, since 
 environment-specific, and built into the prompt:
 
 ```ts
-export default defineSchedule({
+export default defineRoutine({
   cron: "0 9 * * 1-5",
   secrets: ["OWNER_SLACK_USER_ID"],
   prompt: (secrets) =>
@@ -292,7 +292,7 @@ export default defineSchedule({
 The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
 `@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
 token, `apiBaseUrl`, Markdown splitting and rate-limit handling the channel replies with. With no
-channel mounted (`fastagent schedule fire` / `invoke`) the transport is built from `SLACK_BOT_TOKEN` against
+channel mounted (`fastagent routine run` / `invoke`) the transport is built from `SLACK_BOT_TOKEN` against
 Slack's default API base. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
 
 File mode uses Slack's current [external upload

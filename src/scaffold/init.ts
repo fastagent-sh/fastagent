@@ -85,7 +85,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     },
   ];
 
-  // Inside another agent's DEFINITION (its `skills/`, `tools/`, `channels/` or `schedules/`): the outer agent would
+  // Inside another agent's DEFINITION (its `skills/`, `tools/`, `channels/` or `routines/`): the outer agent would
   // load the new one as its own content.
   const owner = agentDefinitionOwner(dir);
   if (owner) {

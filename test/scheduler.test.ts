@@ -4,10 +4,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
-import type { LoadedSchedule } from "../src/schedule/schedule.ts";
+import type { LoadedRoutine } from "../src/schedule/routine.ts";
 import * as Effect from "effect/Effect";
 import { createScheduler as scheduler, fireScheduleOnce as fire } from "../src/schedule/scheduler.ts";
-import { scheduleSession } from "../src/schedule/schedule.ts";
+import { routineSession } from "../src/schedule/routine.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
@@ -26,7 +26,7 @@ function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
   return { agent, calls };
 }
 
-const hourly = (over: Partial<LoadedSchedule> = {}): LoadedSchedule => ({
+const hourly = (over: Partial<LoadedRoutine> = {}): LoadedRoutine => ({
   name: "job",
   cron: "0 * * * *", // top of every hour
   tz: "UTC",
@@ -73,7 +73,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const s = createScheduler({
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T10:30:00Z"),
     });
     s.start();
@@ -93,7 +93,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const options = {
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T10:30:00Z"), // 11:00 is still ahead → no catch-up to confuse this
     };
     const s = createScheduler(options);
@@ -128,7 +128,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const s = createScheduler({
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T10:30:00Z"),
     });
     s.start();
@@ -148,7 +148,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const options = {
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T12:30:00Z"),
     };
     const s = createScheduler(options);
@@ -178,7 +178,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const s = createScheduler({
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
     expect(() => s.start()).not.toThrow();
@@ -295,19 +295,19 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
+  it("catches up an overdue run ONCE, claims the slot, session = routine:<name>", async () => {
     const root = await freshRoot();
     seedClaim(root, "job", "2026-07-07T08:00:00Z"); // last fired 08:00; now is past several hourly slots
     const { agent, calls } = recordingAgent();
     const s = createScheduler({
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1)); // exactly ONE catch-up, not one per missed slot
-    expect(calls[0]).toEqual({ session: scheduleSession("job"), text: "go" });
+    expect(calls[0]).toEqual({ session: routineSession("job"), text: "go" });
     expect(lastFire(root, "job")).toBe("2026-07-07T12:30:00.000Z"); // the claim records when it fired
     // The same claim records how it ended — no second file, nothing appended anywhere.
     await vi.waitFor(() => expect(outcomes(root, "job")).toEqual(["completed", "completed"]));
@@ -319,7 +319,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     vi.setSystemTime(new Date("2026-07-07T10:30:00Z"));
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
-    const s = createScheduler({ agent, stateRoot: root, schedules: [hourly()] }); // default now = the faked clock
+    const s = createScheduler({ agent, stateRoot: root, routines: [hourly()] }); // default now = the faked clock
     s.start();
     expect(calls).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1000); // → 11:00
@@ -335,7 +335,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const s = createScheduler({ agent, stateRoot: root, schedules: [hourly()] });
+    const s = createScheduler({ agent, stateRoot: root, routines: [hourly()] });
     s.start();
     // Sabotage the claim state AFTER arming: a FILE where `claims/job/` belongs makes `claimSlot` throw (ENOTDIR —
     // the unreadable-state class state.ts throws on by design), and it throws BEFORE the slot is claimed, so the
@@ -363,7 +363,7 @@ describe("schedule/scheduler: fire algorithm", () => {
       new Date("2026-07-07T10:00:00Z"),
     );
     const { agent, calls } = recordingAgent();
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start(); // polls wake-ups immediately on start
     await vi.waitFor(() => expect(calls.length).toBe(1));
     expect(calls[0]?.session).toBe("conv-9"); // fired back into the wake-up's session
@@ -391,7 +391,7 @@ describe("schedule/scheduler: fire algorithm", () => {
       { type: "text", delta: "your bank balance is 12345" },
       { type: "completed" },
     ]);
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
     await vi.waitFor(() => expect(logs.some((l) => /wake \w+ completed \(\d+ms\)/.test(l))).toBe(true));
@@ -412,7 +412,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     ]);
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
     // NOT dropped: re-scheduled (deferred) with a bumped attempt count — a one-shot wake must not vanish.
@@ -437,7 +437,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     vi.spyOn(console, "error").mockImplementation((m) => {
       errs.push(String(m));
     });
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
     // Wait for the turn's FAILURE to be processed (its log) so the defer/drop decision has definitely run
     // — not a bare sleep: listWakeups is 0 right after the claim too, before that decision.
@@ -454,7 +454,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const s = createScheduler({
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
     s.start();
@@ -482,7 +482,7 @@ describe("schedule/scheduler: fire algorithm", () => {
       ]),
     );
     const { agent, calls } = recordingAgent();
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T09:00:30Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T09:00:30Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1)); // fired
     // A recurring envelope carries the id AND the unwake instruction — the documented way to stop it is
@@ -510,7 +510,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const { agent, calls } = recordingAgent([
       { type: "failed", retryable: true, code: "session_busy", details: "busy" },
     ]);
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:00:00Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T10:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
     // The recurrence survives (the CLAIM advanced it in place); THIS occurrence is reported skipped, never deferred
@@ -537,12 +537,38 @@ describe("schedule/scheduler: fire algorithm", () => {
     const { agent, calls } = recordingAgent([
       { type: "failed", retryable: true, code: "session_busy", details: "busy" },
     ]);
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    const s = createScheduler({ agent, stateRoot: root, routines: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
     await vi.waitFor(() => expect(logs.some((l) => /dropped after too many/.test(l))).toBe(true));
     expect(listWakeups(root)).toHaveLength(0); // gone — that's exactly why the drop must be reported as an error
     s.stop();
+  });
+});
+
+describe("schedule/createScheduler: a routine with no cron", () => {
+  it("is not armed, and not warned about either", async () => {
+    // A routine without a cron is reached by NAME, so there is nothing for the clock to arm. The
+    // absence must not read as "a cron that will never fire again" — that warning exists for a real
+    // cron whose grid has run out, and firing it here would send an operator after nothing.
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const { agent, calls } = recordingAgent();
+    const onDemand = { name: "reindex", prompt: "refresh" } as LoadedRoutine;
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      routines: [onDemand],
+      now: () => new Date("2026-07-07T10:30:00Z"),
+    });
+    s.start();
+    await new Promise((r) => setTimeout(r, 50));
+    s.stop();
+
+    expect(calls).toEqual([]); // nothing fired it
+    expect(logs.join("\n")).not.toMatch(/will never fire again/);
+    expect(claimed(root, "reindex")).toEqual([]); // and nothing was claimed
   });
 });
 
@@ -556,7 +582,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBeUndefined();
-    expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
+    expect(calls).toEqual([{ session: routineSession("job"), text: "go" }]);
     // ONE file answers both planes: WHEN it fired (where catch-up resumes) and HOW it ended. Its NAME is the slot.
     expect(lastFire(root, "job")).toBe("2026-07-07T10:00:03.000Z");
     expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
@@ -564,10 +590,10 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
   });
 
   it("OVERLAP is `skipped`, not `failed` — the previous turn still running is a policy, not a fault", async () => {
-    // A schedule's turns share one `schedule:<name>` session, so an occurrence arriving while the
+    // A schedule's turns share one `routine:<name>` session, so an occurrence arriving while the
     // previous one runs is refused by that session. Recording it as `failed` made "the last run was
-    // still going" indistinguishable from "the model call died" in `fastagent schedule history`, and
-    // handed a public `POST /trigger` caller a `failed` that is not one. Every scheduler names this
+    // still going" indistinguishable from "the model call died" in `fastagent routine history`, and
+    // handed a public `POST /run` caller a `failed` that is not one. Every scheduler names this
     // instead: k8s `concurrencyPolicy: Forbid`, Temporal's `Skip` overlap policy.
     const root = await freshRoot();
     const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
@@ -616,7 +642,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
 
   it("what the turn SAID is neither logged nor stored — it is already in the session", async () => {
     // #546 asked us to stop storing model output that nothing prunes. The reply is durable exactly once, in the
-    // session this fire ran in (`schedule:job`, persisted under `<stateRoot>/sessions/` like any other): the claim
+    // session this fire ran in (`routine:job`, persisted under `<stateRoot>/sessions/` like any other): the claim
     // carries the outcome, and the log carries the fact that it completed.
     const root = await freshRoot();
     const logs: string[] = [];
@@ -742,7 +768,7 @@ describe("schedule/scheduler: externalClock mode", () => {
     const s = createScheduler({
       agent,
       stateRoot: root,
-      schedules: [hourly()],
+      routines: [hourly()],
       now: () => new Date("2026-07-07T10:30:00Z"),
       externalClock: true,
     });

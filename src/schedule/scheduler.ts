@@ -8,7 +8,7 @@ import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
-import { type LoadedSchedule, scheduleSession } from "./schedule.ts";
+import { type LoadedRoutine, routineSession } from "./routine.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
@@ -35,7 +35,7 @@ function markInterruptedFire(stateRoot: string, name: string, fire: Fire | undef
   if (fire === undefined || fire.outcome !== undefined) return;
   log.warn(
     `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
-      `and that slot stays skipped (see \`fastagent schedule history ${name}\`)`,
+      `and that slot stays skipped (see \`fastagent routine history ${name}\`)`,
   );
   // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
   // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
@@ -44,7 +44,7 @@ function markInterruptedFire(stateRoot: string, name: string, fire: Fire | undef
 }
 
 export interface Scheduler {
-  /** Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. */
+  /** Arm routines, account for a fire the previous run was killed in, and catch up overdue work once. */
   start(): void;
   /** Cancel pending waits. */
   stop(): void;
@@ -53,7 +53,8 @@ export interface Scheduler {
 export interface SchedulerOptions {
   agent: Agent;
   stateRoot: string;
-  schedules: LoadedSchedule[];
+  /** Every routine this serve loaded. Only the ones WITH a cron are armed — the rest are reached by name. */
+  routines: LoadedRoutine[];
   /** Override wall-clock dates; elapsed time and waits use the Effect clock. */
   now?: () => Date;
   /** External slot delivery owns cron timers and catch-up; local wake polling still runs. */
@@ -81,9 +82,9 @@ function oneLine(text: string): string {
  * The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup.
  *
  * WHAT THE TURN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
- * (`schedule:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
- * EXPORTED for the API path (`POST /trigger`), which runs the same turn without a claim: it has no occurrence to
- * claim, because nobody's grid produced it (schedule/trigger.ts). The resident clock's own claim/run/settle is
+ * (`routine:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
+ * EXPORTED for the API path (`POST /run`), which runs the same turn without a claim: it has no occurrence to
+ * claim, because nobody's grid produced it (schedule/run.ts). The resident clock's own claim/run/settle is
  * {@link fireScheduleOnce}.
  *
  * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
@@ -152,7 +153,7 @@ export interface ScheduleFireOutcome {
 export function fireScheduleOnce(opts: {
   agent: Agent;
   stateRoot: string;
-  schedule: LoadedSchedule;
+  schedule: LoadedRoutine;
   /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
   slot: Date;
   now?: () => Date;
@@ -185,9 +186,9 @@ export function fireScheduleOnce(opts: {
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
+    const r = yield* runTurn(agent, s.name, routineSession(s.name), s.prompt);
     // OVERLAP IS NOT FAILURE. The claim still stands — this occurrence is decided and will not be retried — but
-    // what decided it was the previous turn still holding `schedule:<name>`, which is the policy every scheduler
+    // what decided it was the previous turn still holding `routine:<name>`, which is the policy every scheduler
     // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
     if (r.busy) {
       settleClaim(stateRoot, s.name, slot, "skipped", r.ms);
@@ -218,7 +219,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const {
       agent,
       stateRoot,
-      schedules,
+      routines,
       now = () => new Date(clock.currentTimeMillisUnsafe()),
       externalClock = false,
     } = options;
@@ -246,7 +247,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         }),
       );
     };
-    const cronLoop = (s: LoadedSchedule, first: Date) =>
+    const cronLoop = (s: LoadedRoutine, first: Date) =>
       Effect.gen(function* () {
         let due: Date | undefined = first;
         while (due) {
@@ -267,7 +268,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             ),
             Effect.uninterruptible,
           );
-          due = nextRun(s.cron, s.tz, now());
+          due = s.cron === undefined ? undefined : nextRun(s.cron, s.tz, now());
         }
       });
 
@@ -331,15 +332,18 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         // boot (`latestFire`).
         const lastFires = new Map<string, string>();
         if (!externalClock) {
-          for (const s of schedules) {
+          for (const s of routines) {
             const fire = latestFire(stateRoot, s.name);
             if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
             markInterruptedFire(stateRoot, s.name, fire);
           }
         }
         const current = now();
-        for (const s of externalClock ? [] : schedules) {
+        for (const s of externalClock ? [] : routines) {
           if (stopped) break;
+          // NO CRON, NO CLOCK. A routine without one is not unscheduled by accident — it is reached by name
+          // (`POST /run`, `fastagent routine run`), so there is nothing here to arm and nothing to warn about.
+          if (s.cron === undefined) continue;
           const last = lastFires.get(s.name);
           const due = nextRun(s.cron, s.tz, last ? new Date(last) : current);
           if (!due) {

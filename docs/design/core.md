@@ -40,7 +40,7 @@ One agent shape, one marker:
 <agent dir>/                # any name — the config below is what makes it an agent
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
-├── skills/  tools/  channels/  schedules/
+├── skills/  tools/  channels/  routines/
 ├── fastagent.config.ts     # THE marker
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image; pi's machine-global ~/.pi one stays unread)
@@ -59,7 +59,7 @@ repo/                       # `fastagent dev` here  → agent = repo/agent, work
 ├── AGENTS.md
 ├── src/
 └── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo/agent
-    ├── persona.md  skills/  tools/  channels/  schedules/
+    ├── persona.md  skills/  tools/  channels/  routines/
     ├── fastagent.config.ts
     └── .secrets/  .state/
 ```
@@ -80,7 +80,7 @@ manifest does not load.
 - **The marker is the config, at every position, and it is a declaration rather than configuration.**
   Nothing in an agent directory is logically required to serve a turn, so the marker has to be the one
   artifact present in every agent and absent from every non-agent. `persona.md`, `skills/`, `tools/`,
-  `channels/` and `schedules/` are each optional and generic enough that scanning for them would read
+  `channels/` and `routines/` are each optional and generic enough that scanning for them would read
   half the world's repositories as agents. `export default {}` is a signature — the same job
   `package.json`, `Cargo.toml` and `pyproject.toml` do. A directory holding nothing but a config is a
   complete agent, and `--agent-dir` calls it anything.
@@ -173,7 +173,7 @@ separate tag in `engines/pi/session-effects.ts` because it is control flow, not 
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
 `createPiAgentFromDir` sits above L2 and resolves placement, config, model, auth, tools, sessions, and
-machinery paths. `dev`, `start`, `invoke`, and `fire` share it rather than carrying parallel
+machinery paths. `dev`, `start`, `invoke`, and `routine run` share it rather than carrying parallel
 implementations.
 
 Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn.
@@ -252,7 +252,7 @@ the source.
 Workspace tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
 `tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
-refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `schedules/`. The coding set is fixed for directory agents: isolation belongs around the whole
+refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `routines/`. The coding set is fixed for directory agents: isolation belongs around the whole
 agent process, where it also covers authored tools and channel code. Conditional built-ins
 (`search_tools` for deferred tools, `wake` for self-scheduling) keep their own policies. Reusable
 integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting.
@@ -552,23 +552,25 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   ID/Secret travel as channel secrets. Event callbacks must still finish within three seconds, so the
   shared acceptance boundary persists and enqueues only.
 
-## 8. Schedules and self-scheduling
+## 8. Routines and self-scheduling
 
-Static schedules are `schedules/<name>.ts` files exporting `{ cron, tz?, prompt }`. The scheduler
-derives the stable session `schedule:<name>`, claims a slot before invoking, catches up one overdue
-occurrence after downtime (not every missed slot), writes the outcome back into that claim, and leaves
-delivery to agent tools.
+A **routine** is `routines/<name>.ts` exporting `{ prompt, cron?, tz? }` — the only named unit of work,
+and `cron` is a FIELD of it rather than the concept: with one, the clock fires it; without one, its name
+is the only way in (`POST /run`, `fastagent routine run`). Either way it runs in the stable session
+`routine:<name>`. The clock claims a slot before invoking, catches up one overdue occurrence after
+downtime (not every missed slot), writes the outcome back into that claim, and leaves delivery to agent
+tools. A routine with no cron is not armed and not warned about.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
 one JSON object — `{"firedAt"}` at claim time, gaining `outcome` and `ms` when the turn reports — pruned
-to the newest 512, which is what makes `fastagent schedule history` bounded by construction rather than
+to the newest 512, which is what makes `fastagent routine history` bounded by construction rather than
 by a retention policy. JSON rather than a line this module splits itself, because `settleClaim` may not
 write atomically (see below): half an object does not parse, so a torn claim reads as unsettled instead
 of as a record whose third field happened to look like a number. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
 before its turn starts) and a stale slot (refused before a claim is taken; it is a WARN line where a
 duplicate delivery is INFO).
 
-**What the turn SAID is stored once, and not here.** Every fire runs in a session — `schedule:<name>` for
+**What the turn SAID is stored once, and not here.** Every fire runs in a session — `routine:<name>` for
 a cron, the asking conversation for a wake-up — and a session is persisted under `<stateRoot>/sessions/`
 like any other, with the engine's own storage and compaction semantics. The claim therefore carries the
 outcome and nothing else, and the log carries the fact that the fire completed, plus the failure detail
@@ -703,7 +705,7 @@ and EventBridge Scheduler rules delivering each cron slot. Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
-reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
+reply so the forwarder re-emits it byte-exact), a routine fire goes through `fireScheduleOnce` with
 the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
 SSE. `GET /ping` reports `HealthyBusy` while background turns run (`channels/busy.ts`) so an idle
 reclaim cannot kill a post-ACK turn, and always carries `time_of_last_update`: the field is documented

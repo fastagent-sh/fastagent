@@ -183,13 +183,13 @@ Read [Channels](channels.md) for the channel model, [GitHub channel](github.md) 
 ## 8. Run on a clock
 
 Channels turn external events into invocations; **schedules** do the same for the clock — firing the
-agent on a cron: a daily digest, a periodic check. Drop a file in `schedules/` (mirroring `tools/`), named by its filename:
+agent on a cron: a daily digest, a periodic check. Drop a file in `routines/` (mirroring `tools/`), named by its filename:
 
 ```ts
-// schedules/daily-digest.ts
-import { defineSchedule } from "@fastagent-sh/fastagent";
+// routines/daily-digest.ts
+import { defineRoutine } from "@fastagent-sh/fastagent";
 
-export default defineSchedule({
+export default defineRoutine({
   cron: "0 9 * * *",
   tz: "America/New_York",
   secrets: ["TEAM_CHAT_ID"],
@@ -207,16 +207,16 @@ the same gate refuses a run while the name is unset. Then test it immediately (w
 the cron, and without touching the real fire state):
 
 ```bash
-fastagent schedule fire daily-digest
+fastagent routine run daily-digest
 ```
 
 On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.
 [AgentCore ingress](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
-`fastagent schedule history <name>` answers "did last night's run silently fail?", and
-`fastagent schedule list` shows the selected local state's pending work. Agents can
+`fastagent routine history <name>` answers "did last night's run silently fail?", and
+`fastagent routine list` shows the selected local state's pending work. Agents can
 also schedule **themselves** (a built-in `wake` tool — "check the deploy in 10 minutes") — opt in with
 `selfSchedule: true` in `fastagent.config.ts`. See the [CLI reference](cli.md) and
-[API reference](api-reference.md#schedule-authoring).
+[API reference](api-reference.md#routine-authoring).
 
 ## Where next
 

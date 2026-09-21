@@ -3,10 +3,11 @@ import type { Agent } from "../agent.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
-import type { LoadedSchedule } from "../schedule/schedule.ts";
-import { type AgentService, loadServingSchedules, type MountableAgent, routesFor, startSchedules } from "../service.ts";
+import type { LoadedRoutine } from "../schedule/routine.ts";
+import { type AgentService, loadServingRoutines, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
 import * as Effect from "effect/Effect";
+import { MAX_ECHOED_NAME, runRoutineByName } from "../schedule/run.ts";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { text } from "./respond.ts";
 import { activeWork, beginWork } from "./busy.ts";
@@ -137,10 +138,10 @@ export async function mountAgentcoreService(
         "contract instead of our own /invoke, and reaching it already requires bedrock-agentcore:InvokeAgentRuntime.",
     );
   }
-  if (opened.serveTrigger !== undefined) {
+  if (opened.serveRun !== undefined) {
     log.warn(
-      "[fastagent] agentcore: http.trigger has no effect here — schedules fire through the forwarder's " +
-        "schedule-fire envelope, which is gated by the ingress secret rather than served as an anonymous route.",
+      "[fastagent] agentcore: http.run has no effect here — routines fire through the forwarder's " +
+        "routine-fire envelope, which is gated by the ingress secret rather than served as an anonymous route.",
     );
   }
   if (opened.publishControl) {
@@ -152,8 +153,8 @@ export async function mountAgentcoreService(
   }
 
   // Started here, not deferred to an envelope.
-  const schedules = await loadServingSchedules(agentDir);
-  const scheduled = startSchedules(agent, stateRoot, opened.selfSchedule, schedules, { externalClock: true });
+  const routines = await loadServingRoutines(agentDir);
+  const scheduled = startSchedules(agent, stateRoot, opened.selfSchedule, routines, { externalClock: true });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
     const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { serveInvoke: false });
@@ -171,7 +172,7 @@ export async function mountAgentcoreService(
   const adapterRoutes = mountAgentcore({
     agent,
     stateRoot,
-    schedules: scheduled.schedules,
+    routines: scheduled.routines,
     onStateReady: options.onStateReady,
     channels: lazyChannels,
   });
@@ -193,7 +194,7 @@ export async function mountAgentcoreService(
     // NONE: the adapter's two paths are IAM-gated and the channels behind them verify their own platform.
     unverifiedRoutes: [],
     // No `controlPrefix`: it is not served here, so nothing may report a prefix a caller could dial.
-    schedules: scheduled.schedules,
+    routines: scheduled.routines,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     async close() {
       scheduled.stop();
@@ -208,26 +209,26 @@ export async function mountAgentcoreService(
 export function mountAgentcore(options: {
   agent: Agent;
   stateRoot: string;
-  schedules: readonly LoadedSchedule[];
+  routines: readonly LoadedRoutine[];
   onStateReady?: () => void;
   /** The channel surface, initialized once by the adapter on trusted ingress. */
   channels: AgentcoreAdapterOptions["channels"];
 }): Routes {
-  const { agent, stateRoot, schedules, onStateReady, channels } = options;
+  const { agent, stateRoot, routines, onStateReady, channels } = options;
   // OCCURRENCE SEMANTICS, because this host's clock is ours: `deploy` wrote the EventBridge rule and the forwarder
   // relays its instant behind the ingress secret, so the slot is a real grid point of that schedule and a claim
-  // means something (dedup across redeliveries, a fire history, the overlap policy). `POST /trigger` — the
+  // means something (dedup across redeliveries, a fire history, the overlap policy). `POST /run` — the
   // unauthenticated API — is NOT this and is not served here at all.
   const fireSchedule = async (name: string, occurrence: Date): Promise<Response> => {
-    const schedule = schedules.find((s) => s.name === name);
-    if (!schedule) {
+    const routine = routines.find((r) => r.name === name);
+    if (!routine) {
       return text(
-        `no schedule named "${name}" (this deployment has: ${schedules.map((s) => s.name).join(", ")})\n`,
+        `no schedule named "${name}" (this deployment has: ${routines.map((r) => r.name).join(", ")})\n`,
         404,
       );
     }
     const outcome = await Effect.runPromise(
-      fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
+      fireScheduleOnce({ agent, stateRoot, schedule: routine, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
     ).catch((cause: unknown) => {
       // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
       // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
@@ -239,6 +240,19 @@ export function mountAgentcore(options: {
     }
     return Response.json({ slot: occurrence.toISOString(), ...outcome });
   };
+  // BY NAME, on the IAM door. `POST /run`'s contract, through the only ingress this host has for a caller AWS has
+  // already identified — which makes it stricter here than the anonymous route other hosts publish. A routine
+  // without a cron is reachable ONLY this way on this host, and that is the point: nothing is unreachable.
+  const runRoutine = async (name: string): Promise<Response> => {
+    const routine = routines.find((r) => r.name === name);
+    if (!routine) {
+      return text(
+        `no declared work named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${routines.map((r) => r.name).join(", ")})\n`,
+        404,
+      );
+    }
+    return Response.json(await runRoutineByName(agent, routine));
+  };
   return agentcoreRoutes({
     channels,
     agent,
@@ -247,6 +261,6 @@ export function mountAgentcore(options: {
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
-    ...(schedules.length > 0 ? { fireSchedule } : {}),
+    ...(routines.length > 0 ? { fireSchedule, runRoutine } : {}),
   });
 }

@@ -18,7 +18,7 @@ import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { loadSchedules } from "../../schedule/discover.ts";
+import { loadRoutines } from "../../schedule/discover.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface InfoOptions {
@@ -59,7 +59,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const inspected = await inspectChannels(agentDir).catch(failStartup);
   const channels = inspected.channels.map((c) => c.name);
   // Loaded (imported + validated), not just discovered.
-  const sched = await loadSchedules(agentDir).catch(failStartup);
+  const sched = await loadRoutines(agentDir).catch(failStartup);
   // What the definition DECLARED it needs, and which of those have no value here. `info` reports
   // (never asserts): it is the read-only view of the same list `dev`/`start` refuse to boot without
   // and `deploy` carries to the host.
@@ -78,11 +78,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   ];
   const unsetSecrets = missingSecrets(declaredSecrets);
   const unsetAtBoot = missingSecrets(codeInputSecrets);
-  const schedules = sched.schedules.map((s) => ({
-    name: s.name,
-    cron: s.cron,
-    tz: s.tz ?? null,
-    next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
+  const routines = sched.routines.map((r) => ({
+    name: r.name,
+    cron: r.cron ?? null,
+    tz: r.tz ?? null,
+    // A routine with no cron has no next fire — it is reached by name (`POST /run`, `routine run`), which is a
+    // fact worth printing rather than a null to squint at.
+    next: r.cron === undefined ? null : (nextRun(r.cron, r.tz, new Date())?.toISOString() ?? null),
   }));
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login create them,
   // info must not).
@@ -126,8 +128,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           deferredTools: tools.deferred,
           toolError: tools.error ?? null,
           channels,
-          schedules,
-          scheduleFailures: sched.failures,
+          routines,
+          routineFailures: sched.failures,
           channelFailures: inspected.failures,
           selfSchedule: config.selfSchedule ?? false,
           stateRoot,
@@ -168,7 +170,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
   if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
   line("channels", channels.join(", ") || "(none)");
-  line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");
+  line(
+    "routines",
+    routines.map((r) => `${r.name} (${r.cron === null ? "on demand" : `next ${r.next ?? "never"}`})`).join(", ") ||
+      "(none)",
+  );
   line("selfSchedule", config.selfSchedule ? "on (mounts the wake tool when serving)" : "off");
   line("secrets", declaredSecrets.length > 0 ? describeSecrets(declaredSecrets) : "(none declared)");
   // Each unset name appears in exactly ONE ⚠, by consequence: the boot-blocking ones say so, and

@@ -189,9 +189,9 @@ describe("the assembly's parts stay out of the public surface", () => {
     "createControlPlane",
     "loadTools",
     "loadChannels",
-    "loadSchedules",
+    "loadRoutines",
     "createScheduler",
-    "scheduleSession",
+    "routineSession",
     // pi-ai's own runtime function: forwarding it makes us answerable for an API we do not own.
     "createProvider",
   ];

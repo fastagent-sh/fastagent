@@ -18,7 +18,7 @@ import {
   readTextIfExists,
 } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
-import { loadSchedules } from "../schedule/discover.ts";
+import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -33,7 +33,7 @@ import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { isEnvKey } from "./secrets.ts";
-import { shouldServeTrigger } from "../service.ts";
+import { shouldServeRun } from "../service.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -47,8 +47,8 @@ interface DeployFacts {
   /** Every declared channel with the ingress its module shape says it has, custom ones included. */
   channels: DeclaredChannel[];
   /**
-   * `schedules/` declares at least one cron. KEPT APART from {@link hasWakeups} because only this one has an
-   * external substitute: `POST /trigger` lets someone else's clock fire a declared schedule, so an operator who
+   * `routines/` declares at least one cron. KEPT APART from {@link hasWakeups} because only this one has an
+   * external substitute: `POST /run` lets someone else's clock run a declared routine, so an operator who
    * wants scale-to-zero has an option here and none for a wake-up.
    */
   hasCron: boolean;
@@ -182,12 +182,12 @@ export async function preflightDeploy(input: {
   }
   const modelSpec = model.spec;
 
-  // Time triggers (static schedules or self-scheduling) need a machine kept running, and a declared schedule also
-  // decides whether `POST /trigger` mounts — so the load happens HERE, before the warning that has to name it.
+  // Time triggers (static routines or self-scheduling) need a machine kept running, and a declared schedule also
+  // decides whether `POST /run` mounts — so the load happens HERE, before the warning that has to name it.
   // Loaded, not just listed: the same load answers "are there time triggers" AND "what did they declare they need".
   // A file that FAILED to load still counts as a trigger — the author will fix it, and a plan that scaled to zero
   // because a cron was broken on deploy day would sleep through it afterwards.
-  const loadedSchedules = await loadSchedules(agentDir);
+  const loadedRoutines = await loadRoutines(agentDir);
 
   // What the PUBLIC host URL answers with no authentication of ours in front of it — NAMED FROM WHAT WILL ACTUALLY
   // MOUNT, never from the host alone. `POST /invoke` is on by default whatever channels a definition declares (so
@@ -195,16 +195,16 @@ export async function preflightDeploy(input: {
   // my tools" in silence), but `http.invoke: false` withholds it. Listing an endpoint this deployment does not serve
   // is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
   //
-  // `POST /trigger` follows the SAME condition the assembly uses, through the same function
-  // (`shouldServeTrigger`). Leaving it out had the two failures this list exists to prevent —
-  // one missing endpoint in the ordinary case, and complete silence for `http.invoke: false` + `http.trigger: true`,
+  // `POST /run` follows the SAME condition the assembly uses, through the same function
+  // (`shouldServeRun`). Leaving it out had the two failures this list exists to prevent —
+  // one missing endpoint in the ordinary case, and complete silence for `http.invoke: false` + `http.run: true`,
   // which is a public URL whose ONLY anonymous turn endpoint went unmentioned.
-  const servesTrigger =
-    loadedSchedules.schedules.length > 0 &&
-    shouldServeTrigger({ serveInvoke: config.http?.invoke, serveTrigger: config.http?.trigger });
+  const servesRun =
+    loadedRoutines.routines.length > 0 &&
+    shouldServeRun({ serveInvoke: config.http?.invoke, serveRun: config.http?.run });
   const unauthenticated = [
     ...(config.http?.invoke === false ? [] : ["POST /invoke (run a turn with this agent's tools)"]),
-    ...(servesTrigger ? ["POST /trigger (fire any schedule this agent declares)"] : []),
+    ...(servesRun ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
     ...(config.sessionControl === true ? ["/control/* (read, steer or delete any session)"] : []),
   ];
   if (publicUrl && unauthenticated.length > 0) {
@@ -248,9 +248,14 @@ export async function preflightDeploy(input: {
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
-  // A FAILED schedule file still counts: it declares the intent, and the deployed process reports the failure —
-  // a plan that scaled to zero because the file did not parse would hide it behind silence instead.
-  const hasCron = loadedSchedules.schedules.length + loadedSchedules.failures.length > 0;
+  // A ROUTINE IS NOT A CRON. `cron` is a field, so counting routine FILES answered a different question: a
+  // definition whose only routine is reached by name (`POST /run`) would pin one machine up forever and print a
+  // note about a cron instant it does not have. `deploy agentcore` already filtered the same way when it turned
+  // routines into EventBridge rules; this is the other reader of that fact, and they must agree.
+  //
+  // A FAILED file still counts, on the conservative side: it may well declare a cron, and a plan that scaled to
+  // zero because the file did not parse would hide that behind silence.
+  const hasCron = loadedRoutines.routines.some((r) => r.cron !== undefined) || loadedRoutines.failures.length > 0;
   const hasWakeups = !!config.selfSchedule;
   if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({
@@ -274,9 +279,9 @@ export async function preflightDeploy(input: {
     messages.push({
       level: "note",
       text:
-        `schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
+        `routines/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
         `instant). To scale to zero instead, keep the time in a scheduler you own and let it call ` +
-        `\`POST /trigger\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-trigger).`,
+        `\`POST /run\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-run).`,
     });
   }
 
@@ -507,7 +512,7 @@ export async function preflightDeploy(input: {
   // a crash loop, which is the failure mode this whole mechanism exists to move to build time. Under
   // `--run` that is a gate, like a channel that fails to inspect; generate-only warns, since the
   // operator may be producing artifacts from a machine that never installed the agent's deps.
-  for (const failure of [...resolvedTools.toolFailures, ...loadedSchedules.failures]) {
+  for (const failure of [...resolvedTools.toolFailures, ...loadedRoutines.failures]) {
     const issue =
       `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried ` +
       `to the host, so the deployed box would refuse to start`;
@@ -517,7 +522,7 @@ export async function preflightDeploy(input: {
   const extraSecrets: DeclaredSecret[] = [
     ...(config.deploy?.secrets ?? []).map((name) => ({ name, source: "fastagent.config deploy.secrets" })),
     ...allSecrets(resolvedTools.toolSecrets),
-    ...allSecrets(loadedSchedules.secrets),
+    ...allSecrets(loadedRoutines.secrets),
     // A CUSTOM channel's credentials exist nowhere else: the first-party table can only name the channels fastagent
     // ships, and guessing a custom one's variables is impossible.
     ...allSecrets(inspected.secrets),

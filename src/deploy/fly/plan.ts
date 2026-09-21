@@ -22,7 +22,7 @@ export interface FlyPlanInput extends ContainerInput {
   /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
    *  attributed to the file that declared it. */
   extraSecrets?: readonly DeclaredSecret[];
-  /** `schedules/` declares a cron — one of the things that forces a machine up (deploy/residency.ts). */
+  /** `routines/` declares a cron — one of the things that forces a machine up (deploy/residency.ts). */
   hasCron: boolean;
   /** `selfSchedule` is on — the wake tool, which forces a machine up with no external substitute. */
   hasWakeups: boolean;
@@ -46,8 +46,8 @@ function flyToml(appName: string, port: number, residency: Residency | undefined
   const alternative =
     residency?.reason === CRON_CAN_BE_EXTERNAL
       ? `  # …or keep the time somewhere else and set this to 0: a scheduler you own (Fly Cron Manager,\n` +
-        `  # supercronic, GitHub Actions) calls \`POST /trigger\`, which runs one declared unit of work by name.\n` +
-        `  # It is an API, not a clock: read its contract first — docs/api-reference.md#post-trigger.\n`
+        `  # supercronic, GitHub Actions) calls \`POST /run\`, which runs one declared unit of work by name.\n` +
+        `  # It is an API, not a clock: read its contract first — docs/api-reference.md#post-run.\n`
       : "";
   // Suspend, not stop: a resume is fast enough that a webhook does not time out. Edit the line to change it.
   const stopLine = `  auto_stop_machines = "suspend"   # suspend on idle (fast resume on the next webhook)`;

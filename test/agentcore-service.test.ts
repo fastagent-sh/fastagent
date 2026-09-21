@@ -45,7 +45,8 @@ describe("deferred AgentCore initialization", () => {
     // 30s ceiling never absorbed and 60s stopped absorbing too — a full `npm test` run puts a fork on
     // every core, and this stage is import-bound, so contention scales it by more than 3x. Raise the
     // budget rather than cap parallelism (vitest.config.ts states why). It still bounds a genuine hang:
-    // the file's other ten tests answer in ~10ms or less, so only THIS one can spend it.
+    // every test here but this one and the IAM-door one below answers in ~10ms or less, so only those
+    // two can spend it — they are the two that mount a service for real.
   }, 120_000);
 
   it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
@@ -194,11 +195,11 @@ describe("mountAgentcoreService", () => {
   it("names every config key that cannot mean anything here, not just sessionControl", async () => {
     // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
     // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.invoke`
-    // has no `/invoke` to withhold (this host serves `POST /invocations`); `http.trigger` has no
+    // has no `/invoke` to withhold (this host serves `POST /invocations`); `http.run` has no
     // anonymous route to withhold either, because schedules fire through the ingress-gated envelope.
     const dir = await agentDir(
       {},
-      `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false, trigger: false } }`,
+      `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false, run: false } }`,
     );
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const service = await mountAgentcoreService(await open(dir));
@@ -206,7 +207,7 @@ describe("mountAgentcoreService", () => {
       const said = warn.mock.calls.flat().join(" ");
       expect(said).toMatch(/http\.cors has no effect here/);
       expect(said).toMatch(/http\.invoke has no effect here/);
-      expect(said).toMatch(/http\.trigger has no effect here/);
+      expect(said).toMatch(/http\.run has no effect here/);
     } finally {
       warn.mockRestore();
       await service.close();
@@ -283,9 +284,9 @@ describe("mountAgentcoreService", () => {
     // This is the half of the split that keeps a slot, a claim, a fire history and the overlap policy:
     // `deploy` wrote the EventBridge rule and injected `<aws.scheduler.scheduled-time>`, the forwarder
     // relays it behind the ingress secret, so the instant IS a grid point of that schedule and the
-    // claim means something. `POST /trigger` is the other contract — an unauthenticated API with no
+    // claim means something. `POST /run` is the other contract — an unauthenticated API with no
     // occurrence — and is not served on this host at all (asserted above).
-    const dir = await agentDir({ "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` });
+    const dir = await agentDir({ "routines/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` });
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const service = await mountAgentcoreService(await open(dir));
     const occurrence = "2026-07-07T09:00:00.000Z";
@@ -294,7 +295,7 @@ describe("mountAgentcoreService", () => {
         new Request("http://h/invocations", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "digest", occurrence }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "routine-fire", name: "digest", occurrence }),
         }),
       );
     try {
@@ -305,7 +306,7 @@ describe("mountAgentcoreService", () => {
       const retry = (await (await fire()).json()) as { fired: boolean; skippedReason?: string };
       expect(retry.fired).toBe(false);
       expect(retry.skippedReason).toContain("already claimed");
-      // …and the fire is on the record, which is what `fastagent schedule history` reads.
+      // …and the fire is on the record, which is what `fastagent routine history` reads.
       const { readFires } = await import("../src/schedule/state.ts");
       const { resolveStateRoot } = await import("../src/paths.ts");
       expect(readFires(resolveStateRoot(dir), "digest").map((f) => f.slot)).toEqual([occurrence]);
@@ -315,7 +316,7 @@ describe("mountAgentcoreService", () => {
         new Request("http://h/invocations", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "gone", occurrence }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "routine-fire", name: "gone", occurrence }),
         }),
       );
       expect(unknown.status).toBe(404);
@@ -325,13 +326,60 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("reports loaded schedules, and close() is safe to call twice", async () => {
+  it("runs a routine BY NAME on the IAM door — the contract POST /run has, where there is no route", async () => {
+    // The other half of the split. `routine-fire` names an occurrence our own clock produced and claims
+    // it; this names only the work. It is on the IAM door (no ingress secret) for the same reason
+    // `invoke` is: the forwarder never emits it, so it can only come from a direct InvokeAgentRuntime
+    // call — which makes by-name running STRICTER here than the anonymous route other hosts publish,
+    // not absent. A cron-less routine is reachable ONLY this way here, which is why nothing warns.
+    const dir = await agentDir({ "routines/reindex.ts": `export default { prompt: "refresh" };` });
+    const service = await mountAgentcoreService(await open(dir));
+    const call = (name: string) =>
+      service.handler(
+        new Request("http://h/invocations", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ kind: "routine-run", name }), // NO ingress secret
+        }),
+      );
+    try {
+      const res = await call("reindex");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ name: "reindex", session: "routine:reindex", ran: true });
+      // No occurrence means no claim, and therefore no fire history — that is `routine-fire`'s job.
+      const { readFires } = await import("../src/schedule/state.ts");
+      const { resolveStateRoot } = await import("../src/paths.ts");
+      expect(readFires(resolveStateRoot(dir), "reindex")).toEqual([]);
+      // NOT a second call here: "every call is a call" is `runRoutineByName`'s contract and is covered
+      // against a faux agent in schedule-run.test.ts. This door owes its WIRING, and a real turn costs
+      // a cold engine assembly — paying for it twice to re-prove someone else's rule is how a suite
+      // gets slow enough to go red on contention alone.
+
+      // 404 lists what this deployment HAS, and clips the name it quotes back — the same
+      // MAX_ECHOED_NAME `POST /run` reads, imported rather than copied, because two doors answering one
+      // contract is exactly where a second copy of a rule starts to drift.
+      const unknown = await call("x".repeat(4000));
+      expect(unknown.status).toBe(404);
+      const said = await unknown.text();
+      expect(said).toContain("x".repeat(64));
+      expect(said).not.toContain("x".repeat(65));
+      expect(said).toContain("this deployment has: reindex");
+    } finally {
+      await service.close();
+    }
+    // Same budget, same reason as the probe test above: mounting the service pays a full cold engine
+    // assembly (~15s measured alone), which the suite's 30s ceiling does not absorb once a full
+    // `npm test` puts a fork on every core. The rest of this test is milliseconds, so the ceiling
+    // still bounds a genuine hang.
+  }, 120_000);
+
+  it("reports loaded routines, and close() is safe to call twice", async () => {
     const dir = await agentDir(
-      { "schedules/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
+      { "routines/digest.ts": `export default { cron: "0 9 * * *", prompt: "hi" };` },
       `{ model: "openai-codex/gpt-5.5" }`,
     );
     const service = await mountAgentcoreService(await open(dir));
-    expect(service.schedules.map((s) => s.name)).toEqual(["digest"]);
+    expect(service.routines.map((s) => s.name)).toEqual(["digest"]);
 
     await service.close();
     // Both the shutdown hook and an explicit close can run.

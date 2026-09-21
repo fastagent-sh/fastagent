@@ -37,7 +37,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   }
   // This command RUNS one tool body, so it takes the same guarantee dev/start take — for THAT tool
   // only (`owner`): running one tool by hand must not require the credentials of the tools it is not
-  // running, and `fire` scopes the same way for one schedule.
+  // running, and `routine run` scopes the same way for one routine.
   // The failures go to the gate as well, even though they were just printed: the gate's guarantee is
   // that a refusal never hides them, and it cannot know a caller already reported. A repeated line on
   // the refusal path is the cheaper failure than one that depends on this call site remembering.
