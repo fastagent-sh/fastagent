@@ -52,6 +52,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
+import { parseFireLine } from "../../src/deploy/agentcore/logs.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { CLI, aws, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv, run } from "./env.ts";
 
@@ -107,9 +108,6 @@ afterAll(async () => {
   }
 }, 900_000);
 
-/** `routine-fire <name> (<occurrence>): <status> <body>` — the forwarder's one line per delivery. */
-const FIRE_LINE = new RegExp(`routine-fire ${SCHEDULE} \\(([^)]+)\\): (\\d+) (.*)`);
-
 /** Poll the forwarder's log group until it has said something about a fire, or the budget runs out. */
 async function waitForFire(
   sinceMs: number,
@@ -141,19 +139,19 @@ async function waitForFire(
       seen = lines.length;
       lastLine = (lines.at(-1)?.message ?? "").trim().slice(0, 300);
       for (const event of lines) {
-        // TRIMMED, because every CloudWatch message ends with a newline and this regex used to anchor on
-        // `$`. In Perl and Python that matches before a trailing newline; in JavaScript it does NOT — `$`
-        // without `m` is end-of-input only. So the pattern matched nothing real, on every run, while the
-        // probe reported "the forwarder logged N lines, none of them a routine-fire" and looked like a
-        // delivery problem. The anchor is gone with it: `(.*)` already stops at the newline.
-        const matched = FIRE_LINE.exec((event.message ?? "").trim());
-        if (matched)
-          return {
-            occurrence: matched[1] as string,
-            status: Number(matched[2]),
-            body: matched[3] as string,
-            raw: (event.message ?? "").trim(),
-          };
+        // `parseFireLine` lives in src (deploy/agentcore/logs.ts) because it is string work with no AWS in
+        // it, and `test/live/**` is outside `npm test` — the defect it was extracted over cost a paid
+        // deployment to find.
+        const raw = (event.message ?? "").trim();
+        const line = parseFireLine(raw, SCHEDULE);
+        if (line === undefined) continue;
+        // A CALL THAT NEVER CAME BACK is a VERDICT, not silence. Polling on through it to a 360s timeout and then
+        // reporting "none of them a routine-fire" is exactly the misreading `invokeLogged` was added to
+        // prevent (forwarder.js) — so this fails NOW, with the forwarder's own words.
+        if (line.kind === "failed") {
+          throw new Error(`the forwarder could not reach the container for ${line.occurrence}: ${line.message}`);
+        }
+        return { occurrence: line.occurrence, status: line.status, body: line.body, raw };
       }
       lastError = `the forwarder logged ${seen} line(s), none of them a routine-fire for "${SCHEDULE}"`;
     } else {
@@ -197,17 +195,21 @@ describe("agentcore routines: EventBridge holds the clock and names each fire", 
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
     ).toBeTruthy();
 
-    // SIX MINUTES, which the header's own measurement supports and nothing observed contradicts. The
-    // routine runs from the minute after the stack is created, so the first delivery's instant is
-    // within 60s of this point; the cold invocation then took 61.4s end to end (container start,
-    // definition open, model turn), and the poll interval is 10s — about 130s to the first match,
-    // against a 360s budget.
+    // SIX MINUTES, on the numbers in this file's header. The routine runs from the minute after the stack
+    // is created, so the first delivery's instant is within 60s of this point; the cold invocation then
+    // took 49.9s end to end (container start, definition open, model turn), and the poll interval is 10s
+    // — about 120s to the first match, against a 360s budget. Roughly 3x headroom.
     //
-    // It was briefly raised to 900s, which was a second patch on a symptom the line above had already
-    // explained: the run that timed out had delivered every fire ON TIME and logged them, and what hid
-    // them was `--filter-pattern`, not the clock. The budget is a cost ceiling here — one real model
-    // turn per minute of it — so it stays at the measured number until something is observed to exceed
-    // it. It also has to fit inside this test's own timeout alongside the deploy (~7 minutes measured).
+    // THE JITTER IS THE REASON TO STATE THAT RATIO RATHER THAN A MARGIN IN SECONDS: between the
+    // 2026-09-20 and 2026-09-21 runs the steady-state latency DOUBLED, 23.5-24.5s to 43.6-45.0s, with no
+    // change on our side. Whatever moved (region load, model latency) can move again, so the budget is
+    // sized in multiples of a measured worst case, not in the slack left over from one.
+    //
+    // It was briefly raised to 900s, which was a second patch on a symptom already explained: the run
+    // that timed out had delivered every fire ON TIME and logged them, and what hid them was
+    // `--filter-pattern`, not the clock. The budget is a cost ceiling — one real model turn per minute of
+    // it — so it stays at the measured number until something is observed to exceed it. It also has to
+    // fit inside this test's own timeout alongside the deploy (~7 minutes measured).
     const fire = await waitForFire(deployedAt, 360_000);
 
     // (1) THE assertion this probe exists for. A non-200 is a cold start, an opened definition, a model

@@ -8,6 +8,7 @@ import { Buffer } from "node:buffer";
 import * as nodeCrypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
+import { parseFireLine } from "../src/deploy/agentcore/logs.ts";
 import { ENVELOPE_KINDS, RESERVED_PATHS } from "../src/channels/agentcore-protocol.ts";
 import { forwarderSource } from "../src/deploy/agentcore/plan.ts";
 
@@ -271,6 +272,51 @@ describe("agentcore forwarder (executed)", () => {
     expect(dead.logs.mock.calls.flat().join("\n")).toContain(
       "routine-fire digest (2026-07-28T09:00:00Z): invoke failed: runtime unavailable",
     );
+  });
+
+  it("what it LOGS is what parseFireLine reads — the two halves of one format, bound", async () => {
+    // The format has one producer (this file's source) and readers elsewhere: an operator's eyes, and the
+    // live probe. Both sides used to carry their own literal, so a drift showed up as "the probe is red
+    // and the log has seven lines in it" — after a paid deployment. This binds them offline, and it runs
+    // the producer's ACTUAL output through the parser rather than a string retyped here.
+    //
+    // CloudWatch prefixes a timestamp and request id and appends a newline, which the parser has to
+    // survive: `$` is end-of-input in JavaScript, unlike Perl and Python, and an anchored pattern
+    // therefore matched nothing real on every run.
+    const wrap = (line: string) => `2026-07-28T09:00:03.120Z\t5e6ab0df-14d7-4ec0\tINFO\t${line}\n`;
+
+    const ok = loadForwarder();
+    await ok.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } });
+    const delivered = ok.logs.mock.calls.flat().find((l) => String(l).includes("routine-fire digest"));
+    expect(parseFireLine(wrap(String(delivered)), "digest")).toEqual({
+      kind: "delivered",
+      occurrence: "2026-07-28T09:00:00Z",
+      status: 200,
+      body: JSON.stringify({ ok: true }), // the harness default container reply, verbatim
+    });
+
+    const dead = loadForwarder({
+      containerReply: () => {
+        throw new Error("runtime unavailable");
+      },
+    });
+    await expect(
+      dead.handler({ scheduleFire: { name: "digest", occurrence: "2026-07-28T09:00:00Z" } }),
+    ).rejects.toThrow(/runtime unavailable/);
+    const failed = dead.logs.mock.calls.flat().find((l) => String(l).includes("routine-fire digest"));
+    // X MUST NOT HAPPEN: a call that never came back must not read as a delivery. A reader that only
+    // knows the status-code shape polls past it to a timeout and then blames the clock — the exact
+    // misreading `invokeLogged` exists to prevent.
+    const parsedFailure = parseFireLine(wrap(String(failed)), "digest");
+    expect(parsedFailure).toEqual({
+      kind: "failed",
+      occurrence: "2026-07-28T09:00:00Z",
+      message: "runtime unavailable",
+    });
+
+    // And a line about something else is not a fire at all.
+    expect(parseFireLine(wrap("REPORT RequestId: 5e6ab0e0\tDuration: 2907.69 ms"), "digest")).toBeUndefined();
+    expect(parseFireLine(wrap("routine-fire other (2026-07-28T09:00:00Z): 200 {}"), "digest")).toBeUndefined();
   });
 
   it("a wakePoke event forwards a wake-poke envelope (the invocation itself is the payload)", async () => {
