@@ -273,7 +273,9 @@ describe("cli: the assembled serving surface", () => {
         { unverifiedRoutes: ["POST /invoke", "POST /run", "GET /health"] },
         { host: "127.0.0.1", tunnel: false },
       );
-      expect(warn.mock.calls.flat().join(" ")).toContain("POST /run (run any routine this agent declares; GET /routines lists them)");
+      expect(warn.mock.calls.flat().join(" ")).toContain(
+        "POST /run (run any routine this agent declares; GET /routines lists them)",
+      );
 
       // …and NOT once `http.cors` has taken it back — then the operator named the origins themselves.
       warn.mockClear();
