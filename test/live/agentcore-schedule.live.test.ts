@@ -52,7 +52,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
-import { parseFireLine } from "../../src/deploy/agentcore/logs.ts";
+import { parseFireLine } from "../fire-line.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { CLI, aws, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv, run } from "./env.ts";
 
@@ -60,7 +60,7 @@ const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "an
 
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
-const SCHEDULE = "tick";
+const ROUTINE = "tick";
 /** Every minute: EventBridge Scheduler's own floor, and what bounds this probe's wait. */
 const CRON = "* * * * *";
 
@@ -83,7 +83,7 @@ beforeAll(async () => {
   // sees the same shape either way, and this fixture then needs no `npm install` before `deploy` reads
   // it. (The deployed image installs the package itself; this file is read on the BUILDER.)
   await writeFile(
-    join(agentDir, "routines", `${SCHEDULE}.ts`),
+    join(agentDir, "routines", `${ROUTINE}.ts`),
     `export default { cron: ${JSON.stringify(CRON)}, prompt: "Reply with just: tick" };\n`,
   );
   await writeFile(
@@ -144,7 +144,7 @@ async function waitForFire(
         // it, and `test/live/**` is outside `npm test` — the defect it was extracted over cost a paid
         // deployment to find.
         const raw = (event.message ?? "").trim();
-        const line = parseFireLine(raw, SCHEDULE);
+        const line = parseFireLine(raw, ROUTINE);
         if (line === undefined) continue;
         // A CALL THAT NEVER CAME BACK names the timeout, and does not end the run. `invokeLogged` rethrows so
         // that EventBridge RETRIES (forwarder.js), which makes one cold-start miss a recoverable state the
@@ -159,7 +159,7 @@ async function waitForFire(
       }
       // The forwarder's own words WIN over a count: a reported miss says what went wrong, "N lines, none of
       // them a fire" only says this function did not find one.
-      lastError = unreachable ?? `the forwarder logged ${seen} line(s), none of them a routine-fire for "${SCHEDULE}"`;
+      lastError = unreachable ?? `the forwarder logged ${seen} line(s), none of them a routine-fire for "${ROUTINE}"`;
     } else {
       // Absent until first use: AWS creates the group when the Lambda first writes.
       lastError = events.stderr.trim().slice(0, 300);

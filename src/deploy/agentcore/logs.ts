@@ -1,4 +1,4 @@
-/** AgentCore log discovery, tailing, and reading back the one line the forwarder writes per fire. */
+/** AgentCore log discovery + tailing. */
 import type { CliRunner } from "../runner.ts";
 import { forwarderLogGroup } from "./plan.ts";
 import { parseStackOutputs } from "./run.ts";
@@ -15,63 +15,6 @@ export interface AgentcoreLogsPlan {
 }
 
 export type AgentcoreLogsOutcome = { ok: true; logGroup: string } | { ok: false; gate: string };
-
-/**
- * What the forwarder said about one routine fire, read back from its log.
- *
- * `delivered` carries the container's answer (its own reply body rides along); `failed` is the call that never
- * came back at all. They are kept apart because a reader that only knows the first one mistakes the second for
- * silence — which is the mistake `invokeLogged` exists to prevent (deploy/agentcore/forwarder.js), and which a
- * live probe then made anyway by matching only the status-code shape and timing out with "the forwarder logged N
- * lines, none of them a routine-fire".
- */
-export type ForwarderFireLine =
-  | { kind: "delivered"; occurrence: string; status: number; body: string }
-  | { kind: "failed"; occurrence: string; message: string };
-
-/**
- * Parse ONE CloudWatch message into what the forwarder meant by it, or `undefined` when the line is about
- * something else (an ordinary Lambda `START`/`REPORT`, a webhook, another routine).
- *
- * HERE RATHER THAN IN THE PROBE, because this is string work with no AWS in it: `test/live/**` is excluded from
- * `npm test`, so a defect in it is found by paying for a deployment. The one that was found that way was an
- * anchored pattern — `$` is end-of-input in JavaScript, unlike Perl and Python, and every CloudWatch message
- * carries a trailing newline, so it matched nothing real on every run. NOTHING HERE IS ANCHORED, at either end:
- * the message arrives with a timestamp and request id in front of it and a newline after it.
- *
- * NO REGEX FOR THE HEAD. A routine name is a filename, so `a+b.ts` is a legal one and would otherwise have to be
- * escaped into the pattern — a guard nobody can see working, since both call sites pass plain names. Looking for
- * a literal is what the reader means anyway, and it is why the name in the line cannot be read as a pattern.
- *
- * The FORMAT has one producer (`forwarder.js`), and `test/agentcore-forwarder.test.ts` feeds that producer's own
- * output through this function — so the two cannot drift apart without a red offline test.
- */
-export function parseFireLine(message: string, routine: string): ForwarderFireLine | undefined {
-  const marker = `routine-fire ${routine} (`;
-  const at = message.indexOf(marker);
-  if (at === -1) return undefined;
-  const afterName = message.slice(at + marker.length);
-  const close = afterName.indexOf("): ");
-  // PAST THIS POINT THE LINE IS OURS, so nothing below may return `undefined`: the caller reads that as "this
-  // line was about something else" and keeps waiting. A fire it cannot read is the one thing it must not wait
-  // out — that misreading is the whole defect this function was extracted over, and the format growing a third
-  // tail (a retry, a skip) is exactly how it would come back.
-  if (close === -1) {
-    throw new Error(`a routine-fire line for "${routine}" has no occurrence: ${message.trim().slice(0, 300)}`);
-  }
-  const occurrence = afterName.slice(0, close);
-  // The newline CloudWatch appends cannot reach the body below, because `.` does not cross one. A `.trim()`
-  // here would look like that guard while being unobservable — the offline test wraps its input the way
-  // CloudWatch does, so a body pattern that DID cross the newline is what turns red.
-  const tail = afterName.slice(close + "): ".length);
-  const failed = /^invoke failed: (.*)/.exec(tail);
-  if (failed) return { kind: "failed", occurrence, message: failed[1] as string };
-  const delivered = /^(\d+) (.*)/.exec(tail);
-  if (!delivered) {
-    throw new Error(`unrecognized routine-fire line for "${routine}": ${message.trim().slice(0, 300)}`);
-  }
-  return { kind: "delivered", occurrence, status: Number(delivered[1]), body: delivered[2] as string };
-}
 
 /** Runtime id from `arn:...:runtime/<id>` — the id prefixes AgentCore's per-endpoint log group. */
 function runtimeIdFromArn(arn: string): string | undefined {
