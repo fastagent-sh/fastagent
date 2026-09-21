@@ -326,7 +326,7 @@ describe("cli end to end: the thin entry", () => {
     const { code, stdout, stderr } = await run(["routine", "list", dir]);
     expect(code).toBe(0);
     expect(stdout).toBe("");
-    expect(stderr).toMatch(/no routines declared/);
+    expect(stderr).toMatch(/nothing declared or pending/);
   });
 
   it("tool with no args is a usage error from the kernel: exit 2", async () => {

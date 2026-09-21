@@ -12,6 +12,7 @@ import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { routineSession } from "../../schedule/routine.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
+import { listWakeups } from "../../schedule/wakeups.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 /**
@@ -78,12 +79,21 @@ export function runRoutineHistory(name: string, dirArg: string, json: boolean): 
   );
 }
 
-/** `fastagent routine list [dir]`: every declared unit of work, and when (or whether) a clock fires it. */
+/**
+ * `fastagent routine list [dir]`: every declared routine, and when (or whether) a clock fires it.
+ *
+ * IT ALSO READS the agent's pending wake-ups. They are a different owner (the state, not the definition) but the
+ * same question when an operator is asking it: "what is going to wake this agent up?". Deleting the command that
+ * CANCELLED one was right — `unwake({ id })` covers it, and a serve that can receive the alarm can also be spoken
+ * to — but that argument is about WRITING. Without a read, the only way to learn why an agent wakes at 3am is to
+ * open `<stateRoot>/schedule/wakeups.json` by hand.
+ */
 export async function runRoutineList(dirArg: string, json: boolean): Promise<void> {
   const { agentDir: target } = placementOrExit(resolve(dirArg));
   enterAgentEnv(target);
   const { routines, failures } = await loadRoutines(target).catch(failStartup);
   reportModuleLoadFailures(failures);
+  const wakeups = listWakeups(resolveStateRoot(target));
   if (json) {
     console.log(
       JSON.stringify(
@@ -92,6 +102,7 @@ export async function runRoutineList(dirArg: string, json: boolean): Promise<voi
             ...r,
             next: r.cron === undefined ? null : (nextRun(r.cron, r.tz, new Date())?.toISOString() ?? null),
           })),
+          wakeups,
         },
         null,
         2,
@@ -99,8 +110,8 @@ export async function runRoutineList(dirArg: string, json: boolean): Promise<voi
     );
     return;
   }
-  if (routines.length === 0) {
-    console.error(`no routines declared — nothing in routines/ (agent: ${target})`);
+  if (routines.length === 0 && wakeups.length === 0) {
+    console.error(`nothing declared or pending — no routines/ files, no wake-ups (agent: ${target})`);
     return;
   }
   for (const r of routines) {
@@ -111,5 +122,11 @@ export async function runRoutineList(dirArg: string, json: boolean): Promise<voi
         ? "on demand".padEnd(26)
         : `${(nextRun(r.cron, r.tz, new Date())?.toISOString() ?? "(never)").padEnd(26)}cron ${r.cron}${r.tz ? ` ${r.tz}` : ""}`;
     console.log(`${r.name.padEnd(20)} ${when}`);
+  }
+  // Labelled, because these two are NOT the same kind of thing: a routine is the author's, a wake-up is the
+  // agent's own and is cancelled with `unwake` rather than a command here.
+  for (const w of wakeups) {
+    const kind = w.cron ? `cron ${w.cron}${w.tz ? ` ${w.tz}` : ""}` : "one-shot";
+    console.log(`wake ${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
   }
 }

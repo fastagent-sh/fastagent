@@ -45,7 +45,8 @@ describe("deferred AgentCore initialization", () => {
     // 30s ceiling never absorbed and 60s stopped absorbing too — a full `npm test` run puts a fork on
     // every core, and this stage is import-bound, so contention scales it by more than 3x. Raise the
     // budget rather than cap parallelism (vitest.config.ts states why). It still bounds a genuine hang:
-    // the file's other ten tests answer in ~10ms or less, so only THIS one can spend it.
+    // every test here but this one and the IAM-door one below answers in ~10ms or less, so only those
+    // two can spend it — they are the two that mount a service for real.
   }, 120_000);
 
   it("returns authenticated probe failures as structured transport-200 diagnostics", async () => {
@@ -349,7 +350,10 @@ describe("mountAgentcoreService", () => {
       const { readFires } = await import("../src/schedule/state.ts");
       const { resolveStateRoot } = await import("../src/paths.ts");
       expect(readFires(resolveStateRoot(dir), "reindex")).toEqual([]);
-      expect((await call("reindex")).status).toBe(200); // every call is a call: an API, not a clock
+      // NOT a second call here: "every call is a call" is `runRoutineByName`'s contract and is covered
+      // against a faux agent in schedule-run.test.ts. This door owes its WIRING, and a real turn costs
+      // a cold engine assembly — paying for it twice to re-prove someone else's rule is how a suite
+      // gets slow enough to go red on contention alone.
 
       // 404 lists what this deployment HAS, and clips the name it quotes back — the same
       // MAX_ECHOED_NAME `POST /run` reads, imported rather than copied, because two doors answering one
@@ -363,7 +367,11 @@ describe("mountAgentcoreService", () => {
     } finally {
       await service.close();
     }
-  });
+    // Same budget, same reason as the probe test above: mounting the service pays a full cold engine
+    // assembly (~15s measured alone), which the suite's 30s ceiling does not absorb once a full
+    // `npm test` puts a fork on every core. The rest of this test is milliseconds, so the ceiling
+    // still bounds a genuine hang.
+  }, 120_000);
 
   it("reports loaded routines, and close() is safe to call twice", async () => {
     const dir = await agentDir(

@@ -105,7 +105,7 @@ function listClaims(dir: string): string[] {
  * How a claimed occurrence ended.
  *
  * `skipped` is NOT a failure and is the reason this is an enum rather than a boolean: a schedule's turns share one
- * `schedule:<name>` session, so an occurrence arriving while the previous one is still running is refused by that
+ * `routine:<name>` session, so an occurrence arriving while the previous one is still running is refused by that
  * session, and recording it as `failed` made "the last run was still going" indistinguishable from "the model call
  * died" — two things an operator reacts to completely differently. Every scheduler names this: Kubernetes calls it
  * `concurrencyPolicy: Forbid`, Temporal calls it the `Skip` overlap policy, and neither treats it as an error.

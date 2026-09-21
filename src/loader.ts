@@ -11,7 +11,8 @@ import { log } from "./log.ts";
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 
 /** Whether `name` is an importable agent module (a discovery candidate, not a type declaration). */
-function isModuleFile(name: string): boolean {
+/** Does this filename look like a code input? Exported so a caller can ask about a directory it does NOT load. */
+export function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
 }
 

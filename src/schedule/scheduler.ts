@@ -82,7 +82,7 @@ function oneLine(text: string): string {
  * The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup.
  *
  * WHAT THE TURN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
- * (`schedule:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
+ * (`routine:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
  * EXPORTED for the API path (`POST /run`), which runs the same turn without a claim: it has no occurrence to
  * claim, because nobody's grid produced it (schedule/run.ts). The resident clock's own claim/run/settle is
  * {@link fireScheduleOnce}.
@@ -188,7 +188,7 @@ export function fireScheduleOnce(opts: {
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
     const r = yield* runTurn(agent, s.name, routineSession(s.name), s.prompt);
     // OVERLAP IS NOT FAILURE. The claim still stands — this occurrence is decided and will not be retried — but
-    // what decided it was the previous turn still holding `schedule:<name>`, which is the policy every scheduler
+    // what decided it was the previous turn still holding `routine:<name>`, which is the policy every scheduler
     // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
     if (r.busy) {
       settleClaim(stateRoot, s.name, slot, "skipped", r.ms);

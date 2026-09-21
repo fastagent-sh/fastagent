@@ -453,8 +453,8 @@ const routine: CommandSpec = {
       description:
         "List the routines this definition declares: the next cron instant for each that has one, and " +
         '"on demand" for each that does not — those are reached by name (POST /run, `routine run`). The agent\'s ' +
-        "own pending wake-ups are not here: they live in the STATE, not the definition, and the agent " +
-        "cancels its own with the `unwake` tool. Read-only.",
+        "own pending wake-ups are listed too, prefixed `wake`: a different owner (the STATE, not the " +
+        "definition), and only the agent cancels them (the `unwake` tool). Read-only.",
       args: [DIR_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent routine list" }],

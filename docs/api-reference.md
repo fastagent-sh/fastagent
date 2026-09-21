@@ -509,8 +509,8 @@ from a **wake-up**: the agent can schedule work for itself (`selfSchedule`), and
 the same idea — work to be done later — but every operational difference follows from one root. A
 routine is written in the *definition* (versioned, reviewed, shipped with the image, named by its
 author, reachable by name); a wake-up is written into the *state* by a running agent (minted id,
-cancellable, aimed back at the conversation it came from). Code and data. `fastagent routine list` reads the first; the second is the
-agent's own, and `unwake` is what cancels it.
+cancellable, aimed back at the conversation it came from). Code and data. `fastagent routine list` reads
+both — the wake-ups prefixed `wake` — but only the agent cancels one, with `unwake`.
 
 **The delivery target belongs in `secrets`, not in the prompt text.** A chat/channel id is
 environment-specific, so declare it and build the prompt from it: the builder runs once at load, its

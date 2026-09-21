@@ -27,7 +27,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `invoke <message> [dir]` | Run one agent turn and exit. |
 | `routine run <name> [dir]` | Run one routine's turn immediately (authoring loop), cron or not. |
 | `routine history <name> [dir]` | Print a routine's recent fires (what they said is in the session). |
-| `routine list [dir] [--json]` | Every declared routine: the next cron instant, or `on demand` where it has none. |
+| `routine list [dir] [--json]` | Every declared routine (next cron instant, or `on demand`) plus the agent's own pending wake-ups. |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
@@ -251,13 +251,15 @@ Two things have no claim and therefore no history here, only logs: the agent's s
 already claimed a later one — that instant will never run, which a clock that moved backwards can produce in
 a row; it is logged as a warning, where an ordinary duplicate delivery is an info line).
 
-`fastagent routine list [dir]` reads the DEFINITION: every declared routine with its next cron instant,
-or `on demand` where it declares none (those are reached by name — `POST /run`, `routine run`), with
-`--json` for the machine-readable form. It does not show the agent's own pending wake-ups: those live in
-the state, not the definition, and the agent cancels its own with the `unwake` tool (session-scoped).
-There is no operator command for that: a wake-up fires only while a serve is running, and a running
-serve is one whose session can be spoken to, so "the alarm is loose" and "the agent is unreachable"
-cannot both be true.
+`fastagent routine list [dir]` reads both owners. From the DEFINITION: every declared routine with its
+next cron instant, or `on demand` where it declares none (those are reached by name — `POST /run`,
+`routine run`). From the STATE: the agent's own pending wake-ups, prefixed `wake` (id, next fire,
+one-shot/cron, session, prompt). `--json` gives both as `routines` and `wakeups`.
+
+**Reading a wake-up is an operator's; cancelling one is the agent's.** `unwake({ id })` is
+session-scoped and there is no command beside it: a wake-up fires only while a serve is running, and a
+running serve is one whose session can be spoken to, so "the alarm is loose" and "the agent is
+unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedule/wakeups.json`.
 
 ## `fastagent tool`
 

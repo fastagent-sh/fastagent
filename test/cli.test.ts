@@ -295,6 +295,36 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/looked in .*fastagent\/routines/);
   });
 
+  it("routine list reads BOTH owners: the declared routines and the agent's own pending wake-ups", async () => {
+    // Cancelling a wake-up is the agent's (`unwake`), and that command is gone on purpose. Reading one is
+    // not: without this, finding out why an agent wakes at 3am means opening
+    // `<stateRoot>/schedule/wakeups.json` by hand.
+    const dir = await agentWorkspace("fa-list-", {
+      "routines/daily.mjs": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
+      "routines/reindex.mjs": `export default { prompt: "refresh" };\n`,
+    });
+    const { addWakeup } = await import("../src/schedule/wakeups.ts");
+    const { resolveStateRoot } = await import("../src/paths.ts");
+    const added = addWakeup(resolveStateRoot(join(dir, "fastagent")), {
+      session: "chat:42",
+      prompt: "check the deploy",
+      fireAt: new Date(Date.now() + 3_600_000),
+    });
+    if (!added.ok) throw new Error(added.error);
+
+    const text = await run(["routine", "list", dir]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toMatch(/daily\s+\S+\s+cron 0 9 \* \* \*/);
+    expect(text.stdout).toMatch(/reindex\s+on demand/); // no cron: the name is the only way in
+    expect(text.stdout).toContain(`wake ${added.id}`); // labelled — a different owner, not a routine
+    expect(text.stdout).toContain("session=chat:42");
+
+    const asJson = await run(["routine", "list", "--json", dir]);
+    const parsed = JSON.parse(asJson.stdout) as { routines: { name: string }[]; wakeups: { id: string }[] };
+    expect(parsed.routines.map((r) => r.name)).toEqual(["daily", "reindex"]);
+    expect(parsed.wakeups.map((w) => w.id)).toEqual([added.id]);
+  });
+
   it("routine history refuses an impossible name with exit 1, not an empty history", async () => {
     // The difference that matters to a script: a mistyped argument and "this schedule has never fired" must not
     // both look like success with no output — which is exactly what `--json` printing nothing would say.
