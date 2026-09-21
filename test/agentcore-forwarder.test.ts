@@ -317,6 +317,27 @@ describe("agentcore forwarder (executed)", () => {
     // And a line about something else is not a fire at all.
     expect(parseFireLine(wrap("REPORT RequestId: 5e6ab0e0\tDuration: 2907.69 ms"), "digest")).toBeUndefined();
     expect(parseFireLine(wrap("routine-fire other (2026-07-28T09:00:00Z): 200 {}"), "digest")).toBeUndefined();
+
+    // THE NAME IS A LITERAL, not a pattern. A routine name is a filename, so `a.b` is a legal one, and a
+    // regex built from it would read the `.` as "any character" and claim this line belongs to it.
+    expect(parseFireLine(wrap("routine-fire aXb (2026-07-28T09:00:00Z): 200 {}"), "a.b")).toBeUndefined();
+    expect(parseFireLine(wrap("routine-fire a.b (2026-07-28T09:00:00Z): 200 {}"), "a.b")).toMatchObject({
+      kind: "delivered",
+    });
+  });
+
+  it("a fire line it cannot read THROWS, because the caller reads undefined as silence", async () => {
+    // `undefined` means "this line was about something else" and the probe keeps waiting on it. For a line
+    // that is provably this routine's, waiting is the one wrong answer: that is the misreading this parser
+    // was extracted over, and a third tail shape (a retry, a skip) is how it would come back — offline
+    // green, one paid deployment timing out.
+    const wrap = (line: string) => `2026-07-28T09:00:03.120Z\t5e6ab0df-14d7-4ec0\tINFO\t${line}\n`;
+    expect(() => parseFireLine(wrap("routine-fire digest (2026-07-28T09:00:00Z): retry in 30s"), "digest")).toThrow(
+      /unrecognized routine-fire line for "digest"/,
+    );
+    expect(() => parseFireLine(wrap("routine-fire digest (2026-07-28T09:00:00Z"), "digest")).toThrow(
+      /has no occurrence/,
+    );
   });
 
   it("a wakePoke event forwards a wake-poke envelope (the invocation itself is the payload)", async () => {

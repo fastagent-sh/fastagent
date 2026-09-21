@@ -118,6 +118,7 @@ async function waitForFire(
   let lastError = "no forwarder log group yet";
   let seen = 0;
   let lastLine = "";
+  let unreachable: string | undefined;
   while (Date.now() < deadline) {
     // NO `--filter-pattern`. The group holds one Lambda's output, so the server-side term index buys
     // nothing here — and it is a SECOND eventually-consistent thing to wait on: a run whose fires were
@@ -145,15 +146,20 @@ async function waitForFire(
         const raw = (event.message ?? "").trim();
         const line = parseFireLine(raw, SCHEDULE);
         if (line === undefined) continue;
-        // A CALL THAT NEVER CAME BACK is a VERDICT, not silence. Polling on through it to a 360s timeout and then
-        // reporting "none of them a routine-fire" is exactly the misreading `invokeLogged` was added to
-        // prevent (forwarder.js) — so this fails NOW, with the forwarder's own words.
+        // A CALL THAT NEVER CAME BACK names the timeout, and does not end the run. `invokeLogged` rethrows so
+        // that EventBridge RETRIES (forwarder.js), which makes one cold-start miss a recoverable state the
+        // system is allowed to be in — failing here would call a compliant deployment red. What this fixes is
+        // the other half: the timeout now quotes the forwarder instead of claiming "none of them a
+        // routine-fire", which is the misreading `invokeLogged` exists to prevent.
         if (line.kind === "failed") {
-          throw new Error(`the forwarder could not reach the container for ${line.occurrence}: ${line.message}`);
+          unreachable = `the forwarder could not reach the container for ${line.occurrence}: ${line.message}`;
+          continue;
         }
         return { occurrence: line.occurrence, status: line.status, body: line.body, raw };
       }
-      lastError = `the forwarder logged ${seen} line(s), none of them a routine-fire for "${SCHEDULE}"`;
+      // The forwarder's own words WIN over a count: a reported miss says what went wrong, "N lines, none of
+      // them a fire" only says this function did not find one.
+      lastError = unreachable ?? `the forwarder logged ${seen} line(s), none of them a routine-fire for "${SCHEDULE}"`;
     } else {
       // Absent until first use: AWS creates the group when the Lambda first writes.
       lastError = events.stderr.trim().slice(0, 300);
