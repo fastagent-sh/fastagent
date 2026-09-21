@@ -173,7 +173,7 @@ separate tag in `engines/pi/session-effects.ts` because it is control flow, not 
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
 `createPiAgentFromDir` sits above L2 and resolves placement, config, model, auth, tools, sessions, and
-machinery paths. `dev`, `start`, `invoke`, and `fire` share it rather than carrying parallel
+machinery paths. `dev`, `start`, `invoke`, and `routine run` share it rather than carrying parallel
 implementations.
 
 Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn.
@@ -552,12 +552,14 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   ID/Secret travel as channel secrets. Event callbacks must still finish within three seconds, so the
   shared acceptance boundary persists and enqueues only.
 
-## 8. Schedules and self-scheduling
+## 8. Routines and self-scheduling
 
-Static schedules are `routines/<name>.ts` files exporting `{ cron, tz?, prompt }`. The scheduler
-derives the stable session `routine:<name>`, claims a slot before invoking, catches up one overdue
-occurrence after downtime (not every missed slot), writes the outcome back into that claim, and leaves
-delivery to agent tools.
+A **routine** is `routines/<name>.ts` exporting `{ prompt, cron?, tz? }` — the only named unit of work,
+and `cron` is a FIELD of it rather than the concept: with one, the clock fires it; without one, its name
+is the only way in (`POST /run`, `fastagent routine run`). Either way it runs in the stable session
+`routine:<name>`. The clock claims a slot before invoking, catches up one overdue occurrence after
+downtime (not every missed slot), writes the outcome back into that claim, and leaves delivery to agent
+tools. A routine with no cron is not armed and not warned about.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
 one JSON object — `{"firedAt"}` at claim time, gaining `outcome` and `ms` when the turn reports — pruned

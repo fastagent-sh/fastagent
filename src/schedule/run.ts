@@ -42,14 +42,14 @@ import { type LoadedRoutine, routineSession } from "./routine.ts";
 import { runTurn } from "./scheduler.ts";
 
 /** A trigger body is a name; the cap only has to admit that. */
-const MAX_TRIGGER_BODY_BYTES = 4 * 1024;
+const MAX_RUN_BODY_BYTES = 4 * 1024;
 
 /**
  * How much of a caller's `name` a 404 will quote back — the ONE thing this route echoes, because telling a typo
  * from a stale caller needs the name and nothing else does. Long enough to recognise one, short enough not to be a
  * page.
  */
-const MAX_ECHOED_NAME = 64;
+export const MAX_ECHOED_NAME = 64;
 
 /** The Effect boundary, in one place: the turn runs, and its outcome is what the caller reads. */
 const runOnce = (agent: Agent, routine: LoadedRoutine) =>
@@ -139,7 +139,7 @@ export function createRunHandler(options: {
     if (req.method !== "POST") return text("POST only\n", 405);
     const wrongType = refuseNonJsonBody(req);
     if (wrongType) return wrongType;
-    const body = await readBodyCapped(req, MAX_TRIGGER_BODY_BYTES);
+    const body = await readBodyCapped(req, MAX_RUN_BODY_BYTES);
     if ("tooLarge" in body) return text("body too large\n", 413);
 
     let payload: unknown;

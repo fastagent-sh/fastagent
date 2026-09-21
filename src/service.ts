@@ -293,7 +293,7 @@ export interface AgentService {
    * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
    * that safe is replay, not waiting — a chat turn's intent is durable before it is accepted and its channel
    * replays it on the next boot (`channels/kit/turn-store.ts`), and an in-flight HTTP/SSE caller sees the stream
-   * drop and retries. The one path with neither is a schedule fire, whose claim is written before the turn: it
+   * drop and retries. The one path with neither is a routine fire, whose claim is written before the turn: it
    * stays skipped, and the next boot records it as `interrupted` rather than losing it silently.
    */
   close(): Promise<void>;
@@ -318,7 +318,7 @@ export interface MountableAgent {
   agentDir: string;
   /** The agent's cwd. */
   workspace: string;
-  /** Where durable state lives (channel state, sessions, schedule fires). */
+  /** Where durable state lives (channel state, sessions, routine fires). */
   stateRoot: string;
   /** The session-control hub, when the opener built one. A serve has it whether or not `/control/*` is published:
    *  a chat channel's stop command reaches the running turn through it. */

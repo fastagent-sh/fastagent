@@ -375,10 +375,10 @@ fastagent routine history daily-review
 
 These commands read the selected local state root, not a deployed host's state.
 
-`fire` runs one real turn immediately and prints its reply without advancing the cron fire state.
+`routine run` runs one real turn immediately and prints its reply without advancing the cron fire state.
 It can still perform real tool side effects and update conversation history; it is not a dry run.
 A serving-time fire records its outcome in the slot it claimed; what it said is in its session, like any other turn.
-`invoke` and `fire` do not mount the serving-time `wake` tool or prove that a future timer fires.
+`invoke` and `routine run` do not mount the serving-time `wake` tool or prove that a future timer fires.
 
 Enable `selfSchedule: true` in the existing config only when autonomous follow-ups are wanted. Then test
 an actual `wake` while serving, including its eventual action and delivery. Cancelling one is the
@@ -457,7 +457,7 @@ Keep these checks distinct. Use the smallest relevant ones, and make credentiale
 | Check | What it proves |
 |---|---|
 | Typecheck, unit test, direct tool execution, `info` | Source types, exercised runtime validation/logic, and definition inspection. These do not prove model or channel behavior. |
-| One real `invoke` or `fire` | A provider call and the exercised tool path. It does not verify timers, webhook ingress, or deployment. |
+| One real `invoke` or `routine run` | A provider call and the exercised tool path. It does not verify timers, webhook ingress, or deployment. |
 | URL verification and a real channel conversation | Report registration separately from actual receipt and framework-managed reply delivery. |
 | Proactive message/file and a fired schedule/wake | Verify the intended recipient, observable delivery, and the selected clock path. Check token renewal when applicable. |
 | Generated plan / accepted CloudFormation template | Artifact generation or platform template validation only; neither proves deployed operation. |

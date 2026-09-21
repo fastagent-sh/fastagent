@@ -199,12 +199,12 @@ export async function preflightDeploy(input: {
   // (`shouldServeRun`). Leaving it out had the two failures this list exists to prevent —
   // one missing endpoint in the ordinary case, and complete silence for `http.invoke: false` + `http.run: true`,
   // which is a public URL whose ONLY anonymous turn endpoint went unmentioned.
-  const servesTrigger =
+  const servesRun =
     loadedRoutines.routines.length > 0 &&
     shouldServeRun({ serveInvoke: config.http?.invoke, serveRun: config.http?.run });
   const unauthenticated = [
     ...(config.http?.invoke === false ? [] : ["POST /invoke (run a turn with this agent's tools)"]),
-    ...(servesTrigger ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
+    ...(servesRun ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
     ...(config.sessionControl === true ? ["/control/* (read, steer or delete any session)"] : []),
   ];
   if (publicUrl && unauthenticated.length > 0) {
@@ -248,9 +248,14 @@ export async function preflightDeploy(input: {
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
-  // A FAILED schedule file still counts: it declares the intent, and the deployed process reports the failure —
-  // a plan that scaled to zero because the file did not parse would hide it behind silence instead.
-  const hasCron = loadedRoutines.routines.length + loadedRoutines.failures.length > 0;
+  // A ROUTINE IS NOT A CRON. `cron` is a field, so counting routine FILES answered a different question: a
+  // definition whose only routine is reached by name (`POST /run`) would pin one machine up forever and print a
+  // note about a cron instant it does not have. `deploy agentcore` already filtered the same way when it turned
+  // routines into EventBridge rules; this is the other reader of that fact, and they must agree.
+  //
+  // A FAILED file still counts, on the conservative side: it may well declare a cron, and a plan that scaled to
+  // zero because the file did not parse would hide that behind silence.
+  const hasCron = loadedRoutines.routines.some((r) => r.cron !== undefined) || loadedRoutines.failures.length > 0;
   const hasWakeups = !!config.selfSchedule;
   if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({

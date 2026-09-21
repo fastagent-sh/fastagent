@@ -350,7 +350,16 @@ describe("mountAgentcoreService", () => {
       const { resolveStateRoot } = await import("../src/paths.ts");
       expect(readFires(resolveStateRoot(dir), "reindex")).toEqual([]);
       expect((await call("reindex")).status).toBe(200); // every call is a call: an API, not a clock
-      expect((await call("nope")).status).toBe(404);
+
+      // 404 lists what this deployment HAS, and clips the name it quotes back — the same
+      // MAX_ECHOED_NAME `POST /run` reads, imported rather than copied, because two doors answering one
+      // contract is exactly where a second copy of a rule starts to drift.
+      const unknown = await call("x".repeat(4000));
+      expect(unknown.status).toBe(404);
+      const said = await unknown.text();
+      expect(said).toContain("x".repeat(64));
+      expect(said).not.toContain("x".repeat(65));
+      expect(said).toContain("this deployment has: reindex");
     } finally {
       await service.close();
     }

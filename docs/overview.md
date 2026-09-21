@@ -18,7 +18,7 @@ agent/
 ├── skills/             # optional reusable markdown expertise
 ├── tools/              # optional code tools
 ├── channels/           # optional webhook/bot adapters
-├── routines/          # optional cron time triggers
+├── routines/           # optional named units of work (a cron, an API call, or both)
 ├── extensions/         # optional pi extension modules (chat only — see configuration.md)
 ├── AGENTS.md           # optional project context (yours, or a host repo's)
 ├── reference.md        # optional markdown context (any file layout)
@@ -30,7 +30,7 @@ agent/
 1. **Your directory is the agent** — `persona.md` (identity), `skills/`, `tools/`, `channels/`, and markdown context stay as files you can inspect, edit, and commit. An `AGENTS.md` is *project context* the agent reads (its own, or a host repo's) — not a rewrite requirement.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 3. **A reference implementation** — pi-based assembly for `persona.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
-4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `fire`, `schedule`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
+4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `routine`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
 5. **Composable adapters**: GitHub, Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
 6. **Time triggers** — cron schedules (`routines/` files) and opt-in agent self-scheduling (the `wake` tool), with a bounded fire history (`fastagent routine history`).
 
@@ -127,7 +127,7 @@ Implemented today:
 - HTTP/SSE invoke channel.
 - GitHub, Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Cron schedules (`routines/` files) and opt-in agent self-scheduling (the `wake` tool), with a bounded fire history.
-- `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
+- `dev`, `chat`, `invoke`, `tool`, `info`, `routine`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
 

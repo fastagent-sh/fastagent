@@ -273,7 +273,7 @@ version. If the CLI reports a Lark config-API fallback, add the scope manually. 
 
 Cron schedules fire only while a serving process is up:
 
-- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` and `fire` do
+- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` and `routine run` do
   not start the scheduler,
 - a run missed while the process was down is caught up once on the next start, not once per missed
   slot,

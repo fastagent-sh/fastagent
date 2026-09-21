@@ -630,7 +630,7 @@ stricter one — AWS has already said who the caller is.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
 capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
-one-shot `invoke`/`fire`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
+one-shot `invoke`/`routine run`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
 records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a RECURRING one — persisted under
 `<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes
 the conversation — the woken turn's prompt is enveloped with the wake-up's id and origin ("YOUR

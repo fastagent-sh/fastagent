@@ -128,7 +128,7 @@ fastagent logs agentcore --env production
 | `deploy <host> [dir]` | add `--env <name>`; drop `--model` (§5: it never reaches the box) and `--auth-path`; `host` stays a required positional (unambiguous, so it does not move) |
 | `logs <host> [dir]` | add `--env <name>` |
 | `login [provider]` | add `-g`; drop the `--auth-path` flag (the SDK's `authPath` option stays) |
-| `dev`, `chat`, `info`, `invoke`, `fire`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
+| `dev`, `chat`, `info`, `invoke`, `routine run`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
 | the other six commands | unchanged |
 
 `[dir]` is a positional both `deploy` and `logs` already carry, so `--env` is a flag rather than a second optional positional — `deploy fly production` and `deploy fly ./myagent` are indistinguishable otherwise. `deploy` without `--run` keeps its current meaning: it writes the generated artifacts into the agent dir (ownership markers decide what may be overwritten) and changes nothing on the host. Reading back remote state is **not** part of this proposal.

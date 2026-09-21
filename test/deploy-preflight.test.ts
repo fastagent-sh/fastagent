@@ -526,12 +526,29 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const none = await call(await workspace(), { model: "openai/gpt-4o-mini" });
     expect(none.ok && !none.hasCron && !none.hasWakeups).toBe(true);
 
-    // A routines/ file → hasCron, and the note names `POST /run`: someone else's clock CAN fire a declared
-    // schedule, so an operator paying for an idle box has a real option and should be told it exists.
-    const dir = await workspace();
+    // A ROUTINE IS NOT A CRON. `cron` is a field, so what pins a machine up is a routine that DECLARES one —
+    // counting routine files answered a different question and made a by-name-only definition pay for an idle
+    // box forever, while printing a note about a cron instant it does not have.
     const { mkdir, writeFile: wf } = await import("node:fs/promises");
+    const byNameOnly = await workspace();
+    await mkdir(join(byNameOnly, "routines"), { recursive: true });
+    await wf(join(byNameOnly, "routines", "reindex.ts"), `export default { prompt: "refresh" };\n`);
+    const onDemand = await call(byNameOnly, { model: "openai/gpt-4o-mini" });
+    expect(onDemand.ok && !onDemand.hasCron && !onDemand.hasWakeups).toBe(true);
+    if (onDemand.ok) {
+      expect(onDemand.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
+    }
+
+    // A routines/ file WITH a cron → hasCron, and the note names `POST /run`: a cron is a time, and a time can
+    // be kept elsewhere, so an operator paying for an idle box has a real option and should be told it exists.
+    const dir = await workspace();
     await mkdir(join(dir, "routines"), { recursive: true });
-    await wf(join(dir, "routines", "daily.ts"), "export default {};\n"); // discovery counts files, not validity
+    // A file that fails to LOAD still counts, conservatively: it may well declare a cron, and scaling to zero
+    // because it did not parse would hide that behind silence.
+    await wf(join(dir, "routines", "broken.ts"), "export default {};\n");
+    const broken = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(broken.ok && broken.hasCron).toBe(true);
+    await wf(join(dir, "routines", "daily.ts"), `export default { cron: "0 9 * * *", prompt: "go" };\n`);
     const withCron = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(withCron.ok && withCron.hasCron && !withCron.hasWakeups).toBe(true);
     if (withCron.ok) {

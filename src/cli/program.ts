@@ -425,7 +425,7 @@ const routine: CommandSpec = {
       flags: [MODEL, NO_INPUT],
       examples: [{ cmd: "fastagent routine run daily-digest" }],
       run: async (args, f) =>
-        (await import("./commands/fire.ts")).runFire(args[0] as string, args[1] as string, {
+        (await import("./commands/routine-run.ts")).runRoutine(args[0] as string, args[1] as string, {
           model: f.model as string | undefined,
           input: f.input !== false,
         }),

@@ -80,9 +80,9 @@ export const agentcoreHost: HostDeploy = {
       modelAuth,
       channels,
       extraSecrets,
-      // ONLY THE ONES WITH A CRON become rules. A routine without one is reached by NAME, and this host serves no
-      // such route — so it would be unreachable here, which the warning below says out loud rather than shipping a
-      // deployment whose author thinks it is live.
+      // ONLY THE ONES WITH A CRON become rules. A routine without one is reached by NAME, through this host's
+      // IAM-gated `routine-run` envelope (channels/agentcore.ts) rather than a route — so it needs no rule and
+      // loses nothing by not having one.
       schedules: loaded.routines.flatMap((r) =>
         r.cron === undefined ? [] : [{ name: r.name, cron: r.cron, ...(r.tz !== undefined ? { tz: r.tz } : {}) }],
       ),
@@ -90,10 +90,6 @@ export const agentcoreHost: HostDeploy = {
       idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
-    // A CRON-LESS ROUTINE IS NOT UNREACHABLE HERE, it just has a different door: this host publishes no
-    // `POST /run`, so it is reached by the IAM-gated `routine-run` envelope (channels/agentcore.ts) rather than an
-    // anonymous route. Nothing to warn about — an earlier version of this warned, which was a gap being reported
-    // instead of closed.
     for (const u of plan.untranslatableSchedules) {
       // Same discipline as Fly's kept-toml time-trigger gate: a deploy whose schedule silently never fires is worse
       // than a stopped deploy.

@@ -1,4 +1,9 @@
-/** `fastagent routine history|list`. The wake-up half lives in commands/wake.ts — a different owner, a different lifecycle. */
+/**
+ * `fastagent routine history|list` — the routines this DEFINITION declares.
+ *
+ * The agent's own pending wake-ups are not here and have no command: they live in the state, not the definition,
+ * and `unwake({ id })` is what cancels one (schedule/wakeups.ts says why).
+ */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";

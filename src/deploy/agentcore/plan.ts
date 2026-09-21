@@ -143,7 +143,7 @@ export function forwarderLogGroup(name: string): string {
   return `/aws/lambda/${forwarderFunctionName(name)}`;
 }
 
-/** The ONE fixed ingress session id (webhooks + schedule fires). */
+/** The ONE fixed ingress session id (webhooks + routine fires). */
 export function ingressSessionId(name: string): string {
   return `fastagent-ingress-${name}`.padEnd(33, "0").slice(0, 128);
 }

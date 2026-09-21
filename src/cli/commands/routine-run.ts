@@ -1,6 +1,6 @@
 /**
- * `fastagent routine run <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for routines (like `invoke`
- * is for a prompt).
+ * `fastagent routine run <name> [dir]`: run ONE routine's turn immediately — the authoring loop for routines (like
+ * `invoke` is for a prompt). Cron or not: a routine that declares none has no other local entry.
  */
 import { join } from "node:path";
 import { displayPath } from "../../paths.ts";
@@ -12,16 +12,16 @@ import { routineSession } from "../../schedule/routine.ts";
 import { failStartup, gateSecretsOrExit } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
-export interface FireOptions {
+export interface RoutineRunOptions {
   model?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
 }
 
-export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
+export async function runRoutine(name: string, dirArg: string, opts: RoutineRunOptions): Promise<void> {
   const placement = await enterAgentCommand(dirArg, opts);
-  // Schedules are agent surface — discover them where dev/start/`routine list` do (the agent dir), so `fire` sees
-  // the same set the scheduler serves.
+  // Routines are agent surface — discovered where dev/start/`routine list` do (the agent dir), so this command
+  // sees the same set the clock serves.
   const { routines, secrets, failures } = await loadRoutines(placement.agentDir).catch(failStartup);
   // Reported BEFORE the name is looked up: a routine file that failed to import is missing from
   // `routines`, so "unknown routine" is the case where the author most needs to hear about it.
@@ -37,20 +37,20 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
       ),
     );
   }
-  // `fire` RUNS this schedule, so it takes the serving path's guarantee: a prompt built from an
+  // This RUNS the routine, so it takes the serving path's guarantee: a prompt built from an
   // unset declared value is the degraded turn this feature exists to prevent (`Post the digest to `
   // — sent and executed), and the loader resolved it into a string before anything could notice.
-  // THIS schedule only (`owner`): firing one job must not fail because a SIBLING SCHEDULE needs a
+  // THIS schedule only (`owner`): running one routine must not fail because a SIBLING ROUTINE needs a
   // credential this machine has no reason to hold. The agent assembled below is a different question
-  // and gates every mounted tool — a fired turn can call any of them — so `fire` is not free of a
-  // tool's declaration, only of another schedule's. The failures go to the gate too, even though they
+  // and gates every mounted tool — a run's turn can call any of them — so this command is not free of a
+  // tool's declaration, only of another routine's. The failures go to the gate too, even though they
   // were printed above: its guarantee must not depend on this call site remembering (a repeated line
   // on the refusal path is the cheaper failure).
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
   const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
   }).catch(failStartup);
-  console.error(`[fastagent] fire: ${name} (${modelSpec})`);
+  console.error(`[fastagent] routine run: ${name} (${modelSpec})`);
   await reportAuth(placement.agentDir, modelSpec, authPath, fallbackAuthPath);
   const exitCode = await runInvokeStream(
     agent.invoke({ session: routineSession(name) }, { text: routine.prompt }),

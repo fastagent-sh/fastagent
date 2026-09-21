@@ -201,8 +201,9 @@ session, so you see exactly what the served scheduler would do:
 - no name → usage on stderr, exit 2; an unknown schedule name → exit 1 with the available names,
 - it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
 
-A `routines/<name>.ts` file default-exports `defineRoutine({ cron, tz?, prompt })`; the scheduler
-fires the agent on that cron when you `dev`/`start`. The filename becomes a directory name in the state
+A `routines/<name>.ts` file default-exports `defineRoutine({ prompt, cron?, tz? })`. With a `cron`, the
+clock fires it when you `dev`/`start`; without one, its name is the only way in (`POST /run`, or this
+command). The filename becomes a directory name in the state
 root, so it cannot be `.`, `..`, or contain a path separator. Output is the agent's tools' job — the scheduler
 only fires and logs. See the [API reference](./api-reference.md#routine-authoring).
 
@@ -394,7 +395,7 @@ Recurring per-command options (same meaning everywhere they appear):
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: `127.0.0.1` for `dev`, all interfaces for `start` (containers need it); `--bind 0.0.0.0` opens a dev serve to the LAN. Prefer this flag over `http.host` for a non-wildcard bind — that value travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
 | `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run — nor `POST /run`, which it takes with it even where the definition set `http.run: true` (both start a turn for an anonymous caller, and this flag exists for the run whose definition cannot be edited). The data plane is unauthenticated and runs a turn with the agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it — `dev --tunnel` publishes the port, and that is the case this flag is for. Prefer it over `http.invoke: false` for a one-off, for the same reason `--bind` is preferred over `http.host`: the config value travels into a deployed image. |
-| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
+| `--no-input` | `dev`, `start`, `invoke`, `routine run`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
 | `--json` | `info`, `routine history`, `routine list` | Machine-readable output. |
 
