@@ -24,19 +24,21 @@
  *
  * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
  *
- * WHAT IT MEASURED, ap-southeast-1, 2026-09-20 — recorded so the next reader does not have to deploy
- * to learn it. Seven consecutive deliveries of a `* * * * *` schedule, read from the forwarder's log:
+ * WHAT IT MEASURED, ap-southeast-1, 2026-09-21 — recorded so the next reader does not have to deploy
+ * to learn it. Seven consecutive deliveries of a `* * * * *` routine, read from the forwarder's log:
  *
- *     occurrence (clock)     container slot             status   lag    turn
- *     2026-09-20T09:35:00Z   2026-09-20T09:35:00.000Z   200    61.4s  3022ms   fired=true
- *     2026-09-20T09:36:00Z   2026-09-20T09:36:00.000Z   200    23.6s  2423ms   fired=true
+ *     occurrence (clock)     container slot             status     lag     turn
+ *     2026-09-21T07:39:00Z   2026-09-21T07:39:00.000Z   200      49.9s   3224ms   fired=true
+ *     2026-09-21T07:40:00Z   2026-09-21T07:40:00.000Z   200      43.6s   2431ms   fired=true
  *     …five more, all 200, all `fired: true`, every slot identical to the occurrence EventBridge named
  *
  * The first is the cold one: container start, definition open and a model turn inside one invocation.
- * Steady state is 23.5–24.5s from the scheduled instant to a completed turn, of which ~2.5s is the
- * turn — i.e. the delivery itself lands some 21s after the instant, never before it.
+ * Steady state is 43.6–45.0s from the scheduled instant to a completed turn, of which ~2.4–3.8s is the
+ * turn — i.e. the delivery lands some 40s after the instant, never before it, which is what
+ * `POST /run`'s callers never have to think about and what a claim-keeping clock does.
+ *
  * Every `slot` in the reply equals the `<aws.scheduler.scheduled-time>` the rule sent, which is the
- * design's whole claim — the clock names the occurrence and the container does not recompute it.
+ * design's whole claim: the clock names the occurrence and the container does not recompute it.
  *
  * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and an EventBridge
  * rule) and one real model turn per minute it is up. Teardown is the shared
@@ -106,7 +108,7 @@ afterAll(async () => {
 }, 900_000);
 
 /** `routine-fire <name> (<occurrence>): <status> <body>` — the forwarder's one line per delivery. */
-const FIRE_LINE = new RegExp(`routine-fire ${SCHEDULE} \\(([^)]+)\\): (\\d+) (.*)$`);
+const FIRE_LINE = new RegExp(`routine-fire ${SCHEDULE} \\(([^)]+)\\): (\\d+) (.*)`);
 
 /** Poll the forwarder's log group until it has said something about a fire, or the budget runs out. */
 async function waitForFire(
@@ -139,7 +141,12 @@ async function waitForFire(
       seen = lines.length;
       lastLine = (lines.at(-1)?.message ?? "").trim().slice(0, 300);
       for (const event of lines) {
-        const matched = FIRE_LINE.exec(event.message ?? "");
+        // TRIMMED, because every CloudWatch message ends with a newline and this regex used to anchor on
+        // `$`. In Perl and Python that matches before a trailing newline; in JavaScript it does NOT — `$`
+        // without `m` is end-of-input only. So the pattern matched nothing real, on every run, while the
+        // probe reported "the forwarder logged N lines, none of them a routine-fire" and looked like a
+        // delivery problem. The anchor is gone with it: `(.*)` already stops at the newline.
+        const matched = FIRE_LINE.exec((event.message ?? "").trim());
         if (matched)
           return {
             occurrence: matched[1] as string,
