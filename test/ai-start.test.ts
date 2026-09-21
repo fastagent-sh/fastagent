@@ -68,7 +68,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       routines: [expect.objectContaining({ name: "daily-review", cron: "0 9 * * *" })],
       toolError: null,
       toolFailures: [],
-      scheduleFailures: [],
+      routineFailures: [],
       diagnostics: [],
     });
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toBe(config);

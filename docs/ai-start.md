@@ -381,8 +381,9 @@ A serving-time fire records its outcome in the slot it claimed; what it said is 
 `invoke` and `fire` do not mount the serving-time `wake` tool or prove that a future timer fires.
 
 Enable `selfSchedule: true` in the existing config only when autonomous follow-ups are wanted. Then test
-an actual `wake` while serving, including its eventual action and delivery. Use `fastagent routine list`
-and `fastagent wake cancel <id>` to inspect or cancel pending local wake-ups.
+an actual `wake` while serving, including its eventual action and delivery. Cancelling one is the
+agent's own job (`unwake({ id })`, session-scoped): a wake-up only fires while a serve is running, and a
+running serve is one whose session can be spoken to.
 
 | Execution posture | Clock and persistence requirements |
 |---|---|

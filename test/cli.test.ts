@@ -579,7 +579,7 @@ describe("cli papercuts", () => {
     expect(info.routines).toHaveLength(1);
     expect(info.routines[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
     expect(info.routines[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
-    expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
+    expect(JSON.stringify(info.routineFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
     expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
     expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]); // omitted = everything
 

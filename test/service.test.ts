@@ -50,7 +50,7 @@ describe("createAgentService", () => {
     }
   });
 
-  it("a routines/ directory reaches POST /run — the only wiring dev and start actually use", async () => {
+  it("a routines/ directory reaches POST /run AND GET /routines — the only wiring dev and start use", async () => {
     // THE WIRE, not the route: `loadServingRoutines(agentDir)` → `routesFor({ routines })` is the
     // only path from a real `routines/` file to this route, and every other test bypasses it (one
     // hands `routesFor` a literal, the other calls `createRunHandler` directly). Cutting it —
@@ -58,12 +58,23 @@ describe("createAgentService", () => {
     // the delivery path.
     const dir = await agentDir({
       "routines/daily.mjs": `export default { cron: "0 9 * * *", prompt: "summarise the day" };\n`,
+      "routines/reindex.mjs": `export default { prompt: "refresh" };\n`,
     });
     const service = await createAgentService(dir);
     try {
       // 415, like `/invoke` above: mounted, and refusing a body it was not told is JSON.
       expect((await service.handler(new Request("http://h/run", { method: "POST" }))).status).toBe(415);
       expect(service.unverifiedRoutes).toContain("POST /run");
+
+      // The CATALOGUE of that route, through the same wire — and answering for real, because a mounted
+      // route key proves only the mount. A cron-less routine appears here with no `cron`, which is how a
+      // caller learns its name is the only way in.
+      expect(service.unverifiedRoutes).toContain("GET /routines");
+      const listed = await service.handler(new Request("http://h/routines"));
+      expect(listed.status).toBe(200);
+      expect(await listed.json()).toEqual([{ name: "daily", cron: "0 9 * * *" }, { name: "reindex" }]);
+      // HEAD is answered by the GET route (channels/serve.ts), so a probe of the catalogue works.
+      expect((await service.handler(new Request("http://h/routines", { method: "HEAD" }))).status).toBe(200);
     } finally {
       await service.close();
     }

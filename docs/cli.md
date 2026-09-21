@@ -25,10 +25,9 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
-| `schedule fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
-| `schedule history <name> [dir]` | Print a schedule's recent fires (what they said is in the session). |
-| `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
-| `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
+| `routine run <name> [dir]` | Run one routine's turn immediately (authoring loop), cron or not. |
+| `routine history <name> [dir]` | Print a routine's recent fires (what they said is in the session). |
+| `routine list [dir] [--json]` | Every declared routine: the next cron instant, or `on demand` where it has none. |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
@@ -131,7 +130,7 @@ live next turn, no restart); a supervisor restarts the worker on edits to the co
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
 OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
-back to the config (same for `start` / `invoke` / `schedule fire` / `chat` / `deploy`). Pass `--model` or set
+back to the config (same for `start` / `invoke` / `routine run` / `chat` / `deploy`). Pass `--model` or set
 `FASTAGENT_MODEL` to skip the prompt — `deploy` takes no `--model`, so there it is the config value or
 `FASTAGENT_MODEL` in `.secrets/.env`.
 
@@ -251,12 +250,13 @@ Two things have no claim and therefore no history here, only logs: the agent's s
 already claimed a later one — that instant will never run, which a clock that moved backwards can produce in
 a row; it is logged as a warning, where an ordinary duplicate delivery is an info line).
 
-`fastagent routine list [dir]` shows everything that will fire, from BOTH producers: the static
-`routines/` files (name + next cron instant) and the agent's pending self-scheduled wake-ups (id, next
-fire, one-shot/cron, session, prompt), with `--json` for the machine-readable form;
-`fastagent wake cancel <id> [dir]` removes one wake-up: the
-operator's kill switch for a runaway recurring wake (the agent's own is the `unwake` tool, which is
-session-scoped).
+`fastagent routine list [dir]` reads the DEFINITION: every declared routine with its next cron instant,
+or `on demand` where it declares none (those are reached by name — `POST /run`, `routine run`), with
+`--json` for the machine-readable form. It does not show the agent's own pending wake-ups: those live in
+the state, not the definition, and the agent cancels its own with the `unwake` tool (session-scoped).
+There is no operator command for that: a wake-up fires only while a serve is running, and a running
+serve is one whose session can be spoken to, so "the alarm is loose" and "the agent is unreachable"
+cannot both be true.
 
 ## `fastagent tool`
 
@@ -396,7 +396,7 @@ Recurring per-command options (same meaning everywhere they appear):
 | `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run — nor `POST /run`, which it takes with it even where the definition set `http.run: true` (both start a turn for an anonymous caller, and this flag exists for the run whose definition cannot be edited). The data plane is unauthenticated and runs a turn with the agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it — `dev --tunnel` publishes the port, and that is the case this flag is for. Prefer it over `http.invoke: false` for a one-off, for the same reason `--bind` is preferred over `http.host`: the config value travels into a deployed image. |
 | `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
-| `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
+| `--json` | `info`, `routine history`, `routine list` | Machine-readable output. |
 
 ## Exit codes
 

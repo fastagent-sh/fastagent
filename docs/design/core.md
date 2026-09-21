@@ -703,7 +703,7 @@ and EventBridge Scheduler rules delivering each cron slot. Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
-reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
+reply so the forwarder re-emits it byte-exact), a routine fire goes through `fireScheduleOnce` with
 the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
 SSE. `GET /ping` reports `HealthyBusy` while background turns run (`channels/busy.ts`) so an idle
 reclaim cannot kill a post-ACK turn, and always carries `time_of_last_update`: the field is documented

@@ -116,10 +116,10 @@ export function createRoutineListHandler(options: {
     ...(r.cron !== undefined ? { cron: r.cron } : {}),
     ...(r.tz !== undefined ? { tz: r.tz } : {}),
   }));
-  return async (req) => {
-    if (req.method !== "GET") return text("GET only\n", 405);
-    return Response.json(body);
-  };
+  // NO METHOD CHECK. The router dispatches `GET /routines` here and nothing else, so the only thing such a check
+  // could reach is HEAD — which `channels/serve.ts` deliberately answers with the GET route, the same way
+  // `GET /health` is HEAD-probeable. Checking would break that and buy nothing.
+  return async () => Response.json(body);
 }
 
 /**

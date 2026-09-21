@@ -188,12 +188,18 @@ describe("init: scaffoldAgent", () => {
     const inside = join(await freshDir(), "fastagent");
     await mkdir(inside);
     await writeFile(join(inside, "fastagent.config.ts"), "export default {};\n"); // a real agent
-    // Its skills/tools/channels/schedules are what it LOADS: an agent scaffolded there becomes part of
+    // Its skills/tools/channels/routines are what it LOADS: an agent scaffolded there becomes part of
     // that definition rather than an agent of its own. Every other command refuses this position too.
-    const surface = join(inside, "skills");
-    await mkdir(surface);
-    await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the definition of the agent at .*fastagent/);
-    expect(await exists(join(surface, "persona.md"))).toBe(false); // side-effect-free refusal
+    //
+    // EVERY entry of that surface, because the list is the only thing `agentDefinitionOwner` reads and a
+    // rename that updates the loader but not the list silently reopens one directory (`routines/` was
+    // exactly that — the loader moved, `LOADED_SURFACE` still said `schedules`).
+    for (const name of ["skills", "tools", "channels", "routines"]) {
+      const surface = join(inside, name);
+      await mkdir(surface);
+      await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the definition of the agent at .*fastagent/);
+      expect(await exists(join(surface, "persona.md"))).toBe(false); // side-effect-free refusal
+    }
 
     // The rest of an agent's directory is the AUTHOR's tree — a second agent there is legitimate (the
     // monorepo case), so ownership stops at the loaded surface instead of claiming the whole subtree.

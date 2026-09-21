@@ -509,8 +509,8 @@ from a **wake-up**: the agent can schedule work for itself (`selfSchedule`), and
 the same idea — work to be done later — but every operational difference follows from one root. A
 routine is written in the *definition* (versioned, reviewed, shipped with the image, named by its
 author, reachable by name); a wake-up is written into the *state* by a running agent (minted id,
-cancellable, aimed back at the conversation it came from). Code and data. `fastagent routine list`
-reads the first, `fastagent wake list` the second.
+cancellable, aimed back at the conversation it came from). Code and data. `fastagent routine list` reads the first; the second is the
+agent's own, and `unwake` is what cancels it.
 
 **The delivery target belongs in `secrets`, not in the prompt text.** A chat/channel id is
 environment-specific, so declare it and build the prompt from it: the builder runs once at load, its
@@ -635,9 +635,12 @@ records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a R
 `<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes
 the conversation — the woken turn's prompt is enveloped with the wake-up's id and origin ("YOUR
 self-scheduled turn, not a user message"), so the model can tell its own alarm from the user speaking. It reads the current session through `ToolContext.sessionManager`; guardrails cap the minimum delay,
-the recurring frequency (≥10 min between fires), and the per-session pending count. The agent cancels its own
-with `unwake({ id })` (session-scoped); the operator with `fastagent wake cancel <id>` (`schedule list`
-shows ids).
+the recurring frequency (≥10 min between fires), and the per-session pending count. The agent cancels its own with `unwake({ id })`, and that is the
+only way: it is session-scoped, and there is no operator command beside it. A wake-up fires only while a
+serve is running, and a running serve is one whose session can be spoken to (`POST /invoke`, the control
+plane's `follow_up`, or the chat thread it lives in) — so "the alarm is loose" and "the agent is
+unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedule/wakeups.json`, which
+needs no command.
 
 ## Config and models
 

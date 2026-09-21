@@ -312,7 +312,7 @@ describe("schedule/wake-alarm: the sink", () => {
     expect(rearmed?.at).toBe("2026-07-28T12:00:00.000Z"); // advanced to the NEXT cron instant
 
     // unwake mirrors too (the cancelled alarm goes stray and self-deletes on fire — lazy by design).
-    removeWakeup(root, (added as { id: string }).id);
+    removeWakeup(root, (added as { id: string }).id, "s");
     await vi.waitFor(() => expect(calls).toHaveLength(4));
   });
 

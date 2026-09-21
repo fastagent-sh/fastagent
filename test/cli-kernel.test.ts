@@ -82,7 +82,6 @@ describe("cli kernel: spec conformance", () => {
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["routine", "run"], "does NOT advance its fire state"],
       [["routine", "history"], "did last night's run silently fail"],
-      [["wake", "cancel"], "the agent's own is the `unwake` tool"],
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
       [["start"], "frozen by git"],
@@ -237,9 +236,9 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a missing required argument is a usage error: exit 2", async () => {
-    const r = await parse(["wake", "cancel"]);
+    const r = await parse(["routine", "history"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/missing required argument 'id'/);
+    expect(r.err).toMatch(/missing required argument 'name'/);
   });
 
   it("a bare group command shows its subcommand help and exits 2", async () => {
@@ -250,10 +249,10 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {
-    const r = await parse(["wake", "cancle", "wake-1"]);
+    const r = await parse(["routine", "histry", "digest"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/unknown command 'cancle'/);
-    expect(r.err).toMatch(/cancel/); // did-you-mean
+    expect(r.err).toMatch(/unknown command 'histry'/);
+    expect(r.err).toMatch(/history/); // did-you-mean
   });
 
   it("an empty required argument is a usage error on every command (the old falsy guards, kept)", async () => {
@@ -262,7 +261,6 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
       ["routine", "run", ""],
       ["tool", ""],
       ["routine", "history", ""],
-      ["wake", "cancel", ""],
     ];
     for (const argv of cases) {
       const r = await parse(argv);
@@ -329,13 +327,6 @@ describe("cli end to end: the thin entry", () => {
     expect(code).toBe(0);
     expect(stdout).toBe("");
     expect(stderr).toMatch(/no routines declared/);
-  });
-
-  it("wake cancel on a missing wake-up exits 1 (runtime miss, not usage)", async () => {
-    const dir = await agentWorkspace("fa-kernel-cancel-");
-    const { code, stderr } = await run(["wake", "cancel", "wake-nope", dir]);
-    expect(code).toBe(1);
-    expect(stderr).toMatch(/no pending wake-up wake-nope/);
   });
 
   it("tool with no args is a usage error from the kernel: exit 2", async () => {

@@ -32,7 +32,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
     // place", not "broken file".
     failStartup(
       new Error(
-        `unknown routine "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "routines")) ?? "schedules"}). ` +
+        `unknown routine "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "routines")) ?? "routines"}). ` +
           `available: ${routines.map((r) => r.name).join(", ") || "(none)"}`,
       ),
     );

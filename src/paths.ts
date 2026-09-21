@@ -36,7 +36,7 @@ export const AGENT_MODELS_FILE = "models.json";
 
 export interface ResolvedPlacement {
   /**
-   * The AGENT directory — where the definition (persona.md/skills/tools/channels/schedules), the config, and the
+   * The AGENT directory — where the definition (persona.md/skills/tools/channels/routines), the config, and the
    * machinery dirs (`.secrets/`, `.state/`) live.
    */
   agentDir: string;
@@ -48,7 +48,7 @@ export interface ResolvedPlacement {
  * The definition paths an agent LOADS content from — the surface a second agent must not be scaffolded inside
  * ({@link agentDefinitionOwner}), because the outer agent would read it as its own skills/tools.
  */
-const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "schedules"] as const;
+const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "routines"] as const;
 
 function isDir(p: string): boolean {
   return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;

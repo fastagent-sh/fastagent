@@ -209,8 +209,8 @@ const start: CommandSpec = {
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > fastagent.config.ts http.host > all interfaces\n" +
     "  /invoke:  --no-invoke > fastagent.config.ts http.invoke > served\n" +
-    "  /trigger: --no-invoke > fastagent.config.ts http.run > http.invoke\n" +
-    "            (only mounted when the definition declares routines/)\n" +
+    "  /run:     --no-invoke > fastagent.config.ts http.run > http.invoke\n" +
+    "            (with GET /routines; both only where routines/ declares something)\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +
@@ -453,42 +453,13 @@ const routine: CommandSpec = {
       description:
         "List the routines this definition declares: the next cron instant for each that has one, and " +
         '"on demand" for each that does not — those are reached by name (POST /run, `routine run`). The agent\'s ' +
-        "own pending wake-ups are `fastagent wake list`, a different owner. Read-only.",
+        "own pending wake-ups are not here: they live in the STATE, not the definition, and the agent " +
+        "cancels its own with the `unwake` tool. Read-only.",
       args: [DIR_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent routine list" }],
       run: async (args, flags) =>
         (await import("./commands/routine.ts")).runRoutineList(args[0] as string, flags.json === true),
-    },
-  ],
-};
-
-const wake: CommandSpec = {
-  name: "wake",
-  summary: "inspect and cancel the wake-ups the agent scheduled for itself",
-  subcommands: [
-    {
-      name: "list",
-      summary: "every pending wake-up, with the session it will resume",
-      description:
-        "List the agent's pending self-scheduled wake-ups: id, when it fires, one-shot or recurring, and the " +
-        "session it resumes. These are written into the STATE by a running agent, which is why they are not " +
-        "`routine list` — that one reads the definition. Read-only.",
-      args: [DIR_ARG],
-      flags: [JSON_FLAG],
-      examples: [{ cmd: "fastagent wake list" }],
-      run: async (args, flags) =>
-        (await import("./commands/wake.ts")).runWakeList(args[0] as string, flags.json === true),
-    },
-    {
-      name: "cancel",
-      summary: "remove a pending wake-up — the operator's kill switch for a runaway recurring wake",
-      description:
-        "Remove a pending wake-up — the operator's kill switch for a runaway recurring wake (the agent's own " +
-        "is the `unwake` tool). Not session-scoped: the operator owns the box.",
-      args: [{ name: "<id>", description: "the wake-up id (`fastagent wake list` shows ids)" }, DIR_ARG],
-      examples: [{ cmd: "fastagent wake cancel wake-1700000000000-ab12" }],
-      run: async (args) => (await import("./commands/wake.ts")).runWakeCancel(args[0] as string, args[1] as string),
     },
   ],
 };
@@ -560,7 +531,6 @@ export const specs: readonly CommandSpec[] = [
   tool,
   invoke,
   routine,
-  wake,
   dev,
   chat,
   start,

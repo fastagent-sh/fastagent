@@ -144,7 +144,9 @@ describe("schedule/run: POST /run", () => {
     expect(said).not.toContain("secret instructions");
     expect(said).not.toContain("summarise");
 
-    expect((await list(new Request("http://h/routines", { method: "POST" }))).status).toBe(405);
+    // NO method check of its own: the router sends only `GET /routines` here, and HEAD is answered by
+    // the GET route on purpose (channels/serve.ts) — a check would break that probe and reach nothing
+    // else. The route table is what refuses a POST. (service.test.ts covers HEAD through the real wire.)
     // Nothing declared, no catalogue — the same rule POST /run follows.
     expect(createRoutineListHandler({ routines: [] })).toBeUndefined();
   });

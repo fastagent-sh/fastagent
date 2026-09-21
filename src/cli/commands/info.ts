@@ -129,7 +129,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           toolError: tools.error ?? null,
           channels,
           routines,
-          scheduleFailures: sched.failures,
+          routineFailures: sched.failures,
           channelFailures: inspected.failures,
           selfSchedule: config.selfSchedule ?? false,
           stateRoot,

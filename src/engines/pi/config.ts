@@ -37,7 +37,8 @@ export interface FastagentConfig {
    * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
    * refused, because it reads as "nobody" and would mean the opposite).
    *
-   * `trigger` serves `POST /run`, which fires a schedule this definition declares. It follows `invoke` unless
+   * `run` serves `POST /run` (and `GET /routines`), which run a routine this definition declares by name. It
+   * follows `invoke` unless
    * set: turning the anonymous turn endpoint off must not leave a second one open behind it. Set it `true` for the
    * one combination that gets wrong — no `/invoke`, but an external clock (a crontab, a CI job) driving the
    * schedules. It has no effect where `routines/` declares nothing; there is no route then.
@@ -183,7 +184,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   }
   for (const key of Object.keys(c.http ?? {})) {
     if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke" && key !== "run") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke, trigger)`);
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke, run)`);
     }
   }
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {

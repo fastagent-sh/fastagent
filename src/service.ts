@@ -119,7 +119,8 @@ export async function routesFor(
    * signature checks as the only way into a public port. Named for the config key it carries, not for the
    * "built-in fallback" it once withheld — that concept is gone.
    *
-   * `schedules` mounts `POST /run`. Passed in rather than loaded here so the route and the resident clock
+   * `routines` mounts `POST /run` and `GET /routines`. Passed in rather than loaded here so the routes and
+   * the resident clock
    * cannot disagree about which routines exist (`loadServingRoutines`). `serveRun` overrides the default
    * that route inherits from `serveInvoke`.
    */
@@ -153,12 +154,10 @@ export async function routesFor(
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
   const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
   if (options.serveInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
-  // `POST /run` exists only where there is something to trigger. It rides this table for the reason the table
-  // exists: it authenticates nobody, so it inherits the JSON body gate, the cross-origin policy, the reserved path
-  // and the startup report's account of what is open — none of which it had to ask for.
-  //
   // `POST /run` exists only where there is something to run, and `GET /routines` exactly where that route does:
-  // it is the catalogue OF that route, so listing names nobody can use would be a catalogue of nothing.
+  // it is the catalogue OF that route, so listing names nobody can use would be a catalogue of nothing. Both ride
+  // this table for the reason the table exists: they authenticate nobody, so they inherit the JSON body gate, the
+  // cross-origin policy, the reserved path and the startup report's account of what is open.
   if (shouldServeRun(options)) {
     const routines = options.routines ?? [];
     const run = createRunHandler({ agent, routines });
@@ -327,7 +326,7 @@ export interface MountableAgent {
   /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Required, not defaulted: an
    *  embedder assembling this by hand would otherwise lose the plane to a 404 with nothing said anywhere. */
   publishControl: boolean;
-  /** Whether the agent routines its own follow-up turns. */
+  /** Whether the agent schedules its own follow-up turns (the `wake` tool). */
   selfSchedule: boolean;
   /**
    * The origins a browser may call this serve from (`http.cors`). Unset is the default, which answers EVERY origin
