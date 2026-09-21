@@ -173,9 +173,11 @@ src/
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
-│   └── agentcore/ { plan.ts, run.ts, logs.ts, zip.ts, forwarder.js } # ONE CloudFormation stack: runtime +
-│                             # forwarder Lambda (webhooks) + EventBridge rules (schedules). No public URL,
-│                             # no resident process, no volume — the facts every difference follows from
+│   └── agentcore/ { plan.ts, run.ts, destroy.ts, logs.ts, zip.ts, forwarder.js } # ONE CloudFormation stack:
+│                             # runtime + forwarder Lambda (webhooks) + EventBridge rules (schedules). No public
+│                             # URL, no resident process, no volume — the facts every difference follows from.
+│                             # destroy.ts is the other direction, and it exists because three of the four
+│                             # resources cannot be stack resources
 ├── schedule/               # the N axis: the unit of work (a ROUTINE) and the clock that fires it
 │   ├── routine.ts          # defineRoutine({ prompt, cron?, tz? }) — the ONLY named unit of work. `cron` is a
 │   │                       # FIELD: without one, the name is the only way in. Not a "schedule" (that named a time)

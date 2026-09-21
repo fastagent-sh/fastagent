@@ -92,6 +92,14 @@ export const MAX_LIFETIME_SECONDS = 28800;
 
 export const FORWARDER_FILE = "lambda/index.js";
 
+/**
+ * Where the forwarder puts the one-shot schedule for a wake-up. The id inside the name is minted in the
+ * container, so this prefix is the only handle anything outside has on the alarms a deployment has pending.
+ */
+export function wakeAlarmPrefix(name: string): string {
+  return `fa-${name}-wk-`;
+}
+
 /** Account-suffixed artifact bucket for S3's global namespace. */
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
@@ -425,7 +433,7 @@ function template(
         ? [
             `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
             `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule]`,
-            `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/fa-${input.name}-wk-*`,
+            `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
             `              - Effect: Allow # hand the poke schedules their invoke role`,
             `                Action: iam:PassRole`,
             `                Resource: !GetAtt WakeSchedulerRole.Arn`,
@@ -460,7 +468,7 @@ function template(
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,
             `          WAKE_ROLE_ARN: !GetAtt WakeSchedulerRole.Arn`,
-            `          WAKE_PREFIX: fa-${input.name}-wk-`,
+            `          WAKE_PREFIX: ${wakeAlarmPrefix(input.name)}`,
           ]
         : []),
       `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
