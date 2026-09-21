@@ -24,19 +24,21 @@
  *
  * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
  *
- * WHAT IT MEASURED, ap-southeast-1, 2026-09-20 — recorded so the next reader does not have to deploy
- * to learn it. Seven consecutive deliveries of a `* * * * *` schedule, read from the forwarder's log:
+ * WHAT IT MEASURED, ap-southeast-1, 2026-09-21 — recorded so the next reader does not have to deploy
+ * to learn it. Seven consecutive deliveries of a `* * * * *` routine, read from the forwarder's log:
  *
- *     occurrence (clock)     container slot             status   lag    turn
- *     2026-09-20T09:35:00Z   2026-09-20T09:35:00.000Z   200    61.4s  3022ms   fired=true
- *     2026-09-20T09:36:00Z   2026-09-20T09:36:00.000Z   200    23.6s  2423ms   fired=true
+ *     occurrence (clock)     container slot             status     lag     turn
+ *     2026-09-21T07:39:00Z   2026-09-21T07:39:00.000Z   200      49.9s   3224ms   fired=true
+ *     2026-09-21T07:40:00Z   2026-09-21T07:40:00.000Z   200      43.6s   2431ms   fired=true
  *     …five more, all 200, all `fired: true`, every slot identical to the occurrence EventBridge named
  *
  * The first is the cold one: container start, definition open and a model turn inside one invocation.
- * Steady state is 23.5–24.5s from the scheduled instant to a completed turn, of which ~2.5s is the
- * turn — i.e. the delivery itself lands some 21s after the instant, never before it.
+ * Steady state is 43.6–45.0s from the scheduled instant to a completed turn, of which ~2.4–3.8s is the
+ * turn — i.e. the delivery lands some 40s after the instant, never before it, which is what
+ * `POST /run`'s callers never have to think about and what a claim-keeping clock does.
+ *
  * Every `slot` in the reply equals the `<aws.scheduler.scheduled-time>` the rule sent, which is the
- * design's whole claim — the clock names the occurrence and the container does not recompute it.
+ * design's whole claim: the clock names the occurrence and the container does not recompute it.
  *
  * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and an EventBridge
  * rule) and one real model turn per minute it is up. Teardown is the shared
@@ -50,6 +52,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
+import { parseFireLine } from "../fire-line.ts";
 import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { CLI, aws, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv, run } from "./env.ts";
 
@@ -57,7 +60,7 @@ const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "an
 
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
-const SCHEDULE = "tick";
+const ROUTINE = "tick";
 /** Every minute: EventBridge Scheduler's own floor, and what bounds this probe's wait. */
 const CRON = "* * * * *";
 
@@ -80,7 +83,7 @@ beforeAll(async () => {
   // sees the same shape either way, and this fixture then needs no `npm install` before `deploy` reads
   // it. (The deployed image installs the package itself; this file is read on the BUILDER.)
   await writeFile(
-    join(agentDir, "routines", `${SCHEDULE}.ts`),
+    join(agentDir, "routines", `${ROUTINE}.ts`),
     `export default { cron: ${JSON.stringify(CRON)}, prompt: "Reply with just: tick" };\n`,
   );
   await writeFile(
@@ -105,9 +108,6 @@ afterAll(async () => {
   }
 }, 900_000);
 
-/** `routine-fire <name> (<occurrence>): <status> <body>` — the forwarder's one line per delivery. */
-const FIRE_LINE = new RegExp(`routine-fire ${SCHEDULE} \\(([^)]+)\\): (\\d+) (.*)$`);
-
 /** Poll the forwarder's log group until it has said something about a fire, or the budget runs out. */
 async function waitForFire(
   sinceMs: number,
@@ -118,6 +118,7 @@ async function waitForFire(
   let lastError = "no forwarder log group yet";
   let seen = 0;
   let lastLine = "";
+  let unreachable: string | undefined;
   while (Date.now() < deadline) {
     // NO `--filter-pattern`. The group holds one Lambda's output, so the server-side term index buys
     // nothing here — and it is a SECOND eventually-consistent thing to wait on: a run whose fires were
@@ -139,16 +140,26 @@ async function waitForFire(
       seen = lines.length;
       lastLine = (lines.at(-1)?.message ?? "").trim().slice(0, 300);
       for (const event of lines) {
-        const matched = FIRE_LINE.exec(event.message ?? "");
-        if (matched)
-          return {
-            occurrence: matched[1] as string,
-            status: Number(matched[2]),
-            body: matched[3] as string,
-            raw: (event.message ?? "").trim(),
-          };
+        // `parseFireLine` lives in src (deploy/agentcore/logs.ts) because it is string work with no AWS in
+        // it, and `test/live/**` is outside `npm test` — the defect it was extracted over cost a paid
+        // deployment to find.
+        const raw = (event.message ?? "").trim();
+        const line = parseFireLine(raw, ROUTINE);
+        if (line === undefined) continue;
+        // A CALL THAT NEVER CAME BACK names the timeout, and does not end the run. `invokeLogged` rethrows so
+        // that EventBridge RETRIES (forwarder.js), which makes one cold-start miss a recoverable state the
+        // system is allowed to be in — failing here would call a compliant deployment red. What this fixes is
+        // the other half: the timeout now quotes the forwarder instead of claiming "none of them a
+        // routine-fire", which is the misreading `invokeLogged` exists to prevent.
+        if (line.kind === "failed") {
+          unreachable = `the forwarder could not reach the container for ${line.occurrence}: ${line.message}`;
+          continue;
+        }
+        return { occurrence: line.occurrence, status: line.status, body: line.body, raw };
       }
-      lastError = `the forwarder logged ${seen} line(s), none of them a routine-fire for "${SCHEDULE}"`;
+      // The forwarder's own words WIN over a count: a reported miss says what went wrong, "N lines, none of
+      // them a fire" only says this function did not find one.
+      lastError = unreachable ?? `the forwarder logged ${seen} line(s), none of them a routine-fire for "${ROUTINE}"`;
     } else {
       // Absent until first use: AWS creates the group when the Lambda first writes.
       lastError = events.stderr.trim().slice(0, 300);
@@ -190,17 +201,21 @@ describe("agentcore routines: EventBridge holds the clock and names each fire", 
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
     ).toBeTruthy();
 
-    // SIX MINUTES, which the header's own measurement supports and nothing observed contradicts. The
-    // routine runs from the minute after the stack is created, so the first delivery's instant is
-    // within 60s of this point; the cold invocation then took 61.4s end to end (container start,
-    // definition open, model turn), and the poll interval is 10s — about 130s to the first match,
-    // against a 360s budget.
+    // SIX MINUTES, on the numbers in this file's header. The routine runs from the minute after the stack
+    // is created, so the first delivery's instant is within 60s of this point; the cold invocation then
+    // took 49.9s end to end (container start, definition open, model turn), and the poll interval is 10s
+    // — about 120s to the first match, against a 360s budget. Roughly 3x headroom.
     //
-    // It was briefly raised to 900s, which was a second patch on a symptom the line above had already
-    // explained: the run that timed out had delivered every fire ON TIME and logged them, and what hid
-    // them was `--filter-pattern`, not the clock. The budget is a cost ceiling here — one real model
-    // turn per minute of it — so it stays at the measured number until something is observed to exceed
-    // it. It also has to fit inside this test's own timeout alongside the deploy (~7 minutes measured).
+    // THE JITTER IS THE REASON TO STATE THAT RATIO RATHER THAN A MARGIN IN SECONDS: between the
+    // 2026-09-20 and 2026-09-21 runs the steady-state latency DOUBLED, 23.5-24.5s to 43.6-45.0s, with no
+    // change on our side. Whatever moved (region load, model latency) can move again, so the budget is
+    // sized in multiples of a measured worst case, not in the slack left over from one.
+    //
+    // It was briefly raised to 900s, which was a second patch on a symptom already explained: the run
+    // that timed out had delivered every fire ON TIME and logged them, and what hid them was
+    // `--filter-pattern`, not the clock. The budget is a cost ceiling — one real model turn per minute of
+    // it — so it stays at the measured number until something is observed to exceed it. It also has to
+    // fit inside this test's own timeout alongside the deploy (~7 minutes measured).
     const fire = await waitForFire(deployedAt, 360_000);
 
     // (1) THE assertion this probe exists for. A non-200 is a cold start, an opened definition, a model
