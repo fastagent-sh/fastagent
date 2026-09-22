@@ -806,7 +806,9 @@ is `/skill:<name> [args]`, which the server turns into the skill's body with the
 Do not expand it client-side; the files belong to the agent, which may be on another machine. An
 unknown name goes through as plain text, silently, so check the name against this list if a typo should
 be visible — a skill whose file became unreadable is off this list too (the loader warns `read_failed`
-and drops it), so the one comparison covers both. For a data-plane client the list is COMPLETE — skills are the
+and drops it), so the one comparison covers both. The remaining case is a list that outlived its file
+(a steer mid-run, a definition replaced under the container): the prompt goes through unexpanded and
+the server logs `skill_expansion failed`. For a data-plane client the list is COMPLETE — skills are the
 only thing the engine expands, since the definition's `extensions/` (pi's command registration) are
 not run when serving and prompt templates are off — so a `/` menu binds to it and nothing else. (A
 chat channel's `/stop` is the channel's, intercepted before the agent, not a name from here.) It is

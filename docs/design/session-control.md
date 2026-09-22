@@ -211,21 +211,27 @@ on it.
 ONE SPELLING, NOT A NEGOTIATED ONE, and that is a known limit rather than a design: this contract has
 one engine implementing it, so a client hard-codes the prefix. Nothing in `commands()` or
 `capabilities()` reports it, so a second engine with a different spelling — or none — cannot be told
-apart from this one, and adding it is a contract change (`AgentCommand` is public surface). What the
-contract does forbid today is the client-side alternative: a client MUST NOT read
-`skills/<name>/SKILL.md` and build the prompt itself. That re-implements definition loading, drifts
-from it, and fails outright against a remote agent whose files are not on its machine — the case
-local/remote symmetry exists for.
+apart from this one, and adding it is a contract change (`AgentCommand` is public surface). Until then
+the MUST NOT above is what keeps a client honest: hard-coding one engine's spelling is recoverable,
+expanding the name yourself is not.
 
 ONE silent fall-back, and it is a name nothing knows: an unknown name goes through as plain text,
 because at this layer a typo and a sentence that opens with a slash are the same bytes. Checking the
 name against this list first is the client's job for exactly that reason.
 
-A skill whose FILE cannot be read is not a second one. The loader reads it before anything can expand
-it, so an unreadable file means the skill is not in the definition this turn — it warns
-(`read_failed`, with the errno and path), drops out of `commands()`, and the prefixed spelling then
-behaves as the unknown name above, which is what it now is. So the one list a client compares against
-covers both a typo and a skill that broke.
+A skill whose FILE cannot be read is not a second one WHEN THE LIST AND THE FILE AGREE: the loader
+reads it first, so an unreadable file means the skill is not in the definition this turn — it warns
+(`read_failed`, with the errno and path), drops out of `commands()`, and the prefixed spelling behaves
+as the unknown name above, which is what it now is. That is the ordinary case, and it is why the one
+list a client compares against covers both a typo and a skill that broke.
+
+The list can outlive the file, though: it is refreshed per invoke, while the body is read at prompt
+time. A steer or follow-up inside a run, or a definition replaced under a running container, names a
+file that is already gone — pi reports `skill_expansion` on its extension error channel and sends the
+line unexpanded. Serving subscribes to that channel for this one reason, so the turn logs
+`skill_expansion failed for <path>: <errno>` instead of quietly answering as if the name were prose.
+The CALLER still gets an ordinary turn: the prompt is honest about what was sent, and nothing about a
+missing file makes the run itself fail.
 
 COMPLETE for what a data-plane client can invoke, which is what lets it bind its `/` menu to this list
 and nothing else: skills are the only thing the ENGINE expands. The definition's `extensions/` — pi's

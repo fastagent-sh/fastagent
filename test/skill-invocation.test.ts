@@ -14,14 +14,19 @@
  * `createPiAgentFromDefinition`.
  */
 import { expect, it, vi } from "vitest";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../src/agent.ts";
 import { createInvokeHandler } from "../src/channels/http.ts";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { log } from "../src/log.ts";
+import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { makeFaux } from "./faux.ts";
 
 const SKILL = (body: string) => `---\nname: weather\ndescription: Report weather.\n---\n${body}\n`;
@@ -121,4 +126,52 @@ it("a skill whose FILE went unreadable leaves the definition, loudly, and then r
 
   expect(warned.join("\n")).toMatch(/read_failed:.*(EACCES|permission denied)/);
   expect(sent()).toContain("/skill:weather now"); // unexpanded, like any name the definition does not have
+});
+
+it("an expansion that fails because the LIST outlived the file is reported, not swallowed", async () => {
+  // The other order, and the one the loader cannot pre-empt: the skill list is refreshed per invoke, the file is
+  // read at prompt time. A steer or follow-up inside a run, or a definition replaced under a running container,
+  // leaves a list naming a file that is gone — and pi answers that by raising `skill_expansion` on the extension
+  // error channel and sending the line to the model unexpanded. Nothing else in a turn mentions it, so the agent
+  // would simply ignore a skill the caller named.
+  const dir = await mkdtemp(join(tmpdir(), "fa-skill-stale-"));
+  await mkdir(join(dir, "skills", "weather"), { recursive: true });
+  const skillPath = join(dir, "skills", "weather", "SKILL.md");
+  await writeFile(skillPath, SKILL("Call the METAR endpoint."));
+
+  const { faux } = makeFaux();
+  const seen: string[] = [];
+  faux.setResponses([
+    (context: { messages: { role: string }[] }) => {
+      seen.push(JSON.stringify(context.messages.filter((message) => message.role === "user")));
+      return fauxAssistantMessage("ok");
+    },
+  ]);
+  const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const agent = createPiAgentFromSession({
+    lease: inProcessLease(),
+    sessionFactory: piAgentSessionFactory({
+      sessions: piInMemorySessionRecordStore({ cwd: dir }),
+      engine: async () => ({ modelRuntime, model: faux.getModel() }),
+      // A list that still names the skill, pinned the way a run in flight pins it.
+      readDefinition: () => ({
+        systemPrompt: "test",
+        skills: [{ name: "weather", description: "Report weather.", filePath: skillPath, content: "body" }],
+      }),
+      cwd: dir,
+    }),
+  });
+  await rm(skillPath);
+
+  const warned: string[] = [];
+  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+  try {
+    await collect(agent.invoke({ session: "s" }, { text: "/skill:weather now" }));
+  } finally {
+    warn.mockRestore();
+  }
+
+  expect(warned.join("\n")).toMatch(/skill_expansion failed for .*SKILL\.md: ENOENT/);
+  expect(seen.join("")).toContain("/skill:weather now"); // unexpanded, as pi leaves it
 });
