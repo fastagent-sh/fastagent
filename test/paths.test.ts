@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { displayPath, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { displayPath, placementDeadEnd, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
 
 describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
   const config = async (dir: string): Promise<void> => {
@@ -19,6 +19,101 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await config(join(dir, "fastagent"));
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
+  });
+
+  // Skipped as root, where there is no such thing as a directory the process cannot enter.
+  const asUser = process.getuid?.() === 0 ? it.skip : it;
+  asUser("a directory it cannot LOOK INTO is a permission error, never 'no agent here'", async () => {
+    // The dangerous direction: `existsSync` answers false for EACCES too, so an agent behind a directory the
+    // caller cannot enter was reported as absent — and the refusal for absent ends in `run \`fastagent init\`
+    // to scaffold one`, over a definition that is already there.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-perm-"));
+    await config(join(dir, "fastagent"));
+    await chmod(join(dir, "fastagent"), 0o000);
+    try {
+      // The definition IS there, so the refusal must name the directory hiding it — and say to check it
+      // before taking the `fastagent init` way out, which would scaffold over an agent nobody can see.
+      expect(() => resolvePlacement(dir)).toThrow(/could not be read \(permission\), so an agent may be inside/);
+      expect(() => resolvePlacement(dir)).toThrow(
+        /: fastagent. Check those first; run `fastagent init` to scaffold one only if none/,
+      );
+      // Pointed AT the unreadable agent, not at its parent: a NAMED directory, so the errno itself travels.
+      expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/EACCES/);
+    } finally {
+      await chmod(join(dir, "fastagent"), 0o755);
+    }
+  });
+
+  asUser("a directory it cannot look into never outranks a message that says what to DO", async () => {
+    // Two agents and no way to pick: telling the caller to fix a third directory's permissions does not
+    // resolve that, and fixing it would not change the answer.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-many-"));
+    await config(join(dir, "alpha"));
+    await config(join(dir, "beta"));
+    await mkdir(join(dir, "locked"));
+    await chmod(join(dir, "locked"), 0o000);
+    try {
+      expect(() => resolvePlacement(dir, {})).toThrow(/holds 2 agents \(alpha, beta\)/);
+      expect(() => resolvePlacement(dir, { FASTAGENT_AGENT: "gamma" })).toThrow(/FASTAGENT_AGENT asserts "gamma"/);
+
+      // And the weaker question keeps its old answer: `login` asks whether it is outside an agent, for which a
+      // neighbour it may not enter is environment noise — answering it exits instead of logging in globally.
+      const empty = await mkdtemp(join(tmpdir(), "fa-ws-noise-"));
+      await mkdir(join(empty, "locked"));
+      await chmod(join(empty, "locked"), 0o000);
+      try {
+        expect(placementDeadEnd(empty, {})).toBeUndefined();
+        expect(() => resolvePlacement(empty, {})).toThrow(/could not be read \(permission\)/);
+        // The way out SURVIVES the note: an unreadable neighbour on a shared machine is not a reason to
+        // withhold the only line that says what to do here.
+        expect(() => resolvePlacement(empty, {})).toThrow(/run `fastagent init` to scaffold one/);
+      } finally {
+        await chmod(join(empty, "locked"), 0o755);
+      }
+    } finally {
+      await chmod(join(dir, "locked"), 0o755);
+    }
+  });
+
+  it("a failure that is NOT about permissions surfaces as itself", async () => {
+    // The scan swallows "someone else's 0700 directory" because that is normal on a shared machine. ELOOP is
+    // not: it has a different fix, and calling it a permission problem sends the caller to chmod something
+    // that is not broken. (A self-referential symlink is the cheapest real one — statSync gives up on it.)
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-loop-"));
+    await symlink(join(dir, "loop"), join(dir, "loop"));
+    expect(() => resolvePlacement(dir, {})).toThrow(/ELOOP/);
+    expect(() => resolvePlacement(dir, {})).not.toThrow(/could not be read \(permission\)/);
+  });
+
+  asUser("the list of unreadable directories is bounded", async () => {
+    // `/tmp` on a shared machine: a dozen `systemd-private-*` and `snap-private-tmp` entries, none of them an
+    // agent. Printing every one buries the line that says what to do.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-many-locked-"));
+    const locked = ["a", "b", "c", "d", "e"].map((n) => join(dir, n));
+    for (const d of locked) {
+      await mkdir(d);
+      await chmod(d, 0o000);
+    }
+    try {
+      expect(() => resolvePlacement(dir, {})).toThrow(/5 directories here could not be read/);
+      expect(() => resolvePlacement(dir, {})).toThrow(/a, b, c, \+2 more/);
+    } finally {
+      for (const d of locked) await chmod(d, 0o755);
+    }
+  });
+
+  asUser("an unreadable NEIGHBOUR does not fail a scan that found the agent", async () => {
+    // Every machine has directories this process may not enter; `workspaceHint` scans the PARENT of an agent
+    // for a hint, which on a CI runner means scanning /tmp. A decorative hint must not fail the command.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-neighbour-"));
+    await config(join(dir, "fastagent"));
+    await mkdir(join(dir, "locked"));
+    await chmod(join(dir, "locked"), 0o000);
+    try {
+      expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
+    } finally {
+      await chmod(join(dir, "locked"), 0o755);
+    }
   });
 
   it("the NAME does not decide what IS an agent — the directory can be called anything", async () => {
