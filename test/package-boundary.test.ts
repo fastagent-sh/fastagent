@@ -218,6 +218,15 @@ describe("the assembly's parts stay out of the public surface", () => {
 
   const ENTRIES = ["core.ts", "pi.ts", "index.ts"];
 
+  it("every failure code a caller must recognise is exported as a VALUE", async () => {
+    // A type-only export makes an embedder copy the literal, and `"session_busy"` decides whether a first
+    // `failed` is a fail-fast reject or the retry/steer path. The session plane already exports its codes.
+    const core = (await import(resolve(srcDir, "core.ts"))) as Record<string, unknown>;
+    expect([core.SESSION_BUSY_CODE, core.ABORTED_CODE]).toEqual(["session_busy", "aborted"]);
+    const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
+    expect(index.SESSION_BUSY_CODE).toBe(core.SESSION_BUSY_CODE);
+  });
+
   it("no entry exports an assembly part", async () => {
     // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
     const offenders: string[] = [];

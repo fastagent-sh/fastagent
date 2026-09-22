@@ -74,8 +74,12 @@ Author tool schemas with the `z` re-exported from `@fastagent-sh/fastagent` (as 
 
 ```ts
 // (1) raw stream — render tokens as they arrive
+import { SESSION_BUSY_CODE } from "@fastagent-sh/fastagent";
 for await (const e of agent.invoke({ session: "u1" }, { text: "hi" })) {
   if (e.type === "text") render(e.delta);
+  // A FIRST event of this shape is a reject, not a failed turn: that session is mid-run. Retry with
+  // backoff, or steer the running turn (docs/design/session-control.md). Import the code, never copy it.
+  if (e.type === "failed" && e.code === SESSION_BUSY_CODE) queueOrSteer();
 }
 
 // (2) buffered JSON — one question, one answer
