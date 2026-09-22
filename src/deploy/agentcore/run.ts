@@ -3,6 +3,7 @@ import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
+import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
@@ -66,16 +67,6 @@ const EMPTY_STACK_STATUSES = new Set([
   "REVIEW_IN_PROGRESS",
   "DELETE_COMPLETE",
 ]);
-
-/**
- * Does this `describe-stacks` failure ANSWER "is there a stack?" — the CLI's own "no such stack" — or leave it
- * unanswered (no `cloudformation:DescribeStacks` on the role, throttling, an endpoint that does not resolve)? The
- * difference decides whether a deploy stays quiet about replacing the agent's memory. Exported for the live probe:
- * only a real `aws` CLI can say whether this wording still holds.
- */
-export function isMissingStack(stderr: string | undefined): boolean {
-  return /does not exist|ValidationError/i.test(stderr ?? "");
-}
 
 /** Budget for image pull, storage initialization and channel construction. */
 const PROBE_TIMEOUT_MS = 240_000;
@@ -185,23 +176,23 @@ export async function deployAgentcoreRun(
   const repo = agentcoreRepoName(plan.name);
 
   // 1.
-  const identity = await aws(["sts", "get-caller-identity", "--output", "json"], { capture: true });
-  if (identity.code === 127) {
-    return gate("aws CLI not found — install AWS CLI v2: https://docs.aws.amazon.com/cli/, then re-run");
+  const cli = awsCli(aws);
+  const identity = await cli.read(
+    ["sts", "get-caller-identity", "--output", "json"],
+    awsJson((parsed) => {
+      const { Account, Arn } = (parsed ?? {}) as { Account?: unknown; Arn?: unknown };
+      return typeof Account === "string"
+        ? { account: Account, principal: typeof Arn === "string" ? Arn : undefined }
+        : undefined;
+    }),
+  );
+  if (!("ok" in identity)) {
+    if ("absent" in identity) return gate("`aws sts get-caller-identity` found no caller — run `aws configure`");
+    if (identity.code === 127) return gate(`${identity.unreadable}, then re-run`);
+    // QUOTED: expired token, a missing profile and a proxy that eats STS are three different next actions.
+    return gate(`no working AWS credentials (${identity.unreadable}) — run \`aws configure\`, then re-run`);
   }
-  if (identity.code !== 0) {
-    return gate("no working AWS credentials — run `aws configure` (or set AWS_ACCESS_KEY_ID/…), then re-run");
-  }
-  let account: string;
-  let principal: string | undefined;
-  try {
-    const parsed = JSON.parse(identity.stdout) as { Account?: unknown; Arn?: unknown };
-    if (typeof parsed.Account !== "string") throw new Error("no Account");
-    account = parsed.Account;
-    principal = typeof parsed.Arn === "string" ? parsed.Arn : undefined;
-  } catch {
-    return gate("could not read the account id from `aws sts get-caller-identity` — see the output above");
-  }
+  const { account, principal } = identity.ok;
   let region = plan.region;
   if (!region) {
     const fromConfig = await aws(["configure", "get", "region"], { capture: true });
@@ -278,8 +269,10 @@ export async function deployAgentcoreRun(
   // 3d. Read the stack here, for the two questions that both depend on it: does this deploy destroy the agent's
   // memory (below), and is there a failed first create to clear (step 7)? The destructive one is only worth saying
   // while the multi-minute build has not run yet, and step 7 reuses this answer unless it was still in flight.
+  // An unanswered question must not read as "a first deploy, nothing to lose": `sts get-caller-identity` succeeding
+  // says nothing about whether this role can read CloudFormation. That three-way answer is aws-cli.ts's.
   const readStackStatus = () =>
-    aws(
+    cli.read(
       [
         "cloudformation",
         "describe-stacks",
@@ -290,25 +283,19 @@ export async function deployAgentcoreRun(
         "--output",
         "text",
       ],
-      // stderr is CLASSIFIED here (no stack vs unreadable), so it must not stream to the terminal as this deploy's
-      // first visible line either.
-      { capture: true, captureStderr: true },
+      (stdout) => stdout.trim() || undefined,
     );
   const stackStatus = await readStackStatus();
-  // An unanswered question must not read as "a first deploy, nothing to lose": `sts get-caller-identity` succeeding
-  // says nothing about whether this role can read CloudFormation.
-  const noStack = isMissingStack(stackStatus.stderr);
-  const status = stackStatus.code === 0 ? stackStatus.stdout.trim() : "";
+  const status = "ok" in stackStatus ? stackStatus.ok : "";
   // The only answers the build can invalidate: one still in flight (a first create rolling back is exactly what step 7
   // exists for, and minutes of arm64 build are long enough for it to settle), and one we never got.
-  const settling = status.endsWith("_IN_PROGRESS") || (stackStatus.code !== 0 && !noStack);
+  const settling = status.endsWith("_IN_PROGRESS") || "unreadable" in stackStatus;
   // Warn, never gate — same as the region probe above: a role without this read, or an older CLI, must not refuse a
   // legitimate deploy.
-  if (stackStatus.code !== 0 && !noStack) {
-    const why = (stackStatus.stderr ?? "").trim().split("\n")[0];
+  if ("unreadable" in stackStatus) {
     log(
-      `warn: could not read stack ${stack}${why ? ` (${why})` : ""} — if it exists, this deploy resets its managed ` +
-        `SessionStorage (${MOUNT}) and a failed first create will not be cleared`,
+      `warn: could not read stack ${stack} (${stackStatus.unreadable}) — if it exists, this deploy resets its ` +
+        `managed SessionStorage (${MOUNT}) and a failed first create will not be cleared`,
     );
   } else if (status !== "" && !EMPTY_STACK_STATUSES.has(status)) {
     log(
@@ -323,8 +310,13 @@ export async function deployAgentcoreRun(
   // 4.
   const registry = `${account}.dkr.ecr.${region}.amazonaws.com`;
   const image = `${registry}/${repo}:${plan.tag}`;
-  const described = await aws(["ecr", "describe-repositories", "--repository-names", repo], { capture: true });
-  if (described.code === 0) {
+  const described = await cli.present(["ecr", "describe-repositories", "--repository-names", repo]);
+  if ("unreadable" in described) {
+    // NOT the create branch. A denial here used to end as "`aws ecr create-repository` failed", naming the step
+    // after the one that actually went wrong.
+    return gate(`could not read ECR repository ${repo} (${described.unreadable}) — fix that, then re-run`);
+  }
+  if ("ok" in described) {
     log(`ECR repository ${repo} exists — skipping create`);
   } else {
     log(`creating ECR repository ${repo}…`);
@@ -337,7 +329,13 @@ export async function deployAgentcoreRun(
   let forwarderParams: { bucket: string; key: string } | undefined;
   if (plan.topology.forwarder) {
     const bucket = deploymentBucketName(plan.name, account);
-    if ((await aws(["s3api", "head-bucket", "--bucket", bucket], { capture: true })).code !== 0) {
+    const head = await cli.present(["s3api", "head-bucket", "--bucket", bucket]);
+    // Same shape as the repository above: a 403 is not a 404, and creating on top of it fails with a message
+    // about the wrong thing.
+    if ("unreadable" in head) {
+      return gate(`could not read deployment bucket ${bucket} (${head.unreadable}) — fix that, then re-run`);
+    }
+    if ("absent" in head) {
       log(`creating deployment bucket ${bucket}…`);
       // us-east-1 is the ONE region that must not carry a LocationConstraint (the API rejects it).
       const createArgs = ["s3api", "create-bucket", "--bucket", bucket];
@@ -394,7 +392,7 @@ export async function deployAgentcoreRun(
 
   // 7. The 3d answer stands unless it was still settling then — a second read is the narrow exception, not the rule.
   const beforeDeploy = settling ? await readStackStatus() : stackStatus;
-  if (beforeDeploy.code === 0 && beforeDeploy.stdout.trim() === "ROLLBACK_COMPLETE") {
+  if ("ok" in beforeDeploy && beforeDeploy.ok === "ROLLBACK_COMPLETE") {
     log(`stack ${stack} is ROLLBACK_COMPLETE (a failed first create) — deleting it before re-creating…`);
     if ((await aws(["cloudformation", "delete-stack", "--stack-name", stack])).code !== 0) {
       return gate("`aws cloudformation delete-stack` failed — see the output above");
@@ -426,12 +424,15 @@ export async function deployAgentcoreRun(
   }
 
   // 8. Outputs — the runtime ARN (the data plane) and the forwarder URL (the webhook surface).
-  const outputsQuery = await aws(
+  const outputsRead = await cli.read(
     ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
-    { capture: true },
+    awsJson(pickStackOutputs),
   );
-  if (outputsQuery.code !== 0) return gate("`aws cloudformation describe-stacks` failed — see the output above");
-  const outputs = parseStackOutputs(outputsQuery.stdout);
+  if (!("ok" in outputsRead)) {
+    const why = "absent" in outputsRead ? `${stack} is not there` : outputsRead.unreadable;
+    return gate(`\`aws cloudformation describe-stacks\` failed after a successful deploy (${why})`);
+  }
+  const outputs = outputsRead.ok;
   const runtimeArn = outputs.RuntimeArn;
   if (!runtimeArn) return gate("stack has no RuntimeArn output — was the template edited? Regenerate with --force");
   const url = outputs.ForwarderUrl?.replace(/\/$/, ""); // registrars append /<path>; no double slash
@@ -447,13 +448,13 @@ export async function deployAgentcoreRun(
       "--runtime-session-id",
       ingressSessionId(plan.name),
     ];
-    const stopped = await aws(stopCommand, { capture: true, captureStderr: true });
-    if (stopped.code !== 0) {
+    const stopped = await cli.write(stopCommand);
+    if (!("done" in stopped)) {
       // Classify, don't guess: "no session yet" (first deploy — expected, quiet note) vs a REAL stop failure
-      // (permissions/CLI/network), which must stop verification against the previous image.
-      const stderr = stopped.stderr ?? "";
-      // The message follows the ANSWER (no session to stop vs a real failure).
-      const noSession = /ResourceNotFound|not\s*found|does not exist/i.test(stderr);
+      // (permissions/CLI/network), which must stop verification against the previous image. Both words are
+      // aws-cli.ts's — this file had its own third spelling of "already gone".
+      const noSession = "absent" in stopped;
+      const stderr = noSession ? "" : stopped.refused;
       if (noSession || !plan.topology.forwarder) {
         log(
           noSession

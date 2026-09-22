@@ -27,6 +27,11 @@
  *    nothing — so empty stdout is output we could not read, and {@link awsList} says so rather than reporting
  *    an empty list.
  *
+ * WHAT DOES NOT GO THROUGH IT: a WRITE whose output an operator watches (`docker buildx build`, `s3 cp`,
+ * `cloudformation deploy`) keeps its streams on the terminal — capturing a multi-minute arm64 build to replay it
+ * at the end is a regression, and it is why `run.ts` can say "see the output above" where `destroy.ts` cannot.
+ * That is a stdio choice, not a second classifier: those calls ask "did this work", never "is it there".
+ *
  * What is deliberately NOT here: what to DO about each answer. Whether an unreadable read aborts the teardown
  * or degrades it is a per-resource policy (the stack's probe decides the report's honesty; a log-group listing
  * only supplies names), and that belongs at the call site where the reason is visible.
