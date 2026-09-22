@@ -2,7 +2,7 @@
  * PLACEMENT: which directory holds the agent, and which directory the agent works ON — plus the machinery paths that
  * follow from it.
  */
-import { type Dirent, existsSync, readdirSync, statSync } from "node:fs";
+import { type Dirent, type Stats, existsSync, readdirSync, statSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -50,13 +50,29 @@ export interface ResolvedPlacement {
  */
 const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "routines"] as const;
 
+/**
+ * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent
+ * directory the caller cannot enter (EACCES) reported as no-agent-here ends in `run \`fastagent init\` to
+ * scaffold one` — over a definition that exists. So ENOENT/ENOTDIR are absence, and every other errno travels
+ * with its path to the caller, as {@link agentChildren} already does for the scan itself.
+ */
+function statOrAbsent(p: string): Stats | undefined {
+  try {
+    return statSync(p);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw e;
+  }
+}
+
 function isDir(p: string): boolean {
-  return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+  return statOrAbsent(p)?.isDirectory() === true;
 }
 
 /** THE marker: a directory that declares itself an agent with a {@link AGENT_CONFIG_FILE}. */
 function hasConfig(p: string): boolean {
-  return isDir(p) && existsSync(join(p, AGENT_CONFIG_FILE));
+  return isDir(p) && statOrAbsent(join(p, AGENT_CONFIG_FILE)) !== undefined;
 }
 
 /** The agent directories DIRECTLY inside `dir` — the one-level scan that finds an agent without knowing its name. */

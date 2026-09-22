@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { displayPath, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
 
 describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
@@ -19,6 +19,25 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await config(join(dir, "fastagent"));
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
+  });
+
+  // Skipped as root, where there is no such thing as a directory the process cannot enter.
+  const asUser = process.getuid?.() === 0 ? it.skip : it;
+  asUser("a directory it cannot LOOK INTO is a permission error, never 'no agent here'", async () => {
+    // The dangerous direction: `existsSync` answers false for EACCES too, so an agent behind a directory the
+    // caller cannot enter was reported as absent — and the refusal for absent ends in `run \`fastagent init\`
+    // to scaffold one`, over a definition that is already there.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-perm-"));
+    await config(join(dir, "fastagent"));
+    await chmod(join(dir, "fastagent"), 0o000);
+    try {
+      expect(() => resolvePlacement(dir)).toThrow(/EACCES/);
+      expect(() => resolvePlacement(dir)).not.toThrow(/fastagent init/);
+      // Pointed AT the unreadable agent, not at its parent: the same question, the other entry.
+      expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/EACCES/);
+    } finally {
+      await chmod(join(dir, "fastagent"), 0o755);
+    }
   });
 
   it("the NAME does not decide what IS an agent — the directory can be called anything", async () => {
