@@ -65,3 +65,42 @@ export function clientHost(host: string | undefined): string {
   // biome-ignore lint/style/noNonNullAssertion: only a wildcard bind leaves host undefined
   return host!.includes(":") && !host!.startsWith("[") ? `[${host}]` : host!;
 }
+
+/**
+ * The names a loopback serve answers to when nothing else is configured — the addresses `localhost` resolves to,
+ * plus the name itself.
+ */
+export const LOOPBACK_HOST_NAMES: readonly string[] = ["localhost", "127.0.0.1", "[::1]"];
+
+/**
+ * May a caller NAME this serve the way it just did? A different question from {@link classifyBind}, which is about
+ * the address we listen on: this one is about the `Host` header, and it exists because a browser can be made to
+ * send a name that resolves to 127.0.0.1 while the page stays same-origin (DNS rebinding). Same-origin means no
+ * `Origin` header and no content-type restriction, so neither guard in `channels/serve.ts` applies and the port —
+ * `POST /invoke` with the agent's full tool authority, `/control/*` when it is published — answers a web page with
+ * no credential.
+ *
+ * The REQUEST URL, not the raw header: the Node adapter builds it from `Host`, so this reads the same value with
+ * the port already off and an IPv6 literal already bracketed, which is the form the default list is written in.
+ */
+export function isAllowedHost(requestUrl: string, allowed: readonly string[]): boolean {
+  const named = normalize(new URL(requestUrl).hostname);
+  return allowed.some((entry) => normalize(entry) === named);
+}
+
+/**
+ * Refuse a host allow-list that cannot answer anything.
+ *
+ * An EMPTY list is the spelling worth catching: it reads as "no name may reach this" and would lock the operator
+ * out of their own loopback serve with a 403 naming the key they just set.
+ */
+export function assertAllowedHosts(hosts: unknown, where: string): asserts hosts is string[] {
+  if (!Array.isArray(hosts) || hosts.some((h) => typeof h !== "string" || h === "")) {
+    throw new Error(`${where} must be an array of host names (e.g. ["localhost", "agent.local"])`);
+  }
+  if (hosts.length === 0) {
+    throw new Error(
+      `${where} is empty — list at least the names you reach this serve by (default: localhost, 127.0.0.1, [::1])`,
+    );
+  }
+}

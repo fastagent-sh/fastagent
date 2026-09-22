@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Routes } from "../src/channel.ts";
+import { assertAllowedHosts } from "../src/bind.ts";
 import {
   assertCorsOrigins,
   assertRouteKey,
@@ -136,6 +137,16 @@ describe("serve: who may call this from a browser", () => {
     expect(
       (await preflight(build(["*"]), "/invoke", "https://evil.example.com")).headers.get("access-control-allow-origin"),
     ).toBe("*");
+  });
+
+  it("an EMPTY http.allowedHosts is refused at load — it would lock the operator out of their own serve", () => {
+    // The list REPLACES the default, so `[]` means "no name reaches this" and every request to an unpublished
+    // loopback serve would 403 pointing at the key that had just been set.
+    expect(() => assertAllowedHosts([], 'fastagent.config.ts: "http.allowedHosts"')).toThrow(
+      /"http\.allowedHosts" is empty — list at least the names you reach this serve by/,
+    );
+    expect(() => assertAllowedHosts(["agent.local"], "x")).not.toThrow();
+    expect(() => assertAllowedHosts(["localhost", ""], "x")).toThrow(/must be an array of host names/);
   });
 
   it("an EMPTY http.cors is refused at load, because it would mean the opposite of what it looks like", async () => {

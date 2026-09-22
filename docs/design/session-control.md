@@ -765,30 +765,26 @@ One thing neither mechanism covers, recorded so it is not rediscovered: a cross-
 `/control/sessions/{id}/events` is a simple request, so it is sent and the server subscribes, even
 though the page cannot read a byte of it. That costs a held connection, not a disclosure.
 
-KNOWN GAP (tracked as issue #573): DNS rebinding. The page rebinds its own hostname to `127.0.0.1`, so
-its requests become same-origin — no `Origin` to judge, and any content type it likes, which defeats
-mechanism 1 as well.
+**Mechanism 3, and only where the port IS the boundary: the `Host`.** DNS rebinding defeats the other
+two together — the page rebinds its own hostname to `127.0.0.1`, so its requests are same-origin: no
+`Origin` to judge, and any content type it likes, which takes the JSON gate out with it. An
+unpublished loopback serve (`dev`, `start --bind 127.0.0.1`, no `--tunnel`) therefore refuses a
+request that NAMES it something it does not answer to: `localhost`, `127.0.0.1`, `[::1]`, or whatever
+`http.allowedHosts` says instead. The refusal is a 403 naming the key and the current list, because
+the operator who meets it is running something that behaves normally — cloudflared, Caddy and Traefik
+all pass the original `Host` (nginx happens not to: its default is `proxy_set_header Host
+$proxy_host`).
 
-Note what changed when the cross-origin default became `*`: rebinding is no longer NEEDED to reach a
-loopback serve from a page, since an ordinary cross-origin call is now answered. What it still buys an
-attacker is the rest of mechanism 1 — a same-origin request may carry any content type, so the JSON
-gate stops applying, and a `dev` serve narrowed by `http.cors` is reachable again despite the list.
+NOT on a published port — a wildcard bind, a tunnel, a container. A foreign `Host` is the ordinary
+case there, the port is reachable without a browser at all, and a list we cannot know would refuse the
+gateway the deployment is supposed to sit behind. Enforcement follows the same two facts the boot
+warnings do: the bind's reach, and whether a tunnel published it.
 
-The only thing left to check would be `Host`, and this is a deliberate decision not to:
-
-- Closing it costs a config key. A loopback-only `Host` rule cannot be unconditional: `cloudflared`
-  forwards the original `Host` by default (`httpHostHeader` is empty), and so do Caddy and Traefik. We
-  know when `--tunnel` is on and could exempt it; we do not know about the operator's reverse proxy,
-  so a same-host facade — the deployment shape recommended below — would meet a 403 with no way to
-  answer it unless we also ship a host allowlist. (nginx happens to pass: its default is
-  `proxy_set_header Host $proxy_host`.)
-- It closes a narrower gap than it used to. With `*` as the default, the page a developer visits can
-  already drive a loopback serve without any DNS trick; `Host` validation would take back the
-  `http.cors` narrowing, not the default.
-
-So a `dev` serve left running is worth treating as drivable by any page the developer visits, and by
-an attacker who controls DNS even when `http.cors` is pinned. If that matters, stop the serve, or put
-it behind something that authenticates.
+What this does NOT take back is the cross-origin default: with `*`, any page the developer visits can
+still call a loopback serve directly and read the reply. `Host` checking closes the rebinding path —
+the one that also defeats the JSON gate and survives an `http.cors` narrowing — not the default. A
+`dev` serve left running is still worth treating as drivable by any page the developer visits, unless
+`http.cors` is pinned.
 
 **The multi-tenant facade.** N users behind one deployment, each reaching only their own sessions: the
 facade authenticates its user, reads the session id out of the request, checks it against its OWN

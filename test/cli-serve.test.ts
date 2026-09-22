@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { announceControl, reportServing, withRunOverrides } from "../src/cli/serve.ts";
+import type { ChannelHandler } from "../src/channel.ts";
+import { announceControl, guardHost, reportServing, withRunOverrides } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
 import { type MountableAgent, mountSessionControl, routesFor } from "../src/service.ts";
 import { log } from "../src/log.ts";
@@ -448,5 +449,55 @@ describe("cli: bind address policy", () => {
     // holding that path with a protocol of its own). A copyable request that 404s, or that pushes the
     // built-in body at a handler which does not accept it, is worse than no line.
     expect(readyAddressLines("127.0.0.1", 1, false)).toEqual([bindLine("127.0.0.1", 1)]);
+  });
+});
+
+describe("cli: an unpublished loopback serve answers only to names it knows", () => {
+  // DNS rebinding is the attack: a page resolves its own hostname to 127.0.0.1, so its requests are SAME-ORIGIN —
+  // no `Origin` header, any content type — and both of the router's guards stop applying. What is behind them is
+  // `POST /invoke` with the agent's full tool authority, and `/control/*` when it is published.
+  const served: ChannelHandler = () => text("served\n", 200);
+  const ask = (handler: ChannelHandler, host: string) =>
+    handler(new Request(`http://${host}/invoke`, { method: "POST" }));
+
+  it("refuses a foreign Host, and names the key and the list", async () => {
+    const guarded = guardHost(served, "127.0.0.1", false, undefined);
+    const refused = await guarded(new Request("http://evil.example.com:8787/invoke", { method: "POST" }));
+
+    expect(refused.status).toBe(403);
+    const body = await refused.text();
+    // The operator who hits this is running something that behaves normally (cloudflared, Caddy and Traefik all
+    // pass the original Host), so the refusal has to carry the fix, not just the verdict.
+    expect(body).toContain("evil.example.com");
+    expect(body).toContain("http.allowedHosts");
+    expect(body).toContain("localhost, 127.0.0.1, [::1]");
+  });
+
+  it("answers the three names localhost resolves to, port and brackets included", async () => {
+    const guarded = guardHost(served, "127.0.0.1", false, undefined);
+    for (const host of ["localhost:8787", "127.0.0.1", "[::1]:8787"]) {
+      expect((await ask(guarded, host)).status, host).toBe(200);
+    }
+  });
+
+  it("is NOT enforced on a published port — a foreign Host is normal there", async () => {
+    // Each of these is a posture where the port is already reachable without a browser, and where enforcing a list
+    // we cannot know would refuse the reverse proxy the deployment is meant to sit behind.
+    for (const [label, handler] of [
+      ["tunnel", guardHost(served, "127.0.0.1", true, undefined)],
+      ["wildcard bind", guardHost(served, undefined, false, undefined)],
+      ["specific interface", guardHost(served, "192.168.1.9", false, undefined)],
+    ] as const) {
+      expect((await ask(handler, "evil.example.com")).status, label).toBe(200);
+    }
+  });
+
+  it("a configured list REPLACES the default, like http.cors", async () => {
+    const guarded = guardHost(served, "127.0.0.1", false, ["agent.local"]);
+    expect((await ask(guarded, "agent.local:8787")).status).toBe(200);
+    // Narrowed themselves out of localhost — which the refusal says, by listing what IS allowed.
+    const refused = await ask(guarded, "localhost:8787");
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain("currently: agent.local");
   });
 });

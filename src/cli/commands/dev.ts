@@ -72,6 +72,11 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   serveService(
     service,
     { port: portFlag ?? a.config.http?.port ?? 8787, host },
-    { tunnel, agentDir: a.agentDir, stateRoot: a.stateRoot },
+    {
+      tunnel,
+      agentDir: a.agentDir,
+      stateRoot: a.stateRoot,
+      ...(a.config.http?.allowedHosts ? { allowedHosts: a.config.http.allowedHosts } : {}),
+    },
   );
 }

@@ -1,10 +1,19 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
-import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
+import {
+  LOOPBACK_HOST_NAMES,
+  answersLocalhost,
+  bindAddress,
+  bindLabel,
+  classifyBind,
+  clientHost,
+  isAllowedHost,
+} from "../bind.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
 import type { AgentService, MountableAgent, MountAgentServiceOptions } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
+import { text } from "../channels/respond.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { declaredChannels } from "../channels/discover.ts";
@@ -77,11 +86,11 @@ export function cliMountOptions(wrapAgent: (agent: Agent) => Agent): MountAgentS
 export function serveService(
   service: AgentService,
   bind: { port: number; host?: string },
-  posture: { tunnel: boolean; agentDir: string; stateRoot: string },
+  posture: { tunnel: boolean; agentDir: string; stateRoot: string; allowedHosts?: readonly string[] },
 ): void {
   const { host } = bind;
   const { tunnel, agentDir, stateRoot } = posture;
-  serve(service.handler, bind, {
+  serve(guardHost(service.handler, host, tunnel, posture.allowedHosts), bind, {
     ready: service.ready,
     onListening: (p) => {
       reportServing(service, host, p);
@@ -90,6 +99,45 @@ export function serveService(
     },
     onShutdown: () => service.close(),
   });
+}
+
+/**
+ * Refuse a caller that reached an UNPUBLISHED LOOPBACK serve under a name we do not answer to.
+ *
+ * The posture, and only it, is what makes this a boundary rather than theatre: `dev` and
+ * `start --bind 127.0.0.1` with no tunnel claim the port IS the access control, and a web page crosses that by
+ * rebinding its own hostname to 127.0.0.1 — the requests then look same-origin, so no `Origin` is sent and any
+ * content type is allowed, which takes both of the router's guards out of play (`channels/serve.ts`). What is
+ * behind them is a turn with the agent's full tool authority and, when it is published, `/control/*`.
+ *
+ * NOT ON A PUBLISHED PORT. A wildcard bind, a tunnel, a container: a foreign `Host` is the normal case there, the
+ * port is reachable without a browser at all, and enforcing a list we cannot know would refuse the reverse proxy
+ * the deployment is supposed to sit behind (cloudflared, Caddy and Traefik all pass the original `Host`).
+ *
+ * EVERY route, including the channels' — a signed webhook cannot reach an unpublished loopback port anyway, so
+ * there is nothing to exempt and one rule to read.
+ *
+ * A SET list REPLACES the default rather than adding to it, the same way `http.cors` does — one rule for both
+ * lists, and the refusal names what is currently allowed, so an operator who narrowed themselves out reads why.
+ */
+export function guardHost(
+  handler: ChannelHandler,
+  host: string | undefined,
+  tunnel: boolean,
+  configured: readonly string[] | undefined,
+): ChannelHandler {
+  if (tunnel || classifyBind(host) !== "loopback") return handler;
+  const allowed = configured ?? LOOPBACK_HOST_NAMES;
+  return (request) => {
+    if (isAllowedHost(request.url, allowed)) return handler(request);
+    // NAMED, both of them: the operator who hits this is running something that behaves normally (a proxy passing
+    // the original Host), and needs the key and the name it refused to fix it in one read.
+    return text(
+      `host ${new URL(request.url).hostname} is not allowed for this loopback serve — add it to http.allowedHosts ` +
+        `(currently: ${allowed.join(", ")})\n`,
+      403,
+    );
+  };
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */

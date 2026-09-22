@@ -12,6 +12,7 @@ import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
 import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
+import { assertAllowedHosts } from "../../bind.ts";
 import { assertCorsOrigins } from "../../channels/serve.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
@@ -37,6 +38,15 @@ export interface FastagentConfig {
    * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
    * refused, because it reads as "nobody" and would mean the opposite).
    *
+   * `allowedHosts` names what a caller may call this serve — the `Host` header, not the origin — and is enforced
+   * ONLY where the port is unpublished loopback (`dev`, `start --bind 127.0.0.1` with no `--tunnel`). That is the
+   * one posture where "the port is the boundary" is the whole claim, and a web page can cross it by rebinding its
+   * own name to 127.0.0.1: the requests are then SAME-ORIGIN, so neither the cross-origin policy nor the JSON body
+   * gate applies. Unset allows `localhost`, `127.0.0.1` and `[::1]`; set it when something else reaches this serve
+   * by name — a reverse proxy passing the original `Host` (cloudflared, Caddy and Traefik all do), or a `.local`
+   * name you dial yourself. A published port does not enforce it at all: a foreign `Host` is normal there, and the
+   * port is already reachable without a browser.
+   *
    * `run` serves `POST /run` (and `GET /routines`), which run a routine this definition declares by name. It
    * follows `invoke` unless
    * set: turning the anonymous turn endpoint off must not leave a second one open behind it. Set it `true` for the
@@ -49,7 +59,7 @@ export interface FastagentConfig {
    * turn with the agent's full tool authority, so "my telegram bot is deployed" should not have to mean "and anyone
    * with the URL can drive it".
    */
-  http?: { port?: number; host?: string; cors?: string[]; invoke?: boolean; run?: boolean };
+  http?: { port?: number; host?: string; cors?: string[]; allowedHosts?: string[]; invoke?: boolean; run?: boolean };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
   selfSchedule?: boolean;
   /**
@@ -183,8 +193,8 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http" must be an object`);
   }
   for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke" && key !== "run") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke, run)`);
+    if (!["port", "host", "cors", "allowedHosts", "invoke", "run"].includes(key)) {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, allowedHosts, invoke, run)`);
     }
   }
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
@@ -194,6 +204,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http.run" must be a boolean`);
   }
   if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
+  if (c.http?.allowedHosts !== undefined) assertAllowedHosts(c.http.allowedHosts, `${path}: "http.allowedHosts"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
     throw new Error(`${path}: "http.port" must be an integer 0-65535`);
   }

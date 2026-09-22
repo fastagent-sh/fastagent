@@ -41,7 +41,13 @@ export interface StartOptions {
   input?: boolean;
 }
 
-type StartedService = AgentService & { stateRoot: string; bindHost?: string; port: number };
+type StartedService = AgentService & {
+  stateRoot: string;
+  bindHost?: string;
+  port: number;
+  /** `http.allowedHosts` — the names an unpublished loopback serve answers to (src/cli/serve.ts). */
+  allowedHosts?: readonly string[];
+};
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -84,7 +90,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   serveService(
     service,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host },
-    { tunnel, agentDir: service.agentDir, stateRoot: service.stateRoot },
+    {
+      tunnel,
+      agentDir: service.agentDir,
+      stateRoot: service.stateRoot,
+      ...(service.allowedHosts ? { allowedHosts: service.allowedHosts } : {}),
+    },
   );
 }
 
@@ -206,7 +217,13 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
         mountable,
         cliMountOptions(() => traced),
       ));
-  return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
+  return {
+    ...service,
+    stateRoot,
+    bindHost: config.http?.host,
+    port: config.http?.port ?? 8787,
+    ...(config.http?.allowedHosts ? { allowedHosts: config.http.allowedHosts } : {}),
+  };
 }
 
 async function maybeSeedAuth(authPath: string): Promise<void> {
