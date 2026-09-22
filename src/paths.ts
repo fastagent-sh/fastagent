@@ -101,7 +101,12 @@ function agentChildren(dir: string): { agents: string[]; unreadable: string[] } 
     try {
       if (hasConfig(child)) agents.push(child);
     } catch (e) {
-      unreadable.push(`${child} (${(e as NodeJS.ErrnoException).code ?? "unreadable"})`);
+      // PERMISSION ONLY. "Someone else's 0700 directory sits next to mine" is the normal case this carrying
+      // exists for, and it is the one an operator can act on. EIO, ELOOP, a non-errno throw: those are real
+      // failures with different fixes, and a scan has no business turning them into a line of prose.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM") throw e;
+      unreadable.push(entry.name);
     }
   }
   return { agents: agents.sort(), unreadable: unreadable.sort() };
@@ -112,8 +117,12 @@ function agentChildren(dir: string): { agents: string[]; unreadable: string[] } 
  * because aiming at an agent can only mean that agent.
  */
 export function agentsAt(dir: string): string[] {
-  const base = resolve(dir);
-  return hasConfig(base) ? [base] : agentChildren(base).agents;
+  return scanAgents(resolve(dir)).agents;
+}
+
+/** {@link agentsAt} plus what the scan could not look at — one readdir answering both questions. */
+function scanAgents(base: string): { agents: string[]; unreadable: string[] } {
+  return hasConfig(base) ? { agents: [base], unreadable: [] } : agentChildren(base);
 }
 
 /** WHICH agent is meant, when a directory holds several. */
@@ -211,23 +220,35 @@ export function resolvePlacement(dir: string, env: NodeJS.ProcessEnv = process.e
   const placement = findPlacement(dir, env);
   if (!placement) {
     const base = resolve(dir);
-    // `hasConfig(base)`: the agent is base itself (and FASTAGENT_AGENT named someone else), so its children are
-    // not candidates at all.
-    const unreadable = hasConfig(base) ? [] : agentChildren(base).unreadable;
-    const cannotLook =
-      unreadable.length === 0
-        ? undefined
-        : `${base} holds ${unreadable.length} director${unreadable.length === 1 ? "y" : "ies"} this process ` +
-          `cannot look into, so whether an agent is there is unknown: ${unreadable.join(", ")} — fix the ` +
-          `permissions and re-run`;
-    throw new Error(
-      placementDeadEnd(base, env) ??
-        cannotLook ??
-        `${base} is not a fastagent agent — no fastagent.config.ts here, and no directory holding one ` +
-          `directly inside; run \`fastagent init\` to scaffold one`,
-    );
+    throw new Error(placementDeadEnd(base, env) ?? `${base} is not a fastagent agent${noAgentHere(base)}`);
   }
   return placement;
+}
+
+/** At most this many names before the rest become a count — `/tmp` on a shared machine has plenty. */
+const LISTED_UNREADABLE = 3;
+
+/**
+ * The rest of the "not an agent" refusal: the way out, plus what could not be looked at.
+ *
+ * BOTH, never one or the other. `fastagent init` is the only line that tells the caller what to do, and a
+ * directory it cannot enter is exactly why that advice can be wrong (#571: scaffolding over a definition that
+ * is there but invisible). Substituting the second for the first sends anyone running in `/tmp`, or on a
+ * shared machine, to fix permissions on directories that were never theirs and hold no agent.
+ */
+function noAgentHere(base: string): string {
+  const { unreadable } = scanAgents(base);
+  const noConfig = ` — no fastagent.config.ts here, and no readable directory holding one directly inside`;
+  const scaffold = "run `fastagent init` to scaffold one";
+  if (unreadable.length === 0) return `${noConfig}; ${scaffold}`;
+  const shown = unreadable.slice(0, LISTED_UNREADABLE).join(", ");
+  const rest = unreadable.length - LISTED_UNREADABLE;
+  // The unknown FIRST, because it is the one thing that can make the advice wrong.
+  return (
+    `${noConfig}. ${unreadable.length} director${unreadable.length === 1 ? "y" : "ies"} here could not be ` +
+    `read (permission), so an agent may be inside one: ${shown}${rest > 0 ? `, +${rest} more` : ""}. Check ` +
+    `those first; ${scaffold} only if none of them holds an agent`
+  );
 }
 
 /** How to WRITE a path for someone standing in `cwd`. */
