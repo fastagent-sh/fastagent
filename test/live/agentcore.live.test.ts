@@ -23,13 +23,10 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { TEMPLATE_FILE, agentcoreName, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
 import { awsCli } from "../../src/deploy/agentcore/aws-cli.ts";
-import { CLI, aws, run } from "./env.ts";
+import { CLI, aws, awsAsRunner, run } from "./env.ts";
 
 /** The PRODUCTION classifier over the real CLI — `aws-cli.ts` decides there / gone / could not find out. */
-const cli = awsCli(async (args, opts) => {
-  const result = await aws(args);
-  return { ...result, stderr: opts?.captureStderr ? result.stderr : undefined };
-});
+const cli = awsCli(awsAsRunner);
 
 /** Generated artifact dirs, removed however the run ends: this probe writes a template per run and
  *  creates nothing in AWS, so the only thing it can leak is disk. */
@@ -116,6 +113,20 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
       "fastagent/live-probe-absent",
     ]);
     expect(repo, `describe-repositories on a missing repo no longer reads as absent`).toEqual({ absent: true });
+
+    // The LEAST regular of the three: an HTTP status and an English phrase rather than an exception name
+    // (`An error occurred (404) when calling the HeadBucket operation: Not Found`). The account suffix keeps
+    // this a bucket only we could own — a name someone else holds answers 403, which is a different question.
+    const identity = await aws(["sts", "get-caller-identity", "--output", "json"]);
+    expect(identity.code, `sts get-caller-identity failed: ${identity.stderr}`).toBe(0);
+    const account = (JSON.parse(identity.stdout) as { Account: string }).Account;
+    const bucket = await cli.present([
+      "s3api",
+      "head-bucket",
+      "--bucket",
+      deploymentBucketName(agentcoreName("fastagent-live-probe-absent"), account),
+    ]);
+    expect(bucket, `head-bucket on a missing bucket no longer reads as absent`).toEqual({ absent: true });
   });
 
   it("a failure that answers NOTHING does not read as 'no such stack'", async () => {

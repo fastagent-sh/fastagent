@@ -27,7 +27,7 @@
  *    nothing — so empty stdout is output we could not read, and {@link awsList} says so rather than reporting
  *    an empty list.
  *
- * WHAT DOES NOT GO THROUGH IT: a WRITE whose output an operator watches (`docker buildx build`, `s3 cp`,
+ * WHAT DOES NOT GO THROUGH IT: a call whose output an operator watches (`docker buildx build`, `s3 cp`,
  * `cloudformation deploy`) keeps its streams on the terminal — capturing a multi-minute arm64 build to replay it
  * at the end is a regression, and it is why `run.ts` can say "see the output above" where `destroy.ts` cannot.
  * That is a stdio choice, not a second classifier: those calls ask "did this work", never "is it there".
@@ -82,9 +82,10 @@ export function awsCli(aws: CliRunner): AwsCli {
     read,
     present: (args) => read(args, () => true as const),
     write: async (args) => {
-      // NOT captured: a write's output belongs on the terminal, where an operator watching a teardown can see
-      // CloudFormation working. Its stderr is captured because a refusal has to be quotable.
-      const { code, stderr } = await aws(args, { captureStderr: true });
+      // CAPTURED, both streams. Every write that goes through here is a short API call whose success output is
+      // noise (`stop-runtime-session` answers with its session JSON) — the long ones an operator watches are
+      // exactly the ones that do not go through this module, see the header.
+      const { code, stderr } = await aws(args, { capture: true, captureStderr: true });
       if (code === 0) return { done: true };
       if (ABSENT.test(stderr ?? "")) return { absent: true };
       return { refused: (stderr ?? "").trim().slice(0, SAID_LIMIT) };

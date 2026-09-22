@@ -122,8 +122,17 @@ async function probeRuntime(
 }
 
 /** Stack outputs (`describe-stacks --query "Stacks[0].Outputs"`) → { OutputKey: OutputValue }. */
-/** `Stacks[0].Outputs` as a map, or `undefined` when the document is not that list at all. */
+/**
+ * `Stacks[0].Outputs` as a map, or `undefined` when the document is not that list at all.
+ *
+ * `null` IS AN ANSWER, and an empty map is what it says: that is what JMESPath prints for a stack with no
+ * Outputs section, i.e. a template edited or generated without one. Reading it as unreadable blamed
+ * `aws cloudformation describe-stacks` — a command that had just succeeded — instead of letting the caller's
+ * own "no RuntimeArn, regenerate with --force" gate say what to do. Distinct from empty stdout, which is the
+ * CLI printing nothing at all (aws-cli.ts, point 4).
+ */
 export function pickStackOutputs(parsed: unknown): Record<string, string> | undefined {
+  if (parsed === null) return {};
   if (!Array.isArray(parsed)) return undefined;
   const out: Record<string, string> = {};
   for (const o of parsed as { OutputKey?: unknown; OutputValue?: unknown }[]) {
@@ -131,15 +140,6 @@ export function pickStackOutputs(parsed: unknown): Record<string, string> | unde
   }
   return out;
 }
-
-export function parseStackOutputs(stdout: string): Record<string, string> {
-  try {
-    return pickStackOutputs(JSON.parse(stdout)) ?? {};
-  } catch {
-    return {};
-  }
-}
-
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
 export function paramsFileContent(
   imageUri: string,

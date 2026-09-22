@@ -6,7 +6,7 @@ import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
   paramsFileContent,
-  parseStackOutputs,
+  pickStackOutputs,
 } from "../src/deploy/agentcore/run.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
@@ -634,13 +634,13 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
 });
 
 describe("deploy/agentcore/run: helpers", () => {
-  it("parseStackOutputs tolerates garbage and partial shapes", () => {
-    expect(parseStackOutputs("not json")).toEqual({});
-    // A stack with no Outputs answers `null`, which must read as "no RuntimeArn" (the driver gates).
-    expect(parseStackOutputs("null")).toEqual({});
-    expect(parseStackOutputs(JSON.stringify([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }]))).toEqual({
-      A: "1",
-    });
+  it("pickStackOutputs: `null` is an ANSWER (no Outputs section), anything else unreadable", () => {
+    // `--query Stacks[0].Outputs` prints `null` for a stack without an Outputs section, so reading it as
+    // unreadable blamed a describe-stacks that had just succeeded. Empty means the driver's own
+    // "no RuntimeArn output — was the template edited?" gate speaks, which is the one with a next action.
+    expect(pickStackOutputs(null)).toEqual({});
+    expect(pickStackOutputs("not a list")).toBeUndefined();
+    expect(pickStackOutputs([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }])).toEqual({ A: "1" });
   });
 
   it("paramsFileContent: maps env names, chunks a long auth seed in order, clears every unused chunk", () => {
