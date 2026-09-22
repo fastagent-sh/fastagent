@@ -6,7 +6,7 @@
  * be proven once; a rule with eleven has no enforcer at all.
  */
 import { describe, expect, it } from "vitest";
-import { awsCli, awsList } from "../src/deploy/agentcore/aws-cli.ts";
+import { awsCli, awsJson } from "../src/deploy/agentcore/aws-cli.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 /** Records the options each invocation was given — the flags are half of what this module owns. */
@@ -69,7 +69,7 @@ describe("awsCli", () => {
       expect(
         await cli.read(
           ["x"],
-          awsList<string>(() => []),
+          awsJson<string[]>(() => []),
         ),
         stdout,
       ).toEqual({ ok: [] });
@@ -83,7 +83,7 @@ describe("awsCli", () => {
     expect(
       await cli.read(
         ["x"],
-        awsList<string>(() => ["never"]),
+        awsJson<string[]>(() => ["never"]),
       ),
     ).toMatchObject({ unreadable: "(no output)" });
   });
@@ -95,7 +95,7 @@ describe("awsCli", () => {
     expect(
       await cli.read(
         ["x"],
-        awsList<string>(() => []),
+        awsJson<string[]>(() => []),
       ),
     ).toMatchObject({
       unreadable: "<html>proxy error</html>",

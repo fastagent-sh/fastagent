@@ -11,6 +11,9 @@ import type { CliRunner } from "../src/deploy/runner.ts";
 
 const ACCOUNT = "111122223333";
 const REGION = "ap-southeast-1";
+/** What the forwarder actually mints: the prefix plus `sha256(wakeId).slice(0, 16)` (forwarder.js). */
+const ALARM_A = "fa-probe-wk-0123456789abcdef";
+const ALARM_B = "fa-probe-wk-fedcba9876543210";
 /** What AgentCore names the runtime's own log group, which holds the agent's stdout. */
 const RUNTIME_PREFIX = "/aws/bedrock-agentcore/runtimes/probe-";
 const RUNTIME_GROUP = `${RUNTIME_PREFIX}xyz-DEFAULT`;
@@ -88,7 +91,7 @@ describe("destroy agentcore", () => {
     const aws = fakeAws({
       "scheduler list-schedules": {
         code: 0,
-        stdout: JSON.stringify({ Schedules: [{ Name: "fa-probe-wk-abc" }, { Name: "fa-probe-wk-def" }] }),
+        stdout: JSON.stringify({ Schedules: [{ Name: ALARM_A }, { Name: ALARM_B }] }),
       },
       "s3api list-object-versions": {
         code: 0,
@@ -186,7 +189,7 @@ describe("destroy agentcore", () => {
     aws.runner = async (args, opts) => {
       if (args[0] === "scheduler" && args[1] === "list-schedules") {
         listings += 1;
-        const schedules = listings === 1 ? ["fa-probe-wk-old"] : ["fa-probe-wk-old", "fa-probe-wk-new"];
+        const schedules = listings === 1 ? [ALARM_A] : [ALARM_A, ALARM_B];
         await inner(args, opts); // still recorded in calls
         return { code: 0, stdout: JSON.stringify({ Schedules: schedules.map((Name) => ({ Name })) }), stderr: "" };
       }
@@ -197,8 +200,8 @@ describe("destroy agentcore", () => {
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.removed.filter((r) => r.startsWith("wake alarm"))).toEqual([
-      "wake alarm fa-probe-wk-old",
-      "wake alarm fa-probe-wk-new", // and the old one is not deleted twice
+      `wake alarm ${ALARM_A}`,
+      `wake alarm ${ALARM_B}`, // and the first one is not deleted twice
     ]);
   });
 
@@ -344,6 +347,59 @@ describe("destroy agentcore", () => {
     expect(outcome.removed).toContain("repository fastagent/probe");
     // The forwarder's group is named exactly, so the delete answers what the listing could not.
     expect(outcome.removed).toContain("log group /aws/lambda/fastagent-probe-forwarder");
+  });
+
+  it("sweeps only alarms this deployment MINTED, not everything under the prefix", async () => {
+    // `fa-probe-wk-` is also the start of what a sibling workspace literally named `probe-wk-abc` produces
+    // (`fa-probe-wk-abc-wk-<hash>`). Taking that one would delete a LIVE deployment's pending wake-ups, and a
+    // wake-up is not re-created — the forwarder mints it once, from a running turn.
+    const aws = fakeAws({
+      "scheduler list-schedules": {
+        code: 0,
+        stdout: JSON.stringify({
+          Schedules: [{ Name: ALARM_A }, { Name: "fa-probe-wk-abc-wk-0123456789abcdef" }],
+        }),
+      },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.removed).toContain(`wake alarm ${ALARM_A}`);
+    expect(outcome.removed.join("\n")).not.toContain("probe-wk-abc");
+    expect(outcome.found).toContain(`1 wake alarm(s) under fa-probe-wk-`);
+  });
+
+  it("refuses the bucket when something arrived in it AFTER the inventory", async () => {
+    // The kept-bucket decision is made against the inventory; `purgeBucket` re-reads minutes later, and that
+    // second listing is what actually gets deleted. Nothing in the deployment can write there (the template
+    // grants no `s3:*`), so this is a person or another tool — and a batch delete is not reversible.
+    let reads = 0;
+    const aws = fakeAws();
+    const inner = aws.runner;
+    aws.runner = async (args, opts) => {
+      if (args[0] === "s3api" && args[1] === "list-object-versions") {
+        reads += 1;
+        await inner(args, opts);
+        const versions =
+          reads === 1
+            ? [{ Key: "forwarder/a.zip", VersionId: "v1" }]
+            : [
+                { Key: "forwarder/a.zip", VersionId: "v1" },
+                { Key: "someone-elses/data.json", VersionId: "v2" },
+              ];
+        return { code: 0, stdout: JSON.stringify({ Versions: versions }), stderr: "" };
+      }
+      return inner(args, opts);
+    };
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain("someone-elses/data.json");
+    expect(outcome.gate).toContain("appeared in it since the inventory");
+    expect(names(aws.calls)).not.toContain("s3api delete-objects");
+    expect(names(aws.calls)).not.toContain("s3api delete-bucket");
   });
 
   it("a read failure the delete REMEDIED is a warning, not a survivor", async () => {

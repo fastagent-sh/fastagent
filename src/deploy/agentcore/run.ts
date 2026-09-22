@@ -9,11 +9,13 @@ import {
   AUTH_SEED_CHUNK_SIZE,
   AUTH_SEED_MAX_CHUNKS,
   MOUNT,
-  type AgentcoreTopology,
+  agentcoreRepoName,
+  agentcoreStackName,
   cfnParamName,
+  deploymentBucketName,
   forwarderSource,
   ingressSessionId,
-  deploymentBucketName,
+  type AgentcoreTopology,
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
 import { missingValuesGate } from "../secrets.ts";
@@ -129,15 +131,19 @@ async function probeRuntime(
 }
 
 /** Stack outputs (`describe-stacks --query "Stacks[0].Outputs"`) → { OutputKey: OutputValue }. */
+/** `Stacks[0].Outputs` as a map, or `undefined` when the document is not that list at all. */
+export function pickStackOutputs(parsed: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(parsed)) return undefined;
+  const out: Record<string, string> = {};
+  for (const o of parsed as { OutputKey?: unknown; OutputValue?: unknown }[]) {
+    if (typeof o?.OutputKey === "string" && typeof o?.OutputValue === "string") out[o.OutputKey] = o.OutputValue;
+  }
+  return out;
+}
+
 export function parseStackOutputs(stdout: string): Record<string, string> {
   try {
-    const arr = JSON.parse(stdout) as { OutputKey?: unknown; OutputValue?: unknown }[];
-    if (!Array.isArray(arr)) return {};
-    const out: Record<string, string> = {};
-    for (const o of arr) {
-      if (typeof o?.OutputKey === "string" && typeof o?.OutputValue === "string") out[o.OutputKey] = o.OutputValue;
-    }
-    return out;
+    return pickStackOutputs(JSON.parse(stdout)) ?? {};
   } catch {
     return {};
   }
@@ -175,8 +181,8 @@ export async function deployAgentcoreRun(
   probe: { fetchImpl?: typeof fetch; timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<AgentcoreRunOutcome> {
   const gate = (g: string): AgentcoreRunOutcome => ({ ok: false, gate: g });
-  const stack = `fastagent-${plan.name}`;
-  const repo = `fastagent/${plan.name}`;
+  const stack = agentcoreStackName(plan.name);
+  const repo = agentcoreRepoName(plan.name);
 
   // 1.
   const identity = await aws(["sts", "get-caller-identity", "--output", "json"], { capture: true });

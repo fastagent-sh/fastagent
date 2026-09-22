@@ -1,8 +1,8 @@
 /** AgentCore log discovery + tailing. */
 import type { CliRunner } from "../runner.ts";
-import { awsCli, awsValue, parseLogGroupNames } from "./aws-cli.ts";
-import { forwarderLogGroup, runtimeLogGroupPrefix } from "./plan.ts";
-import { parseStackOutputs } from "./run.ts";
+import { awsCli, awsJson, parseLogGroupNames } from "./aws-cli.ts";
+import { agentcoreStackName, forwarderLogGroup, runtimeLogGroupPrefix } from "./plan.ts";
+import { pickStackOutputs } from "./run.ts";
 
 export type AgentcoreLogSource = "runtime" | "forwarder";
 
@@ -31,12 +31,12 @@ export async function tailAgentcoreLogs(
   announce: (message: string) => void = () => {},
 ): Promise<AgentcoreLogsOutcome> {
   const cli = awsCli(aws);
-  const stack = `fastagent-${plan.name}`;
+  const stack = agentcoreStackName(plan.name);
   // THROUGH THE ADJUDICATOR, like every other read of an AWS result in this directory: an exit code alone cannot
   // separate "deploy it first" from `AccessDeniedException`, and this file used to say the first for both.
   const outputsRead = await cli.read(
     ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
-    awsValue<Record<string, string>>((parsed) => parseStackOutputs(JSON.stringify(parsed))),
+    awsJson(pickStackOutputs),
   );
   if ("absent" in outputsRead) {
     return { ok: false, gate: `no AgentCore stack ${stack} in this account/region — deploy it first` };

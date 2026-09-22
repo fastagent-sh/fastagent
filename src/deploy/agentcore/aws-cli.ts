@@ -88,8 +88,8 @@ export function awsCli(aws: CliRunner): AwsCli {
 }
 
 /**
- * A LIST read, which is what most of these are: `pick` says which part of the parsed JSON it wants, and this
- * owns the two answers it must not produce.
+ * A JSON read: `pick` says what it wants out of the parsed document, and this owns the two answers it must not
+ * produce.
  *
  * NOT AN EXCEPTION — `JSON.parse` on output the CLI never promised threw
  * `SyntaxError: Unexpected end of JSON input` out of a command whose CLI has no catch-all, i.e. a Node stack
@@ -101,19 +101,11 @@ export function awsCli(aws: CliRunner): AwsCli {
  * into "there is nothing there" — a bucket reported clean because its listing was truncated is the same defect
  * class as a denial read as an absence, reached from the other side. Empty stdout needs no branch of its own:
  * `JSON.parse("")` throws like any other unreadable output, and {@link awsCli} names it `(no output)`.
+ *
+ * ONE FUNCTION for lists and single values, because they were the same three lines twice — in a module whose
+ * whole argument is that a rule with two implementations has none.
  */
-export function awsList<T>(pick: (parsed: unknown) => T[]): (stdout: string) => T[] | undefined {
-  return (stdout) => {
-    try {
-      return pick(JSON.parse(stdout));
-    } catch {
-      return undefined;
-    }
-  };
-}
-
-/** The same guard for a read whose answer is one value rather than a list. */
-export function awsValue<T>(pick: (parsed: unknown) => T | undefined): (stdout: string) => T | undefined {
+export function awsJson<T>(pick: (parsed: unknown) => T | undefined): (stdout: string) => T | undefined {
   return (stdout) => {
     try {
       return pick(JSON.parse(stdout));
@@ -124,7 +116,7 @@ export function awsValue<T>(pick: (parsed: unknown) => T | undefined): (stdout: 
 }
 
 /** `logGroups[].logGroupName` as names — the shape both `logs` and `destroy` ask CloudWatch for. */
-export const parseLogGroupNames = awsList<string>((parsed) => {
+export const parseLogGroupNames = awsJson<string[]>((parsed) => {
   if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === "string")) throw new Error("not a name list");
   return parsed as string[];
 });

@@ -139,7 +139,21 @@ export function toRuntimeName(basename: string): string {
 
 /** The forwarder Lambda's name — and therefore its log group, which AWS derives from it. */
 function forwarderFunctionName(name: string): string {
-  return `fastagent-${name}-forwarder`;
+  return `${agentcoreStackName(name)}-forwarder`;
+}
+
+/**
+ * The two names every part of this host derives from the deployment name, and the reason they are functions:
+ * a deploy CREATES them and a destroy LOOKS FOR them, so a drift between the two spellings is silent in the
+ * worst direction. `describe-repositories` on a mis-spelled repo answers `RepositoryNotFoundException`, which
+ * is "already gone" — the teardown would report nothing left to delete while the repository kept billing.
+ */
+export function agentcoreStackName(name: string): string {
+  return `fastagent-${name}`;
+}
+
+export function agentcoreRepoName(name: string): string {
+  return `fastagent/${name}`;
 }
 
 /**
@@ -611,8 +625,8 @@ function template(
 /** Compute the AgentCore deploy plan from the resolved definition. */
 export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const { name, channels } = input;
-  const stack = `fastagent-${name}`;
-  const repo = `fastagent/${name}`;
+  const stack = agentcoreStackName(name);
+  const repo = agentcoreRepoName(name);
   const prefix = input.agentPrefix;
 
   // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings.

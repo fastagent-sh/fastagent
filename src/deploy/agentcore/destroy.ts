@@ -22,8 +22,10 @@
  * retry needs.
  */
 import type { CliRunner } from "../runner.ts";
-import { awsCli, awsList, awsValue, parseLogGroupNames } from "./aws-cli.ts";
+import { awsCli, awsJson, parseLogGroupNames } from "./aws-cli.ts";
 import {
+  agentcoreRepoName,
+  agentcoreStackName,
   deploymentBucketName,
   forwarderLogGroup,
   runtimeLogGroupPrefix,
@@ -66,18 +68,18 @@ interface Version {
  * half-deleted deployment this command exists to finish. AWS says it with a document that simply has neither
  * key (measured: `{"RequestCharged": null, "Prefix": ""}`), which is why `??` here and not a special case.
  */
-const parseVersions = awsList<Version>((parsed) => {
+const parseVersions = awsJson<Version[]>((parsed) => {
   const { Versions, DeleteMarkers } = parsed as { Versions?: Version[]; DeleteMarkers?: Version[] };
   return [...(Versions ?? []), ...(DeleteMarkers ?? [])];
 });
 
-const parseScheduleNames = awsList<string>((parsed) =>
+const parseScheduleNames = awsJson<string[]>((parsed) =>
   ((parsed as { Schedules?: { Name?: unknown }[] }).Schedules ?? []).flatMap((s) =>
     typeof s.Name === "string" ? [s.Name] : [],
   ),
 );
 
-const parseAccountId = awsValue<string>((parsed) => {
+const parseAccountId = awsJson<string>((parsed) => {
   const { Account } = parsed as { Account?: unknown };
   return typeof Account === "string" ? Account : undefined;
 });
@@ -98,8 +100,8 @@ export async function destroyAgentcoreDeployment(
     removed: parts.removed ?? [],
     kept: parts.kept ?? [],
   });
-  const stack = `fastagent-${plan.name}`;
-  const repo = `fastagent/${plan.name}`;
+  const stack = agentcoreStackName(plan.name);
+  const repo = agentcoreRepoName(plan.name);
 
   const identity = await aws.read(["sts", "get-caller-identity", "--output", "json"], parseAccountId);
   if (!("ok" in identity)) {
@@ -140,7 +142,13 @@ export async function destroyAgentcoreDeployment(
     parseScheduleNames,
   );
   if ("unreadable" in listed) return gate(`could not list wake alarms under ${prefix}: ${listed.unreadable}`);
-  const alarms = "ok" in listed ? listed.ok : [];
+  // THE FULL SHAPE, not just the prefix. The forwarder mints every alarm as prefix + sha256(wakeId)[:16]
+  // (plan.ts / forwarder.js), and a prefix alone is ambiguous between sibling agents: a workspace literally
+  // named `<name>-wk-abc` produces `fa-<name>-wk-abc-wk-<hash>`, which starts with THIS deployment's prefix.
+  // Deleting it would take a live deployment's pending wake-ups, and a wake-up is not re-created.
+  const isMintedAlarm = (alarm: string) =>
+    alarm.startsWith(prefix) && /^[0-9a-f]{16}$/.test(alarm.slice(prefix.length));
+  const alarms = ("ok" in listed ? listed.ok : []).filter(isMintedAlarm);
 
   // A GATE for these three, because they decide whether the REPORT is true. `delete-stack` answers 0 for a
   // stack that does not exist, so "deleted: stack X" for a stack nobody deployed — or "nothing left to delete"
@@ -222,10 +230,11 @@ export async function destroyAgentcoreDeployment(
     );
   }
   if ("unreadable" in runtimeRead) {
-    // This one carries a suffix only AWS knows, so it survives and the operator is told which prefix to finish.
+    // A failure in BOTH modes — this one carries a suffix only AWS knows, so nothing downstream can address it
+    // — but an inventory deletes nothing, so saying it "was NOT deleted" there names the wrong problem.
     failures.push(
       `listing log groups under ${runtimePrefix} (${runtimeRead.unreadable}) — the runtime's log group holds ` +
-        `the agent's stdout and was NOT deleted`,
+        (plan.run ? `the agent's stdout and was NOT deleted` : `the agent's stdout and cannot be named`),
     );
   }
   for (const warning of warnings) announce(warning);
@@ -313,7 +322,7 @@ export async function destroyAgentcoreDeployment(
     if ("unreadable" in after) {
       failures.push(`re-listing wake alarms under ${prefix}: ${after.unreadable}`);
     } else {
-      await sweepAlarms("ok" in after ? after.ok : []);
+      await sweepAlarms(("ok" in after ? after.ok : []).filter(isMintedAlarm));
     }
   }
 
@@ -351,6 +360,17 @@ async function purgeBucket(
   if ("absent" in listed) return; // gone between the inventory and now: the goal state
   if ("unreadable" in listed) {
     failures.push(`bucket ${bucket}: could not list its objects, so it was left in place (${listed.unreadable})`);
+    return;
+  }
+  // THE SAME RULE ON WHAT IT JUST READ. The decision to delete this bucket was made against the inventory,
+  // minutes of `stack-delete-complete` ago, and this listing is the one whose contents actually get deleted.
+  // Nothing in the deployment can write here in that window (the template grants the runtime and the forwarder
+  // no `s3:*`), so this catches a person or another tool — and a batch delete is not reversible.
+  const foreign = [...new Set(listed.ok.map((v) => v.Key).filter((key) => !key.startsWith("forwarder/")))];
+  if (foreign.length > 0) {
+    failures.push(
+      `bucket ${bucket} — ${foreign.join(", ")} appeared in it since the inventory, so it was left in place`,
+    );
     return;
   }
   for (let at = 0; at < listed.ok.length; at += DELETE_BATCH) {
