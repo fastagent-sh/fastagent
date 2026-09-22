@@ -22,6 +22,10 @@ import { makeFaux, sentTools } from "./faux.ts";
 /** An extension registering one tool whose presence proves the module was loaded and bound. */
 const markerExtension = (toolName: string) => `
 export default async function (api) {
+  api.registerCommand("marker", {
+    description: "proves a command was registered",
+    handler: async () => {},
+  });
   api.registerTool({
     name: ${JSON.stringify(toolName)},
     label: ${JSON.stringify(toolName)},
@@ -128,6 +132,26 @@ describe("definition: serving does NOT run extensions, and says so", () => {
     const offered = await toolNamesOfferedBy(dir);
     expect(offered).not.toContain("extension_marker");
     expect(offered.length).toBeGreaterThan(0); // the agent still serves, with its own tools
+  });
+
+  it("does not let an extension COMMAND swallow a prompt — so `commands()` is the whole `/` menu", async () => {
+    // pi resolves `/name` against registered extension commands BEFORE anything else, and a hit returns from
+    // `prompt()` without running the turn. Serving loads no extensions, so that cannot happen here — which is
+    // what lets a client bind its `/` menu to `commands()` and nothing else: no name runs but goes unlisted.
+    const dir = await agentDirWith({ "extensions/marker.ts": markerExtension("extension_marker") });
+    const { faux } = makeFaux();
+    let sent = "";
+    faux.setResponses([
+      (context) => {
+        sent = JSON.stringify(context.messages.filter((message) => message.role === "user"));
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+    const { text } = await collect(agent.invoke({ session: "s" }, { text: "/marker do it" }));
+
+    expect(sent, "the extension command consumed the prompt").toContain("/marker do it");
+    expect(text).toBe("ok"); // a real turn ran, rather than the silent return a command hit produces
   });
 
   it("warns that they were skipped, rather than dropping them in silence", async () => {

@@ -313,6 +313,20 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       sessionId,
       recordActivations: true,
     });
+    // THE ONLY LISTENER for a fault pi reports nowhere else: `/skill:<name>` is expanded by reading `filePath` at
+    // prompt time, and when that read fails pi raises `skill_expansion` on the extension error channel and sends
+    // the line to the model unexpanded. Without this the turn is silent about it — the answer just ignores a skill
+    // the caller named. The list can outlive the file: it is refreshed per invoke (`readDefinition` above), so a
+    // steer or follow-up inside a run, or a definition replaced under a running container
+    // (`src/deploy/workspace.ts`), reaches exactly that state.
+    //
+    // Serving only. It subscribes on THIS session's `ExtensionRunner` (pi's `onError` adds to a per-runner set),
+    // but `bindExtensions` also re-emits `session_start` — a no-op here, where no extension is loaded at all, and
+    // not something to hand `chat`, whose extensions do run.
+    await session.bindExtensions({
+      onError: ({ extensionPath, event, error }) =>
+        log.warn(`[fastagent] session ${sessionId}: ${event} failed for ${extensionPath}: ${error}`),
+    });
     return session;
   };
 }
