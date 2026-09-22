@@ -16,7 +16,9 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
-import { ingressSessionId, deploymentBucketName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
+import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deploy/agentcore/destroy.ts";
+import { ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
+import type { CliRunner } from "../../src/deploy/runner.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
 export function requireEnv(name: string, hint: string): string {
@@ -141,6 +143,15 @@ export async function aws(args: string[]): Promise<{ code: number; stdout: strin
   }
 }
 
+/**
+ * {@link aws} as the product's {@link CliRunner}. The two differ only in what they hand back: this one always
+ * captures, since a probe has nowhere to stream to.
+ */
+const awsAsRunner: CliRunner = async (args) => {
+  const { code, stdout, stderr } = await aws(args);
+  return { code, stdout, stderr };
+};
+
 /** POST one turn to a deployed agent and return its SSE events (the built-in `/invoke`, mounted
  *  because no channel is declared). Same reduction test/http.test.ts uses; `JSON.parse` is
  *  deliberately unguarded, since a payload that is not an event is a broken wire format, not a case to
@@ -180,69 +191,21 @@ export const answerOf = (events: AgentEvent[]): string =>
   events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
 
 /**
- * Everything one AgentCore probe created, destroyed in the order the dependencies demand — ONE copy,
- * shared by every AgentCore probe, because each step is load-bearing in a way that is invisible when
- * it is wrong. What survives a silent teardown is a Bedrock runtime, a Lambda with a public Function
- * URL, an image in ECR and a bucket holding the forwarder package, all of them billing.
+ * Everything one AgentCore probe created, torn down BY THE PRODUCT — `fastagent destroy agentcore --run`,
+ * through the same function the CLI calls.
  *
- * WAKE ALARMS FIRST, while the stack still stands. The forwarder creates them at RUNTIME with the SDK
- * into the `default` Scheduler group, so they are not stack resources and `delete-stack` does not take
- * them; `ActionAfterCompletion: DELETE` only runs once a schedule FIRES, so anything killed between
- * the wake call and the fire leaves one pending. After `delete-stack` its target is gone and it
- * retries into nothing for weeks — the orphan shape this account actually grew. Swept for EVERY
- * fixture, not only the one that asks for wake-ups: one line (`selfSchedule`, a channel, a schedule)
- * turns the forwarder on, and a teardown that had to be extended first would leak before it was.
- *
- * The artifact bucket and the repository are created OUTSIDE the stack (like the ECR repo), which
- * makes them a probe's own job. Every deletion is ATTEMPTED even after an earlier one fails, and every
- * failure is collected into one throw: "already gone" is the goal state, not a failure.
+ * This used to be the probe's own copy of the sequence, and the ordering in it is load-bearing in ways that are
+ * invisible when they are wrong (wake alarms while the stack still stands, a bucket emptied before it is
+ * deleted). A teardown only the probes owned is one that every non-probe deployment leaked past; the account
+ * this repo is developed against grew five orphaned buckets that way. Calling the product means the teardown
+ * path is exercised on every probe run instead of only by hand.
  */
-export async function destroyAgentcoreDeployment(name: string, account: string): Promise<void> {
-  const stack = `fastagent-${name}`;
-  const repo = `fastagent/${name}`;
-  const errors: unknown[] = [];
-  const attempt = async (label: string, args: string[]) => {
-    const { code, stderr } = await aws(args);
-    if (code !== 0 && !/does not exist|NotFound|NoSuchBucket/i.test(stderr)) {
-      errors.push(new Error(`${label} failed: ${stderr.slice(0, 500)}`));
-    }
-  };
-
-  // The forwarder names every alarm `WAKE_PREFIX + sha256(wakeId)[:16]` (plan.ts). The prefix is all a
-  // probe can predict — the id is minted inside the container.
-  const alarmPrefix = `fa-${name}-wk-`;
-  const pending = await aws(["scheduler", "list-schedules", "--name-prefix", alarmPrefix, "--output", "json"]);
-  if (pending.code === 0) {
-    for (const alarm of (JSON.parse(pending.stdout) as { Schedules?: { Name: string }[] }).Schedules ?? []) {
-      await attempt(`scheduler delete-schedule ${alarm.Name}`, ["scheduler", "delete-schedule", "--name", alarm.Name]);
-    }
-  } else {
-    // Not fatal to the rest of teardown, but never silent: an unreadable list is indistinguishable from
-    // an empty one, and the difference is whether something is still out there firing.
-    errors.push(new Error(`could not list wake alarms under ${alarmPrefix}: ${pending.stderr.slice(0, 300)}`));
-  }
-
-  await attempt("delete-stack", ["cloudformation", "delete-stack", "--stack-name", stack]);
-  await attempt("wait stack-delete-complete", [
-    "cloudformation",
-    "wait",
-    "stack-delete-complete",
-    "--stack-name",
-    stack,
-  ]);
-  if (account) {
-    const bucket = deploymentBucketName(name, account);
-    await attempt("s3 rb", ["s3", "rb", `s3://${bucket}`, "--force"]);
-  }
-  await attempt("ecr delete-repository", ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
-  // OUTLIVES THE STACK. AWS creates a Lambda's log group on first write, so it is not a stack resource
-  // and `delete-stack` leaves it — with a 14-day retention policy the deploy applied, i.e. holding data
-  // the probe produced. Every forwarder-bearing fixture leaks one per run without this.
-  await attempt("logs delete-log-group", ["logs", "delete-log-group", "--log-group-name", forwarderLogGroup(name)]);
-
-  if (errors.length > 0) {
-    throw new AggregateError(errors, `teardown failed — check stack ${stack}, bucket fa-${name}-*, repo ${repo}`);
-  }
+export async function destroyAgentcoreDeployment(name: string): Promise<void> {
+  const outcome = await destroyDeployment({ name, run: true }, awsAsRunner);
+  if (!outcome.ok) throw new Error(`teardown failed: ${outcome.gate}`);
+  // A KEPT resource is still billing. The product keeps a bucket holding anything but the forwarder's zips,
+  // which for a probe means the deploy wrote something no version of it should have.
+  if (outcome.kept.length > 0) throw new Error(`teardown kept resources: ${outcome.kept.join("; ")}`);
 }
 
 /**

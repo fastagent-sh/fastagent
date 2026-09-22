@@ -65,10 +65,10 @@ const ROUTINE = "tick";
 const CRON = "* * * * *";
 
 let workspace = "";
-let account = "";
 
 beforeAll(async () => {
-  account = await requireAwsAccount(45);
+  // Gate on the credential's remaining lifetime before spending a deploy on it.
+  await requireAwsAccount(45);
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
   workspace = join(tmpdir(), NAME);
@@ -102,7 +102,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try {
-    await destroyAgentcoreDeployment(NAME, account);
+    await destroyAgentcoreDeployment(NAME);
   } finally {
     if (workspace) await rm(workspace, { recursive: true, force: true });
   }

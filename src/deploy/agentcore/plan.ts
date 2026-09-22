@@ -92,6 +92,14 @@ export const MAX_LIFETIME_SECONDS = 28800;
 
 export const FORWARDER_FILE = "lambda/index.js";
 
+/**
+ * Where the forwarder puts the one-shot schedule for a wake-up. The id inside the name is minted in the
+ * container, so this prefix is the only handle anything outside has on the alarms a deployment has pending.
+ */
+export function wakeAlarmPrefix(name: string): string {
+  return `fa-${name}-wk-`;
+}
+
 /** Account-suffixed artifact bucket for S3's global namespace. */
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
@@ -131,7 +139,35 @@ export function toRuntimeName(basename: string): string {
 
 /** The forwarder Lambda's name — and therefore its log group, which AWS derives from it. */
 function forwarderFunctionName(name: string): string {
-  return `fastagent-${name}-forwarder`;
+  return `${agentcoreStackName(name)}-forwarder`;
+}
+
+/**
+ * The two names every part of this host derives from the deployment name, and the reason they are functions:
+ * a deploy CREATES them and a destroy LOOKS FOR them, so a drift between the two spellings is silent in the
+ * worst direction. `describe-repositories` on a mis-spelled repo answers `RepositoryNotFoundException`, which
+ * is "already gone" — the teardown would report nothing left to delete while the repository kept billing.
+ */
+export function agentcoreStackName(name: string): string {
+  return `fastagent-${name}`;
+}
+
+export function agentcoreRepoName(name: string): string {
+  return `fastagent/${name}`;
+}
+
+/**
+ * Where a RUNTIME's logs land, by the identifier the caller happens to hold: `fastagent logs` knows the runtime id
+ * from the stack's `RuntimeArn`, `destroy` knows only the {@link toRuntimeName} the template deployed — and AgentCore
+ * names the id `<AgentRuntimeName>-<suffix>`, so the same prefix serves both. MEASURED (ap-southeast-1, 2026-09-22):
+ * a deploy of `destroy-probe-yehg` produced `/aws/bedrock-agentcore/runtimes/destroy_probe_yehg-6oR1zq7pBZ-DEFAULT`.
+ *
+ * ONE OWNER because of what the callers do with it: `logs` picks a group to tail, `destroy` DELETES everything the
+ * prefix matches. The trailing `-` is what keeps `probe-` off `probe2-…`, and a second hand-spelled copy of this
+ * string is a copy that can lose it.
+ */
+export function runtimeLogGroupPrefix(runtimeOrName: string): string {
+  return `/aws/bedrock-agentcore/runtimes/${runtimeOrName}-`;
 }
 
 /**
@@ -425,7 +461,7 @@ function template(
         ? [
             `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
             `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule]`,
-            `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/fa-${input.name}-wk-*`,
+            `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
             `              - Effect: Allow # hand the poke schedules their invoke role`,
             `                Action: iam:PassRole`,
             `                Resource: !GetAtt WakeSchedulerRole.Arn`,
@@ -460,7 +496,7 @@ function template(
         ? [
             `          WAKE_SECRET: !Ref FastagentWakeSecret`,
             `          WAKE_ROLE_ARN: !GetAtt WakeSchedulerRole.Arn`,
-            `          WAKE_PREFIX: fa-${input.name}-wk-`,
+            `          WAKE_PREFIX: ${wakeAlarmPrefix(input.name)}`,
           ]
         : []),
       `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
@@ -589,8 +625,8 @@ function template(
 /** Compute the AgentCore deploy plan from the resolved definition. */
 export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const { name, channels } = input;
-  const stack = `fastagent-${name}`;
-  const repo = `fastagent/${name}`;
+  const stack = agentcoreStackName(name);
+  const repo = agentcoreRepoName(name);
   const prefix = input.agentPrefix;
 
   // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings.

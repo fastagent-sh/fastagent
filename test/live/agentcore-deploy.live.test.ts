@@ -59,11 +59,11 @@ const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
 
 let workspace = "";
-let account = "";
 
 beforeAll(async () => {
   // 45 = this probe's own declared budgets, 30 minutes for the deploy plus 15 for teardown.
-  account = await requireAwsAccount(45);
+  // Gate on the credential's remaining lifetime before spending a deploy on it.
+  await requireAwsAccount(45);
 
   // Registered BEFORE anything is created, so the workflow sweep can still find these resources if
   // this process is killed mid-deploy (a job timeout, a cancelled run) and afterAll never runs. The
@@ -93,7 +93,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // `finally`, not a catch: the AWS failure still throws, and the temp directory still goes.
   try {
-    await destroyAgentcoreDeployment(NAME, account);
+    await destroyAgentcoreDeployment(NAME);
   } finally {
     if (workspace) await rm(workspace, { recursive: true, force: true });
   }

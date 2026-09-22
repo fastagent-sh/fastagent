@@ -203,6 +203,34 @@ AWS creates each log group on first use. Before the first Runtime invocation or 
 aws logs put-retention-policy --log-group-name <the group the command above resolves> --retention-in-days 14
 ```
 
+### Tearing it down
+
+```bash
+fastagent destroy agentcore        # what is out there; deletes nothing
+fastagent destroy agentcore --run  # delete it
+```
+
+`aws cloudformation delete-stack` is not enough, which is why this is a command. The S3 artifact bucket and
+the ECR repository have to exist **before** the stack that reads the forwarder zip and the image from them, so
+they are not stack resources. Both log groups are created by AWS on first write, so no template owns them
+(the runtime's holds every turn the agent ever printed). And a wake alarm is minted at runtime by the
+container, so nothing in the template lists it — after the Lambda is gone it retries into nothing for weeks.
+
+It prints the account and **region** it is working in before it reads anything: every resource here is regional,
+and a profile pointing somewhere other than the deploy's region would otherwise answer "nothing in this
+account" — which reads as "already clean". A read it cannot complete (denied, throttled, expired token) stops
+the command instead of being taken for absence.
+
+Two boundaries worth knowing before you run it:
+
+- **The session storage goes with the stack.** There is no way to delete this deployment and keep the
+  conversations. A bucket holding anything but the forwarder's zips is the one thing the command keeps, and it
+  tells you what is in it.
+- **Webhook registrations are NOT removed.** `deploy --run` registered your Function URL with Telegram /
+  Slack / Feishu, and destroy only touches AWS. Point them somewhere else, or clear them — for Telegram,
+  `curl "https://api.telegram.org/bot<token>/deleteWebhook"` — otherwise the platform keeps delivering to a
+  URL that no longer answers.
+
 AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed after the configured idle timeout — 3 minutes by default). The second half is a hard constraint on the agent, not just on the host: a turn here cannot require the previous turn's process, which is SPEC MUST 6 — see [conformance levels](design/conformance-levels.md). The stack therefore carries:
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
