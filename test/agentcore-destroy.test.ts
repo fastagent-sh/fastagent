@@ -244,20 +244,6 @@ describe("destroy agentcore", () => {
     expect(names(aws.calls)).toContain("logs delete-log-group");
   });
 
-  it("a log-group listing it cannot read is a gate, not a bare SyntaxError", async () => {
-    // `output = text` in the caller's AWS config is all it takes. The parse is guarded for that reason, and the
-    // failure has to reach the operator as one actionable line rather than a stack trace through the CLI.
-    const aws = fakeAws({
-      "logs describe-log-groups": { code: 0, stdout: "/aws/lambda/fastagent-probe-forwarder\n" },
-    });
-    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
-
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.gate).toContain("could not list log groups under /aws/lambda/fastagent-probe-forwarder");
-    expect(names(aws.calls)).not.toContain("cloudformation delete-stack");
-  });
-
   it("an EMPTY listing is an empty list, not a crash: the AWS CLI prints nothing for a paginated no-result", async () => {
     // Not hypothetical. `create-bucket` happens before the upload into it, and a previous destroy that got
     // through `delete-objects` and failed on `delete-bucket` leaves an empty bucket — which is the half-deleted
@@ -321,6 +307,31 @@ describe("destroy agentcore", () => {
     expect(outcome.found).toContain(`log group ${RUNTIME_GROUP}`);
     expect(outcome.removed).toContain(`log group ${RUNTIME_GROUP}`);
     expect(names(aws.calls)).not.toContain("cloudformation delete-stack"); // nothing to delete
+  });
+
+  it("a log-group listing it cannot read does NOT stop the teardown, but is reported", async () => {
+    // `output = text` in the caller's AWS config is all it takes, and a role without `logs:DescribeLogGroups`
+    // or one `ThrottlingException` has the same shape. These two reads only supply NAMES — gating on them
+    // turned the command into a permanent no-op with a Bedrock runtime and a Lambda billing behind it.
+    const aws = fakeAws({
+      "logs describe-log-groups": { code: 0, stdout: "/aws/lambda/fastagent-probe-forwarder\n" },
+      [`logs describe-log-groups --log-group-name-prefix ${RUNTIME_PREFIX} `]: {
+        code: 254,
+        stderr: "AccessDeniedException: not authorized to perform logs:DescribeLogGroups",
+      },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain("AccessDeniedException");
+    expect(outcome.gate).toContain("was NOT deleted");
+    // EVERYTHING ELSE STILL WENT, which is the point.
+    expect(outcome.removed).toContain("stack fastagent-probe");
+    expect(outcome.removed).toContain(`bucket fa-probe-${ACCOUNT}`);
+    expect(outcome.removed).toContain("repository fastagent/probe");
+    // The forwarder's group is named exactly, so the delete answers what the listing could not.
+    expect(outcome.removed).toContain("log group /aws/lambda/fastagent-probe-forwarder");
   });
 
   it("reports nothing for a deployment that is not there, and claims no deletion", async () => {
@@ -415,7 +426,12 @@ describe("destroy agentcore", () => {
 
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
+    // AND IT QUOTES AWS. `captureStderr` means none of this reached the terminal, so a gate ending in "see the
+    // output above" pointed at a blank screen — while the text is the only thing separating a denial from an
+    // absence, which is the distinction this whole command is built on.
     expect(outcome.gate).toContain("could not tell whether stack fastagent-probe exists in ap-southeast-1");
+    expect(outcome.gate).toContain("AccessDeniedException");
+    expect(outcome.gate).not.toContain("see the output above");
     expect(aws.calls.flat().filter((a) => a.startsWith("delete"))).toEqual([]);
 
     // Same rule for the other two reads, so the answer cannot depend on which one is denied.
@@ -432,6 +448,13 @@ describe("destroy agentcore", () => {
     const aws = fakeAws();
     await destroyAgentcoreDeployment({ name: "probe", run: false }, aws.runner, (m) => said.push(m));
     expect(said.join("\n")).toContain(`account ${ACCOUNT}, region ${REGION}`);
+
+    // BEFORE THE READS whose gates name them: an operator pointed at the wrong profile has to see where they
+    // are on the line above the failure, which is what `docs/deploy.md` promises.
+    const order = fakeAws({ "scheduler list-schedules": { code: 254, stderr: "AccessDeniedException" } });
+    const beforeGate: string[] = [];
+    await destroyAgentcoreDeployment({ name: "probe", run: true }, order.runner, (m) => beforeGate.push(m));
+    expect(beforeGate.join("\n")).toContain(`region ${REGION}`);
 
     const noRegion = fakeAws({ "configure get region": { code: 0, stdout: "" } });
     const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, noRegion.runner);

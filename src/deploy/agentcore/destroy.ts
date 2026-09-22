@@ -30,11 +30,11 @@ export type AgentcoreDestroyOutcome =
   /** `found` is what the reads saw; `removed` what the writes did; `kept` what this command refused to delete. */
   | { ok: true; found: string[]; removed: string[]; kept: string[] }
   /**
-   * `removed` and `kept` ride along: a half-finished teardown is exactly when "what is already gone" matters
-   * most, and the kept bucket is this command's only deliberate decision — it must not vanish from the report
-   * because something else failed.
+   * The same three ride along on a failure: a half-finished teardown is exactly when "what is out there" and
+   * "what is already gone" matter most, and the kept bucket is this command's only deliberate decision — none
+   * of them may vanish from the report because something else failed.
    */
-  | { ok: false; gate: string; removed: string[]; kept: string[] };
+  | { ok: false; gate: string; found: string[]; removed: string[]; kept: string[] };
 
 /** An AWS CLI failure that means the thing is already gone, which is what a teardown is trying to achieve. */
 const ABSENT = /does not exist|NotFound|not found|NoSuchBucket|NoSuchEntity|ResourceNotFoundException/i;
@@ -93,11 +93,15 @@ export async function destroyAgentcoreDeployment(
   aws: CliRunner,
   announce: (message: string) => void = () => {},
 ): Promise<AgentcoreDestroyOutcome> {
-  const gate = (g: string, removed: string[] = [], kept: string[] = []): AgentcoreDestroyOutcome => ({
+  const gate = (
+    g: string,
+    parts: { found?: string[]; removed?: string[]; kept?: string[] } = {},
+  ): AgentcoreDestroyOutcome => ({
     ok: false,
     gate: g,
-    removed,
-    kept,
+    found: parts.found ?? [],
+    removed: parts.removed ?? [],
+    kept: parts.kept ?? [],
   });
   const stack = `fastagent-${plan.name}`;
   const repo = `fastagent/${plan.name}`;
@@ -122,7 +126,9 @@ export async function destroyAgentcoreDeployment(
     if (typeof parsed.Account !== "string") throw new Error("no Account");
     account = parsed.Account;
   } catch {
-    return gate("could not read the account id from `aws sts get-caller-identity` — see the output above");
+    return gate(
+      `could not read the account id from \`aws sts get-caller-identity\`: ${identity.stdout.trim().slice(0, 300)}`,
+    );
   }
   const bucket = deploymentBucketName(plan.name, account);
 
@@ -134,6 +140,10 @@ export async function destroyAgentcoreDeployment(
   if (!region) {
     return gate("no AWS region configured — set AWS_REGION (or `aws configure set region <region>`), then re-run");
   }
+
+  // BEFORE THE READS, not after: every gate below names the account or the region, and the operator pointed at
+  // the wrong profile has to be able to see that from the line above the failure.
+  announce(`account ${account}, region ${region}`);
 
   // The alarm ids are minted inside the container, so the PREFIX is all we can ask for. An unreadable list is
   // indistinguishable from an empty one, and the difference is whether something out there is still firing.
@@ -147,27 +157,31 @@ export async function destroyAgentcoreDeployment(
   }
   const alarms = parseScheduleNames(listed.stdout);
   if (alarms === undefined) {
-    return gate(`could not read the wake alarm list under ${prefix} — see the output above`);
+    return gate(`could not read the wake alarm list under ${prefix}: ${listed.stdout.trim().slice(0, 300)}`);
   }
 
   // WHAT IS ACTUALLY THERE, read before anything is deleted. Not for safety — the deletes tolerate a miss — but
   // because this report is the command's entire output, and `aws cloudformation delete-stack` answers 0 for a
   // stack that does not exist. Reporting "deleted: stack X" for a stack nobody deployed is the false signal this
   // repo refuses; the reads are also what the inventory (`destroy` without `--run`) prints.
-  // `captureStderr` on every one of these: "does not exist" is the EXPECTED answer here, and letting the AWS
-  // CLI print it makes a clean inventory look like three failures.
+  // `captureStderr` ON EVERY ONE OF THESE, for two reasons that pull the same way: "does not exist" is the
+  // EXPECTED answer here and printing it makes a clean inventory look like three failures, and the text is the
+  // only thing that separates a denial from an absence. It also means NOTHING reaches the terminal — so a gate
+  // that said "see the output above" pointed at a blank screen, and each one quotes AWS instead.
   // AND `undefined` FOR "I COULD NOT TELL". An exit code alone cannot separate `does not exist` from
   // `AccessDeniedException`, `ThrottlingException` or `ExpiredToken` — and reading a denial as absence is how
   // this command reports "nothing left to delete" over a runtime that is still billing. `ABSENT` is the one
   // place that decides what "already gone" looks like; the alarm and log-group listings beside this already
   // gate on unreadable, and these now match.
-  const exists = async (args: string[]): Promise<boolean | undefined> => {
-    const { code, stderr } = await aws(args, { capture: true, captureStderr: true });
-    return code === 0 ? true : ABSENT.test(stderr ?? "") ? false : undefined;
+  const exists = async (args: string[]): Promise<{ present: boolean | undefined; said: string }> => {
+    const { code, stdout, stderr } = await aws(args, { capture: true, captureStderr: true });
+    const said = ((stderr ?? "").trim() || stdout.trim()).slice(0, 300);
+    return { present: code === 0 ? true : ABSENT.test(stderr ?? "") ? false : undefined, said };
   };
-  const stackExists = await exists(["cloudformation", "describe-stacks", "--stack-name", stack, "--output", "json"]);
+  const stackProbe = await exists(["cloudformation", "describe-stacks", "--stack-name", stack, "--output", "json"]);
+  const stackExists = stackProbe.present;
   if (stackExists === undefined) {
-    return gate(`could not tell whether stack ${stack} exists in ${region} — see the output above`);
+    return gate(`could not tell whether stack ${stack} exists in ${region}: ${stackProbe.said}`);
   }
   const versions = await aws(["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"], {
     capture: true,
@@ -175,20 +189,23 @@ export async function destroyAgentcoreDeployment(
   });
   const bucketExists = versions.code === 0;
   if (!bucketExists && !ABSENT.test(versions.stderr ?? "")) {
-    return gate(`could not tell whether bucket ${bucket} exists — see the output above`);
+    return gate(
+      `could not tell whether bucket ${bucket} exists in ${region}: ${(versions.stderr ?? "").trim().slice(0, 300)}`,
+    );
   }
   const contents = bucketExists ? parseVersions(versions.stdout) : [];
   if (contents === undefined) {
-    return gate(`could not read the object listing for bucket ${bucket} — see the output above`);
+    return gate(`could not read the object listing for bucket ${bucket}: ${versions.stdout.trim().slice(0, 300)}`);
   }
   const keys = contents.map((v) => v.Key);
   // A bucket that holds anything but the forwarder's zips is NOT ours to delete. Today's deploy puts nothing
   // else there (agent state lives on the AgentCore storage mount), but an older one kept `state/snapshot.json.gz`
   // in it, and in this account those snapshots were the only copy left of two retired agents.
   const foreign = [...new Set(keys.filter((key) => !key.startsWith("forwarder/")))];
-  const repoExists = await exists(["ecr", "describe-repositories", "--repository-names", repo, "--output", "json"]);
+  const repoProbe = await exists(["ecr", "describe-repositories", "--repository-names", repo, "--output", "json"]);
+  const repoExists = repoProbe.present;
   if (repoExists === undefined) {
-    return gate(`could not tell whether repository ${repo} exists in ${region} — see the output above`);
+    return gate(`could not tell whether repository ${repo} exists in ${region}: ${repoProbe.said}`);
   }
 
   // BOTH LOG GROUPS, and the runtime's has to be resolved while the stack still stands: its name carries the
@@ -196,7 +213,7 @@ export async function destroyAgentcoreDeployment(
   // resource — same reason, twice — and the runtime's holds the agent's own stdout/stderr, i.e. what it said in
   // every conversation. `deploy`'s runbook already knows there are two: it sets a retention on each.
   const forwarderGroup = forwarderLogGroup(plan.name);
-  const listLogGroups = async (prefix: string): Promise<string[] | undefined> => {
+  const listLogGroups = async (prefix: string): Promise<{ names: string[] | undefined; said: string }> => {
     const listed = await aws(
       [
         "logs",
@@ -210,32 +227,51 @@ export async function destroyAgentcoreDeployment(
       ],
       { capture: true, captureStderr: true },
     );
-    return listed.code === 0 ? parseLogGroupNames(listed.stdout) : undefined;
+    return {
+      names: listed.code === 0 ? parseLogGroupNames(listed.stdout) : undefined,
+      said: ((listed.stderr ?? "").trim() || listed.stdout.trim()).slice(0, 300),
+    };
   };
-  const forwarderGroups = await listLogGroups(forwarderGroup);
-  if (forwarderGroups === undefined) {
-    return gate(`could not list log groups under ${forwarderGroup} in ${region} — see the output above`, []);
-  }
+  const forwarderList = await listLogGroups(forwarderGroup);
   // THE RUNTIME'S GROUP IS NAMED WITHOUT THE STACK. AgentCore's runtime id is `<AgentRuntimeName>-<suffix>`, and
   // the name is `toRuntimeName(plan.name)` — the same derivation the template deployed. Reading it out of the
   // stack's `RuntimeArn` instead meant that the operator whose first move was `aws cloudformation delete-stack`
   // (which `docs/deploy.md` says it will be) then got a clean-looking teardown with the group holding every
   // line the agent ever printed still sitting there. The trailing `-` keeps `probe-` off `probe2-…`.
   const runtimePrefix = `/aws/bedrock-agentcore/runtimes/${toRuntimeName(plan.name)}-`;
-  const runtimeGroups = await listLogGroups(runtimePrefix);
-  if (runtimeGroups === undefined) {
-    return gate(`could not list log groups under ${runtimePrefix} in ${region} — see the output above`, []);
-  }
-  const logGroups = [...forwarderGroups.filter((name) => name === forwarderGroup), ...runtimeGroups];
+  const runtimeList = await listLogGroups(runtimePrefix);
 
-  announce(`account ${account}, region ${region}`);
+  // A LISTING THAT FAILS IS NOT A REASON TO DELETE NOTHING. These two reads only supply NAMES; the stack, the
+  // bucket and the repository are decided by their own probes. Gating here turned a role without
+  // `logs:DescribeLogGroups` — or one `ThrottlingException` — into a permanent no-op with a Bedrock runtime and
+  // a Lambda billing behind it, which contradicts this module's own rule that every deletion is attempted.
+  //
+  // The forwarder's group is named EXACTLY, so the delete itself answers what the listing could not (absent is
+  // the goal state, a denial becomes a failure). The runtime's carries a suffix only AWS knows, so an
+  // unreadable listing means that group survives and the operator is told which prefix to finish by hand.
+  const failures: string[] = [];
+  if (forwarderList.names === undefined) {
+    failures.push(`listing log groups under ${forwarderGroup} (${forwarderList.said}) — deleting it by name anyway`);
+  }
+  if (runtimeList.names === undefined) {
+    failures.push(
+      `listing log groups under ${runtimePrefix} (${runtimeList.said}) — the runtime's log group holds the ` +
+        `agent's stdout and was NOT deleted`,
+    );
+  }
+  const listedGroups = [
+    ...(forwarderList.names ?? []).filter((name) => name === forwarderGroup),
+    ...(runtimeList.names ?? []),
+  ];
+  // What to DELETE: the listed ones, plus the forwarder's own name when the listing could not confirm it.
+  const logGroups = forwarderList.names === undefined ? [forwarderGroup, ...listedGroups] : listedGroups;
 
   const found: string[] = [];
   if (alarms.length > 0) found.push(`${alarms.length} wake alarm(s) under ${prefix}`);
   if (stackExists) found.push(`stack ${stack}`);
   if (bucketExists) found.push(`bucket ${bucket} (${keys.length} object version(s))`);
   if (repoExists) found.push(`repository ${repo}`);
-  for (const name of logGroups) found.push(`log group ${name}`);
+  for (const name of listedGroups) found.push(`log group ${name}`);
 
   // The one thing this command refuses: a bucket holding anything but the forwarder's zips.
   const kept =
@@ -245,10 +281,13 @@ export async function destroyAgentcoreDeployment(
             `then \`aws s3 rb s3://${bucket} --force\` if you want it gone`,
         ]
       : [];
-  if (!plan.run) return { ok: true, found, removed: [], kept };
+  if (!plan.run) {
+    return failures.length > 0
+      ? gate(`${failures.length} read(s) failed:\n  ${failures.join("\n  ")}`, { found, kept })
+      : { ok: true, found, removed: [], kept };
+  }
 
   const removed: string[] = [];
-  const failures: string[] = [];
   const attempt = async (label: string, args: string[]): Promise<boolean> => {
     const { code, stderr } = await aws(args, { captureStderr: true });
     if (code === 0) {
@@ -277,8 +316,7 @@ export async function destroyAgentcoreDeployment(
       return gate(
         `stack ${stack} refused to delete: ${(asked.stderr ?? "").trim().slice(0, 300)}\n` +
           `  the image and the forwarder package it was built from are untouched, so a retry has what it needs.`,
-        removed,
-        kept,
+        { found, removed, kept },
       );
     }
     {
@@ -295,8 +333,7 @@ export async function destroyAgentcoreDeployment(
           `stack ${stack} did not finish deleting: ${(waited.stderr ?? "").trim().slice(0, 300)}\n` +
             `  its runtime and Lambda are still billing. The image and the forwarder package it was built ` +
             `from are untouched, so a retry has what it needs.`,
-          removed,
-          kept,
+          { found, removed, kept },
         );
       }
       removed.push(`stack ${stack}`);
@@ -327,7 +364,7 @@ export async function destroyAgentcoreDeployment(
   }
 
   if (failures.length > 0) {
-    return gate(`${failures.length} resource(s) survived:\n  ${failures.join("\n  ")}`, removed, kept);
+    return gate(`${failures.length} resource(s) survived:\n  ${failures.join("\n  ")}`, { found, removed, kept });
   }
   return { ok: true, found, removed, kept };
 }

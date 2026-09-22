@@ -78,13 +78,13 @@ const ALARM_PREFIX = `fa-${NAME}-wk-`;
 const WAKE_MS = MIN_WAKE_MS + 30_000;
 
 let workspace = "";
-let account = "";
 /** Read off the converged stack by the probe below, consumed by the ingress assertions after it. */
 let forwarderUrl = "";
 
 beforeAll(async () => {
   // 45 = this probe's own declared budgets, 30 minutes for the deploy plus 15 for teardown.
-  account = await requireAwsAccount(45);
+  // Gate on the credential's remaining lifetime before spending a deploy on it.
+  await requireAwsAccount(45);
 
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
@@ -120,7 +120,7 @@ afterAll(async () => {
   // is why this probe adds no teardown of its own). `finally`, not a catch: the AWS failure still
   // throws, and the temp directory still goes.
   try {
-    await destroyAgentcoreDeployment(NAME, account);
+    await destroyAgentcoreDeployment(NAME);
   } finally {
     if (workspace) await rm(workspace, { recursive: true, force: true });
   }

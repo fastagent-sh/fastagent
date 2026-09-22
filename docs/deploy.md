@@ -216,7 +216,7 @@ they are not stack resources. Both log groups are created by AWS on first write,
 (the runtime's holds every turn the agent ever printed). And a wake alarm is minted at runtime by the
 container, so nothing in the template lists it — after the Lambda is gone it retries into nothing for weeks.
 
-It prints the account and **region** it is working in before anything else: every resource here is regional,
+It prints the account and **region** it is working in before it reads anything: every resource here is regional,
 and a profile pointing somewhere other than the deploy's region would otherwise answer "nothing in this
 account" — which reads as "already clean". A read it cannot complete (denied, throttled, expired token) stops
 the command instead of being taken for absence.

@@ -25,8 +25,12 @@ export async function runDestroy(host: string, dirArg: string, opts: DestroyOpti
     (message) => console.error(`[fastagent] destroy: ${message}`),
   );
   if (!outcome.ok) {
-    // WHAT IT MANAGED TO DELETE, before the gate: a half-finished teardown is exactly when an operator needs
-    // to know which resources are already gone and which the retry still has to reach.
+    // THE WHOLE PICTURE, before the gate: a half-finished teardown is exactly when an operator needs to know
+    // what is out there, what is already gone, and what the retry still has to reach.
+    if (outcome.found.length > 0) {
+      console.log(`what a deploy of "${name}" put in this account:`);
+      for (const item of outcome.found) console.log(`  ${item}`);
+    }
     if (outcome.removed.length > 0) {
       console.log(`deleted before stopping:`);
       for (const item of outcome.removed) console.log(`  ${item}`);

@@ -199,11 +199,8 @@ export const answerOf = (events: AgentEvent[]): string =>
  * deleted). A teardown only the probes owned is one that every non-probe deployment leaked past; the account
  * this repo is developed against grew five orphaned buckets that way. Calling the product means the teardown
  * path is exercised on every probe run instead of only by hand.
- *
- * `account` is no longer read here — `destroyAgentcoreDeployment` resolves it the way a deploy does — and stays
- * in the signature only because every caller has it to hand from `requireAwsAccount`.
  */
-export async function destroyAgentcoreDeployment(name: string, _account: string): Promise<void> {
+export async function destroyAgentcoreDeployment(name: string): Promise<void> {
   const outcome = await destroyDeployment({ name, run: true }, awsAsRunner);
   if (!outcome.ok) throw new Error(`teardown failed: ${outcome.gate}`);
   // A KEPT resource is still billing. The product keeps a bucket holding anything but the forwarder's zips,
