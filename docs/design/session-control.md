@@ -211,6 +211,15 @@ unreadable file both send the line through as plain text — so a client that wa
 must check the name against this list before sending. An engine is free to use another spelling or
 none; a client asks that engine, it does not assume this one.
 
+COMPLETE for the reference engine's serving path, which is what lets a client bind its `/` menu to
+this list and nothing else: skills are the only thing there that a slash can invoke. The definition's
+`extensions/` — pi's way of registering commands — are discovered but NOT run when serving, because
+pi's extension runtime is process-wide and concurrent turns would redirect each other's actions
+(`docs/configuration.md#why-serving-does-not-run-them`); prompt templates are off for the same reason
+the rest of the authoring machine is. So there is no name that runs but is missing here. `chat` is the
+other assembly and does run both — a terminal is one session — but it is not served, so no client sees
+it.
+
 ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
 the list must come from that same read. `source` is free-form because which kinds exist is an engine's
 business (`"skill"` today), and an engine with none answers `[]` — a complete answer. A definition
