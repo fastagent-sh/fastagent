@@ -22,7 +22,7 @@
  * retry needs.
  */
 import type { CliRunner } from "../runner.ts";
-import { awsCli } from "./aws-cli.ts";
+import { awsCli, awsList, awsValue } from "./aws-cli.ts";
 import { parseLogGroupNames } from "./logs.ts";
 import { deploymentBucketName, forwarderLogGroup, toRuntimeName, wakeAlarmPrefix } from "./plan.ts";
 
@@ -56,40 +56,26 @@ interface Version {
  * either is non-empty, which is how a hand-cleanup of this exact account hit
  * `BucketNotEmpty ... You must delete all versions in the bucket`.
  *
- * `""` is an empty bucket, not unreadable output: `create-bucket` happens before the upload into it, and a
- * previous destroy that got through `delete-objects` and failed on `delete-bucket` leaves exactly one — which is
- * the half-deleted deployment this command exists to finish.
+ * AN EMPTY BUCKET is an ordinary answer, and a real one: `create-bucket` happens before the upload into it, and
+ * a previous destroy that got through `delete-objects` and failed on `delete-bucket` leaves exactly one — the
+ * half-deleted deployment this command exists to finish. AWS says it with a document that simply has neither
+ * key (measured: `{"RequestCharged": null, "Prefix": ""}`), which is why `??` here and not a special case.
  */
-function parseVersions(stdout: string): Version[] | undefined {
-  if (stdout.trim() === "") return [];
-  try {
-    const parsed = JSON.parse(stdout) as { Versions?: Version[]; DeleteMarkers?: Version[] };
-    return [...(parsed.Versions ?? []), ...(parsed.DeleteMarkers ?? [])];
-  } catch {
-    return undefined;
-  }
-}
+const parseVersions = awsList<Version>((parsed) => {
+  const { Versions, DeleteMarkers } = parsed as { Versions?: Version[]; DeleteMarkers?: Version[] };
+  return [...(Versions ?? []), ...(DeleteMarkers ?? [])];
+});
 
-/** Wake alarm names, same empty-output rule as {@link parseVersions}. */
-function parseScheduleNames(stdout: string): string[] | undefined {
-  if (stdout.trim() === "") return [];
-  try {
-    return ((JSON.parse(stdout) as { Schedules?: { Name?: unknown }[] }).Schedules ?? []).flatMap((s) =>
-      typeof s.Name === "string" ? [s.Name] : [],
-    );
-  } catch {
-    return undefined;
-  }
-}
+const parseScheduleNames = awsList<string>((parsed) =>
+  ((parsed as { Schedules?: { Name?: unknown }[] }).Schedules ?? []).flatMap((s) =>
+    typeof s.Name === "string" ? [s.Name] : [],
+  ),
+);
 
-function parseAccountId(stdout: string): string | undefined {
-  try {
-    const parsed = JSON.parse(stdout) as { Account?: unknown };
-    return typeof parsed.Account === "string" ? parsed.Account : undefined;
-  } catch {
-    return undefined;
-  }
-}
+const parseAccountId = awsValue<string>((parsed) => {
+  const { Account } = parsed as { Account?: unknown };
+  return typeof Account === "string" ? Account : undefined;
+});
 
 export async function destroyAgentcoreDeployment(
   plan: AgentcoreDestroyPlan,
@@ -184,8 +170,11 @@ export async function destroyAgentcoreDeployment(
   // and the runtime's holds the agent's own stdout/stderr, i.e. what it said in every conversation. `deploy`'s
   // runbook already knows there are two: it sets a retention on each.
   //
-  // THE RUNTIME'S GROUP IS NAMED WITHOUT THE STACK. AgentCore's runtime id is `<AgentRuntimeName>-<suffix>` and
-  // the name is `toRuntimeName(plan.name)`, the same derivation the template deployed. Reading it out of the
+  // THE RUNTIME'S GROUP IS NAMED WITHOUT THE STACK. MEASURED (ap-southeast-1, 2026-09-22): a deploy of
+  // `destroy-probe-yehg` produced `/aws/bedrock-agentcore/runtimes/destroy_probe_yehg-6oR1zq7pBZ-DEFAULT`, so
+  // the id is `<AgentRuntimeName>-<suffix>` and the name is `toRuntimeName(plan.name)`, the same derivation the
+  // template deployed. That account also held ELEVEN of these groups from past deployments whose every other
+  // resource was long gone — this is the leak, not a hypothetical one. Reading the name out of the
   // stack's `RuntimeArn` instead meant that the operator whose first move was `aws cloudformation delete-stack`
   // (which `docs/deploy.md` says it will be) got a clean-looking teardown with the group holding every line the
   // agent ever printed still sitting there. The trailing `-` keeps `probe-` off `probe2-…`.

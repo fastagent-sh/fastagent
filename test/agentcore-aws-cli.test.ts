@@ -6,7 +6,7 @@
  * be proven once; a rule with eleven has no enforcer at all.
  */
 import { describe, expect, it } from "vitest";
-import { awsCli } from "../src/deploy/agentcore/aws-cli.ts";
+import { awsCli, awsList } from "../src/deploy/agentcore/aws-cli.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 /** Records the options each invocation was given — the flags are half of what this module owns. */
@@ -60,17 +60,44 @@ describe("awsCli", () => {
     expect(opts[1]).toEqual({ captureStderr: true });
   });
 
-  it('hands `""` to the parser as an empty list, because that is what a paginated AWS list prints', async () => {
-    // Not hypothetical, and it crashed the command: the AWS CLI prints NOTHING for a list with no results,
-    // even with `--output json`, and `JSON.parse("")` threw `SyntaxError: Unexpected end of JSON input` out of
-    // a CLI with no catch-all — a Node stack trace where one actionable line belonged.
+  it("reads what AWS really answers for 'no results', and calls empty stdout unreadable", async () => {
+    // MEASURED (AWS CLI 2.36.47, ap-southeast-1, 2026-09-22), because a fake said otherwise and a defensive
+    // branch got built on it: an empty bucket answers `{"RequestCharged": null, "Prefix": ""}`,
+    // `scheduler list-schedules` answers `{"Schedules": []}`, `describe-log-groups --query` answers `[]`.
+    for (const stdout of ['{"RequestCharged": null, "Prefix": ""}', '{"Schedules": []}', "[]"]) {
+      const { cli } = fake({ code: 0, stdout });
+      expect(
+        await cli.read(
+          ["x"],
+          awsList<string>(() => []),
+        ),
+        stdout,
+      ).toEqual({ ok: [] });
+    }
+
+    // So empty stdout is NOT "no results" — it is output we failed to read, and answering "there is nothing
+    // there" is how a truncated listing gets reported as a clean resource.
     const { cli } = fake({ code: 0, stdout: "" });
-    expect(await cli.read(["x"], (stdout) => (stdout.trim() === "" ? [] : ["never"]))).toEqual({ ok: [] });
+    expect(
+      await cli.read(
+        ["x"],
+        awsList<string>(() => ["never"]),
+      ),
+    ).toMatchObject({ unreadable: "" });
   });
 
-  it("output the parser rejects is unreadable, never a thrown error", async () => {
+  it("output the parser rejects is unreadable, never a thrown SyntaxError", async () => {
+    // `JSON.parse` on output the CLI never promised threw out of a command whose CLI has no catch-all, so the
+    // operator got a Node stack trace where one actionable line belonged.
     const { cli } = fake({ code: 0, stdout: "<html>proxy error</html>" });
-    expect(await cli.read(["x"], () => undefined)).toMatchObject({ unreadable: "<html>proxy error</html>" });
+    expect(
+      await cli.read(
+        ["x"],
+        awsList<string>(() => []),
+      ),
+    ).toMatchObject({
+      unreadable: "<html>proxy error</html>",
+    });
   });
 
   it("a missing CLI is its own answer, since it says nothing about the resource", async () => {

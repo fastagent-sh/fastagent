@@ -244,14 +244,13 @@ describe("destroy agentcore", () => {
     expect(names(aws.calls)).toContain("logs delete-log-group");
   });
 
-  it("an EMPTY listing is an empty list, not a crash: the AWS CLI prints nothing for a paginated no-result", async () => {
-    // Not hypothetical. `create-bucket` happens before the upload into it, and a previous destroy that got
-    // through `delete-objects` and failed on `delete-bucket` leaves an empty bucket — which is the half-deleted
-    // deployment this command exists to finish. An escaping SyntaxError would reach the operator as a Node
-    // stack trace: `src/cli.ts` has no catch-all.
+  it("an empty bucket is what AWS ACTUALLY answers for one, verbatim", async () => {
+    // MEASURED, not assumed (AWS CLI 2.36.47, ap-southeast-1, 2026-09-22). An earlier round took a fake's word
+    // that the CLI prints NOTHING for a paginated list with no results; it prints this. An empty bucket is not
+    // hypothetical either: `create-bucket` happens before the upload into it, and a previous destroy that got
+    // through `delete-objects` and failed on `delete-bucket` leaves exactly one.
     const aws = fakeAws({
-      "s3api list-object-versions": { code: 0, stdout: "" },
-      "scheduler list-schedules": { code: 0, stdout: "" },
+      "s3api list-object-versions": { code: 0, stdout: '{\n    "RequestCharged": null,\n    "Prefix": ""\n}' },
     });
     const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
 
@@ -260,6 +259,19 @@ describe("destroy agentcore", () => {
     expect(outcome.found).toContain(`bucket fa-probe-${ACCOUNT} (0 object version(s))`);
     expect(outcome.removed).toContain(`bucket fa-probe-${ACCOUNT}`);
     expect(names(aws.calls)).not.toContain("s3api delete-objects"); // nothing in it to delete
+  });
+
+  it("EMPTY stdout is unreadable, not 'there is nothing there'", async () => {
+    // Since none of these commands prints nothing, empty output means we failed to read it — and calling that
+    // an empty list is how a bucket gets reported clean because its listing was truncated. Same defect class as
+    // a denial read as an absence, reached from the other side.
+    const aws = fakeAws({ "s3api list-object-versions": { code: 0, stdout: "" } });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain(`could not read the object listing for bucket fa-probe-${ACCOUNT}`);
+    expect(names(aws.calls)).not.toContain("s3api delete-bucket");
   });
 
   it("output it cannot parse is a gate, not an exception out of the command", async () => {

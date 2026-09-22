@@ -20,8 +20,12 @@
  * 3. **The text travels with the failure.** A caller that cannot reach what AWS said cannot write a message
  *    that omits it; `AccessDeniedException` vs `ThrottlingException` vs `ExpiredToken` are different operator
  *    actions, and that prose is the only thing telling them apart.
- * 4. **Empty output is not a parse failure.** The AWS CLI prints NOTHING for a paginated list with no results,
- *    even with `--output json`, so every parser here is handed `""` as a legitimate empty list.
+ * 4. **What "no results" actually looks like**, which is not what a fake suggested. MEASURED against AWS CLI
+ *    2.36.47 (ap-southeast-1, 2026-09-22): an empty bucket answers
+ *    `{"RequestCharged": null, "Prefix": ""}`, `scheduler list-schedules` with no match answers
+ *    `{"Schedules": []}`, and `describe-log-groups --query` with no match answers `[]`. None of them prints
+ *    nothing — so empty stdout is output we could not read, and {@link awsList} says so rather than reporting
+ *    an empty list.
  *
  * What is deliberately NOT here: what to DO about each answer. Whether an unreadable read aborts the teardown
  * or degrades it is a per-resource policy (the stack's probe decides the report's honesty; a log-group listing
@@ -78,5 +82,40 @@ export function awsCli(aws: CliRunner): AwsCli {
       if (ABSENT.test(stderr ?? "")) return { absent: true };
       return { refused: (stderr ?? "").trim().slice(0, SAID_LIMIT) };
     },
+  };
+}
+
+/**
+ * A LIST read, which is what most of these are: `pick` says which part of the parsed JSON it wants, and this
+ * owns the two answers it must not produce.
+ *
+ * NOT AN EXCEPTION — `JSON.parse` on output the CLI never promised threw
+ * `SyntaxError: Unexpected end of JSON input` out of a command whose CLI has no catch-all, i.e. a Node stack
+ * trace where one actionable line belonged.
+ *
+ * AND NOT AN EMPTY LIST. This branch used to return `[]` for empty stdout, on the claim that the AWS CLI prints
+ * nothing for a paginated list with no results. It does not (header, point 4: all three of our list commands
+ * print a real document). That claim came from a test double, and acting on it turned output we failed to read
+ * into "there is nothing there" — a bucket reported clean because its listing was truncated is the same defect
+ * class as a denial read as an absence, reached from the other side.
+ */
+export function awsList<T>(pick: (parsed: unknown) => T[]): (stdout: string) => T[] | undefined {
+  return (stdout) => {
+    try {
+      return stdout.trim() === "" ? undefined : pick(JSON.parse(stdout));
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+/** The same guard for a read whose answer is one value rather than a list. */
+export function awsValue<T>(pick: (parsed: unknown) => T | undefined): (stdout: string) => T | undefined {
+  return (stdout) => {
+    try {
+      return pick(JSON.parse(stdout));
+    } catch {
+      return undefined;
+    }
   };
 }
