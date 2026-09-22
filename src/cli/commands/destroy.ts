@@ -34,6 +34,9 @@ export async function runDestroy(host: string, dirArg: string, opts: DestroyOpti
       console.log(`deleted before stopping:`);
       for (const item of outcome.removed) console.log(`  ${item}`);
     }
+    // The kept bucket belongs in EVERY report: it is the one thing this command decided not to delete, and a
+    // failure elsewhere is no reason for the operator to stop hearing about it.
+    for (const item of outcome.kept) console.log(`\nKEPT: ${item}`);
     failStartup(new Error(`destroy stopped: ${outcome.gate}`));
   }
 

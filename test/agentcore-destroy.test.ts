@@ -10,6 +10,7 @@ import { destroyAgentcoreDeployment } from "../src/deploy/agentcore/destroy.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 const ACCOUNT = "111122223333";
+const REGION = "ap-southeast-1";
 /** What AgentCore names the runtime's own log group, which holds the agent's stdout. */
 const RUNTIME_GROUP = "/aws/bedrock-agentcore/runtimes/probe-xyz-DEFAULT";
 
@@ -28,6 +29,7 @@ function fakeAws(replies: Record<string, { code: number; stdout?: string; stderr
   // A deployment that fully exists: every read answers, so every resource is reported and deleted.
   const defaults: Record<string, { code: number; stdout?: string; stderr?: string }> = {
     "sts get-caller-identity": { code: 0, stdout: JSON.stringify({ Account: ACCOUNT, Arn: "arn:aws:iam::x:root" }) },
+    "configure get region": { code: 0, stdout: `${REGION}\n` },
     "scheduler list-schedules": { code: 0, stdout: JSON.stringify({ Schedules: [] }) },
     "cloudformation describe-stacks": { code: 0, stdout: JSON.stringify({ Stacks: [{}] }) },
     // The outputs query is a SECOND describe-stacks, and the runtime's log group name comes out of it.
@@ -104,13 +106,13 @@ describe("destroy agentcore", () => {
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     expect(names(aws.calls)).toEqual([
       "sts get-caller-identity",
+      "configure get", // the region every resource below lives in, reported before anything is touched
       "scheduler list-schedules",
       "cloudformation describe-stacks",
       "s3api list-object-versions",
       "ecr describe-repositories",
       "logs describe-log-groups",
-      "cloudformation describe-stacks", // the stack's outputs, for the RUNTIME's log group name
-      "logs describe-log-groups", // and that group, listed while the stack still stands
+      "logs describe-log-groups", // the RUNTIME's group, named from the definition rather than the stack
       // ALARMS WHILE THE STACK STANDS: they are minted at runtime into the default Scheduler group, so the
       // stack does not own them, and after the Lambda is gone they retry into nothing for weeks.
       "scheduler delete-schedule",
@@ -299,32 +301,36 @@ describe("destroy agentcore", () => {
     expect(names(aws.calls)).not.toContain("cloudformation delete-stack");
   });
 
-  it("a stack whose outputs cannot be read leaves the runtime's log group, and SAYS so", async () => {
-    // The group's name carries the runtime id, so without the outputs this command cannot address it. The one
-    // outcome ruled out is reporting success with the agent's whole stdout still sitting there.
+  it("finds the runtime's log group with the stack ALREADY gone", async () => {
+    // `docs/deploy.md` says an operator's first move is `aws cloudformation delete-stack`, so this is the
+    // ordinary case, not an edge one. Reading the group's name out of the stack's `RuntimeArn` meant that after
+    // that move the group holding every line the agent printed was silently left behind — while the command
+    // reported a clean teardown. The name comes from the definition (`toRuntimeName`), so the stack is not
+    // needed to say it.
     const aws = fakeAws({
-      "cloudformation describe-stacks --stack-name fastagent-probe --query": { code: 0, stdout: "[]" },
+      "cloudformation describe-stacks": { code: 254, stderr: "Stack with id fastagent-probe does not exist" },
     });
     const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
 
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.gate).toContain("gave no usable RuntimeArn");
-    expect(outcome.gate).toContain("--log-group-name-prefix /aws/bedrock-agentcore/runtimes/");
-    // Everything it COULD address is still deleted — the leftover is reported, not a reason to stop.
-    expect(outcome.removed).toContain("stack fastagent-probe");
-    expect(outcome.removed).toContain("log group /aws/lambda/fastagent-probe-forwarder");
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.found).toContain(`log group ${RUNTIME_GROUP}`);
+    expect(outcome.removed).toContain(`log group ${RUNTIME_GROUP}`);
+    expect(names(aws.calls)).not.toContain("cloudformation delete-stack"); // nothing to delete
   });
 
   it("reports nothing for a deployment that is not there, and claims no deletion", async () => {
     // `aws cloudformation delete-stack` answers 0 for a stack that does not exist, so a teardown that skips the
     // reads reports "deleted: stack X" for something nobody deployed. Observed on a real second `--run`.
+    // The real CLI says so on stderr, and the implementation now READS it — an exit code alone cannot tell
+    // "does not exist" from "AccessDeniedException".
     const absent = { code: 254, stderr: "does not exist" };
     const aws = fakeAws({
       "cloudformation describe-stacks": absent,
       "s3api list-object-versions": absent,
       "ecr describe-repositories": absent,
       "logs describe-log-groups": { code: 0, stdout: "[]" },
+      "logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore": { code: 0, stdout: "[]" },
     });
     const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
 
@@ -345,6 +351,72 @@ describe("destroy agentcore", () => {
     if (outcome.ok) return;
     expect(outcome.gate).toContain("log group /aws/lambda/fastagent-probe-forwarder");
     expect(outcome.gate).toContain("AccessDeniedException");
+  });
+
+  it("a failure elsewhere does not hide the bucket it deliberately KEPT", async () => {
+    // The kept bucket is this command's only decision of its own. An operator who sees only the survivors does
+    // not learn that one bucket was left on purpose, or what is in it.
+    const aws = fakeAws({
+      "s3api list-object-versions": {
+        code: 0,
+        stdout: JSON.stringify({ Versions: [{ Key: "state/snapshot.json.gz", VersionId: "v1" }] }),
+      },
+      "logs delete-log-group": { code: 254, stderr: "AccessDeniedException: not authorized" },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kept.join("\n")).toContain("state/snapshot.json.gz");
+  });
+
+  it("a DENIAL is not an absence: it refuses rather than reporting nothing left to delete", async () => {
+    // The one that matters most. `AccessDeniedException`, `ThrottlingException` and `ExpiredToken` all arrive as
+    // a non-zero exit code, exactly like `does not exist` — and reading them as absence made this command print
+    // `nothing left to delete` over a Bedrock runtime, a Lambda, a repository and a bucket that were all still
+    // billing.
+    const denied = { code: 254, stderr: "An error occurred (AccessDeniedException) when calling the operation" };
+    const aws = fakeAws({ "cloudformation describe-stacks": denied });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain("could not tell whether stack fastagent-probe exists in ap-southeast-1");
+    expect(aws.calls.flat().filter((a) => a.startsWith("delete"))).toEqual([]);
+
+    // Same rule for the other two reads, so the answer cannot depend on which one is denied.
+    for (const key of ["s3api list-object-versions", "ecr describe-repositories"]) {
+      const one = await destroyAgentcoreDeployment({ name: "probe", run: true }, fakeAws({ [key]: denied }).runner);
+      expect(one.ok, `${key} answered a denial and it was read as absence`).toBe(false);
+    }
+  });
+
+  it("names the REGION it looked in, and refuses when there is none", async () => {
+    // Every resource here is regional and none of them says so. A profile pointing somewhere other than the
+    // deploy's region answers "nothing in this account", which reads as "already clean".
+    const said: string[] = [];
+    const aws = fakeAws();
+    await destroyAgentcoreDeployment({ name: "probe", run: false }, aws.runner, (m) => said.push(m));
+    expect(said.join("\n")).toContain(`account ${ACCOUNT}, region ${REGION}`);
+
+    const noRegion = fakeAws({ "configure get region": { code: 0, stdout: "" } });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, noRegion.runner);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain("no AWS region configured");
+
+    // And a missing region fails `get-caller-identity` too, where blaming the credentials sends the operator
+    // to fix the wrong thing.
+    const stsNoRegion = fakeAws({
+      "sts get-caller-identity": {
+        code: 253,
+        stderr: 'You must specify a region. You can also configure your region by running "aws configure".',
+      },
+    });
+    const classified = await destroyAgentcoreDeployment({ name: "probe", run: true }, stsNoRegion.runner);
+    expect(classified.ok).toBe(false);
+    if (classified.ok) return;
+    expect(classified.gate).toContain("no AWS region configured");
   });
 
   it("refuses to guess when the wake alarms cannot be listed", async () => {

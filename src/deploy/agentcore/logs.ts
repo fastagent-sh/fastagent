@@ -17,7 +17,7 @@ export interface AgentcoreLogsPlan {
 export type AgentcoreLogsOutcome = { ok: true; logGroup: string } | { ok: false; gate: string };
 
 /** Runtime id from `arn:...:runtime/<id>` — the id prefixes AgentCore's per-endpoint log group. */
-export function runtimeIdFromArn(arn: string): string | undefined {
+function runtimeIdFromArn(arn: string): string | undefined {
   const marker = ":runtime/";
   const at = arn.lastIndexOf(marker);
   const id = at === -1 ? "" : arn.slice(at + marker.length);
