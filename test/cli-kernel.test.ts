@@ -321,6 +321,18 @@ describe("cli end to end: the thin entry", () => {
     expect(stderr).toBe("");
   });
 
+  it("destroy names the other hosts' commands where they can be READ, not in an unreachable branch", async () => {
+    // `<host>` has `choices`, so commander rejects `destroy fly` before the command body runs — the useful
+    // part (which command those hosts use instead) has to live in the help text.
+    const rejected = await parse(["destroy", "fly"]);
+    expect(rejected.code).toBe(2);
+    expect(rejected.err).toContain("Allowed choices are agentcore");
+
+    const help = await parse(["destroy", "--help"]);
+    expect(help.out).toContain("fly apps destroy");
+    expect(help.out).toContain("railway down");
+  });
+
   it("routine list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
     const dir = await agentWorkspace("fa-kernel-sched-");
     const { code, stdout, stderr } = await run(["routine", "list", dir]);

@@ -477,6 +477,8 @@ const destroy: CommandSpec = {
     "is out there.",
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, DIR_ARG],
   flags: [{ flags: "--run", description: "actually delete. Without it, this is a read-only inventory" }],
+  // The other hosts need no command of their own, and saying which one to use belongs where it can be READ:
+  // `<host>` has `choices`, so a `destroy fly` never reaches the command body.
   examples: [
     { cmd: "fastagent destroy agentcore", note: "what would be deleted" },
     { cmd: "fastagent destroy agentcore --run", note: "delete it" },
@@ -485,7 +487,9 @@ const destroy: CommandSpec = {
     "A bucket holding anything other than the forwarder's zips is reported and KEPT: an older deploy " +
     "wrote agent state there, and it may be the only copy. Everything else is deleted unconditionally, " +
     "including the agent's session storage on the AgentCore runtime — this host keeps it inside the " +
-    "stack, so there is no way to delete the deployment and keep the conversations. AWS ONLY: the " +
+    "stack, so there is no way to delete the deployment and keep the conversations. The other hosts need " +
+    "no command here: `fly apps destroy`, `railway down`, `docker compose -f fastagent.compose.yml down -v`. " +
+    "AWS ONLY: the " +
     "webhook registrations `deploy --run` made with Telegram/Slack/Feishu still point at the deleted " +
     "Function URL, and clearing them is a call to those platforms (for Telegram, deleteWebhook).",
   run: async (args, f) =>

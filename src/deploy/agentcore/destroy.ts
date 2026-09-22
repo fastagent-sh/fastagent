@@ -347,7 +347,14 @@ async function purgeBucket(
     capture: true,
     captureStderr: true,
   });
-  if (listed.code !== 0) return; // gone between the inventory and now
+  if (listed.code !== 0) {
+    if (ABSENT.test(listed.stderr ?? "")) return; // gone between the inventory and now: the goal state
+    // A DENIAL IS NOT AN ABSENCE on the write path either. Returning here left the bucket billing while the
+    // command reported `nothing left to delete` — and the probe's teardown, which judges leaks by this
+    // function's own outcome, could not see it.
+    failures.push(`bucket ${bucket}: could not list its objects, so it was left in place`);
+    return;
+  }
   const versions = parseVersions(listed.stdout);
   if (versions === undefined) {
     failures.push(`bucket ${bucket}: could not read its object listing, so it was left in place`);

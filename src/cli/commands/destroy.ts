@@ -11,14 +11,11 @@ export interface DestroyOptions {
 }
 
 export async function runDestroy(host: string, dirArg: string, opts: DestroyOptions): Promise<void> {
-  // The host argument is DISPATCHED here, as in runDeploy. Only AgentCore needs this command: fly and railway
-  // have `fly apps destroy` / `railway down`, and docker has `docker compose down -v`.
-  if (host !== "agentcore") {
-    failUsage(
-      `destroy: unsupported host "${host}" — only agentcore needs it (fly: \`fly apps destroy\`, ` +
-        `railway: \`railway down\`, docker: \`docker compose -f fastagent.compose.yml down -v\`)`,
-    );
-  }
+  // The host argument is DISPATCHED here, as in runLogs. In practice commander rejects anything else first
+  // (the spec declares `choices`), so what the operator reads is its message plus the spec's notes, which name
+  // the other hosts' own commands. This stays as the seam: a host added to `choices` must not be silently
+  // treated as agentcore.
+  if (host !== "agentcore") failUsage(`destroy: unsupported host "${host}"`);
   const placement = placementOrExit(resolve(dirArg));
   enterAgentEnv(placement.agentDir); // AWS_PROFILE/region/proxy may be definition-local, as on deploy
   const name = agentcoreName(basename(placement.workspace));

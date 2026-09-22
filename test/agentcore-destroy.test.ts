@@ -12,7 +12,8 @@ import type { CliRunner } from "../src/deploy/runner.ts";
 const ACCOUNT = "111122223333";
 const REGION = "ap-southeast-1";
 /** What AgentCore names the runtime's own log group, which holds the agent's stdout. */
-const RUNTIME_GROUP = "/aws/bedrock-agentcore/runtimes/probe-xyz-DEFAULT";
+const RUNTIME_PREFIX = "/aws/bedrock-agentcore/runtimes/probe-";
+const RUNTIME_GROUP = `${RUNTIME_PREFIX}xyz-DEFAULT`;
 
 interface FakeAws {
   runner: CliRunner;
@@ -32,14 +33,10 @@ function fakeAws(replies: Record<string, { code: number; stdout?: string; stderr
     "configure get region": { code: 0, stdout: `${REGION}\n` },
     "scheduler list-schedules": { code: 0, stdout: JSON.stringify({ Schedules: [] }) },
     "cloudformation describe-stacks": { code: 0, stdout: JSON.stringify({ Stacks: [{}] }) },
-    // The outputs query is a SECOND describe-stacks, and the runtime's log group name comes out of it.
-    "cloudformation describe-stacks --stack-name fastagent-probe --query": {
-      code: 0,
-      stdout: JSON.stringify([
-        { OutputKey: "RuntimeArn", OutputValue: "arn:aws:bedrock-agentcore:x:1:runtime/probe-xyz" },
-      ]),
-    },
-    "logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore": {
+    // EXACT, prefix and all. A wider key here would answer a wider `--log-group-name-prefix` — and the command
+    // deletes whatever comes back, which for `/aws/bedrock-agentcore/runtimes/` is every OTHER deployment's
+    // group in this account and region.
+    [`logs describe-log-groups --log-group-name-prefix ${RUNTIME_PREFIX} `]: {
       code: 0,
       stdout: JSON.stringify([RUNTIME_GROUP]),
     },
@@ -161,21 +158,9 @@ describe("destroy agentcore", () => {
   });
 
   it("deletes the RUNTIME's log group too — the agent's own stdout, which no template owns", async () => {
-    // Resolved while the stack still stands, because its name carries the runtime id and only the stack's
-    // outputs know that. Structurally identical to the Lambda's group: AWS creates it on first write.
-    const runtimeGroup = "/aws/bedrock-agentcore/runtimes/probe-xyz-DEFAULT";
-    const aws = fakeAws({
-      "cloudformation describe-stacks --stack-name fastagent-probe --query": {
-        code: 0,
-        stdout: JSON.stringify([
-          { OutputKey: "RuntimeArn", OutputValue: "arn:aws:bedrock-agentcore:x:1:runtime/probe-xyz" },
-        ]),
-      },
-      "logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore": {
-        code: 0,
-        stdout: JSON.stringify([runtimeGroup]),
-      },
-    });
+    // Structurally identical to the Lambda's group: AWS creates it on first write, so no template owns it.
+    // Its name comes from the definition (`toRuntimeName`), which is why the stack is not consulted for it.
+    const aws = fakeAws();
     const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
 
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
@@ -301,6 +286,25 @@ describe("destroy agentcore", () => {
     expect(names(aws.calls)).not.toContain("cloudformation delete-stack");
   });
 
+  it("asks for the runtime prefix EXACTLY, name transform included", async () => {
+    // Everything this listing returns is deleted, so the prefix decides the blast radius: `/…/runtimes/` would
+    // take every other deployment's group in this account and region, and that is irreversible. The trailing
+    // `-` is what keeps `probe-` off `probe2-…`, and the name is `toRuntimeName`'s, not the directory's.
+    const aws = fakeAws();
+    await destroyAgentcoreDeployment({ name: "probe", run: false }, aws.runner);
+    expect(aws.calls).toContainEqual(
+      expect.arrayContaining(["describe-log-groups", "--log-group-name-prefix", RUNTIME_PREFIX]),
+    );
+
+    // `probe-1` is not a legal runtime name (`[a-zA-Z][a-zA-Z0-9_]{0,47}`), so the deploy shipped `probe_1` and
+    // the group is named after THAT. A prefix built from the directory name would find nothing.
+    const dashed = fakeAws();
+    await destroyAgentcoreDeployment({ name: "probe-1", run: false }, dashed.runner);
+    expect(dashed.calls).toContainEqual(
+      expect.arrayContaining(["--log-group-name-prefix", "/aws/bedrock-agentcore/runtimes/probe_1-"]),
+    );
+  });
+
   it("finds the runtime's log group with the stack ALREADY gone", async () => {
     // `docs/deploy.md` says an operator's first move is `aws cloudformation delete-stack`, so this is the
     // ordinary case, not an edge one. Reading the group's name out of the stack's `RuntimeArn` meant that after
@@ -330,7 +334,7 @@ describe("destroy agentcore", () => {
       "s3api list-object-versions": absent,
       "ecr describe-repositories": absent,
       "logs describe-log-groups": { code: 0, stdout: "[]" },
-      "logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore": { code: 0, stdout: "[]" },
+      [`logs describe-log-groups --log-group-name-prefix ${RUNTIME_PREFIX} `]: { code: 0, stdout: "[]" },
     });
     const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
 
@@ -351,6 +355,36 @@ describe("destroy agentcore", () => {
     if (outcome.ok) return;
     expect(outcome.gate).toContain("log group /aws/lambda/fastagent-probe-forwarder");
     expect(outcome.gate).toContain("AccessDeniedException");
+  });
+
+  it("a DENIAL on the second bucket read leaves it billing, and SAYS so", async () => {
+    // The purge re-reads, because minutes of `stack-delete-complete` sit between the inventory and it. A
+    // denial there used to `return` silently: the bucket stayed, `removed` did not mention it, and the CLI
+    // printed `nothing left to delete`. The probe's teardown judges leaks by this outcome, so it could not
+    // see that shape either — and five orphaned buckets in one account are what it looks like.
+    let reads = 0;
+    const aws = fakeAws();
+    const inner = aws.runner;
+    aws.runner = async (args, opts) => {
+      if (args[0] === "s3api" && args[1] === "list-object-versions") {
+        reads += 1;
+        await inner(args, opts);
+        return reads === 1
+          ? { code: 0, stdout: JSON.stringify({ Versions: [{ Key: "forwarder/a.zip", VersionId: "v1" }] }), stderr: "" }
+          : {
+              code: 254,
+              stdout: "",
+              stderr: "An error occurred (AccessDeniedException) when calling ListObjectVersions",
+            };
+      }
+      return inner(args, opts);
+    };
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain(`bucket fa-probe-${ACCOUNT}: could not list its objects`);
+    expect(names(aws.calls)).not.toContain("s3api delete-bucket");
   });
 
   it("a failure elsewhere does not hide the bucket it deliberately KEPT", async () => {
