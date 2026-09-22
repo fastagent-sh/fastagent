@@ -800,9 +800,12 @@ without its prompt being consumed, when the run finishes inside the window — a
 outcome; the settlement is the truth.
 
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
-the definition exposes (`source: "skill"` today). It is a LISTING, not a dispatch surface — the data
-plane takes prompts as text and nothing expands `/name`, so what typing one means is the client's
-choice. It is read live and uncached — the definition's `skills/` is re-read per call (the ②
+the definition exposes (`source: "skill"` today). It is a LISTING, not a dispatch surface: to RUN one,
+send its engine spelling as ordinary prompt text and let the engine expand it — for the pi engine that
+is `/skill:<name> [args]`, which the server turns into the skill's body with the arguments appended.
+Do not expand it client-side; the files belong to the agent, which may be on another machine. An
+unknown name and an unreadable skill file both go through as plain text, so check the name against
+this list if a typo should be visible. It is read live and uncached — the definition's `skills/` is re-read per call (the ②
 context walk the full load does is skipped: this answers at composer-open frequency) — so a skill
 added while serving appears at once; `[]` means the agent exposes none. It is also the one read that can REJECT:
 a definition the server cannot read at all is a deployment fault with no truthful degraded value, and

@@ -194,10 +194,22 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 interface AgentCommand { name: string; description?: string; source: string }
 ```
 
-What a composer's `/` completion LISTS, deliberately not an invocation surface: the data plane takes
-prompts as text and nothing in it expands `/name`, so what typing one means is the client's business.
-It cannot be reconstructed client-side — the assembly is the only place that knows the set after
-first-wins collision resolution.
+What a composer's `/` completion LISTS. It cannot be reconstructed client-side — the assembly is the
+only place that knows the set after first-wins collision resolution.
+
+NOT a dispatch surface, and a client MUST NOT expand a name itself. The data plane takes prompts as
+text; what a name means when it appears in one is the ENGINE's, because the engine is the side that
+holds the definition — a client that read `skills/<name>/SKILL.md` and built the prompt would
+re-implement loading, drift from it, and break outright against a remote agent whose files are not on
+its machine. A client offers the list and sends the spelling; it does not interpret it.
+
+The reference engine's spelling is `/skill:<name> [args]`, expanded server-side into the skill's body
+with the arguments appended, so it behaves identically in-process and over HTTP+SSE (asserted in
+`test/skill-invocation.test.ts`). It is deliberately a PREFIX: a bare `/name` stays ordinary text, and
+the model decides whether to act on it. Two silent fall-backs come with it — an unknown name and an
+unreadable file both send the line through as plain text — so a client that wants a typo to be visible
+must check the name against this list before sending. An engine is free to use another spelling or
+none; a client asks that engine, it does not assume this one.
 
 ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
 the list must come from that same read. `source` is free-form because which kinds exist is an engine's
