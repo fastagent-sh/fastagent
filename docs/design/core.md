@@ -558,8 +558,8 @@ A **routine** is `routines/<name>.ts` exporting `{ prompt, cron?, tz? }` — the
 and `cron` is a FIELD of it rather than the concept: with one, the clock fires it; without one, its name
 is the only way in (`POST /run`, `fastagent routine run`). Either way it runs in the stable session
 `routine:<name>`. The clock claims a slot before invoking, catches up one overdue occurrence after
-downtime (not every missed slot), writes the outcome back into that claim, and leaves delivery to agent
-tools. A routine with no cron is not armed and not warned about.
+downtime (not every missed slot, and not at all before its first fire — nothing recorded that it was
+armed then), writes the outcome back into that claim, and leaves delivery to agent tools. A routine with no cron is not armed and not warned about.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
 one JSON object — `{"firedAt"}` at claim time, gaining `outcome` and `ms` when the turn reports — pruned

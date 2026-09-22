@@ -532,8 +532,9 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
   created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
   several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock
   racing the resident one). The newest claim also says when the schedule last fired, which is where a run missed
-  while the process was down resumes — once on the next start, not per missed slot. A slot older than the newest
-  claim is refused as a stale replay.
+  while the process was down resumes — once on the next start, not per missed slot. A routine that has never
+  fired has no claim to resume from, so its first armed slot is the next one, not the one it was down for.
+  A slot older than the newest claim is refused as a stale replay.
 
 The scheduler is started by
 the serve path (`dev`/`start`); `fastagent routine run <name>` runs one schedule's turn immediately for authoring.
