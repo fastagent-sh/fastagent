@@ -6,7 +6,7 @@ import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
   paramsFileContent,
-  parseStackOutputs,
+  pickStackOutputs,
 } from "../src/deploy/agentcore/run.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
@@ -26,6 +26,14 @@ const OUTPUTS = JSON.stringify([
   { OutputKey: "RuntimeArn", OutputValue: "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc" },
   { OutputKey: "ForwarderUrl", OutputValue: "https://xyz.lambda-url.us-west-2.on.aws/" },
 ]);
+
+/** What the real CLI prints — an exit code alone cannot separate a 404 from a 403 (src/deploy/agentcore/aws-cli.ts). */
+const NO_BUCKET = { code: 254, stderr: "An error occurred (404) when calling the HeadBucket operation: Not Found" };
+const NO_REPO = {
+  code: 254,
+  stderr: "An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation",
+};
+const DENIED = { code: 254, stderr: "An error occurred (AccessDeniedException) when calling the operation" };
 
 /** The CLI's answer for a stack that is not there — what a FIRST deploy reads. */
 const NO_SUCH_STACK = {
@@ -92,9 +100,7 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
   const withForwarder = plan({ topology: FORWARDER });
 
   it("creates it when absent, locks it down, and hands the stack the bucket + content-hashed key", async () => {
-    const { cli: aws, cmds } = fakeCli((a) =>
-      a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
-    );
+    const { cli: aws, cmds } = fakeCli((a) => (a[0] === "s3api" && a[1] === "head-bucket" ? NO_BUCKET : happyAws(a)));
     writeParams.mockClear();
 
     const out = await run(withForwarder, aws, fakeCli().cli);
@@ -121,7 +127,7 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
 
   it("gates when the deployment bucket cannot be secured", async () => {
     const { cli: aws, cmds } = fakeCli((a) =>
-      a[1] === "put-public-access-block" ? { code: 1 } : a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+      a[1] === "put-public-access-block" ? { code: 1 } : a[1] === "head-bucket" ? NO_BUCKET : happyAws(a),
     );
     const out = await run(withForwarder, aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false });
@@ -130,14 +136,12 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
   });
 
   it("omits LocationConstraint in us-east-1 (the one region whose create-bucket rejects it)", async () => {
-    const { cli: aws, cmds } = fakeCli((a) =>
-      a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
-    );
+    const { cli: aws, cmds } = fakeCli((a) => (a[0] === "s3api" && a[1] === "head-bucket" ? NO_BUCKET : happyAws(a)));
     await run(plan({ topology: FORWARDER, region: "us-east-1" }), aws, fakeCli().cli);
     expect(cmds().find((c) => c.startsWith("s3api create-bucket"))).not.toContain("LocationConstraint");
 
     const { cli: other, cmds: otherCmds } = fakeCli((a) =>
-      a[0] === "s3api" && a[1] === "head-bucket" ? { code: 254 } : happyAws(a),
+      a[0] === "s3api" && a[1] === "head-bucket" ? NO_BUCKET : happyAws(a),
     );
     await run(plan({ topology: FORWARDER, region: "eu-west-1" }), other, fakeCli().cli);
     expect(otherCmds().find((c) => c.startsWith("s3api create-bucket"))).toContain("LocationConstraint=eu-west-1");
@@ -283,14 +287,37 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(cmds().some((c) => c.startsWith("ecr create") || c.startsWith("cloudformation"))).toBe(false);
   });
 
-  it("skips ECR create when the repository exists; creates it when describe fails", async () => {
+  it("skips ECR create when the repository exists; creates it when AWS says it is not there", async () => {
     const exists = fakeCli(happyAws);
     await run(plan(), exists.cli, fakeCli().cli);
     expect(exists.cmds().some((c) => c.startsWith("ecr create-repository"))).toBe(false);
 
-    const absent = fakeCli((a) => (a[0] === "ecr" && a[1] === "describe-repositories" ? { code: 254 } : happyAws(a)));
+    const absent = fakeCli((a) => (a[0] === "ecr" && a[1] === "describe-repositories" ? NO_REPO : happyAws(a)));
     await run(plan(), absent.cli, fakeCli().cli);
     expect(absent.cmds()).toContain("ecr create-repository --repository-name fastagent/my-agent");
+  });
+
+  it("a read it could not complete is NOT a create — for the repository or the bucket", async () => {
+    // Both used to branch on the exit code alone, so a denial went down the create path and ended as
+    // "`aws ecr create-repository` failed", naming the step after the one that actually went wrong.
+    for (const [command, denied] of [
+      ["ecr describe-repositories", "could not read ECR repository fastagent/my-agent"],
+      ["s3api head-bucket", "could not read deployment bucket fa-my-agent-123456789012"],
+    ] as const) {
+      const [service, action] = command.split(" ");
+      const { cli, cmds } = fakeCli((a) => (a[0] === service && a[1] === action ? DENIED : happyAws(a)));
+      // The bucket only exists in the forwarder topology.
+      const outcome = await run(plan({ topology: FORWARDER }), cli, fakeCli().cli);
+
+      expect(outcome.ok, command).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.gate).toContain(denied);
+      // AWS's own words, because a denial, an expired token and a throttle are three different next actions.
+      expect(outcome.gate).toContain("AccessDeniedException");
+      expect(cmds().some((c) => c.startsWith("ecr create-repository") || c.startsWith("s3api create-bucket"))).toBe(
+        false,
+      );
+    }
   });
 
   it("a ROLLBACK_COMPLETE stack (failed first create) is deleted + awaited before re-creating", async () => {
@@ -324,6 +351,23 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(cmds().filter((c) => c.includes("Stacks[0].StackStatus"))).toHaveLength(2);
     expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
     expect(cmds()).toContain("cloudformation wait stack-delete-complete --stack-name fastagent-my-agent");
+  });
+
+  it("a status it could not read is re-asked after the build, like one still in flight", async () => {
+    // An unreadable answer is not an answer: a throttle or a slow endpoint before a multi-minute build says
+    // nothing about the stack step 7 is about to act on, and treating it as "nothing to clear" leaves a failed
+    // first create in place for `cloudformation deploy` to trip over minutes later.
+    const answers = [DENIED, { stdout: "ROLLBACK_COMPLETE\n" }];
+    const { cli: aws, cmds } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
+        ? (answers.shift() ?? { stdout: "ROLLBACK_COMPLETE\n" })
+        : happyAws(a),
+    );
+    const out = await run(plan(), aws, fakeCli().cli);
+
+    expect(out).toMatchObject({ ok: true });
+    expect(cmds().filter((c) => c.includes("Stacks[0].StackStatus"))).toHaveLength(2);
+    expect(cmds()).toContain("cloudformation delete-stack --stack-name fastagent-my-agent");
   });
 
   describe("a redeploy replaces the agent's memory, and says so while stopping is still free", () => {
@@ -590,13 +634,13 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
 });
 
 describe("deploy/agentcore/run: helpers", () => {
-  it("parseStackOutputs tolerates garbage and partial shapes", () => {
-    expect(parseStackOutputs("not json")).toEqual({});
-    // A stack with no Outputs answers `null`, which must read as "no RuntimeArn" (the driver gates).
-    expect(parseStackOutputs("null")).toEqual({});
-    expect(parseStackOutputs(JSON.stringify([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }]))).toEqual({
-      A: "1",
-    });
+  it("pickStackOutputs: `null` is an ANSWER (no Outputs section), anything else unreadable", () => {
+    // `--query Stacks[0].Outputs` prints `null` for a stack without an Outputs section, so reading it as
+    // unreadable blamed a describe-stacks that had just succeeded. Empty means the driver's own
+    // "no RuntimeArn output — was the template edited?" gate speaks, which is the one with a next action.
+    expect(pickStackOutputs(null)).toEqual({});
+    expect(pickStackOutputs("not a list")).toBeUndefined();
+    expect(pickStackOutputs([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }])).toEqual({ A: "1" });
   });
 
   it("paramsFileContent: maps env names, chunks a long auth seed in order, clears every unused chunk", () => {

@@ -48,16 +48,19 @@ describe("awsCli", () => {
     expect(await cli.write(["x"])).toEqual({ refused: "AccessDeniedException: not authorized to DeleteLogGroup" });
   });
 
-  it("captures BOTH streams on a read, so nothing about an expected absence reaches the terminal", async () => {
+  it("captures BOTH streams, so nothing about an expected absence reaches the terminal", async () => {
     // `spawnRunner` maps capture => pipe, and knowing that is not a call site's job: an inventory of an
-    // already-deleted deployment would otherwise print three AWS errors and look like three failures.
+    // already-deleted deployment would otherwise print three AWS errors and look like three failures. Writes
+    // included — every one that comes through here is a short API call whose success output is noise
+    // (`stop-runtime-session` answers with its session JSON), and the watchable ones (`docker buildx build`,
+    // `cloudformation deploy`) deliberately do not use this module at all.
     const { cli, opts } = fake({ code: 0, stdout: "{}" });
     await cli.present(["x"]);
-    expect(opts[0]).toEqual({ capture: true, captureStderr: true });
-
-    // A WRITE does not capture stdout: an operator watching a teardown should see CloudFormation working.
     await cli.write(["y"]);
-    expect(opts[1]).toEqual({ captureStderr: true });
+    expect(opts).toEqual([
+      { capture: true, captureStderr: true },
+      { capture: true, captureStderr: true },
+    ]);
   });
 
   it("reads what AWS really answers for 'no results', and calls empty stdout unreadable", async () => {

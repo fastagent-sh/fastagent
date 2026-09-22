@@ -22,8 +22,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { TEMPLATE_FILE, agentcoreName, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
-import { isMissingStack } from "../../src/deploy/agentcore/run.ts";
-import { CLI, aws, run } from "./env.ts";
+import { awsCli } from "../../src/deploy/agentcore/aws-cli.ts";
+import { CLI, aws, awsAsRunner, run } from "./env.ts";
+
+/** The PRODUCTION classifier over the real CLI — `aws-cli.ts` decides there / gone / could not find out. */
+const cli = awsCli(awsAsRunner);
 
 /** Generated artifact dirs, removed however the run ends: this probe writes a template per run and
  *  creates nothing in AWS, so the only thing it can leak is disk. */
@@ -92,18 +95,38 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // The driver's check-then-act reads these two failures as "absent, go create". If the credential
     // ever loses the permission instead, the same non-zero exit would send it into create — so what
     // the failure SAYS is what separates a first deploy from a broken key.
-    const stack = await aws(["cloudformation", "describe-stacks", "--stack-name", "fastagent-live-probe-absent"]);
-    expect(stack.code).not.toBe(0);
     // Through the driver's own classifier, not a copy of its regex: the same call decides whether a
     // deploy warns that it is about to replace the agent's memory, and a copy here would keep agreeing
     // with itself after the production one drifted.
-    expect(isMissingStack(stack.stderr), `describe-stacks on a missing stack now says: ${stack.stderr}`).toBe(true);
+    const stack = await cli.present([
+      "cloudformation",
+      "describe-stacks",
+      "--stack-name",
+      "fastagent-live-probe-absent",
+    ]);
+    expect(stack, `describe-stacks on a missing stack no longer reads as absent`).toEqual({ absent: true });
 
-    const repo = await aws(["ecr", "describe-repositories", "--repository-names", "fastagent/live-probe-absent"]);
-    expect(repo.code).not.toBe(0);
-    expect(repo.stderr, `describe-repositories on a missing repo now says: ${repo.stderr}`).toMatch(
-      /RepositoryNotFound/i,
-    );
+    const repo = await cli.present([
+      "ecr",
+      "describe-repositories",
+      "--repository-names",
+      "fastagent/live-probe-absent",
+    ]);
+    expect(repo, `describe-repositories on a missing repo no longer reads as absent`).toEqual({ absent: true });
+
+    // The LEAST regular of the three: an HTTP status and an English phrase rather than an exception name
+    // (`An error occurred (404) when calling the HeadBucket operation: Not Found`). The account suffix keeps
+    // this a bucket only we could own — a name someone else holds answers 403, which is a different question.
+    const identity = await aws(["sts", "get-caller-identity", "--output", "json"]);
+    expect(identity.code, `sts get-caller-identity failed: ${identity.stderr}`).toBe(0);
+    const account = (JSON.parse(identity.stdout) as { Account: string }).Account;
+    const bucket = await cli.present([
+      "s3api",
+      "head-bucket",
+      "--bucket",
+      deploymentBucketName(agentcoreName("fastagent-live-probe-absent"), account),
+    ]);
+    expect(bucket, `head-bucket on a missing bucket no longer reads as absent`).toEqual({ absent: true });
   });
 
   it("a failure that answers NOTHING does not read as 'no such stack'", async () => {
@@ -115,7 +138,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // it needs no second credential: this probe's role has DescribeStacks, and a nightly cannot mint a
     // restricted one. The timeouts bound the CLI's connect retries. AccessDenied's exact wording
     // remains unverified here — it is checked only against AWS's documented error codes.
-    const unreachable = await aws([
+    const unreachable = await cli.present([
       "cloudformation",
       "describe-stacks",
       "--stack-name",
@@ -127,10 +150,8 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
       "--cli-read-timeout",
       "3",
     ]);
-    expect(unreachable.code).not.toBe(0);
-    expect(
-      isMissingStack(unreachable.stderr),
-      `an unreachable endpoint now reads as a missing stack: ${unreachable.stderr}`,
-    ).toBe(false);
+    expect("unreadable" in unreachable, `an unreachable endpoint now reads as ${JSON.stringify(unreachable)}`).toBe(
+      true,
+    );
   });
 });

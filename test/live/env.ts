@@ -144,12 +144,13 @@ export async function aws(args: string[]): Promise<{ code: number; stdout: strin
 }
 
 /**
- * {@link aws} as the product's {@link CliRunner}. The two differ only in what they hand back: this one always
- * captures, since a probe has nowhere to stream to.
+ * {@link aws} as the product's {@link CliRunner}. A probe has nowhere to stream to, so this one always captures
+ * — but it honours `captureStderr`, because a caller that did not ask for stderr must not receive it: that is
+ * the flag `aws-cli.ts` classifies through, and a double that ignores it cannot fail when the product does.
  */
-const awsAsRunner: CliRunner = async (args) => {
+export const awsAsRunner: CliRunner = async (args, opts) => {
   const { code, stdout, stderr } = await aws(args);
-  return { code, stdout, stderr };
+  return { code, stdout, stderr: opts?.captureStderr ? stderr : undefined };
 };
 
 /** POST one turn to a deployed agent and return its SSE events (the built-in `/invoke`, mounted

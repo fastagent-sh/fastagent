@@ -48,7 +48,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../src/channels/agentcore-limits.ts";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
-import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
+import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { MIN_WAKE_MS } from "../../src/schedule/wakeups.ts";
 import {
   CLI,
@@ -167,7 +167,7 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
       "json",
     ]);
     expect(outputs.code, `describe-stacks failed: ${outputs.stderr}`).toBe(0);
-    const stackOutputs = parseStackOutputs(outputs.stdout);
+    const stackOutputs = pickStackOutputs(JSON.parse(outputs.stdout)) ?? {};
     const runtimeArn = stackOutputs.RuntimeArn;
     expect(runtimeArn, `the converged stack has no RuntimeArn output:\n${outputs.stdout.slice(0, 500)}`).toBeTruthy();
     forwarderUrl = (stackOutputs.ForwarderUrl ?? "").replace(/\/$/, "");

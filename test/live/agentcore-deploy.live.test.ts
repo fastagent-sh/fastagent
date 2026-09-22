@@ -39,7 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
-import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
+import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import {
   CLI,
   aws,
@@ -121,7 +121,7 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
       "json",
     ]);
     expect(outputs.code, `describe-stacks failed: ${outputs.stderr}`).toBe(0);
-    const runtimeArn = parseStackOutputs(outputs.stdout).RuntimeArn;
+    const runtimeArn = pickStackOutputs(JSON.parse(outputs.stdout))?.RuntimeArn;
     expect(runtimeArn, `the converged stack has no RuntimeArn output:\n${outputs.stdout.slice(0, 500)}`).toBeTruthy();
 
     // A completed model turn proves the serving path, beyond CloudFormation convergence.

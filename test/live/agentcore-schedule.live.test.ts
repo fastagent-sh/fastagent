@@ -53,7 +53,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { parseFireLine } from "../fire-line.ts";
-import { parseStackOutputs } from "../../src/deploy/agentcore/run.ts";
+import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { CLI, aws, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv, run } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -195,7 +195,7 @@ describe("agentcore routines: EventBridge holds the clock and names each fire", 
       "json",
     ]);
     expect(outputs.code, `describe-stacks failed: ${outputs.stderr}`).toBe(0);
-    const stackOutputs = parseStackOutputs(outputs.stdout);
+    const stackOutputs = pickStackOutputs(JSON.parse(outputs.stdout)) ?? {};
     expect(
       stackOutputs.ForwarderUrl,
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
