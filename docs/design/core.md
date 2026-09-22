@@ -245,9 +245,23 @@ only re-run the whole prompt and execute the tool a second time).
 
 ## 5. Tools, skills, and execution environment
 
-Definition-local skills are the deployment truth. Runtime loading never scans global skill directories;
-`fastagent add skill` may copy a global or remote skill into `skills/`, after which the vendored copy is
-the source.
+An agent inherits the machine it runs on. Skills and prompt templates come from the definition's own
+`skills/` AND from the box a turn runs on — pi's Agent Skills discovery, unchanged — because the agent
+already inherits that box: `bash` runs whatever is on the PATH, `read` opens whatever is on the disk.
+Treating the machine's executables as environment and its skills as contamination was a line in the
+wrong place. A name in the definition wins a collision, which is what `fastagent add skill` is for:
+vendoring a copy in both pins it and makes it travel.
+
+The portability guarantee it replaced is now a REPORT at the moment it stops holding — `deploy`'s
+pre-flight names the skills and prompts this machine lends the agent and the image will not have. A
+note, not a gate: a deployed image is a machine too, and whatever `~/.pi/agent/skills` its builder put
+in it is that environment's answer. `commands()` says which is which (`source`: `skill` travels,
+`machine-skill` / `machine-prompt` do not).
+
+Extensions stay out of this, for a reason that is not portability: pi's extension runtime is
+process-wide, and serving runs concurrent turns for unrelated conversations
+(`docs/configuration.md#why-serving-does-not-run-them`). So does the system prompt — inheriting
+capability is one thing, inheriting an identity would be the agent becoming someone else's.
 
 Workspace tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered

@@ -228,13 +228,36 @@ FastAgent:
 `fastagent models` lists the built-in catalog only — it answers "what does FastAgent support", not
 "what does this agent use". To confirm what an agent resolved, run `fastagent info`.
 
-## Engine settings: `.fastagent/pi/settings.json`
+## What the machine lends the agent
+
+An agent inherits the box it runs on. It always did for executables — `bash` runs whatever is on the
+PATH — and it does for pi's resources too: **skills** and **prompt templates** are loaded from the
+definition's own `skills/` *and* from this machine, by pi's [Agent Skills](https://agentskills.io/specification)
+discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, project `.pi/skills/` and `.agents/skills/`).
+A name in the definition wins a collision.
+
+A deployed image is a machine too, and an empty one unless you put something in it. So the moment that
+stops being true is the deploy, and that is where it is reported: `deploy` prints a note naming the
+skills and prompts this machine lends the agent and the image will not have.
+`fastagent add skill <name>` vendors one into `skills/`, where it travels and is git-tracked.
+
+`commands()` (and therefore a `/` composer) says which is which through `source`: `skill` travels,
+`machine-skill` and `machine-prompt` do not.
+
+**Extensions are the exception**, for a reason that is not portability — see
+[Why serving does not run them](#why-serving-does-not-run-them). So is the **system prompt**:
+inheriting capability is one thing, inheriting an identity would make the agent someone else's.
+
+## Engine settings: `~/.pi/agent/settings.json`
 
 The knobs that shape a turn rather than the agent — compaction, retries, prompt-cache warming, transport
-timeouts — belong to pi, not to `fastagent.config.ts`. `dev`/`start` point pi at
-`<workspace>/.fastagent/pi/`, so they travel with the definition: a threshold someone saved on their
-laptop cannot change what a deployed turn does. The file is pi's own settings format; the ones worth
-knowing here:
+timeouts — belong to pi, not to `fastagent.config.ts`, and they come from the machine like everything
+else above: `dev`, `start` and `chat` all read pi's own file, so the posture you tuned locally is the
+posture you get. A deployed image has no such file unless it was built with one, and then pi's defaults
+apply. There is no definition-local override today; if you need one pinned to the artifact, say so and
+it becomes a `fastagent.config.ts` key rather than a path someone has to know about.
+
+The file is pi's own settings format; the ones worth knowing here:
 
 | Setting | Default | Why it matters to an agent |
 |---|---|---|
@@ -249,8 +272,7 @@ knowing here:
 }
 ```
 
-`fastagent chat` is the exception: it reads these from your machine (`~/.pi/agent/settings.json`), so
-the two postures can compact, retry or warm differently. See [CLI](cli.md#fastagent-chat).
+
 
 ### The prompt lives in the session record
 

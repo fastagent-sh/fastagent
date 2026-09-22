@@ -800,9 +800,13 @@ without its prompt being consumed, when the run finishes inside the window — a
 outcome; the settlement is the truth.
 
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
-the definition exposes (`source: "skill"` today). It is a LISTING, not a dispatch surface: to RUN one,
-send its engine spelling as ordinary prompt text and let the engine expand it — for the pi engine that
-is `/skill:<name> [args]`, which the server turns into the skill's body with the arguments appended.
+the definition exposes, plus what the MACHINE this process runs on exposes. `source` says which:
+`skill` is the definition's own and travels with a deploy; `machine-skill` and `machine-prompt` come
+from the box (`~/.pi/agent/skills` and friends) and a deployed image has them only if it was built
+with them. It is a LISTING, not a dispatch surface: to RUN one, send its engine spelling as ordinary
+prompt text and let the engine expand it — for the pi engine a skill is `/skill:<name> [args]`, which
+the server turns into the skill's body with the arguments appended, and a prompt template is the bare
+`/<name>`.
 Do not expand it client-side; the files belong to the agent, which may be on another machine. An
 unknown name goes through as plain text, silently, so check the name against this list if a typo should
 be visible — a skill whose file became unreadable is off this list too (the loader warns `read_failed`

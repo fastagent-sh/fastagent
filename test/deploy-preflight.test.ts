@@ -74,6 +74,28 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
+  it("names what THIS MACHINE lends the agent, which the image will not have", async () => {
+    // An agent inherits the box it runs on, so a deploy is the moment that stops being true. A NOTE, not a gate:
+    // the author knows what they are shipping, and stopping a deploy over a skill they never meant to carry is how
+    // a warning becomes something to skim past.
+    const home = await mkdtemp(join(tmpdir(), "fa-preflight-home-"));
+    await mkdir(join(home, ".pi", "agent", "skills", "metar"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", "agent", "skills", "metar", "SKILL.md"),
+      "---\nname: metar\ndescription: Read aviation weather.\n---\nbody\n",
+    );
+    vi.stubEnv("HOME", home);
+
+    const pre = await call(await workspace(), {});
+
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    const note = pre.messages.find((message) => message.text.includes("THIS machine"));
+    expect(note?.level, "a gate would be stopping a deploy over a skill nobody meant to carry").toBe("note");
+    expect(note?.text).toContain("metar");
+    expect(note?.text).toContain("fastagent add skill <name>"); // the way to make it travel
+  });
+
   it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
     // The value file is how a deployment picks a model without editing the committed default; the operator's
     // shell is deliberately not a source, so this cannot be satisfied by exporting FASTAGENT_MODEL.

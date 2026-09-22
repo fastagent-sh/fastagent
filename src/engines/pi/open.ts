@@ -19,8 +19,8 @@ import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
-import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
-import { reportFindingsIfChanged } from "./report.ts";
+import type { LoadedDefinition } from "./definition.ts";
+import { resolveCommandSurface } from "./agent-session-factory.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -241,19 +241,10 @@ export async function createPiAgentFromDir(
     hub = createPiSessionControl({
       sessions,
       boundary,
-      // Skills ARE the names a client offers — the resolved set, after collisions were decided first-wins, which a
-      // client cannot reconstruct from the directory.
-      commands: async () => {
-        const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
-        // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer
-        // with no signal anywhere.
-        reportFindingsIfChanged(loaded.dir, loaded);
-        return loaded.skills.map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          source: "skill",
-        }));
-      },
+      // What a client offers is what a turn WOULD run, which since this agent inherits its machine is not the
+      // definition alone. Built through the same resource posture the turn uses, so the menu cannot list a name
+      // the prompt would not expand — a second reading of "which skills exist" is how those two come to disagree.
+      commands: () => resolveCommandSurface(agentDir, workspace),
       // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
       // data plane's observer seam.
       tap: caller ? (session, event) => caller(session, event) : undefined,

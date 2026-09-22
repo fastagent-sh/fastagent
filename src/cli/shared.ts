@@ -20,6 +20,7 @@ import {
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
+import { resolveCommandSurface } from "../engines/pi/agent-session-factory.ts";
 import {
   createPiModelRuntime,
   createPiModels,
@@ -93,6 +94,12 @@ export async function reportAssembly(
   reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (a.definition.persona) reportLine("persona", "persona.md");
   reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
+  // Said at boot because it is the one difference between this process and the deployed copy of it that an
+  // author cannot see any other way.
+  const borrowed = (await resolveCommandSurface(a.agentDir, a.workspace)).filter((c) => c.source !== "skill");
+  if (borrowed.length > 0) {
+    reportLine("machine", `${borrowed.map((c) => c.name).join(", ")} (from this machine — NOT in a deployment)`);
+  }
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
   if (a.deferredToolNames.length > 0) {

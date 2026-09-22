@@ -17,6 +17,7 @@ import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/
 import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
+import { resolveCommandSurface } from "../../engines/pi/agent-session-factory.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -124,6 +125,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+          machineSkills: (await resolveCommandSurface(agentDir, workspace))
+            .filter((c) => c.source !== "skill")
+            .map((c) => ({ name: c.name, source: c.source })),
           tools: tools.names,
           deferredTools: tools.deferred,
           toolError: tools.error ?? null,
@@ -167,6 +171,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   line("persona", definition.persona ? "persona.md" : "(none)");
   line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");
+  // What this BOX lends the agent, named apart from what the definition carries: the two behave identically
+  // today and differently the moment this is deployed (docs/design/core.md §5).
+  const borrowed = (await resolveCommandSurface(agentDir, workspace)).filter((c) => c.source !== "skill");
+  if (borrowed.length > 0) {
+    line("machine", `${borrowed.map((c) => c.name).join(", ")} (from this machine — NOT in a deployment)`);
+  }
   line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
   if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
   line("channels", channels.join(", ") || "(none)");

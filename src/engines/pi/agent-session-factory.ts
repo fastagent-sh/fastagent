@@ -2,7 +2,10 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import type { AgentCommand } from "../../session.ts";
+import { loadAgentSkills } from "./definition.ts";
+import { reportFindingsIfChanged } from "./report.ts";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
@@ -38,8 +41,6 @@ export interface PiAgentSessionFactoryOptions {
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
-  /** Where pi looks for ITS settings (retry budget, compaction thresholds, default thinking level). */
-  agentDir?: string;
   /**
    * The definition's own extension entry points, for ANNOUNCING that serving does not run them. pi's extension
    * machinery is built for one process serving one session.
@@ -210,15 +211,6 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
-/**
- * Where pi reads ITS settings for a turn THIS definition owns — the artifact, not the machine it runs on. A retry
- * budget or a compaction threshold saved on someone's laptop (`~/.pi/agent/settings.json`) must not change what a
- * deployed turn does, so the serving assembly points pi at the definition instead.
- */
-function definitionAgentDir(cwd: string): string {
-  return join(cwd, ".fastagent", "pi");
-}
-
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
@@ -226,22 +218,41 @@ export function definitionResourceLoaderOptions(source: {
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
   return {
-    // Definition-only, like dev/start: pi's machine-global discovery (the operator's own ~/.pi extensions, slash
-    // commands, global AGENTS.md, APPEND_SYSTEM.md) stays out, so the agent that runs is the artifact, not the
-    // artifact plus whoever's laptop it is.
+    /**
+     * EXTENSIONS ARE THE EXCEPTION, and the reason is concurrency, not portability: pi's extension runtime is
+     * PROCESS-WIDE — every `AgentSession` overwrites the actions on it — while serving runs concurrent turns for
+     * conversations that have nothing to do with each other. One turn's `pi.sendMessage()` would deliver into
+     * another person's chat (docs/configuration.md#why-serving-does-not-run-them). When pi exports its
+     * per-session loader this line goes with the reason.
+     */
     noExtensions: true,
     // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under noExtensions, which
     // is exactly the split wanted here.
     ...(source.extensionPaths?.length ? { additionalExtensionPaths: [...source.extensionPaths] } : {}),
-    noPromptTemplates: true,
+    // Not pi's: fastagent already loads the SAME files into segment ② (`loadProjectContextFiles` in
+    // definition.ts). Leaving both on would put every AGENTS.md in the prompt twice.
     noContextFiles: true,
-    // A SPACE, not "", when the assembly has no prompt.
+    // The IDENTITY is the definition's, whatever the machine thinks. Inheriting skills is inheriting capability;
+    // inheriting a system prompt would be the agent becoming someone else's agent.
     systemPromptOverride: () => source.systemPrompt() || " ",
     appendSystemPromptOverride: () => [],
-    skillsOverride: (base) => ({
-      skills: toPiSkills(source.skills()) as typeof base.skills,
-      diagnostics: base.diagnostics,
-    }),
+    /**
+     * THE DEFINITION'S SKILLS, PLUS THE MACHINE'S — an agent inherits the box it runs on, the same way it already
+     * inherits the commands on its PATH. `base` is what pi discovered by the Agent Skills standard (the four
+     * directories, the package entries, this machine's pi settings); the definition's own win a name collision,
+     * because vendoring one in is how an author overrides the machine.
+     *
+     * A deployed image is a machine too: whatever `~/.pi/agent/skills` it has is the environment its builder chose,
+     * and `deploy` reports which of the local ones will not be in it.
+     */
+    skillsOverride: (base) => {
+      const own = toPiSkills(source.skills()) as typeof base.skills;
+      const names = new Set(own.map((skill) => skill.name));
+      return {
+        skills: [...own, ...base.skills.filter((skill) => !names.has(skill.name))],
+        diagnostics: base.diagnostics,
+      };
+    },
   };
 }
 
@@ -266,7 +277,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> =>
     createAgentSessionServices({
       cwd,
-      agentDir: options.agentDir ?? definitionAgentDir(cwd),
       modelRuntime,
       // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
       // question the two assemblies answer differently.
@@ -359,4 +369,47 @@ function toPiSkills(skills: Skill[]) {
       disableModelInvocation: skill.disableModelInvocation ?? false,
     };
   });
+}
+
+/**
+ * The names a `/` composer completes: the definition's skills, this machine's skills, and its prompt templates.
+ *
+ * `source` says whether a name TRAVELS. A definition's skill is in the artifact and will be there after a deploy;
+ * everything else belongs to the box this process is running on, which a deployed copy will not have unless its
+ * image was built with one. That distinction is the client's only way to warn before someone builds a workflow on
+ * a name that disappears in the cloud, and it costs nothing to carry.
+ *
+ * THROUGH pi's ResourceLoader, over {@link definitionResourceLoaderOptions} — the same posture a turn is bound
+ * with. Re-deriving "which skills exist" here would be a second implementation of the standard's four directories
+ * and their differing rules, and the two would answer differently the first time either moved.
+ */
+export async function resolveCommandSurface(agentDir: string, workspace: string): Promise<AgentCommand[]> {
+  const own = await loadAgentSkills(agentDir, { cwd: workspace });
+  // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer with
+  // no signal anywhere.
+  reportFindingsIfChanged(own.dir, own);
+  const { resourceLoader } = await createAgentSessionServices({
+    cwd: workspace,
+    resourceLoaderOptions: definitionResourceLoaderOptions({
+      systemPrompt: () => undefined,
+      skills: () => own.skills,
+    }),
+  });
+  const ownNames = new Set(own.skills.map((skill) => skill.name));
+  return [
+    ...own.skills.map((skill) => ({ name: skill.name, description: skill.description, source: "skill" })),
+    ...resourceLoader
+      .getSkills()
+      .skills.filter((skill: { name: string }) => !ownNames.has(skill.name))
+      .map((skill: { name: string; description: string }) => ({
+        name: skill.name,
+        description: skill.description,
+        source: "machine-skill",
+      })),
+    ...resourceLoader.getPrompts().prompts.map((prompt: { name: string; description?: string }) => ({
+      name: prompt.name,
+      ...(prompt.description ? { description: prompt.description } : {}),
+      source: "machine-prompt",
+    })),
+  ];
 }

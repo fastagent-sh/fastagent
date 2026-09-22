@@ -169,10 +169,9 @@ does too, and a `defaultThinkingLevel` you saved for coding does not quietly mak
 at a different effort than your deployment.
 
 The rest of pi's turn-shaping settings — `compaction`, `retry`, `cacheWarming`, `thinkingBudgets`, `transport`, the
-HTTP timeouts — still come from your machine in `chat` while `dev`/`start` read them from the definition
-(`<workspace>/.fastagent/pi/`, see [Engine settings](configuration.md#engine-settings-fastagentpisettingsjson)).
-Set them in either place and the two postures can compact, retry or warm the prompt cache differently. They are not split today because pi
-re-reads its settings from storage on every resource reload, which discards any per-key override applied on top.
+HTTP timeouts — come from your machine in every posture, `chat` and `dev`/`start` alike (see
+[Engine settings](configuration.md#engine-settings-piagentsettingsjson)), the same way its skills do. A deployed image
+has no such file unless it was built with one.
 
 ## `fastagent invoke`
 
