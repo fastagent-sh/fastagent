@@ -61,7 +61,19 @@ export interface SchedulerOptions {
   externalClock?: boolean;
 }
 
-// Recheck the wall clock across long waits and machine suspension; never exceed setTimeout's limit.
+/**
+ * The longest a single armed wait sleeps before looking at the wall clock again.
+ *
+ * WHAT IT BUYS, and only this: a wait LONGER than one cap (a daily, weekly or monthly cron) re-reads the wall
+ * clock every 6 hours, so a clock that jumped forward is noticed within that, instead of after the whole
+ * original delay. MEASURED (2026-09-22): the same jump under a wait SHORTER than the cap changes nothing — a
+ * minute cron whose wall clock jumped 10 minutes past its slot still fired at t+51.4s, when its one timer was
+ * always going to. So this is not a resume guarantee and must not be read as one; it bounds lateness for the
+ * long waits at 6 hours.
+ *
+ * NOT about `setTimeout`'s 2^31-1 ms ceiling: `Effect.sleep` already splits a longer delay by itself
+ * (effect/src/internal/effect.ts, `sleepMillis`).
+ */
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
 
@@ -251,6 +263,10 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       Effect.gen(function* () {
         let due: Date | undefined = first;
         while (due) {
+          // SLEEP, THEN LOOK AGAIN, in both directions: forward, a jumped clock is noticed a cap early
+          // ({@link MAX_WAIT_MS}); backward — an NTP correction, a VM restored from a snapshot — waking on the
+          // timer alone would fire a slot that has not arrived yet and CLAIM it, burning an occurrence that was
+          // still ahead.
           while (now().getTime() < due.getTime()) {
             yield* Effect.sleep(Math.min(due.getTime() - now().getTime(), MAX_WAIT_MS));
           }
@@ -344,6 +360,9 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           // NO CRON, NO CLOCK. A routine without one is not unscheduled by accident — it is reached by name
           // (`POST /run`, `fastagent routine run`), so there is nothing here to arm and nothing to warn about.
           if (s.cron === undefined) continue;
+          // FROM THE LAST FIRE, or from now when there was none. A routine that has never fired does not catch
+          // up the occurrence it missed while the process was down: nothing recorded that it was ever armed then,
+          // so "missed" is not a fact this process has. Every boot after the first resumes from the claim.
           const last = lastFires.get(s.name);
           const due = nextRun(s.cron, s.tz, last ? new Date(last) : current);
           if (!due) {
