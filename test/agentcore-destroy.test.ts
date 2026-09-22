@@ -346,6 +346,31 @@ describe("destroy agentcore", () => {
     expect(outcome.removed).toContain("log group /aws/lambda/fastagent-probe-forwarder");
   });
 
+  it("a read failure the delete REMEDIED is a warning, not a survivor", async () => {
+    // The common shape: `output = text` in the caller's AWS config makes the listing unparseable while
+    // `logs:DeleteLogGroup` works fine. The forwarder's group is named exactly, so `--run` deletes it by name
+    // and nothing survived — reporting `1 resource(s) survived` would fail a teardown that removed everything,
+    // and `test/live/env.ts` reads that outcome as a leak.
+    const said: string[] = [];
+    const aws = fakeAws({
+      "logs describe-log-groups --log-group-name-prefix /aws/lambda": { code: 0, stdout: "not json\n" },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner, (m) => said.push(m));
+
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.removed).toContain("log group /aws/lambda/fastagent-probe-forwarder");
+    // Still SAID, just not counted as a survivor.
+    expect(said.join("\n")).toContain("could not list log groups under /aws/lambda/fastagent-probe-forwarder");
+
+    // WITHOUT `--run` the same unreadable listing is a failure: no delete follows to make it moot, and the
+    // inventory's whole job is saying what is out there.
+    const inventory = await destroyAgentcoreDeployment({ name: "probe", run: false }, aws.runner);
+    expect(inventory.ok).toBe(false);
+    if (inventory.ok) return;
+    expect(inventory.gate).toContain("cannot confirm whether it exists");
+  });
+
   it("reports nothing for a deployment that is not there, and claims no deletion", async () => {
     // `aws cloudformation delete-stack` answers 0 for a stack that does not exist, so a teardown that skips the
     // reads reports "deleted: stack X" for something nobody deployed. Observed on a real second `--run`.

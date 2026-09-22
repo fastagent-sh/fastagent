@@ -22,9 +22,14 @@
  * retry needs.
  */
 import type { CliRunner } from "../runner.ts";
-import { awsCli, awsList, awsValue } from "./aws-cli.ts";
-import { parseLogGroupNames } from "./logs.ts";
-import { deploymentBucketName, forwarderLogGroup, toRuntimeName, wakeAlarmPrefix } from "./plan.ts";
+import { awsCli, awsList, awsValue, parseLogGroupNames } from "./aws-cli.ts";
+import {
+  deploymentBucketName,
+  forwarderLogGroup,
+  runtimeLogGroupPrefix,
+  toRuntimeName,
+  wakeAlarmPrefix,
+} from "./plan.ts";
 
 export interface AgentcoreDestroyPlan {
   /** Deployment base name — stack `fastagent-<name>`, bucket `fa-<name>-<account>`, repo `fastagent/<name>`. */
@@ -179,7 +184,7 @@ export async function destroyAgentcoreDeployment(
   // (which `docs/deploy.md` says it will be) got a clean-looking teardown with the group holding every line the
   // agent ever printed still sitting there. The trailing `-` keeps `probe-` off `probe2-…`.
   const forwarderGroup = forwarderLogGroup(plan.name);
-  const runtimePrefix = `/aws/bedrock-agentcore/runtimes/${toRuntimeName(plan.name)}-`;
+  const runtimePrefix = runtimeLogGroupPrefix(toRuntimeName(plan.name));
   const logGroupsUnder = async (prefix: string) =>
     aws.read(
       [
@@ -200,12 +205,20 @@ export async function destroyAgentcoreDeployment(
   // NOT A GATE, unlike the three above: these two only supply NAMES, and refusing to delete anything because a
   // listing failed turned a role without `logs:DescribeLogGroups` — or one `ThrottlingException` — into a
   // permanent no-op with a Bedrock runtime and a Lambda billing behind it.
+  //
+  // FAILURE vs WARNING is decided by whether the resource SURVIVES it, not by whether a call failed. The
+  // forwarder's group is named exactly, so a `--run` deletes it by name and the failed listing changed nothing
+  // — reporting `1 resource(s) survived` for a teardown that removed everything is the same false signal as the
+  // reverse, and `test/live/env.ts` treats it as a leak. In the inventory, where no delete follows, the same
+  // unreadable listing DOES mean the answer is incomplete.
   const failures: string[] = [];
+  const warnings: string[] = [];
   const named = (read: Awaited<ReturnType<typeof logGroupsUnder>>) => ("ok" in read ? read.ok : []);
   if ("unreadable" in forwarderRead) {
-    // Its name is EXACT, so the delete itself answers what the listing could not.
-    failures.push(
-      `listing log groups under ${forwarderGroup} (${forwarderRead.unreadable}) — deleting it by name anyway`,
+    (plan.run ? warnings : failures).push(
+      plan.run
+        ? `could not list log groups under ${forwarderGroup} (${forwarderRead.unreadable}) — deleted it by name instead`
+        : `listing log groups under ${forwarderGroup} (${forwarderRead.unreadable}) — cannot confirm whether it exists`,
     );
   }
   if ("unreadable" in runtimeRead) {
@@ -215,6 +228,7 @@ export async function destroyAgentcoreDeployment(
         `the agent's stdout and was NOT deleted`,
     );
   }
+  for (const warning of warnings) announce(warning);
   const listedGroups = [...named(forwarderRead).filter((name) => name === forwarderGroup), ...named(runtimeRead)];
   const logGroups = "unreadable" in forwarderRead ? [forwarderGroup, ...listedGroups] : listedGroups;
 

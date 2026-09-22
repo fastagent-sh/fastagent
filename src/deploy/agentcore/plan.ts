@@ -143,6 +143,20 @@ function forwarderFunctionName(name: string): string {
 }
 
 /**
+ * Where a RUNTIME's logs land, by the identifier the caller happens to hold: `fastagent logs` knows the runtime id
+ * from the stack's `RuntimeArn`, `destroy` knows only the {@link toRuntimeName} the template deployed — and AgentCore
+ * names the id `<AgentRuntimeName>-<suffix>`, so the same prefix serves both. MEASURED (ap-southeast-1, 2026-09-22):
+ * a deploy of `destroy-probe-yehg` produced `/aws/bedrock-agentcore/runtimes/destroy_probe_yehg-6oR1zq7pBZ-DEFAULT`.
+ *
+ * ONE OWNER because of what the callers do with it: `logs` picks a group to tail, `destroy` DELETES everything the
+ * prefix matches. The trailing `-` is what keeps `probe-` off `probe2-…`, and a second hand-spelled copy of this
+ * string is a copy that can lose it.
+ */
+export function runtimeLogGroupPrefix(runtimeOrName: string): string {
+  return `/aws/bedrock-agentcore/runtimes/${runtimeOrName}-`;
+}
+
+/**
  * Where the forwarder's logs land. Lambda creates this group itself, from the function name, so three parties have
  * to agree on a string none of them can check against the others: the template that names the function, the runbook
  * and `--run` summary that tell an operator to set its retention, and `fastagent logs --source forwarder`.

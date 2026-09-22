@@ -76,14 +76,16 @@ describe("awsCli", () => {
     }
 
     // So empty stdout is NOT "no results" — it is output we failed to read, and answering "there is nothing
-    // there" is how a truncated listing gets reported as a clean resource.
+    // there" is how a truncated listing gets reported as a clean resource. It needs no branch of its own
+    // (`JSON.parse("")` throws like anything else unreadable), but it does need to SAY so: a gate ending in a
+    // colon and nothing after it tells an operator less than "AWS printed nothing".
     const { cli } = fake({ code: 0, stdout: "" });
     expect(
       await cli.read(
         ["x"],
         awsList<string>(() => ["never"]),
       ),
-    ).toMatchObject({ unreadable: "" });
+    ).toMatchObject({ unreadable: "(no output)" });
   });
 
   it("output the parser rejects is unreadable, never a thrown SyntaxError", async () => {

@@ -1,6 +1,7 @@
 /** AgentCore log discovery + tailing. */
 import type { CliRunner } from "../runner.ts";
-import { forwarderLogGroup } from "./plan.ts";
+import { awsCli, awsValue, parseLogGroupNames } from "./aws-cli.ts";
+import { forwarderLogGroup, runtimeLogGroupPrefix } from "./plan.ts";
 import { parseStackOutputs } from "./run.ts";
 
 export type AgentcoreLogSource = "runtime" | "forwarder";
@@ -24,40 +25,27 @@ function runtimeIdFromArn(arn: string): string | undefined {
   return id && !id.includes("/") ? id : undefined;
 }
 
-/**
- * `logGroups[].logGroupName` as names, or `undefined` when the output is not the JSON we asked for. The AWS CLI
- * renders `--query` in whatever `output` the caller's config sets, so `--output json` is half the guard and this
- * is the other half.
- */
-export function parseLogGroupNames(stdout: string): string[] | undefined {
-  try {
-    const parsed = JSON.parse(stdout) as unknown;
-    return Array.isArray(parsed) && parsed.every((v) => typeof v === "string") ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function tailAgentcoreLogs(
   plan: AgentcoreLogsPlan,
   aws: CliRunner,
   announce: (message: string) => void = () => {},
 ): Promise<AgentcoreLogsOutcome> {
+  const cli = awsCli(aws);
   const stack = `fastagent-${plan.name}`;
-  const outputsResult = await aws(
+  // THROUGH THE ADJUDICATOR, like every other read of an AWS result in this directory: an exit code alone cannot
+  // separate "deploy it first" from `AccessDeniedException`, and this file used to say the first for both.
+  const outputsRead = await cli.read(
     ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
-    { capture: true },
+    awsValue<Record<string, string>>((parsed) => parseStackOutputs(JSON.stringify(parsed))),
   );
-  if (outputsResult.code === 127) {
-    return { ok: false, gate: "aws CLI not found — install AWS CLI v2: https://docs.aws.amazon.com/cli/" };
+  if ("absent" in outputsRead) {
+    return { ok: false, gate: `no AgentCore stack ${stack} in this account/region — deploy it first` };
   }
-  if (outputsResult.code !== 0) {
-    return {
-      ok: false,
-      gate: `could not read AgentCore stack ${stack} — deploy it first, or fix the AWS account/region shown above`,
-    };
+  if ("unreadable" in outputsRead) {
+    if (outputsRead.code === 127) return { ok: false, gate: outputsRead.unreadable };
+    return { ok: false, gate: `could not read AgentCore stack ${stack}: ${outputsRead.unreadable}` };
   }
-  const outputs = parseStackOutputs(outputsResult.stdout);
+  const outputs = outputsRead.ok;
 
   let prefix: string;
   let exact: string | undefined;
@@ -70,14 +58,14 @@ export async function tailAgentcoreLogs(
         gate: `stack ${stack} has no valid RuntimeArn output — regenerate/deploy the AgentCore stack`,
       };
     }
-    prefix = `/aws/bedrock-agentcore/runtimes/${runtimeId}-`;
+    prefix = runtimeLogGroupPrefix(runtimeId);
   } else {
     // `ForwarderUrl` is the stack's INGRESS URL, NOT proof that a forwarder Lambda exists.
     exact = forwarderLogGroup(plan.name);
     prefix = exact;
   }
 
-  const groupsResult = await aws(
+  const groupsRead = await cli.read(
     [
       "logs",
       "describe-log-groups",
@@ -88,15 +76,13 @@ export async function tailAgentcoreLogs(
       "--output",
       "json",
     ],
-    { capture: true },
+    parseLogGroupNames,
   );
-  if (groupsResult.code !== 0) {
-    return { ok: false, gate: "could not discover the CloudWatch log group — see the AWS error above" };
+  if ("unreadable" in groupsRead) {
+    // QUOTED, not "see the error above": the read captures both streams, so there is nothing above.
+    return { ok: false, gate: `could not discover the CloudWatch log group: ${groupsRead.unreadable}` };
   }
-  const groups = parseLogGroupNames(groupsResult.stdout);
-  if (!groups) {
-    return { ok: false, gate: "AWS returned an invalid CloudWatch log-group response" };
-  }
+  const groups = "ok" in groupsRead ? groupsRead.ok : [];
   const matches = groups.filter((group) => (exact ? group === exact : group.startsWith(prefix))).sort();
   if (matches.length === 0) {
     // Absent group = never used, EXCEPT when the stack has no forwarder at all — an invoke-only deployment would
