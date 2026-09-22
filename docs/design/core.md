@@ -720,6 +720,13 @@ selects the Lambda group. It applies no stream filter: AgentCore names streams
 `YYYY/MM/DD/[runtime-logs]<session>`, so the marker is an infix after the UTC date path and a
 `--log-stream-name-prefix` match is always empty.
 
+`fastagent destroy agentcore` is the other direction, and it exists because three of the four things a deploy
+creates cannot be stack resources: the artifact bucket and the ECR repository have to exist BEFORE the stack
+that reads from them, and both log groups are created by AWS on first write. The fourth, a wake alarm, is
+minted at runtime by the container. The wait on `stack-delete-complete` decides whether the rest may run: a
+DELETE_FAILED stack still holds a billing runtime, and the image and forwarder zip below it are what a retry
+needs. Webhook registrations are out of scope — they live on the platforms, not in the account.
+
 **AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `base/`,
 `.state/`, `.secrets/` layout applies on the platform's own mount: it survives compute stop/resume, so
 an idle-reclaimed agent resumes with its memory, and AWS wipes it on every runtime version update — i.e.

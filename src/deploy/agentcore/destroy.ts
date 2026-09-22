@@ -45,13 +45,38 @@ interface Version {
 }
 
 /**
- * Every object AND delete marker in the bucket. The AWS CLI paginates this itself, so one call is the whole
- * bucket — and both lists matter: a versioned bucket refuses `delete-bucket` while either is non-empty, which is
- * how a hand-cleanup of this exact account hit `BucketNotEmpty ... You must delete all versions in the bucket`.
+ * GUARDED, like every other read of AWS CLI output in this directory (`parseStackOutputs`,
+ * `parseLogGroupNames`): output we cannot read becomes `undefined` and the caller turns it into one actionable
+ * line, because an exception escaping this module reaches the operator as a Node stack trace — `src/cli.ts` has
+ * no catch-all.
+ *
+ * EMPTY STDOUT IS AN EMPTY LIST, not a parse failure. The AWS CLI prints NOTHING for a paginated list command
+ * with no results, even with `--output json`. An empty artifact bucket is not hypothetical: `create-bucket`
+ * happens before the upload into it, and a previous destroy that got through `delete-objects` and failed on
+ * `delete-bucket` leaves exactly one — which is the half-deleted deployment this command exists to finish.
  */
-function parseVersions(stdout: string): Version[] {
-  const parsed = JSON.parse(stdout) as { Versions?: Version[]; DeleteMarkers?: Version[] };
-  return [...(parsed.Versions ?? []), ...(parsed.DeleteMarkers ?? [])];
+function parseVersions(stdout: string): Version[] | undefined {
+  if (stdout.trim() === "") return [];
+  try {
+    const parsed = JSON.parse(stdout) as { Versions?: Version[]; DeleteMarkers?: Version[] };
+    // BOTH LISTS: a versioned bucket refuses `delete-bucket` while either is non-empty, which is how a
+    // hand-cleanup of this exact account hit `BucketNotEmpty ... You must delete all versions in the bucket`.
+    return [...(parsed.Versions ?? []), ...(parsed.DeleteMarkers ?? [])];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Wake alarm names, same guard and same empty-output rule as {@link parseVersions}. */
+function parseScheduleNames(stdout: string): string[] | undefined {
+  if (stdout.trim() === "") return [];
+  try {
+    return ((JSON.parse(stdout) as { Schedules?: { Name?: unknown }[] }).Schedules ?? []).flatMap((s) =>
+      typeof s.Name === "string" ? [s.Name] : [],
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export async function destroyAgentcoreDeployment(
@@ -90,7 +115,10 @@ export async function destroyAgentcoreDeployment(
   if (listed.code !== 0) {
     return gate(`could not list wake alarms under ${prefix}: ${(listed.stderr ?? "").trim().slice(0, 300)}`);
   }
-  const alarms = ((JSON.parse(listed.stdout) as { Schedules?: { Name: string }[] }).Schedules ?? []).map((s) => s.Name);
+  const alarms = parseScheduleNames(listed.stdout);
+  if (alarms === undefined) {
+    return gate(`could not read the wake alarm list under ${prefix} — see the output above`);
+  }
 
   // WHAT IS ACTUALLY THERE, read before anything is deleted. Not for safety — the deletes tolerate a miss — but
   // because this report is the command's entire output, and `aws cloudformation delete-stack` answers 0 for a
@@ -106,7 +134,11 @@ export async function destroyAgentcoreDeployment(
     captureStderr: true,
   });
   const bucketExists = versions.code === 0;
-  const keys = bucketExists ? parseVersions(versions.stdout).map((v) => v.Key) : [];
+  const contents = bucketExists ? parseVersions(versions.stdout) : [];
+  if (contents === undefined) {
+    return gate(`could not read the object listing for bucket ${bucket} — see the output above`);
+  }
+  const keys = contents.map((v) => v.Key);
   // A bucket that holds anything but the forwarder's zips is NOT ours to delete. Today's deploy puts nothing
   // else there (agent state lives on the AgentCore storage mount), but an older one kept `state/snapshot.json.gz`
   // in it, and in this account those snapshots were the only copy left of two retired agents.
@@ -118,6 +150,8 @@ export async function destroyAgentcoreDeployment(
   // resource — same reason, twice — and the runtime's holds the agent's own stdout/stderr, i.e. what it said in
   // every conversation. `deploy`'s runbook already knows there are two: it sets a retention on each.
   const forwarderGroup = forwarderLogGroup(plan.name);
+  /** Resources this command knows are there but cannot address. Reported, and never reported as success. */
+  const unnamed: string[] = [];
   const listLogGroups = async (prefix: string): Promise<string[] | undefined> => {
     const listed = await aws(
       [
@@ -146,7 +180,16 @@ export async function destroyAgentcoreDeployment(
     );
     const runtimeArn = outputs.code === 0 ? parseStackOutputs(outputs.stdout).RuntimeArn : undefined;
     const runtimeId = runtimeArn && runtimeIdFromArn(runtimeArn);
-    if (runtimeId) {
+    if (runtimeId === undefined) {
+      // NOT SILENT, and not a refusal either. Without the runtime id this command cannot NAME the group that
+      // holds the agent's stdout, but it can still delete everything else — and reporting success while leaving
+      // that group behind is the one outcome ruled out. The two `describe-log-groups` failures beside this one
+      // gate for the same reason: unreadable and absent are different, and the difference is data left behind.
+      unnamed.push(
+        `the runtime's log group: stack ${stack} gave no usable RuntimeArn, so it cannot be named. Find it with ` +
+          `\`aws logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore/runtimes/\``,
+      );
+    } else {
       const runtimeGroups = await listLogGroups(`/aws/bedrock-agentcore/runtimes/${runtimeId}-`);
       if (runtimeGroups === undefined) {
         return gate(`could not list log groups for runtime ${runtimeId} — check the AWS account/region above`, []);
@@ -161,6 +204,7 @@ export async function destroyAgentcoreDeployment(
   if (bucketExists) found.push(`bucket ${bucket} (${keys.length} object version(s))`);
   if (repoExists) found.push(`repository ${repo}`);
   for (const name of logGroups) found.push(`log group ${name}`);
+  for (const item of unnamed) found.push(`UNREACHABLE: ${item}`);
 
   // The one thing this command refuses: a bucket holding anything but the forwarder's zips.
   const kept =
@@ -196,21 +240,33 @@ export async function destroyAgentcoreDeployment(
 
   if (stackExists) {
     announce(`deleting stack ${stack} (this waits for CloudFormation)…`);
-    if (await attempt(`stack ${stack}`, ["cloudformation", "delete-stack", "--stack-name", stack])) {
-      // THE WAIT DECIDES whether anything below may run. A DELETE_FAILED stack still holds a billing Bedrock
-      // runtime and Lambda, and the image and the forwarder zip below are what it was created FROM — deleting
-      // those while it stands only makes the operator's retry worse. `run.ts` gates on this same command.
+    const asked = await aws(["cloudformation", "delete-stack", "--stack-name", stack], { captureStderr: true });
+    const refused = asked.code !== 0 && !ABSENT.test(asked.stderr ?? "");
+    if (refused) {
+      return gate(
+        `stack ${stack} refused to delete: ${(asked.stderr ?? "").trim().slice(0, 300)}\n` +
+          `  the image and the forwarder package it was built from are untouched, so a retry has what it needs.`,
+        removed,
+      );
+    }
+    {
+      // THE WAIT DECIDES whether anything below may run, AND whether the stack counts as deleted at all.
+      // `delete-stack` returning 0 only means CloudFormation accepted the request: a DELETE_FAILED stack still
+      // holds a billing Bedrock runtime and Lambda, and the image and the forwarder zip below are what it was
+      // created FROM — deleting those while it stands only makes the operator's retry worse. Recording it as
+      // removed before this point printed "deleted: stack X" directly above "did not finish deleting".
       const waited = await aws(["cloudformation", "wait", "stack-delete-complete", "--stack-name", stack], {
         captureStderr: true,
       });
       if (waited.code !== 0 && !ABSENT.test(waited.stderr ?? "")) {
         return gate(
           `stack ${stack} did not finish deleting: ${(waited.stderr ?? "").trim().slice(0, 300)}\n` +
-            `  its runtime and Lambda are still billing. Nothing else was touched — the image and the ` +
-            `forwarder package it was built from are still in place for a retry.`,
+            `  its runtime and Lambda are still billing. The image and the forwarder package it was built ` +
+            `from are untouched, so a retry has what it needs.`,
           removed,
         );
       }
+      removed.push(`stack ${stack}`);
       // AGAIN, NOW. The container served the whole deletion and holds `scheduler:CreateSchedule`, so a wake-up
       // taken in those minutes minted an alarm after the first sweep read the list — an alarm whose target is
       // the Lambda we just deleted, retrying into nothing for weeks.
@@ -218,17 +274,18 @@ export async function destroyAgentcoreDeployment(
         capture: true,
         captureStderr: true,
       });
-      if (after.code !== 0) {
-        failures.push(`re-listing wake alarms under ${prefix}: ${(after.stderr ?? "").trim().slice(0, 300)}`);
-      } else {
-        await sweepAlarms(
-          ((JSON.parse(after.stdout) as { Schedules?: { Name: string }[] }).Schedules ?? []).map((a) => a.Name),
+      const late = after.code === 0 ? parseScheduleNames(after.stdout) : undefined;
+      if (late === undefined) {
+        failures.push(
+          `re-listing wake alarms under ${prefix}: ${(after.stderr ?? "unreadable output").trim().slice(0, 300)}`,
         );
+      } else {
+        await sweepAlarms(late);
       }
     }
   }
 
-  if (bucketExists && foreign.length === 0) await purgeBucket(bucket, aws, attempt);
+  if (bucketExists && foreign.length === 0) await purgeBucket(bucket, aws, attempt, failures);
   if (repoExists) {
     await attempt(`repository ${repo}`, ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
   }
@@ -236,8 +293,9 @@ export async function destroyAgentcoreDeployment(
     await attempt(`log group ${name}`, ["logs", "delete-log-group", "--log-group-name", name]);
   }
 
-  if (failures.length > 0) {
-    return gate(`${failures.length} resource(s) survived:\n  ${failures.join("\n  ")}`, removed);
+  const survived = [...failures, ...unnamed];
+  if (survived.length > 0) {
+    return gate(`${survived.length} resource(s) survived:\n  ${survived.join("\n  ")}`, removed);
   }
   return { ok: true, found, removed, kept };
 }
@@ -250,13 +308,19 @@ async function purgeBucket(
   bucket: string,
   aws: CliRunner,
   attempt: (label: string, args: string[]) => Promise<boolean>,
+  failures: string[],
 ): Promise<void> {
+  // RE-READ rather than reusing the inventory: minutes of `stack-delete-complete` sit between the two.
   const listed = await aws(["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"], {
     capture: true,
     captureStderr: true,
   });
   if (listed.code !== 0) return; // gone between the inventory and now
   const versions = parseVersions(listed.stdout);
+  if (versions === undefined) {
+    failures.push(`bucket ${bucket}: could not read its object listing, so it was left in place`);
+    return;
+  }
   for (let at = 0; at < versions.length; at += DELETE_BATCH) {
     const batch = versions.slice(at, at + DELETE_BATCH).map((v) => ({ Key: v.Key, VersionId: v.VersionId }));
     await attempt(`${batch.length} object version(s) in ${bucket}`, [

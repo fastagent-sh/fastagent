@@ -10,6 +10,8 @@ import { destroyAgentcoreDeployment } from "../src/deploy/agentcore/destroy.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 const ACCOUNT = "111122223333";
+/** What AgentCore names the runtime's own log group, which holds the agent's stdout. */
+const RUNTIME_GROUP = "/aws/bedrock-agentcore/runtimes/probe-xyz-DEFAULT";
 
 interface FakeAws {
   runner: CliRunner;
@@ -28,6 +30,17 @@ function fakeAws(replies: Record<string, { code: number; stdout?: string; stderr
     "sts get-caller-identity": { code: 0, stdout: JSON.stringify({ Account: ACCOUNT, Arn: "arn:aws:iam::x:root" }) },
     "scheduler list-schedules": { code: 0, stdout: JSON.stringify({ Schedules: [] }) },
     "cloudformation describe-stacks": { code: 0, stdout: JSON.stringify({ Stacks: [{}] }) },
+    // The outputs query is a SECOND describe-stacks, and the runtime's log group name comes out of it.
+    "cloudformation describe-stacks --stack-name fastagent-probe --query": {
+      code: 0,
+      stdout: JSON.stringify([
+        { OutputKey: "RuntimeArn", OutputValue: "arn:aws:bedrock-agentcore:x:1:runtime/probe-xyz" },
+      ]),
+    },
+    "logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore": {
+      code: 0,
+      stdout: JSON.stringify([RUNTIME_GROUP]),
+    },
     "s3api list-object-versions": { code: 0, stdout: JSON.stringify({ Versions: [] }) },
     "ecr describe-repositories": { code: 0, stdout: JSON.stringify({ repositories: [{}] }) },
     "logs describe-log-groups": { code: 0, stdout: JSON.stringify(["/aws/lambda/fastagent-probe-forwarder"]) },
@@ -64,6 +77,7 @@ describe("destroy agentcore", () => {
       `bucket fa-probe-${ACCOUNT} (0 object version(s))`,
       "repository fastagent/probe",
       "log group /aws/lambda/fastagent-probe-forwarder",
+      `log group ${RUNTIME_GROUP}`,
     ]);
     // NO WRITE REACHED AWS. The inventory is the confirmation step for an irreversible command, so it has to be
     // safe to run on a production deployment.
@@ -96,6 +110,7 @@ describe("destroy agentcore", () => {
       "ecr describe-repositories",
       "logs describe-log-groups",
       "cloudformation describe-stacks", // the stack's outputs, for the RUNTIME's log group name
+      "logs describe-log-groups", // and that group, listed while the stack still stands
       // ALARMS WHILE THE STACK STANDS: they are minted at runtime into the default Scheduler group, so the
       // stack does not own them, and after the Lambda is gone they retry into nothing for weeks.
       "scheduler delete-schedule",
@@ -109,6 +124,7 @@ describe("destroy agentcore", () => {
       "s3api delete-bucket",
       "ecr delete-repository",
       "logs delete-log-group",
+      "logs delete-log-group", // BOTH: the forwarder's and the runtime's own
     ]);
     const deleted = aws.calls.find((c) => c[1] === "delete-objects") as string[];
     expect(JSON.parse(deleted.at(-1) as string).Objects).toEqual([
@@ -133,6 +149,10 @@ describe("destroy agentcore", () => {
     if (outcome.ok) return;
     expect(outcome.gate).toContain("DELETE_FAILED");
     expect(outcome.gate).toContain("still billing");
+    // AND IT IS NOT IN `removed`. `delete-stack` returning 0 only means CloudFormation accepted the request;
+    // printing "deleted: stack X" directly above "did not finish deleting" is the false signal, twice over,
+    // since the runtime it names is still running.
+    expect(outcome.removed).not.toContain("stack fastagent-probe");
     expect(names(aws.calls)).not.toContain("s3api delete-bucket");
     expect(names(aws.calls)).not.toContain("ecr delete-repository");
     expect(names(aws.calls)).not.toContain("logs delete-log-group");
@@ -158,8 +178,8 @@ describe("destroy agentcore", () => {
 
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.found).toContain(`log group ${runtimeGroup}`);
-    expect(outcome.removed).toContain(`log group ${runtimeGroup}`);
+    expect(outcome.found).toContain(`log group ${RUNTIME_GROUP}`);
+    expect(outcome.removed).toContain(`log group ${RUNTIME_GROUP}`);
     // AFTER the stack, so a runtime still writing does not re-create it.
     const order = names(aws.calls);
     expect(order.indexOf("cloudformation wait")).toBeLessThan(order.lastIndexOf("logs delete-log-group"));
@@ -249,6 +269,51 @@ describe("destroy agentcore", () => {
     if (outcome.ok) return;
     expect(outcome.gate).toContain("could not list log groups under /aws/lambda/fastagent-probe-forwarder");
     expect(names(aws.calls)).not.toContain("cloudformation delete-stack");
+  });
+
+  it("an EMPTY listing is an empty list, not a crash: the AWS CLI prints nothing for a paginated no-result", async () => {
+    // Not hypothetical. `create-bucket` happens before the upload into it, and a previous destroy that got
+    // through `delete-objects` and failed on `delete-bucket` leaves an empty bucket — which is the half-deleted
+    // deployment this command exists to finish. An escaping SyntaxError would reach the operator as a Node
+    // stack trace: `src/cli.ts` has no catch-all.
+    const aws = fakeAws({
+      "s3api list-object-versions": { code: 0, stdout: "" },
+      "scheduler list-schedules": { code: 0, stdout: "" },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.found).toContain(`bucket fa-probe-${ACCOUNT} (0 object version(s))`);
+    expect(outcome.removed).toContain(`bucket fa-probe-${ACCOUNT}`);
+    expect(names(aws.calls)).not.toContain("s3api delete-objects"); // nothing in it to delete
+  });
+
+  it("output it cannot parse is a gate, not an exception out of the command", async () => {
+    const aws = fakeAws({ "s3api list-object-versions": { code: 0, stdout: "<html>proxy error</html>" } });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain(`could not read the object listing for bucket fa-probe-${ACCOUNT}`);
+    expect(names(aws.calls)).not.toContain("cloudformation delete-stack");
+  });
+
+  it("a stack whose outputs cannot be read leaves the runtime's log group, and SAYS so", async () => {
+    // The group's name carries the runtime id, so without the outputs this command cannot address it. The one
+    // outcome ruled out is reporting success with the agent's whole stdout still sitting there.
+    const aws = fakeAws({
+      "cloudformation describe-stacks --stack-name fastagent-probe --query": { code: 0, stdout: "[]" },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain("gave no usable RuntimeArn");
+    expect(outcome.gate).toContain("--log-group-name-prefix /aws/bedrock-agentcore/runtimes/");
+    // Everything it COULD address is still deleted — the leftover is reported, not a reason to stop.
+    expect(outcome.removed).toContain("stack fastagent-probe");
+    expect(outcome.removed).toContain("log group /aws/lambda/fastagent-probe-forwarder");
   });
 
   it("reports nothing for a deployment that is not there, and claims no deletion", async () => {

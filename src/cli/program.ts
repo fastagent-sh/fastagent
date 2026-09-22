@@ -485,7 +485,9 @@ const destroy: CommandSpec = {
     "A bucket holding anything other than the forwarder's zips is reported and KEPT: an older deploy " +
     "wrote agent state there, and it may be the only copy. Everything else is deleted unconditionally, " +
     "including the agent's session storage on the AgentCore runtime — this host keeps it inside the " +
-    "stack, so there is no way to delete the deployment and keep the conversations.",
+    "stack, so there is no way to delete the deployment and keep the conversations. AWS ONLY: the " +
+    "webhook registrations `deploy --run` made with Telegram/Slack/Feishu still point at the deleted " +
+    "Function URL, and clearing them is a call to those platforms (for Telegram, deleteWebhook).",
   run: async (args, f) =>
     (await import("./commands/destroy.ts")).runDestroy(args[0] as string, args[1] as string, {
       run: f.run === true,
