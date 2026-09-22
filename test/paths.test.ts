@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { displayPath, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
+import { displayPath, placementDeadEnd, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
 
 describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
   const config = async (dir: string): Promise<void> => {
@@ -37,6 +37,34 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
       expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/EACCES/);
     } finally {
       await chmod(join(dir, "fastagent"), 0o755);
+    }
+  });
+
+  asUser("a directory it cannot look into never outranks a message that says what to DO", async () => {
+    // Two agents and no way to pick: telling the caller to fix a third directory's permissions does not
+    // resolve that, and fixing it would not change the answer.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-many-"));
+    await config(join(dir, "alpha"));
+    await config(join(dir, "beta"));
+    await mkdir(join(dir, "locked"));
+    await chmod(join(dir, "locked"), 0o000);
+    try {
+      expect(() => resolvePlacement(dir, {})).toThrow(/holds 2 agents \(alpha, beta\)/);
+      expect(() => resolvePlacement(dir, { FASTAGENT_AGENT: "gamma" })).toThrow(/FASTAGENT_AGENT asserts "gamma"/);
+
+      // And the weaker question keeps its old answer: `login` asks whether it is outside an agent, for which a
+      // neighbour it may not enter is environment noise — answering it exits instead of logging in globally.
+      const empty = await mkdtemp(join(tmpdir(), "fa-ws-noise-"));
+      await mkdir(join(empty, "locked"));
+      await chmod(join(empty, "locked"), 0o000);
+      try {
+        expect(placementDeadEnd(empty, {})).toBeUndefined();
+        expect(() => resolvePlacement(empty, {})).toThrow(/cannot look into/);
+      } finally {
+        await chmod(join(empty, "locked"), 0o755);
+      }
+    } finally {
+      await chmod(join(dir, "locked"), 0o755);
     }
   });
 

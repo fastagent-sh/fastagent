@@ -82,8 +82,8 @@ function hasConfig(p: string): boolean {
  * caller pointed at it. Here it cannot: every machine has directories this process may not enter, and one of
  * them sitting next to the agent must not fail a command that found the agent — `workspaceHint` scans the
  * PARENT for a hint, which on a CI runner means scanning `/tmp` and its `snap-private-tmp`. So an unreadable
- * candidate is carried, not thrown, and {@link placementDeadEnd} spends it where it is the answer: when
- * nothing was found, "I could not look at these" is the refusal, never `fastagent init`.
+ * candidate is carried, not thrown, and {@link resolvePlacement} spends it where it is the answer: a caller
+ * that must produce an agent and found none says "I could not look at these", never `fastagent init`.
  */
 function agentChildren(dir: string): { agents: string[]; unreadable: string[] } {
   let entries: Dirent[];
@@ -178,15 +178,6 @@ export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.e
   if (enclosing) {
     return `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`;
   }
-  // BEFORE the counting: "there are no agents here" is only true if every candidate could be looked at, and
-  // this is the path that would otherwise recommend scaffolding over one.
-  const unreadable = hasConfig(base) ? [] : agentChildren(base).unreadable;
-  if (unreadable.length > 0) {
-    return (
-      `${base} holds ${unreadable.length} director${unreadable.length === 1 ? "y" : "ies"} this process cannot ` +
-      `look into, so whether an agent is there is unknown: ${unreadable.join(", ")} — fix the permissions and re-run`
-    );
-  }
   const agents = agentsAt(base).map((a) => basename(a));
   const listed = `${base} holds ${agents.length} agent${agents.length === 1 ? "" : "s"} (${agents.join(", ")})`;
   // Asserting a name that is not here is a different mistake from asserting none, and it is worth its own message at
@@ -206,13 +197,32 @@ export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.e
   return undefined;
 }
 
-/** Resolve a directory into its placement — the ONE owner of the rule ({@link findPlacement}). */
+/**
+ * Resolve a directory into its placement — the ONE owner of the rule ({@link findPlacement}).
+ *
+ * WHERE AN UNREADABLE CANDIDATE IS SPENT, and only here: this caller MUST produce an agent, so a directory it
+ * could not look into is the difference between "there is none" and "there might be". `placementDeadEnd` is
+ * asked a weaker question — is this place a dead end with its own way out — by callers like `login`, for which
+ * a neighbour it may not enter is environment noise, not a reason to exit instead of logging in globally. It
+ * also comes AFTER that call: with two agents to choose between, a permission problem in a third directory is
+ * not the message that gets the caller moving.
+ */
 export function resolvePlacement(dir: string, env: NodeJS.ProcessEnv = process.env): ResolvedPlacement {
   const placement = findPlacement(dir, env);
   if (!placement) {
     const base = resolve(dir);
+    // `hasConfig(base)`: the agent is base itself (and FASTAGENT_AGENT named someone else), so its children are
+    // not candidates at all.
+    const unreadable = hasConfig(base) ? [] : agentChildren(base).unreadable;
+    const cannotLook =
+      unreadable.length === 0
+        ? undefined
+        : `${base} holds ${unreadable.length} director${unreadable.length === 1 ? "y" : "ies"} this process ` +
+          `cannot look into, so whether an agent is there is unknown: ${unreadable.join(", ")} — fix the ` +
+          `permissions and re-run`;
     throw new Error(
       placementDeadEnd(base, env) ??
+        cannotLook ??
         `${base} is not a fastagent agent — no fastagent.config.ts here, and no directory holding one ` +
           `directly inside; run \`fastagent init\` to scaffold one`,
     );
