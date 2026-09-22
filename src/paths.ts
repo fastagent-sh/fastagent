@@ -54,7 +54,7 @@ const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "routines"]
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent
  * directory the caller cannot enter (EACCES) reported as no-agent-here ends in `run \`fastagent init\` to
  * scaffold one` — over a definition that exists. So ENOENT/ENOTDIR are absence, and every other errno travels
- * with its path to the caller, as {@link agentChildren} already does for the scan itself.
+ * with its path, as {@link agentChildren} already did for the scan itself.
  */
 function statOrAbsent(p: string): Stats | undefined {
   try {
@@ -75,20 +75,36 @@ function hasConfig(p: string): boolean {
   return isDir(p) && statOrAbsent(join(p, AGENT_CONFIG_FILE)) !== undefined;
 }
 
-/** The agent directories DIRECTLY inside `dir` — the one-level scan that finds an agent without knowing its name. */
-function agentChildren(dir: string): string[] {
+/**
+ * DIRECTLY inside `dir`: the agent directories, and the ones the answer is missing for.
+ *
+ * A NAMED directory and a SCANNED one are different questions. `hasConfig` throws for the first, because the
+ * caller pointed at it. Here it cannot: every machine has directories this process may not enter, and one of
+ * them sitting next to the agent must not fail a command that found the agent — `workspaceHint` scans the
+ * PARENT for a hint, which on a CI runner means scanning `/tmp` and its `snap-private-tmp`. So an unreadable
+ * candidate is carried, not thrown, and {@link placementDeadEnd} spends it where it is the answer: when
+ * nothing was found, "I could not look at these" is the refusal, never `fastagent init`.
+ */
+function agentChildren(dir: string): { agents: string[]; unreadable: string[] } {
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    if (code === "ENOENT" || code === "ENOTDIR") return { agents: [], unreadable: [] };
     throw e;
   }
-  return entries
-    .filter((e) => !e.isFile() && hasConfig(join(dir, e.name)))
-    .map((e) => join(dir, e.name))
-    .sort();
+  const agents: string[] = [];
+  const unreadable: string[] = [];
+  for (const entry of entries.filter((e) => !e.isFile())) {
+    const child = join(dir, entry.name);
+    try {
+      if (hasConfig(child)) agents.push(child);
+    } catch (e) {
+      unreadable.push(`${child} (${(e as NodeJS.ErrnoException).code ?? "unreadable"})`);
+    }
+  }
+  return { agents: agents.sort(), unreadable: unreadable.sort() };
 }
 
 /**
@@ -97,7 +113,7 @@ function agentChildren(dir: string): string[] {
  */
 export function agentsAt(dir: string): string[] {
   const base = resolve(dir);
-  return hasConfig(base) ? [base] : agentChildren(base);
+  return hasConfig(base) ? [base] : agentChildren(base).agents;
 }
 
 /** WHICH agent is meant, when a directory holds several. */
@@ -161,6 +177,15 @@ export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.e
   const enclosing = enclosingAgentDir(base);
   if (enclosing) {
     return `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`;
+  }
+  // BEFORE the counting: "there are no agents here" is only true if every candidate could be looked at, and
+  // this is the path that would otherwise recommend scaffolding over one.
+  const unreadable = hasConfig(base) ? [] : agentChildren(base).unreadable;
+  if (unreadable.length > 0) {
+    return (
+      `${base} holds ${unreadable.length} director${unreadable.length === 1 ? "y" : "ies"} this process cannot ` +
+      `look into, so whether an agent is there is unknown: ${unreadable.join(", ")} — fix the permissions and re-run`
+    );
   }
   const agents = agentsAt(base).map((a) => basename(a));
   const listed = `${base} holds ${agents.length} agent${agents.length === 1 ? "" : "s"} (${agents.join(", ")})`;

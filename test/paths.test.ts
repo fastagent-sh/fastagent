@@ -31,12 +31,26 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     await config(join(dir, "fastagent"));
     await chmod(join(dir, "fastagent"), 0o000);
     try {
-      expect(() => resolvePlacement(dir)).toThrow(/EACCES/);
+      expect(() => resolvePlacement(dir)).toThrow(/cannot look into.*fa-ws-perm-.*EACCES/s);
       expect(() => resolvePlacement(dir)).not.toThrow(/fastagent init/);
-      // Pointed AT the unreadable agent, not at its parent: the same question, the other entry.
+      // Pointed AT the unreadable agent, not at its parent: a NAMED directory, so the errno itself travels.
       expect(() => resolvePlacement(join(dir, "fastagent"))).toThrow(/EACCES/);
     } finally {
       await chmod(join(dir, "fastagent"), 0o755);
+    }
+  });
+
+  asUser("an unreadable NEIGHBOUR does not fail a scan that found the agent", async () => {
+    // Every machine has directories this process may not enter; `workspaceHint` scans the PARENT of an agent
+    // for a hint, which on a CI runner means scanning /tmp. A decorative hint must not fail the command.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-neighbour-"));
+    await config(join(dir, "fastagent"));
+    await mkdir(join(dir, "locked"));
+    await chmod(join(dir, "locked"), 0o000);
+    try {
+      expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
+    } finally {
+      await chmod(join(dir, "locked"), 0o755);
     }
   });
 
