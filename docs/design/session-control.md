@@ -203,22 +203,36 @@ holds the definition — a client that read `skills/<name>/SKILL.md` and built t
 re-implement loading, drift from it, and break outright against a remote agent whose files are not on
 its machine. A client offers the list and sends the spelling; it does not interpret it.
 
-The reference engine's spelling is `/skill:<name> [args]`, expanded server-side into the skill's body
-with the arguments appended, so it behaves identically in-process and over HTTP+SSE (asserted in
-`test/skill-invocation.test.ts`). It is deliberately a PREFIX: a bare `/name` stays ordinary text, and
-the model decides whether to act on it. Two silent fall-backs come with it — an unknown name and an
-unreadable file both send the line through as plain text — so a client that wants a typo to be visible
-must check the name against this list before sending. An engine is free to use another spelling or
-none; a client asks that engine, it does not assume this one.
+The spelling is `/skill:<name> [args]`, expanded server-side into the skill's body with the arguments
+appended — identically in-process and over HTTP+SSE, both asserted in `test/skill-invocation.test.ts`.
+It is deliberately a PREFIX: a bare `/name` stays ordinary text, and the model decides whether to act
+on it.
 
-COMPLETE for the reference engine's serving path, which is what lets a client bind its `/` menu to
-this list and nothing else: skills are the only thing there that a slash can invoke. The definition's
-`extensions/` — pi's way of registering commands — are discovered but NOT run when serving, because
-pi's extension runtime is process-wide and concurrent turns would redirect each other's actions
-(`docs/configuration.md#why-serving-does-not-run-them`); prompt templates are off for the same reason
-the rest of the authoring machine is. So there is no name that runs but is missing here. `chat` is the
-other assembly and does run both — a terminal is one session — but it is not served, so no client sees
-it.
+ONE SPELLING, NOT A NEGOTIATED ONE, and that is a known limit rather than a design: this contract has
+one engine implementing it, so a client hard-codes the prefix. Nothing in `commands()` or
+`capabilities()` reports it, so a second engine with a different spelling — or none — cannot be told
+apart from this one, and adding it is a contract change (`AgentCommand` is public surface). What the
+contract does forbid today is the client-side alternative: a client MUST NOT read
+`skills/<name>/SKILL.md` and build the prompt itself. That re-implements definition loading, drifts
+from it, and fails outright against a remote agent whose files are not on its machine — the case
+local/remote symmetry exists for.
+
+An unknown name goes through as plain text, silently, because at this layer a typo and a sentence that
+opens with a slash are the same bytes — so a client that wants the typo visible checks the name against
+this list first. An unreadable skill FILE degrades the same way but is not the same kind of silence:
+pi raises a `skill_expansion` extension error for it, and serving does not bind an extension error
+listener, because binding writes into pi's process-wide extension runtime — the exact thing a
+concurrent server must not touch (`docs/configuration.md#why-serving-does-not-run-them`). So that one
+is invisible until pi's per-session extension path is exported. Known gap, not a decision about what
+is worth reporting.
+
+COMPLETE for what a data-plane client can invoke, which is what lets it bind its `/` menu to this list
+and nothing else: skills are the only thing the ENGINE expands. The definition's `extensions/` — pi's
+way of registering commands — are discovered but NOT run when serving, for the runtime reason above,
+and prompt templates are off in BOTH assemblies. So no name runs unlisted. Two things sit outside that
+scope: `chat`, which does run `extensions/` (a terminal is one session) but is not served, and a chat
+channel's own `/stop`, which the CHANNEL intercepts and turns into an `abort` before the agent sees it
+(`src/channels/kit/stop-command.ts`) — a platform command, not a definition name.
 
 ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
 the list must come from that same read. `source` is free-form because which kinds exist is an engine's

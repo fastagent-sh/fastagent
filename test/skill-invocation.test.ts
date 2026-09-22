@@ -7,31 +7,31 @@
  * `skills/<name>/SKILL.md` would be re-implementing definition loading AND would break against a remote agent,
  * which is the one case local/remote symmetry exists to protect.
  *
- * Behaviour under test belongs to pi's `AgentSession.prompt()`, which fastagent reaches by NOT passing
- * `expandPromptTemplates: false` (src/engines/pi/turn-kit.ts, `toPiPromptOptions`). Both halves of that sentence
- * can regress without a word changing here — an engine upgrade, or one added option — so the assertion is on the
- * bytes the model receives.
+ * THE REAL ASSEMBLY, not a hand-built session: the behaviour needs two things to hold at once — pi's
+ * `AgentSession.prompt()` expands the prefix, and fastagent hands it the definition's skills with a readable
+ * `filePath` while never passing `expandPromptTemplates: false` (src/engines/pi/turn-kit.ts). Either half can
+ * regress without a word changing in this file, so the assertion is on the bytes the model receives, through
+ * `createPiAgentFromDefinition`.
  */
 import { expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../src/agent.ts";
-import { collect } from "../src/collect.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
+import { createInvokeHandler } from "../src/channels/http.ts";
+import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { makeFaux } from "./faux.ts";
 
-/** An agent over one real skill on disk, plus the user text each turn actually sent to the model. */
-async function agentWithSkill(): Promise<{ agent: Agent; sent: () => string }> {
+const SKILL = (body: string) => `---\nname: weather\ndescription: Report weather.\n---\n${body}\n`;
+
+/** An agent over one real skill file, the path to that file, and the user text each turn sent to the model. */
+async function agentWithSkill(): Promise<{ agent: Agent; skillPath: string; sent: () => string }> {
   const dir = await mkdtemp(join(tmpdir(), "fa-skill-invoke-"));
+  await writeFile(join(dir, "persona.md"), "You are terse.\n");
   await mkdir(join(dir, "skills", "weather"), { recursive: true });
-  const filePath = join(dir, "skills", "weather", "SKILL.md");
-  await writeFile(filePath, "---\nname: weather\ndescription: Report weather.\n---\nCall the METAR endpoint.\n");
+  const skillPath = join(dir, "skills", "weather", "SKILL.md");
+  await writeFile(skillPath, SKILL("Call the METAR endpoint."));
 
   const { faux } = makeFaux();
   const seen: string[] = [];
@@ -41,34 +41,43 @@ async function agentWithSkill(): Promise<{ agent: Agent; sent: () => string }> {
       return fauxAssistantMessage("ok");
     }),
   );
-  const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-  modelRuntime.registerNativeProvider(faux.provider);
-  const agent = createPiAgentFromSession({
-    lease: inProcessLease(),
-    sessionFactory: piAgentSessionFactory({
-      sessions: piInMemorySessionRecordStore({ cwd: dir }),
-      engine: async () => ({ modelRuntime, model: faux.getModel() }),
-      // The same definition read `commands()` answers from: names resolved, collisions already decided.
-      readDefinition: () => ({
-        systemPrompt: "test",
-        // `content` is deliberately NOT the body: the expansion reads `filePath` at prompt time, which is what
-        // makes a definition edited while serving take effect on the next turn.
-        skills: [{ name: "weather", description: "Report weather.", filePath, content: "STALE-IN-MEMORY-COPY" }],
-      }),
-      cwd: dir,
-    }),
-  });
-  return { agent, sent: () => seen.at(-1) ?? "" };
+  const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+  return { agent, skillPath, sent: () => seen.at(-1) ?? "" };
 }
 
-it("`/skill:<name>` arrives as the skill's BODY, with the arguments after it", async () => {
-  const { agent, sent } = await agentWithSkill();
+it("`/skill:<name>` arrives as the skill's BODY, re-read per turn, with the arguments after it", async () => {
+  const { agent, skillPath, sent } = await agentWithSkill();
   await collect(agent.invoke({ session: "s" }, { text: "/skill:weather in Berlin" }));
 
   // The engine read the file and sent its contents; the client sent 23 characters.
   expect(sent()).toContain("Call the METAR endpoint.");
-  expect(sent()).not.toContain("STALE-IN-MEMORY-COPY"); // read from the file, per turn
   expect(sent()).toContain('<skill name=\\"weather\\"');
+  expect(sent()).toContain("in Berlin");
+
+  // Per TURN, not per boot: the definition is live, so an edit while serving is the next turn's prompt.
+  // A fresh session, because the old body is legitimately still in this one's history.
+  await writeFile(skillPath, SKILL("Call the TAF endpoint instead."));
+  await collect(agent.invoke({ session: "s2" }, { text: "/skill:weather in Berlin" }));
+  expect(sent()).toContain("Call the TAF endpoint instead.");
+  expect(sent()).not.toContain("Call the METAR endpoint.");
+});
+
+it("the same prompt over HTTP produces the same expansion — the point of putting it in the engine", async () => {
+  // A remote client has no access to `skills/weather/SKILL.md`; it sends the spelling and nothing else. If this
+  // ever diverged from the in-process path, every GUI would have to reimplement definition loading to compensate.
+  const { agent, sent } = await agentWithSkill();
+  const handler = createInvokeHandler(agent);
+  const response = await handler(
+    new Request("http://agent/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session: "s", text: "/skill:weather in Berlin" }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  await response.text(); // drain the SSE stream so the turn completes
+
+  expect(sent()).toContain("Call the METAR endpoint.");
   expect(sent()).toContain("in Berlin");
 });
 
