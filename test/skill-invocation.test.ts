@@ -13,14 +13,15 @@
  * regress without a word changing in this file, so the assertion is on the bytes the model receives, through
  * `createPiAgentFromDefinition`.
  */
-import { expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { expect, it, vi } from "vitest";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Agent } from "../src/agent.ts";
 import { createInvokeHandler } from "../src/channels/http.ts";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
+import { log } from "../src/log.ts";
 import { makeFaux } from "./faux.ts";
 
 const SKILL = (body: string) => `---\nname: weather\ndescription: Report weather.\n---\n${body}\n`;
@@ -100,4 +101,24 @@ it("an unknown name goes through as plain text, silently", async () => {
 
   expect(sent()).toContain("/skill:wether in Berlin");
   expect(sent()).not.toContain("Call the METAR endpoint.");
+});
+
+it("a skill whose FILE went unreadable leaves the definition, loudly, and then reads as unknown", async () => {
+  // The loader reads the file before anything can expand it, so there is no second silent fall-back to document:
+  // an unreadable skill is simply not in this turn's definition. It warns with the errno and drops off
+  // `commands()`, which is why the one list a client compares against covers a typo AND a skill that broke.
+  const { agent, skillPath, sent } = await agentWithSkill();
+  await chmod(skillPath, 0o000);
+  // Captured, not read off the spy afterwards: `mockRestore()` clears `mock.calls` with it.
+  const warned: string[] = [];
+  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+  try {
+    await collect(agent.invoke({ session: "s" }, { text: "/skill:weather now" }));
+  } finally {
+    await chmod(skillPath, 0o644);
+    warn.mockRestore();
+  }
+
+  expect(warned.join("\n")).toMatch(/read_failed:.*(EACCES|permission denied)/);
+  expect(sent()).toContain("/skill:weather now"); // unexpanded, like any name the definition does not have
 });

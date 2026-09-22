@@ -804,8 +804,9 @@ the definition exposes (`source: "skill"` today). It is a LISTING, not a dispatc
 send its engine spelling as ordinary prompt text and let the engine expand it — for the pi engine that
 is `/skill:<name> [args]`, which the server turns into the skill's body with the arguments appended.
 Do not expand it client-side; the files belong to the agent, which may be on another machine. An
-unknown name and an unreadable skill file both go through as plain text, so check the name against
-this list if a typo should be visible. For a data-plane client the list is COMPLETE — skills are the
+unknown name goes through as plain text, silently, so check the name against this list if a typo should
+be visible — a skill whose file became unreadable is off this list too (the loader warns `read_failed`
+and drops it), so the one comparison covers both. For a data-plane client the list is COMPLETE — skills are the
 only thing the engine expands, since the definition's `extensions/` (pi's command registration) are
 not run when serving and prompt templates are off — so a `/` menu binds to it and nothing else. (A
 chat channel's `/stop` is the channel's, intercepted before the agent, not a name from here.) It is

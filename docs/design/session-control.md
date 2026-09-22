@@ -217,14 +217,15 @@ contract does forbid today is the client-side alternative: a client MUST NOT rea
 from it, and fails outright against a remote agent whose files are not on its machine — the case
 local/remote symmetry exists for.
 
-An unknown name goes through as plain text, silently, because at this layer a typo and a sentence that
-opens with a slash are the same bytes — so a client that wants the typo visible checks the name against
-this list first. An unreadable skill FILE degrades the same way but is not the same kind of silence:
-pi raises a `skill_expansion` extension error for it, and serving does not bind an extension error
-listener, because binding writes into pi's process-wide extension runtime — the exact thing a
-concurrent server must not touch (`docs/configuration.md#why-serving-does-not-run-them`). So that one
-is invisible until pi's per-session extension path is exported. Known gap, not a decision about what
-is worth reporting.
+ONE silent fall-back, and it is a name nothing knows: an unknown name goes through as plain text,
+because at this layer a typo and a sentence that opens with a slash are the same bytes. Checking the
+name against this list first is the client's job for exactly that reason.
+
+A skill whose FILE cannot be read is not a second one. The loader reads it before anything can expand
+it, so an unreadable file means the skill is not in the definition this turn — it warns
+(`read_failed`, with the errno and path), drops out of `commands()`, and the prefixed spelling then
+behaves as the unknown name above, which is what it now is. So the one list a client compares against
+covers both a typo and a skill that broke.
 
 COMPLETE for what a data-plane client can invoke, which is what lets it bind its `/` menu to this list
 and nothing else: skills are the only thing the ENGINE expands. The definition's `extensions/` — pi's
