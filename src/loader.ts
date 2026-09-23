@@ -6,6 +6,7 @@ import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
 import { log } from "./log.ts";
 
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
@@ -108,25 +109,91 @@ export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[])
   );
 }
 
-/** Import every module the directory declares ({@link moduleInventory}). */
-export async function loadModuleDir(
-  subDir: string,
-): Promise<{ modules: DiscoveredModule[]; failures: ModuleLoadFailure[] }> {
-  const entries = await moduleInventory(subDir);
-  const modules: DiscoveredModule[] = [];
-  const failures: ModuleLoadFailure[] = [];
-  for (const { name, label, file } of entries) {
+/**
+ * What a running process can do with a change to this file, as code a tool may import:
+ * - `"fresh"`: TypeScript, which jiti always transpiles, so {@link importFresh} re-reads it.
+ * - `"restart"`: a format jiti hands to Node's own loaders — an ESM `.mjs`/`.js` to `import()`, a `.cjs`/`.json` to
+ *   `require` — whose caches keep the file as first loaded (measured: a `.js` helper edited from 1 to 2 still reads
+ *   1). pi's `/reload` has the same line for extensions.
+ * - `undefined`: not code at all (`README.md`, an editor's `.swp`, `.DS_Store`) — nothing loads it, so a change to it
+ *   changes nothing and is not one to announce.
+ */
+export function reloadKind(file: string): "fresh" | "restart" | undefined {
+  if (/\.[cm]?tsx?$/.test(file)) return "fresh";
+  if (/\.(m?js|cjs|json)$/.test(file)) return "restart";
+  return undefined;
+}
+
+/** One module's import: what it exported, or why it could not be imported. */
+type Imported = { mod: { default?: unknown } } | { error: unknown };
+
+/**
+ * Import modules the agent may REWRITE while this process runs, as they are on disk now — each module and every local
+ * file it imports. Node's own `import()` caches by URL, and busting the entry's URL (`?v=2`) re-reads only the entry:
+ * a helper it imports stays the old one (measured), a half-swapped module. This is what pi's `/reload` does for
+ * extensions. What it does NOT re-evaluate is an installed package — jiti hands those to Node — which is also what
+ * keeps a tool's `@fastagent-sh/fastagent` the host's own.
+ *
+ * ONE evaluation for the whole set: with `moduleCache: false`, jiti gives each top-level import a cache of its own,
+ * so importing the files one by one evaluated a helper they share once per file — two connection pools where the
+ * author wrote one. The files are imported from inside one evaluated entry instead, which shares one cache, and each
+ * is caught there on its own, so one broken file still costs only itself.
+ */
+async function importFresh(dir: string, files: readonly string[]): Promise<Imported[]> {
+  const jiti = createJiti(import.meta.url, {
+    moduleCache: false,
+    // No transpile cache written next to a deployed definition.
+    fsCache: false,
+    // jiti defaults this ON under Bun, where it hands the file to Bun's own `import()` — whose cache returns the
+    // module as first loaded, forever (measured). Every reload would then log "reloaded" over the old tools.
+    tryNative: false,
+  });
+  const entry = (await jiti.evalModule(
+    `export default async (files) => {
+      const out = [];
+      for (const file of files) {
+        try { out.push({ mod: await import(file) }); } catch (error) { out.push({ error }); }
+      }
+      return out;
+    };`,
+    // Never written, and named so it cannot be: jiti keys its cache by this path, so a real `tools/<name>.ts` would
+    // be answered with this entry. `ext` makes it transpiled — an `.mjs` name was first tried as a native import.
+    { filename: join(dir, "fastagent-load"), ext: ".ts", async: true },
+  )) as { default: (files: readonly string[]) => Promise<Imported[]> };
+  return entry.default(files);
+}
+
+async function importNative(files: readonly string[]): Promise<Imported[]> {
+  const out: Imported[] = [];
+  for (const file of files) {
     try {
-      const mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
-      modules.push({ name, label, file, mod });
+      out.push({ mod: (await import(pathToFileURL(file).href)) as { default?: unknown } });
     } catch (error) {
-      failures.push({
-        label,
-        file,
-        message: `${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`,
-      });
+      out.push({ error });
     }
   }
+  return out;
+}
+
+/** Import every module the directory declares ({@link moduleInventory}); `fresh` imports through {@link importFresh}. */
+export async function loadModuleDir(
+  subDir: string,
+  options: { fresh?: boolean } = {},
+): Promise<{ modules: DiscoveredModule[]; failures: ModuleLoadFailure[] }> {
+  const entries = await moduleInventory(subDir);
+  const files = entries.map((entry) => entry.file);
+  const imported = options.fresh ? await importFresh(subDir, files) : await importNative(files);
+  const modules: DiscoveredModule[] = [];
+  const failures: ModuleLoadFailure[] = [];
+  entries.forEach(({ name, label, file }, index) => {
+    const result = imported[index] as Imported;
+    if ("mod" in result) {
+      modules.push({ name, label, file, mod: result.mod });
+      return;
+    }
+    const error = result.error as NodeJS.ErrnoException;
+    failures.push({ label, file, message: `${error.message}${moduleLoadHint(error)}` });
+  });
   return { modules, failures };
 }
 

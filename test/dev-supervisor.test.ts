@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { devWatchIgnored } from "../src/dev-supervisor.ts";
+import { devChangeRestarts, devWatchIgnored } from "../src/dev-supervisor.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   const root = join("/work", "agent");
@@ -8,9 +8,15 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
-    expect(ignored(join(root, "tools"))).toBe(false);
+    // Everything under tools/ a tool could import stays in scope — whether it restarts is devChangeRestarts' call —
+    // and a directory must stay in scope for its files to be asked about at all.
     expect(ignored(join(root, "tools", "word-count.ts"))).toBe(false);
-    expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
+    expect(ignored(join(root, "tools", "word-count.js"))).toBe(false);
+    expect(ignored(join(root, "tools", "lib"))).toBe(false);
+    expect(ignored(join(root, "tools", "lib", "data.json"))).toBe(false);
+    // Nothing imports these, so they change nothing.
+    expect(ignored(join(root, "tools", "README.md"))).toBe(true);
+    expect(ignored(join(root, "tools", ".word-count.ts.swp"))).toBe(true);
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
     expect(ignored(join(root, "routines", "daily.ts"))).toBe(false); // loaded once per worker — restart is the re-read
     // Which FILES are extensions is decided at boot, so an added or removed entry needs the restart
@@ -60,7 +66,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     const nestedRoot = join("/repo", "fastagent");
     const ig = devWatchIgnored(nestedRoot, join(nestedRoot, ".secrets", ".env"));
     expect(ig(nestedRoot)).toBe(false);
-    expect(ig(join(nestedRoot, "tools", "foo.ts"))).toBe(false);
+    expect(ig(join(nestedRoot, "channels", "foo.ts"))).toBe(false);
     expect(ig(join(nestedRoot, "persona.md"))).toBe(true); // live-read, no restart
     expect(ig(join(nestedRoot, ".secrets", ".env"))).toBe(false);
   });
@@ -79,6 +85,30 @@ describe("dev-supervisor: the watched .env follows FASTAGENT_SECRETS_DIR", () =>
   it("prunes everything when the .env resolves outside the agent (the supervisor warns instead)", () => {
     const ig = devWatchIgnored(root, "/data/.secrets/.env");
     expect(ig("/agent/.secrets/.env")).toBe(true);
-    expect(ig("/agent/tools/x.ts")).toBe(false); // code inputs unaffected
+    expect(ig("/agent/channels/x.ts")).toBe(false); // code inputs unaffected
+  });
+});
+
+describe("dev-supervisor: devChangeRestarts (which watched change costs the worker its process)", () => {
+  const root = join("/work", "agent");
+
+  it("TypeScript under tools/ reloads in the serving worker, so it restarts nothing", () => {
+    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), true)).toBe(false);
+    expect(devChangeRestarts(root, join(root, "tools", "lib", "word.ts"), true)).toBe(false);
+  });
+
+  it("nor does a directory under tools/ — an agent's first helper creates tools/lib/ in the middle of its turn", () => {
+    // chokidar reports it as `addDir`/`unlinkDir`; with no extension it is neither code nor cached code.
+    expect(devChangeRestarts(root, join(root, "tools", "lib"), true)).toBe(false);
+  });
+
+  it("with the worker DOWN it restarts — the worker refused a broken tool at boot, and this may be the fix", () => {
+    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), false)).toBe(true);
+  });
+
+  it("a format Node caches, and every other code input, restart the serving worker", () => {
+    expect(devChangeRestarts(root, join(root, "tools", "lib", "data.json"), true)).toBe(true);
+    expect(devChangeRestarts(root, join(root, "channels", "telegram.ts"), true)).toBe(true);
+    expect(devChangeRestarts(root, join(root, "fastagent.config.ts"), true)).toBe(true);
   });
 });

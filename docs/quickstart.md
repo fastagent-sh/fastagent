@@ -77,7 +77,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` assembles the agent and serves it on `:8787`. persona.md/AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The data plane is `POST /invoke`, always served.
+`dev` assembles the agent and serves it on `:8787`. persona.md/AGENTS.md/`skills/` and TypeScript `tools/` edits go live on the next turn; other code edits (`channels/`, `routines/`, config) restart the worker. The data plane is `POST /invoke`, always served.
 
 Send one turn:
 

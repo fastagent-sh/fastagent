@@ -43,7 +43,11 @@ import { log } from "../src/log.ts";
 /** An agent built the way serving builds one, minus the directory read. */
 async function agentWith(
   responses: FauxResponseStep[],
-  options: Partial<Parameters<typeof piAgentSessionFactory>[0]> = {},
+  {
+    tools,
+    readDefinition = () => ({ skills: [] }),
+    ...options
+  }: Partial<Parameters<typeof piAgentSessionFactory>[0]> & { tools?: MountedTool[] } = {},
 ) {
   const { faux } = makeFaux();
   faux.setResponses(responses);
@@ -54,7 +58,7 @@ async function agentWith(
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd }),
       engine: async () => ({ modelRuntime, model: faux.getModel() }),
-      readDefinition: () => ({ skills: [] }),
+      readDefinition: async () => ({ ...(await readDefinition()), tools }),
       cwd,
       ...options,
     }),

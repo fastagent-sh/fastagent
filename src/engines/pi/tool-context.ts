@@ -73,7 +73,16 @@ export interface TurnContext {
   tools?: ToolActivation;
 }
 
-export const turnContext = new AsyncLocalStorage<TurnContext>();
+/**
+ * ONE store per process, not per copy of this module. A tool reads it through its own import of `defineTool`, and a
+ * tool reloaded while the agent runs (`importFresh`) re-evaluates any local source it imports — when fastagent runs
+ * from source, that includes this file. A second store would leave that tool's `ctx.cwd` and `ctx.sessionManager`
+ * unset, with nothing failing.
+ */
+const shared = globalThis as { [key: symbol]: AsyncLocalStorage<TurnContext> | undefined };
+const TURN_CONTEXT = Symbol.for("fastagent.turnContext");
+shared[TURN_CONTEXT] ??= new AsyncLocalStorage<TurnContext>();
+export const turnContext: AsyncLocalStorage<TurnContext> = shared[TURN_CONTEXT];
 
 /**
  * dedupe → keep registered names only (pi's setters THROW on unknown) → exclude already-active → the names to actually

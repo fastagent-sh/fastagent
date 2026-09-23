@@ -1,10 +1,11 @@
 /** Tool authoring: `defineTool` (the authoring surface) and `loadTools` (filesystem discovery). */
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
-import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
+import { type ModuleLoadFailure, loadModuleDir, reloadKind } from "../../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration, secretValues } from "../../declared-secrets.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
 
@@ -162,7 +163,8 @@ export async function loadTools(dir: string): Promise<{
 }> {
   // The same containment guard channels/routines/skills get.
   await assertInsideAgentDir(dir, "tools");
-  const { modules, failures } = await loadModuleDir(join(dir, "tools"));
+  // Fresh: the agent can rewrite its own tools while it runs, and each read must see them as they are now.
+  const { modules, failures } = await loadModuleDir(join(dir, "tools"), { fresh: true });
   const byName = new Map<string, AgentTool>();
   const collisions: ToolCollision[] = [];
   const secrets = new Map<string, DeclaredSecret[]>();
@@ -185,6 +187,56 @@ export async function loadTools(dir: string): Promise<{
     secrets.set(name, declaration.secrets);
   }
   return { tools: [...byName.values()], secrets, collisions, failures };
+}
+
+/** The tools an invoke binds, and "why these are not what is on disk" when the last reload of `tools/` failed. */
+export interface LiveTools {
+  tools: MountedTool[];
+  failure?: string;
+}
+
+/** Every file under `tools/`, at any depth, with its size and modification time ({@link toolsStamp}). */
+export type ToolsStamp = ReadonlyMap<string, string>;
+
+/**
+ * What `tools/` looks like on disk. Asked once per invoke, so it stats and never imports; a change here is what makes
+ * the next invoke load the tools again. Helpers a tool imports from OUTSIDE `tools/` are not in it — they reload with
+ * the tool that imports them, when that tool changes.
+ */
+export async function toolsStamp(agentDir: string): Promise<ToolsStamp> {
+  const dir = join(agentDir, "tools");
+  let files: string[];
+  try {
+    files = (await readdir(dir, { recursive: true, withFileTypes: true }))
+      // Only what a tool could import: a README or an editor's swap file coming and going is not a change.
+      .filter((entry) => entry.isFile() && reloadKind(entry.name) !== undefined)
+      .map((entry) => join(entry.parentPath, entry.name))
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+  const stamps = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const { size, mtimeMs } = await stat(file);
+        return [file, `${size}\u0000${mtimeMs}`] as const;
+      } catch (error) {
+        // Removed between the listing and the stat — a turn running `rm` or `git checkout` beside this one, or an
+        // editor's temp file. Gone is a state of the directory, not a fault; the next stamp sees it. Not reproduced in
+        // a test: the window is two awaits wide and there is no seam to hold it open.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    }),
+  );
+  return new Map(stamps.filter((stamp) => stamp !== undefined));
+}
+
+/** The files added, removed or rewritten between two stamps. */
+export function changedTools(before: ToolsStamp, after: ToolsStamp): string[] {
+  const changed = [...after].filter(([file, stamp]) => before.get(file) !== stamp).map(([file]) => file);
+  return [...changed, ...[...before.keys()].filter((file) => !after.has(file))];
 }
 
 /** Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name. */

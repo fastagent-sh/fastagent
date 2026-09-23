@@ -91,14 +91,30 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
-  with no restart (and no watcher involvement).
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the
-  dev worker — a new process is the only way to drop the ESM module cache.
+- **persona.md, AGENTS.md, `skills/`, and the TypeScript in `tools/`** are re-read on every turn — edits go live on
+  the next turn with no restart (and no watcher involvement). `tools/` is reloaded when a file under it changed; a
+  reload that fails keeps the previous tools, logs why, and tells the agent in its system prompt on every turn until
+  the fix loads. `start` does the same.
+  - **Only TypeScript** (`.ts`, `.mts`, `.cts`, `.tsx`). A `.js`, `.mjs`, `.cjs` or `.json` file under `tools/` is
+    loaded by Node itself, which keeps it as first read — as in pi's `/reload`. Editing one restarts the `dev`
+    worker; under `start` it logs that a restart is needed, and nothing is reported as reloaded.
+  - **A failed reload is retried when a file under `tools/` changes** — not when a helper outside it does, and not
+    when a secret is set: secrets are read at startup, so a missing one needs a restart.
+  - **Tools have their own copy of local modules.** A reload re-reads the local files a tool imports, so tools load
+    them apart from `channels/` and `routines/` — from boot, not only after a reload. A `lib/queue.ts` both a channel
+    and a tool import is two queues. State they must share belongs in an installed package (Node loads those once)
+    or outside the process.
+  - **Module state is not carried over, and not cleaned up.** A reload evaluates `tools/` again as a whole: a helper
+    your tools share is still one instance, but a new one, and the old one is not closed — its connection pool,
+    `setInterval` or `process.on` listener stays alive beside the new one, once more per reload. Open resources when
+    a tool is called, not at the top of the module.
+- **Code inputs** (`channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`, and `.js`/`.mjs`/`.cjs`/`.json`
+  files under `tools/`) restart the dev worker. So does a TypeScript fix under `tools/` when the worker is down —
+  one that refused a broken tool at boot.
 
 Nothing else is watched: files the agent itself writes into the workspace (its work product) never
-trigger a restart. Helper code imported from outside `tools/`/`channels/` is out of watch scope —
-keep it under `tools/`, or restart manually. (`fastagent chat` is a startup snapshot — restart it
+trigger a restart. Helper code a tool imports from outside `tools/` is reloaded only when something under `tools/`
+changes — keep it under `tools/`. A `channels/` helper outside `channels/` needs a manual restart. (`fastagent chat` is a startup snapshot — restart it
 to pick up any edit.)
 
 If the worker stopped after a broken code edit, save another change after fixing the error. The supervisor should retry.

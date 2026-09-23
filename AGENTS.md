@@ -59,7 +59,8 @@ src/
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
-├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
+├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config;
+│                           # importFresh: a module the agent rewrites while running, re-read with its helpers
 ├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared
 │                           # path predicates and the machinery paths that follow (.secrets/.state)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
@@ -208,7 +209,7 @@ src/
     │                       # which are conversation turns (vs the engine's own `system` entries)
     ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
-    ├── open.ts             # shared opener: directory → agent for dev/start/invoke
+    ├── open.ts             # shared opener: directory → agent for dev/start/invoke; its tools/ are LIVE (liveTools)
     ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent (its own records,
     │                       # in pi's per-workspace location — a SERVED record belongs to the process serving it)
     ├── tool.ts             # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
