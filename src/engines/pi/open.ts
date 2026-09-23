@@ -3,7 +3,6 @@
  * drive.
  */
 import { mkdir } from "node:fs/promises";
-import { relative } from "node:path";
 import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
@@ -19,20 +18,12 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import { refuseBrokenDeclarations, reloadKind } from "../../loader.ts";
+import { refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
-import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
+import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
-import {
-  type LiveTools,
-  type MountedTool,
-  type ToolCollision,
-  type ToolsStamp,
-  changedTools,
-  toolsStamp,
-} from "./tool.ts";
-import { log } from "../../log.ts";
+import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 
@@ -118,98 +109,6 @@ export interface AgentAssembly {
   toolCollisions: ToolCollision[];
   /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
   toolSecrets: Map<string, DeclaredSecret[]>;
-  /** What `tools/` looked like on disk just before those tools were loaded ({@link toolsStamp}). */
-  toolsStamp: ToolsStamp;
-}
-
-/**
- * The tools this agent runs with, or a refusal: every declared file loaded, every secret they declared present.
- * Boot and a live reload ask the same question; they differ only in what a refusal does.
- */
-async function mountableTools(config: FastagentConfig, agentDir: string, workspace: string) {
-  const resolved = await resolveAgentTools(config, agentDir, workspace);
-  // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
-  // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
-  // report an incomplete set, and fixing the file could then reveal more missing values. Refuse the broken file
-  // first and one pass reports every secret the definition actually wants.
-  refuseBrokenDeclarations(resolved.toolFailures);
-  // Both gates live here rather than inside resolveAgentTools, which `info` and `fastagent tool` call to REPORT on a
-  // definition and must survive both faults; every path through this function is about to run ALL of the tools, so
-  // no `owner`.
-  //
-  // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
-  // means "may run in this process" — letting it start would put the empty-credential failure back
-  // inside a turn. An author who does not want that opts out per tool by not declaring.
-  gateSecrets({ declared: resolved.toolSecrets, failures: [] });
-  return resolved;
-}
-
-/**
- * The agent's own `tools/`, LIVE: each invoke asks, and gets them as they are on disk — so a tool the agent wrote
- * for itself is one it can call on its next turn, with no restart. Loaded again only when {@link toolsStamp} moved;
- * a turn already running keeps the tools it was bound with.
- *
- * A reload that fails KEEPS THE LAST TOOLS THAT LOADED and says why: in the log once per state of the directory, and
- * to the model as `failure` for as long as that state lasts — the agent that broke the file is the one placed to fix
- * it, and a tool that is simply absent tells it nothing. Boot refuses the same failure, but here refusing would fail
- * every turn after it — including the one the agent needs to repair what it just broke. All or nothing: a
- * half-applied `tools/` is a set nobody wrote.
- *
- * Only TypeScript reloads ({@link reloadKind}); a change to a file Node caches is said to need a restart, and when that
- * is all that changed nothing is reloaded — logging "reloaded" over a file Node still has cached is the one outcome
- * worse than not reloading.
- */
-export function liveTools(
-  opened: { config: FastagentConfig; agentDir: string; workspace: string },
-  boot: { stamp: ToolsStamp; tools: MountedTool[] },
-  /** What the opener adds on top of the discovered set (the `wake` tool), applied to every reload as at boot. */
-  mount: (tools: MountedTool[]) => MountedTool[] = (tools) => tools,
-): () => Promise<LiveTools> {
-  const { config, agentDir, workspace } = opened;
-  const load = async (): Promise<MountedTool[]> => {
-    const loaded = await mountableTools(config, agentDir, workspace);
-    // Boot reports these where it reports the surface (cli/shared.ts); a reload is where an agent writing its own
-    // tools is likeliest to take a name that is already mounted, and a dropped tool is otherwise just absent.
-    reportToolCollisions(loaded.toolCollisions);
-    return mount(loaded.tools);
-  };
-  let current: LiveTools & { stamp: ToolsStamp } = boot;
-  let reloading: Promise<void> | undefined;
-  const answer = (): LiveTools => ({ tools: current.tools, failure: current.failure });
-  return async () => {
-    const stamp = await toolsStamp(agentDir);
-    const changed = changedTools(current.stamp, stamp);
-    if (changed.length === 0) return answer();
-    const cached = changed.filter((file) => reloadKind(file) === "restart");
-    if (cached.length > 0) {
-      log.warn(
-        `[fastagent] ${cached.map((file) => relative(agentDir, file)).join(", ")} changed — only TypeScript in ` +
-          "tools/ reloads while the agent runs, so restart to load this change",
-      );
-    }
-    if (cached.length === changed.length) {
-      current = { ...current, stamp };
-      return answer();
-    }
-    // Concurrent invokes share one reload; whichever stamp it read, the next invoke compares again.
-    reloading ??= (async () => {
-      try {
-        const tools = await load();
-        current = { stamp, tools };
-        log.info(`[fastagent] tools/ changed — reloaded; the next turns run with the new tools`);
-      } catch (error) {
-        const failure = (error as Error).message;
-        current = { stamp, tools: current.tools, failure };
-        log.warn(
-          `[fastagent] tools/ changed but could not be loaded, so the previous tools stay in use until the next change under tools/ loads: ${failure}`,
-        );
-      } finally {
-        reloading = undefined;
-      }
-    })();
-    await reloading;
-    return answer();
-  };
 }
 
 export async function resolveAgentAssembly(
@@ -225,13 +124,24 @@ export async function resolveAgentAssembly(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  // Stamped BEFORE loading: a file written while the load runs then reads as a change on the next invoke.
-  const stamp = await toolsStamp(agentDir);
-  const { tools, toolNames, deferredToolNames, toolCollisions, toolSecrets } = await mountableTools(
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,
     agentDir,
     workspace,
   );
+  // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
+  // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
+  // report an incomplete set, and fixing the file could then reveal more missing values. Refuse the broken file
+  // first and one pass reports every secret the definition actually wants.
+  refuseBrokenDeclarations(toolFailures);
+  // Both gates live here rather than inside resolveAgentTools, which `info` and `fastagent tool` call to REPORT on a
+  // definition and must survive both faults; every path through this function is about to run ALL of the tools, so
+  // no `owner`.
+  //
+  // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
+  // means "may run in this process" — letting it start would put the empty-credential failure back
+  // inside a turn. An author who does not want that opts out per tool by not declaring.
+  gateSecrets({ declared: toolSecrets, failures: [] });
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
@@ -252,7 +162,6 @@ export async function resolveAgentAssembly(
     deferredToolNames,
     toolCollisions,
     toolSecrets,
-    toolsStamp: stamp,
   };
 }
 
@@ -319,14 +228,10 @@ export async function createPiAgentFromDir(
     toolNames,
     deferredToolNames,
     toolCollisions,
-    toolsStamp: stamp,
   } = await resolveAgentAssembly(dir, options);
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
   // opted into self-scheduling (config.selfSchedule).
-  const withWake = (mounted: MountedTool[]) =>
-    withWakeTool(mounted, stateRoot, !!options.serving && !!config.selfSchedule);
-  const mountedTools = withWake(tools);
-  const readTools = liveTools({ config, agentDir, workspace }, { stamp, tools: mountedTools }, withWake);
+  const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
   // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
@@ -337,7 +242,6 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
-    readTools,
     authPath,
     ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.

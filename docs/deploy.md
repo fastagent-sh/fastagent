@@ -275,7 +275,7 @@ On AgentCore the same layout sits on managed SessionStorage, which the platform 
 - **The image initializes the whole workspace.** Only the agent's dependencies (`fastagent/package.json`) are installed at build time. Keep the deploy CLI and the agent's FastAgent dependency on the same version. Other project dependencies are installed when needed.
 - **Git collaboration follows the agent's policy**: when the workspace is a git repo, `git` is baked in and `.git` ships in the image, so the agent can `git pull` to freshen content and `commit`/`push` its work back; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
 - **Git is optional collaboration, not a persistence requirement.** Non-Git workspaces retain ongoing work too.
-- **Definition edits survive restarts.** Markdown and the TypeScript in `tools/` are live-read each turn; channels, routines, configuration and any other file under `tools/` need a service restart. A new release can replace those edits. The deployed system prompt explains this boundary.
+- **Definition edits survive restarts.** Markdown is live-read each turn; tools, channels and configuration need a service restart. A new release can replace those edits. The deployed system prompt explains this boundary.
 
 ## Other Docker hosts
 
