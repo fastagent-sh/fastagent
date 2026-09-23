@@ -2,6 +2,7 @@ import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts } from "../src/deploy/container.ts";
 import { piBasePrompt } from "../src/engines/pi/create.ts";
+import type { MountedTool } from "../src/engines/pi/tool.ts";
 
 const input = {
   releaseId: "release-one",
@@ -95,6 +96,9 @@ describe("deploy/container: shared Docker context", () => {
       // gone with the definition at the next deployment, which the same sentence has to say.
       expect(piBasePrompt()).toContain("To give yourself a new capability now, write a skill");
       expect(piBasePrompt()).toContain("It lasts until the next deployment replaces that directory");
+      // `wake` is named only when it is mounted (selfSchedule) — a tool the model lacks is one it would call.
+      expect(piBasePrompt()).not.toContain("wake tool");
+      expect(piBasePrompt({ tools: [{ name: "wake" } as MountedTool] })).toContain("use the wake tool.");
       // The host whose storage a deploy RESETS must not be told that work outside the definition
       // survives one — that would name a location its next deploy erases.
       process.env.FASTAGENT_AGENTCORE = "1";
