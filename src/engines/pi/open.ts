@@ -23,6 +23,8 @@ import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
+import { createPiModelRuntime } from "./models.ts";
+import type { FastagentAuthOptions } from "./auth.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
@@ -163,6 +165,31 @@ export async function resolveAgentAssembly(
     toolCollisions,
     toolSecrets,
   };
+}
+
+/**
+ * The model specs `createPiAgentFromDir(dir, { authPath })` could run right now: the agent's own registry (the
+ * built-ins plus its `models.json`) filtered to providers whose auth is configured, sorted. It answers a client's
+ * model picker, so it needs no model set (a freshly scaffolded agent has none) and refreshes no OAuth token:
+ * `getAvailable()` checks configuration, it does not make a request.
+ */
+export async function availableModelsFromDir(
+  dir: string,
+  options: FastagentAuthOptions & { authPath?: string } = {},
+): Promise<string[]> {
+  const { agentDir } = resolvePlacement(dir);
+  // The same two layers the opener reads (resolveAgentAssembly), so a spec listed here authenticates there.
+  const authPath = resolveAuthPath(agentDir, options.authPath);
+  const fallbackAuthPath = resolveAuthFallback(options.authPath);
+  const models = await createPiModelRuntime({
+    agentDir,
+    authPath,
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+    // An unreadable or corrupt credential file reads as "nothing configured" unless the caller's sink throws; a
+    // picker that must not show a broken file as an empty list passes one that does.
+    ...(options.warn ? { warn: options.warn } : {}),
+  });
+  return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
 }
 
 /**

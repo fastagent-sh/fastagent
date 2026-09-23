@@ -239,6 +239,23 @@ function createPiAgentFromDir(
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
+### `availableModelsFromDir`
+
+```ts
+function availableModelsFromDir(
+  dir: string,
+  options?: { authPath?: string; warn?: (message: string) => void },
+): Promise<string[]>;
+```
+
+The `provider/modelId` specs `createPiAgentFromDir(dir, { authPath })` could run now, for a client's model
+picker: the agent's registry (built-ins plus its `models.json`) filtered to providers whose auth is configured,
+read through the same credential layers as the opener. It needs no model set, and it checks configuration
+without refreshing an OAuth token or calling a provider, so a listed spec can still fail at request time
+(an expired login, a rejected key). An unreadable or corrupt credential file is passed to `warn` and
+otherwise reads as nothing configured; a picker that must not show it as an empty list passes a `warn`
+that throws.
+
 ```ts
 interface FastagentConfig {
   tools?: FastagentTool[];

@@ -13,7 +13,7 @@ import {
   providerAuthStatuses,
 } from "../src/engines/pi/models.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
-import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { availableModelsFromDir, createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
 type FakeProvider = {
   id: string;
@@ -296,5 +296,63 @@ describe("models.json on the serving path (createPiAgentFromDir)", () => {
     // that its default derivation keeps pi's catalog cache out of what `deploy` bakes into the image.
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
     expect(stateRoot.startsWith(dir)).toBe(true);
+  });
+});
+
+describe("availableModelsFromDir (a client's model picker)", () => {
+  it("lists the agent's own endpoints and configured built-ins, needs no model, and refreshes no OAuth", async () => {
+    // A workspace with the agent one level inside and NO model set: what a client pointed at a freshly scaffolded
+    // agent sees. Before this, a client could only build pi-ai's built-ins, so a models.json endpoint was unpickable.
+    const workspace = await mkdtemp(join(tmpdir(), "fastagent-available-"));
+    const agentDir = join(workspace, "fastagent");
+    await mkdir(agentDir);
+    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
+    await writeFile(
+      join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          local: {
+            baseUrl: "http://127.0.0.1:9/v1",
+            api: "openai-completions",
+            apiKey: "ollama",
+            models: [{ id: "m1" }],
+          },
+          nokey: {
+            baseUrl: "http://127.0.0.1:9/v1",
+            api: "openai-completions",
+            apiKey: "$FASTAGENT_TEST_UNSET_KEY",
+            models: [{ id: "m2" }],
+          },
+        },
+      }),
+    );
+    // An explicit path gets no global layer, so the machine's real logins cannot leak into the assertion.
+    const authPath = join(workspace, "auth.json");
+    // EXPIRED on purpose: listing must not try to refresh it (the refresh token is fake and the call would fail).
+    await writeFile(
+      authPath,
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "a", refresh: "r", expires: Date.now() - 60_000 } }),
+    );
+
+    const specs = await availableModelsFromDir(workspace, { authPath });
+
+    expect(specs).toContain("local/m1");
+    expect(specs).not.toContain("nokey/m2"); // declared but unauthenticated: not runnable, so not offered
+    expect(specs.some((spec) => spec.startsWith("openai-codex/"))).toBe(true);
+    expect(specs).toEqual([...specs].sort());
+    // A corrupt credential file is the caller's to refuse: with a throwing sink it is an error, not an empty list.
+    await writeFile(authPath, "{invalid");
+    await expect(
+      availableModelsFromDir(workspace, {
+        authPath,
+        warn: (message) => {
+          throw new Error(message);
+        },
+      }),
+    ).rejects.toThrow(/corrupt auth file/);
+    await writeFile(authPath, "{}");
+    // What is listed is what the opener runs.
+    const { modelSpec } = await createPiAgentFromDir(workspace, { authPath, model: "local/m1" });
+    expect(modelSpec).toBe("local/m1");
   });
 });
