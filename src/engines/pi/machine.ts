@@ -48,16 +48,25 @@ export function readMachine(workspace: string): Promise<Machine> {
 
 async function read(workspace: string, agentDir: string): Promise<Machine> {
   const files = SettingsManager.create(workspace, agentDir);
+  // pi reads an unparseable or locked settings file as `{}` and keeps the error for whoever asks. Nobody did, so a
+  // trailing comma in `~/.pi/agent/settings.json` — or pi's own TUI holding the lock at that moment — left this whole
+  // process on pi's defaults, silently: the read happens once.
+  for (const { scope, path, error } of files.drainErrors()) {
+    log.warn(
+      `[fastagent] pi ${scope} settings${path ? ` (${path})` : ""} could not be read, so pi's defaults apply: ${error.message}`,
+    );
+  }
   // INSTALLED PACKAGES, NEVER AN INSTALL. pi's loader resolves `packages` itself and installs a missing one
   // (`npm install`, `git clone`), throwing out of `reload()` when that fails — measured. So fastagent resolves them
   // here, telling pi to skip what is absent, and hands the loader a packageless copy of the settings so its own
-  // resolve has nothing to do. A package skipped is said, once: its skills would otherwise just not be there.
-  const packages = await new DefaultPackageManager({ cwd: workspace, agentDir, settingsManager: files }).resolve(
-    async (source) => {
-      log.warn(`[fastagent] pi package ${source} is not installed, so its skills and prompts are not loaded`);
-      return "skip";
-    },
-  );
+  // resolve has nothing to do.
+  const manager = new DefaultPackageManager({ cwd: workspace, agentDir, settingsManager: files });
+  const packages = await manager.resolve(async () => "skip");
+  // A package skipped is said, once: its skills would otherwise just not be there. Asked of the configured list, not
+  // of `onMissing` — pi never calls that under `PI_OFFLINE`, so the warning would vanish exactly when offline.
+  for (const { source } of manager.listConfiguredPackages().filter((configured) => !configured.installedPath)) {
+    log.warn(`[fastagent] pi package ${source} is not installed, so its skills and prompts are not loaded`);
+  }
   const settings = {
     global: withoutPackages(files.getGlobalSettings()),
     project: withoutPackages(files.getProjectSettings()),

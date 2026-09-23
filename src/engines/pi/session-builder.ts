@@ -9,6 +9,7 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   SessionManager,
+  SettingsManager,
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
@@ -98,19 +99,26 @@ export async function buildAgentSessionRuntime(
       await assemblyFor(cwd);
 
     // Per session, NOT memoized with the assembly.
-    const services = await createAgentSessionServices({
+    const machine = await readMachine(cwd);
+    const loaded = await createAgentSessionServices({
       cwd,
       // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth unification point; see the
       // header.
       modelRuntime,
+      // PACKAGELESS, for the loader: fastagent never installs a pi package (machine.ts). Handed pi's own settings, the
+      // loader resolves `packages` itself — installing a missing one, and failing chat's start when that fails.
+      settingsManager: machine.settingsManager(),
       // Chat's assembly is fixed for the life of the runtime (a rebuild makes a new one), so these read constants.
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => systemPrompt,
         skills: () => definition.skills,
-        machine: await readMachine(cwd),
+        machine,
         extensionPaths,
       }),
     });
+    // ...while the SESSION keeps pi's own file-backed settings, so `/settings` in the TUI still saves. pi persists by
+    // re-reading the file under its lock and writing only the fields that changed, so `packages` there is untouched.
+    const services = { ...loaded, settingsManager: SettingsManager.create(cwd, loaded.agentDir) };
     reportExtensionErrors(services);
 
     // AFTER the services, because an extension may be what defines the model.

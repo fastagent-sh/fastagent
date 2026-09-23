@@ -122,7 +122,13 @@ it("an INSTALLED pi package's skills are inherited like any other", async () => 
   const agent = await machine({ settings: { packages: ["git:github.com/acme/tools"] } });
   await skill(join(agent, "git", "github.com", "acme", "tools", "skills", "lint"), "lint", "Lint from a package.");
 
-  expect(await promptSentBy(await definition())).toContain("Lint from a package.");
+  let prompt = "";
+  const warned = await warnings(async () => {
+    prompt = await promptSentBy(await definition());
+  });
+
+  expect(prompt).toContain("Lint from a package.");
+  expect(warned).not.toMatch(/is not installed/); // present, so not reported as missing
 });
 
 it("a pi package that is NOT installed is skipped and said — never installed", async () => {
@@ -233,4 +239,26 @@ it("pi's engine settings are inherited, the project file deep-merged over the ma
 
   expect(session.settingsManager.getRetryEnabled()).toBe(false); // the project file
   expect(session.settingsManager.getRetrySettings().maxRetries).toBe(7); // the machine's, kept by the merge
+});
+
+it("a package missing under `PI_OFFLINE` is still said — pi skips it without asking there", async () => {
+  // pi's offline mode returns before calling `onMissing`, so a warning hung on that callback vanished exactly when
+  // the machine is offline. The configured list is asked instead.
+  vi.stubEnv("PI_OFFLINE", "1");
+  await machine({ settings: { packages: ["npm:not-installed-anywhere"] } });
+
+  const warned = await warnings(async () => promptSentBy(await definition()));
+
+  expect(warned).toMatch(/pi package npm:not-installed-anywhere is not installed/);
+});
+
+it("an unreadable pi settings file is said, not silently replaced by pi's defaults", async () => {
+  // pi reads a file it cannot parse (or cannot lock, while its own TUI writes it) as `{}` and keeps the error for
+  // whoever asks. The machine is read once, so unasked, the whole process ran on defaults with nothing said.
+  const agent = await machine();
+  await writeFile(join(agent, "settings.json"), '{ "retry": { "maxRetries": 7 }, }');
+
+  const warned = await warnings(async () => promptSentBy(await definition()));
+
+  expect(warned).toMatch(/pi global settings \(.*settings\.json\) could not be read, so pi's defaults apply/);
 });
