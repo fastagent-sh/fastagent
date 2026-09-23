@@ -291,3 +291,23 @@ it("a tool file of any name loads — the load's own entry cannot shadow one", a
   expect(failures).toEqual([]);
   expect(modules.map((module) => module.mod.default)).toEqual(["mine", "mine too"]);
 });
+
+it("a directory mounted again starts from its successful load, not an earlier reader's failure", async () => {
+  // `createAgentService` is public: an embedder may close a service and mount the same directory again. Its boot
+  // load succeeded, so the prompt must not keep reporting the failure the closed one recorded.
+  vi.spyOn(log, "warn").mockImplementation(() => {});
+  const dir = await mkdtemp(join(tmpdir(), "fa-live-remount-"));
+  const reader = (load: () => Promise<string[]>) =>
+    liveCode({ dir: join(dir, "routines"), agentDir: dir, boot: { stamp: new Map(), value: [] as string[] }, load });
+  const first = reader(async () => {
+    throw new Error("routines/digest.ts: invalid cron");
+  });
+  await mkdir(join(dir, "routines"));
+  await writeFile(join(dir, "routines", "digest.ts"), "export default {}\n");
+  await first();
+  expect(liveCodeFailures(dir)).toHaveLength(1);
+
+  reader(async () => []);
+
+  expect(liveCodeFailures(dir)).toEqual([]);
+});

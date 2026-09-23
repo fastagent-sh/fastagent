@@ -630,7 +630,8 @@ publishes none of ours, so `aws bedrock-agentcore invoke-agent-runtime` with
 stricter one — AWS has already said who the caller is.
 
 **Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
-capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
+capability, not given to every agent; it gates the `wake` tool, not a cron the agent writes into `routines/` —
+see [`selfSchedule`](configuration.md)). Then the serving path (`dev`/`start`, where the poller runs — not the
 one-shot `invoke`/`routine run`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
 records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a RECURRING one — persisted under
 `<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes

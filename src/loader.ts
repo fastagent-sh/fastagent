@@ -293,6 +293,9 @@ export function liveCode<T>(options: {
   const label = `${relative(agentDir, dir)}/`;
   const failed = failures.get(resolve(agentDir)) ?? new Map<string, string>();
   failures.set(resolve(agentDir), failed);
+  // The boot value LOADED, so whatever an earlier reader of this directory recorded — a service an embedder closed
+  // and mounted again — is not this one's state.
+  failed.delete(label);
   let current = options.boot;
   let reloading: Promise<void> | undefined;
   return async () => {
