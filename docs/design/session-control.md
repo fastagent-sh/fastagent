@@ -195,7 +195,12 @@ interface AgentCommand { name: string; description?: string; source: string }
 ```
 
 What a composer's `/` completion LISTS. It cannot be reconstructed client-side — the assembly is the
-only place that knows the set after first-wins collision resolution.
+only place that knows the set after first-wins collision resolution, and for a REMOTE agent the files
+behind it are not on the client's machine at all.
+
+The list is what THIS agent has: the definition's skills plus the ones its machine lends, and the
+machine's prompt templates (`docs/design/core.md` §5). `source` says how each is invoked — `skill` or
+`prompt`, the two spellings below — which is the one thing a client needs to act on.
 
 NOT a dispatch surface, and a client MUST NOT expand a name itself. The data plane takes prompts as
 text; what a name means when it appears in one is the ENGINE's, because the engine is the side that
@@ -203,10 +208,12 @@ holds the definition — a client that read `skills/<name>/SKILL.md` and built t
 re-implement loading, drift from it, and break outright against a remote agent whose files are not on
 its machine. A client offers the list and sends the spelling; it does not interpret it.
 
-The spelling is `/skill:<name> [args]`, expanded server-side into the skill's body with the arguments
-appended — identically in-process and over HTTP+SSE, both asserted in `test/skill-invocation.test.ts`.
-It is deliberately a PREFIX: a bare `/name` stays ordinary text, and the model decides whether to act
-on it.
+Two spellings, because there are two kinds of thing. A SKILL is `/skill:<name> [args]`, expanded
+server-side into the skill's body with the arguments appended — identically in-process and over
+HTTP+SSE, both asserted in `test/skill-invocation.test.ts`. A PROMPT TEMPLATE is the bare `/<name>`,
+pi's own spelling for it. A bare name that matches no template is ordinary text, and the model decides
+whether to act on it — which is why a skill needs the prefix: without it, `/weather` would be a wish
+rather than an instruction.
 
 ONE SPELLING, NOT A NEGOTIATED ONE, and that is a known limit rather than a design: this contract has
 one engine implementing it, so a client hard-codes the prefix. Nothing in `commands()` or
@@ -453,7 +460,7 @@ excludes editor replacement, themes, widgets, and all other TUI presentation sur
 ## 10. Definition fidelity
 
 The serving planes must run the same agent that `dev`, `start`, and embedded Agent Handler run:
-FastAgent prompt assembly, definition-local skills and tools, the same deferred-tool activation,
+FastAgent prompt assembly, the same skills (definition and machine, core §5) and tools, the same deferred-tool activation,
 FastAgent auth (never implicit `~/.pi` state), model policy from config, and host-owned working
 directory and session repository — never client-provided paths.
 

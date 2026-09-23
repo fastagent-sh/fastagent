@@ -263,8 +263,6 @@ function assemblePi(opts: {
   tools?: MountedTool[];
   /** Where conversations live. */
   sessions?: PiSessionRecordStore;
-  /** Where pi reads its own settings; see {@link PiAgentSessionFactoryOptions.agentDir}. */
-  agentDir?: string;
   /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
   extensionPaths?: string[];
   env?: ExecutionEnv;
@@ -306,7 +304,6 @@ function assemblePi(opts: {
     tools: opts.tools,
     readDefinition: opts.readDefinition,
     cwd,
-    ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     // `noTools: "builtin"` leaves pi's built-ins in the registry; a lower-level replacement must also deny every
     // omitted coding name so a loader cannot reactivate one later.

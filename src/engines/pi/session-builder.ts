@@ -9,11 +9,13 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   SessionManager,
+  SettingsManager,
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
+import { readMachine } from "./machine.ts";
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
@@ -97,18 +99,26 @@ export async function buildAgentSessionRuntime(
       await assemblyFor(cwd);
 
     // Per session, NOT memoized with the assembly.
-    const services = await createAgentSessionServices({
+    const machine = await readMachine(cwd);
+    const loaded = await createAgentSessionServices({
       cwd,
       // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth unification point; see the
       // header.
       modelRuntime,
+      // PACKAGELESS, for the loader: fastagent never installs a pi package (machine.ts). Handed pi's own settings, the
+      // loader resolves `packages` itself — installing a missing one, and failing chat's start when that fails.
+      settingsManager: machine.settingsManager(),
       // Chat's assembly is fixed for the life of the runtime (a rebuild makes a new one), so these read constants.
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => systemPrompt,
         skills: () => definition.skills,
+        machine,
         extensionPaths,
       }),
     });
+    // ...while the SESSION keeps pi's own file-backed settings, so `/settings` in the TUI still saves. pi persists by
+    // re-reading the file under its lock and writing only the fields that changed, so `packages` there is untouched.
+    const services = { ...loaded, settingsManager: SettingsManager.create(cwd, loaded.agentDir) };
     reportExtensionErrors(services);
 
     // AFTER the services, because an extension may be what defines the model.
@@ -121,9 +131,10 @@ export async function buildAgentSessionRuntime(
       sessionStartEvent,
       model,
       // The SPELLING serving uses (agent-session-factory), never `thinkingLevel` alone: pi resolves an ABSENT level
-      // from its own settings, and chat reads those from the machine (`~/.pi/agent/settings.json`) while a served
-      // turn reads them from the definition. A `/thinking` + Ctrl+S saved for coding would otherwise silently make
-      // this the one posture that answers at a different reasoning effort than the deployment does.
+      // from its own settings, which every posture now reads from the machine (`~/.pi/agent/settings.json`). A
+      // `/thinking` + Ctrl+S saved for coding would otherwise silently make this the one posture that answers at a
+      // different reasoning effort than the deployment does — the effort is the DEFINITION's (`thinkingLevel` in
+      // fastagent.config.ts), unlike the engine knobs around it.
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools,
       // A tool must see one spelling of the workspace, including when opened through a symlink.

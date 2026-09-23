@@ -2,7 +2,8 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
@@ -38,8 +39,6 @@ export interface PiAgentSessionFactoryOptions {
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
-  /** Where pi looks for ITS settings (retry budget, compaction thresholds, default thinking level). */
-  agentDir?: string;
   /**
    * The definition's own extension entry points, for ANNOUNCING that serving does not run them. pi's extension
    * machinery is built for one process serving one session.
@@ -210,38 +209,47 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
-/**
- * Where pi reads ITS settings for a turn THIS definition owns — the artifact, not the machine it runs on. A retry
- * budget or a compaction threshold saved on someone's laptop (`~/.pi/agent/settings.json`) must not change what a
- * deployed turn does, so the serving assembly points pi at the definition instead.
- */
-function definitionAgentDir(cwd: string): string {
-  return join(cwd, ".fastagent", "pi");
-}
-
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
+  /** {@link readMachine} for this workspace — resolved by the caller, because this function is synchronous. */
+  machine: Machine;
   /** Omitted by serving, which does not run them. */
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
   return {
-    // Definition-only, like dev/start: pi's machine-global discovery (the operator's own ~/.pi extensions, slash
-    // commands, global AGENTS.md, APPEND_SYSTEM.md) stays out, so the agent that runs is the artifact, not the
-    // artifact plus whoever's laptop it is.
+    /**
+     * EXTENSIONS ARE THE EXCEPTION, and the reason is concurrency, not portability: pi's extension runtime is
+     * PROCESS-WIDE — every `AgentSession` overwrites the actions on it — while serving runs concurrent turns for
+     * conversations that have nothing to do with each other. One turn's `pi.sendMessage()` would deliver into
+     * another person's chat (docs/configuration.md#why-serving-does-not-run-them). When pi exports its
+     * per-session loader this line goes with the reason.
+     */
     noExtensions: true,
     // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under noExtensions, which
     // is exactly the split wanted here.
     ...(source.extensionPaths?.length ? { additionalExtensionPaths: [...source.extensionPaths] } : {}),
-    noPromptTemplates: true,
+    // Not pi's: fastagent already loads the SAME files into segment ② (`loadProjectContextFiles` in
+    // definition.ts). Leaving both on would put every AGENTS.md in the prompt twice.
     noContextFiles: true,
-    // A SPACE, not "", when the assembly has no prompt.
+    // The IDENTITY is the definition's, whatever the machine thinks. Inheriting skills is inheriting capability;
+    // inheriting a system prompt would be the agent becoming someone else's agent.
     systemPromptOverride: () => source.systemPrompt() || " ",
     appendSystemPromptOverride: () => [],
-    skillsOverride: (base) => ({
-      skills: toPiSkills(source.skills()) as typeof base.skills,
-      diagnostics: base.diagnostics,
+    /**
+     * THE DEFINITION'S SKILLS, PLUS THE MACHINE'S — an agent inherits the box it runs on (machine.ts), and the
+     * definition wins a name collision.
+     *
+     * NO DISCOVERY OF ITS OWN: the machine's half is the process's single read, so a bound session and `commands()`
+     * describe the same box. A loader discovering for itself is what made the menu live while a session was not.
+     */
+    noSkills: true,
+    skillsOverride: () => ({
+      skills: withMachine(toPiSkills(source.skills()) as MachineSkill[], source.machine.skills),
+      diagnostics: [],
     }),
+    noPromptTemplates: true,
+    promptsOverride: () => ({ prompts: [...source.machine.prompts], diagnostics: [] }),
   };
 }
 
@@ -263,18 +271,22 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   let services: Promise<AgentSessionServices> | undefined;
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
-  const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> =>
-    createAgentSessionServices({
+  const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> => {
+    const machine = await readMachine(cwd);
+    return createAgentSessionServices({
       cwd,
-      agentDir: options.agentDir ?? definitionAgentDir(cwd),
       modelRuntime,
+      // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
+      settingsManager: machine.settingsManager(),
       // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
       // question the two assemblies answer differently.
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => definition.systemPrompt,
         skills: () => definition.skills,
+        machine,
       }),
     });
+  };
 
   return async (sessionId, inherit) => {
     const next = await options.readDefinition();
@@ -286,10 +298,19 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     } else {
       // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only reaches the model
       // after a reload.
+      //
+      // AGAINST THE DEFINITION WE LAST APPLIED, never against the loader's skill list: that list is the merge
+      // (definition + machine), so comparing the definition's half to it made `definitionChanged` true whenever the
+      // machine had any skill at all — a full `reload()` per turn on a loader concurrent turns share, re-scanning
+      // pi's resource directories and clearing its extension cache.
+      //
+      // The MACHINE's half is therefore not live: it is read once, when this process built its services. That is
+      // the same deal as the rest of the environment — a `PATH` entry added after a process started does not reach
+      // it either — while the DEFINITION stays live, which is the property `dev` is built on.
       const loader = (await services).resourceLoader;
       const definitionChanged =
         loader.getSystemPrompt() !== (next.systemPrompt || " ") ||
-        skillSet(loader.getSkills().skills) !== skillSet(next.skills);
+        skillSet(definition.skills) !== skillSet(next.skills);
       if (definitionChanged) {
         definition = next;
         await loader.reload();

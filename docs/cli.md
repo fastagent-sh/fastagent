@@ -149,9 +149,11 @@ fastagent chat [dir] [--model provider/modelId]
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
 
-What it runs is **this agent**, not your pi: the definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and
-`extensions/` are loaded, while your machine-global pi skills, extensions, prompt templates and `APPEND_SYSTEM.md`
-stay out — the same rule serving follows, so what you try is what deploys.
+What it runs is **this agent's identity** on **this machine's environment**, the same split serving uses: the
+definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and `extensions/` are loaded, your machine's skills and
+prompt templates are inherited alongside them (see
+[What the machine lends the agent](configuration.md#what-the-machine-lends-the-agent)), and your pi's own
+extensions and `APPEND_SYSTEM.md` stay out.
 
 Sessions are pi's own per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), so `/resume` finds them
 beside your other chats. A served conversation — a schedule's, a channel thread's — is not opened here: it belongs to
@@ -169,10 +171,9 @@ does too, and a `defaultThinkingLevel` you saved for coding does not quietly mak
 at a different effort than your deployment.
 
 The rest of pi's turn-shaping settings — `compaction`, `retry`, `cacheWarming`, `thinkingBudgets`, `transport`, the
-HTTP timeouts — still come from your machine in `chat` while `dev`/`start` read them from the definition
-(`<workspace>/.fastagent/pi/`, see [Engine settings](configuration.md#engine-settings-fastagentpisettingsjson)).
-Set them in either place and the two postures can compact, retry or warm the prompt cache differently. They are not split today because pi
-re-reads its settings from storage on every resource reload, which discards any per-key override applied on top.
+HTTP timeouts — come from your machine in every posture, `chat` and `dev`/`start` alike (see
+[Engine settings](configuration.md#engine-settings-piagentsettingsjson)), the same way its skills do. A deployed image
+has no such file unless it was built with one.
 
 ## `fastagent invoke`
 

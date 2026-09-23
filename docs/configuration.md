@@ -228,13 +228,48 @@ FastAgent:
 `fastagent models` lists the built-in catalog only — it answers "what does FastAgent support", not
 "what does this agent use". To confirm what an agent resolved, run `fastagent info`.
 
-## Engine settings: `.fastagent/pi/settings.json`
+## What the machine lends the agent
+
+An agent inherits the box it runs on, the same way it inherits the `PATH` (the rule:
+[core §5](design/core.md#5-tools-skills-and-execution-environment)). **Skills** and **prompt templates**
+are loaded from the definition's own `skills/` *and* from this machine, by pi's
+[Agent Skills](https://agentskills.io/specification) discovery (`~/.pi/agent/skills/`,
+`~/.agents/skills/`, project `.pi/skills/` and `.agents/skills/`). A name in the definition wins a
+collision; `fastagent add skill <name>` vendors one into `skills/`.
+
+Skills and prompts from pi **packages** (`packages` in pi's `settings.json`) are loaded when the package
+is installed. fastagent never installs one: a package that is listed but not installed is skipped, with
+a warning naming it. The machine is read once, at startup — restart to pick up something installed
+after that.
+
+Deploying ships the project scope, the workspace, and nothing more: a deployed image has whatever its
+build put in it, the way it has whatever binaries its build installed.
+
+**Extensions are the exception**, for a reason that is not portability — see
+[Why serving does not run them](#why-serving-does-not-run-them). So is the **system prompt**:
+inheriting capability is one thing, inheriting an identity would make the agent someone else's.
+
+**Who fires a prompt template changes when you serve.** A template is invoked by name — a bare
+`/<name>` in the prompt text — and on a served agent that text comes from whoever is talking: a group
+member on Telegram, an anonymous `POST /invoke`. So your `~/.pi/agent/prompts/deploy.md` becomes
+something any participant can put into a turn, and a template whose name collides with a platform's
+own (`prompts/start.md` against Telegram's `/start`) silently rewrites that message. It grants no
+capability the agent did not already have — the turn runs with the same tools either way — but the
+decision to run your macro moves from you to them. Keep the machine's `prompts/` for `chat`, or name
+them so a stranger would not guess one; a template that must be part of the agent belongs in the
+definition, where a reader can see it.
+
+## Engine settings: `~/.pi/agent/settings.json`
 
 The knobs that shape a turn rather than the agent — compaction, retries, prompt-cache warming, transport
-timeouts — belong to pi, not to `fastagent.config.ts`. `dev`/`start` point pi at
-`<workspace>/.fastagent/pi/`, so they travel with the definition: a threshold someone saved on their
-laptop cannot change what a deployed turn does. The file is pi's own settings format; the ones worth
-knowing here:
+timeouts — belong to pi, not to `fastagent.config.ts`, and they come from the machine like everything
+else above: `dev`, `start` and `chat` all read pi's own files (serving reads them once, at startup).
+
+pi has two: the machine's `~/.pi/agent/settings.json`, and the project's
+`<workspace>/.pi/settings.json`, deep-merged with the project file winning, as in pi. The project one
+is inside the workspace, so it is part of what a deploy ships.
+
+The file is pi's own settings format; the ones worth knowing here:
 
 | Setting | Default | Why it matters to an agent |
 |---|---|---|
@@ -249,8 +284,7 @@ knowing here:
 }
 ```
 
-`fastagent chat` is the exception: it reads these from your machine (`~/.pi/agent/settings.json`), so
-the two postures can compact, retry or warm differently. See [CLI](cli.md#fastagent-chat).
+
 
 ### The prompt lives in the session record
 

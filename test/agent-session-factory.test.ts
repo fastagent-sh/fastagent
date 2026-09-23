@@ -22,7 +22,7 @@ import {
   createReadTool,
 } from "@earendil-works/pi-coding-agent";
 import type { MountedTool } from "../src/engines/pi/tool.ts";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "../src/collect.ts";
 import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
@@ -62,6 +62,7 @@ async function agentWith(
 }
 
 describe("piAgentSessionFactory: the definition reaches the model", () => {
+  afterEach(() => vi.unstubAllEnvs());
   it("keeps gateway error bodies in the session record and failed event, outside server logs", async () => {
     const { faux } = makeFaux();
     const body = "gateway echoed private request: do-not-log";
@@ -125,14 +126,18 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
 
   it("compacts after a tool inside one run without repeating its side effect", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-same-run-compaction-"));
-    await mkdir(join(cwd, ".fastagent", "pi"), { recursive: true });
+    // pi's own settings, where pi keeps them: this agent inherits the machine it runs on, so the suite gives it a
+    // machine of its own rather than a definition-local override (there is no such thing any more).
+    const home = await mkdtemp(join(tmpdir(), "fa-same-run-home-"));
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
     await writeFile(
-      join(cwd, ".fastagent", "pi", "settings.json"),
+      join(home, ".pi", "agent", "settings.json"),
       JSON.stringify({
         compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 1600 },
         retry: { enabled: false },
       }),
     );
+    vi.stubEnv("HOME", home);
     let toolRuns = 0;
     let turns = 0;
     const requests: string[] = [];

@@ -29,6 +29,7 @@ export default defineConfig({
   },
   test: {
     pool: "forks",
+    setupFiles: ["test/setup.ts"],
     testTimeout: 30000,
     hookTimeout: 30000,
     // test/live/ talks to real providers, the registry and Docker; it runs only under

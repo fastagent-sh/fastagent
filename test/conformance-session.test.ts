@@ -36,6 +36,8 @@ import { listWakeups } from "../src/schedule/wakeups.ts";
 import { readFires } from "../src/schedule/state.ts";
 
 afterEach(() => vi.restoreAllMocks());
+import { definitionResourceLoaderOptions } from "../src/engines/pi/agent-session-factory.ts";
+import { readMachine } from "../src/engines/pi/machine.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
@@ -66,15 +68,13 @@ async function sessionFactory(
   const services = await createAgentSessionServices({
     cwd,
     modelRuntime,
-    resourceLoaderOptions: {
-      // The agent is the definition, not the authoring machine's pi setup (same posture as serving).
-      noExtensions: true,
-      noPromptTemplates: true,
-      noContextFiles: true,
-      systemPromptOverride: () => "test",
-      appendSystemPromptOverride: () => [],
-      skillsOverride: (base) => ({ skills: [], diagnostics: base.diagnostics }),
-    },
+    // THE PRODUCT'S posture, called rather than transcribed: a hand-copied one stops matching the moment the
+    // real one changes, and silently keeps passing. The empty machine comes from `test/setup.ts`'s empty HOME.
+    resourceLoaderOptions: definitionResourceLoaderOptions({
+      systemPrompt: () => "test",
+      skills: () => [],
+      machine: await readMachine(cwd),
+    }),
   });
   const store = dir === undefined ? piInMemorySessionRecordStore({ cwd }) : piSessionRecordStore({ dir, cwd });
   return async (sessionId) => {

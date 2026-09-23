@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
 
@@ -579,6 +579,48 @@ describe("session builder: a chat turn runs at the definition's reasoning effort
       vi.unstubAllEnvs();
       await rm(dir, { recursive: true, force: true });
       await rm(piDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session builder: chat never installs a pi package, and still saves its settings", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("a listed-but-missing package does not stop chat, and nothing is installed", async () => {
+    // Handed pi's own settings, chat's loader resolved `packages` itself: it ran `npm install`, and when that failed
+    // chat did not start — on an offline laptop, or after one registry 404. The npm here only records its calls.
+    const home = await mkdtemp(join(tmpdir(), "fa-chat-home-"));
+    const calls = join(home, "npm-calls.log");
+    const npm = join(home, "npm.sh");
+    await writeFile(npm, `#!/bin/sh\necho "$@" >> ${calls}\nexit 1\n`, { mode: 0o755 });
+    await writeFile(calls, "");
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    const settingsFile = join(home, ".pi", "agent", "settings.json");
+    await writeFile(settingsFile, JSON.stringify({ npmCommand: [npm], packages: ["npm:not-installed-anywhere"] }));
+    vi.stubEnv("HOME", home);
+    const dir = await freshAgentDir("fa-chat-nopkg-");
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+
+      const asked = (await readFile(calls, "utf8")).split("\n").filter(Boolean);
+      expect(
+        asked.filter((line) => line.startsWith("install")),
+        asked.join("\n"),
+      ).toEqual([]);
+
+      // The SESSION's settings are still pi's own file: a `/settings` change saves, and pi writes only the field that
+      // changed, so the listed packages survive it.
+      rt.session.settingsManager.setTheme("fastagent-test-theme");
+      await rt.session.settingsManager.flush();
+      const saved = JSON.parse(await readFile(settingsFile, "utf8"));
+      expect(saved.theme).toBe("fastagent-test-theme");
+      expect(saved.packages).toEqual(["npm:not-installed-anywhere"]);
+      await rt.dispose();
+    } finally {
+      warn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

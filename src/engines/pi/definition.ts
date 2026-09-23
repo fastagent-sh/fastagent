@@ -153,8 +153,8 @@ async function readSkills(
   e: ExecutionEnv,
   root: string,
 ): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
-  // Skills come ONLY from the definition's own skills/ (no external/global mount), so the same definition loads the
-  // same skills on every machine.
+  // The definition's OWN skills/ — its half of the answer. The machine's half is machine.ts's, and `withMachine`
+  // decides a name collision in this half's favour.
   await assertInsideAgentDir(root, "skills");
   const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")], BACKGROUND_CONTEXT);
   const byName = new Map<string, Skill>();

@@ -20,6 +20,7 @@ import {
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
+import { readMachine, withMachine } from "../engines/pi/machine.ts";
 import {
   createPiModelRuntime,
   createPiModels,
@@ -92,7 +93,9 @@ export async function reportAssembly(
   await reportAuth(a.agentDir, a.modelSpec, a.authPath, a.fallbackAuthPath);
   reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (a.definition.persona) reportLine("persona", "persona.md");
-  reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
+  // What this agent HAS — the definition's skills and the ones its machine lends (machine.ts).
+  const skills = withMachine(a.definition.skills, (await readMachine(a.workspace)).skills);
+  reportLine("skills", skills.map((s) => s.name).join(", ") || "(none)");
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
   if (a.deferredToolNames.length > 0) {
