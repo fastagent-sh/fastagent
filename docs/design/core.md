@@ -137,17 +137,14 @@ The pi reference prompt has four segments:
 | ④ runtime context | pi appends cwd, without a date line that would invalidate the prefix cache daily |
 
 `persona.md` is authored identity; `AGENTS.md` is project context. The definition is re-read for every
-invocation, so persona/context/skill edits take effect on the next turn — and so do `tools/`, the code an
-agent writes to improve itself: each invoke reloads them when a file under `tools/` changed (open.ts
-`liveTools`), in `start` as in `dev`. They import fresh (`importFresh`, as pi's `/reload` imports extensions), so
-a helper a tool imports is re-read with it; a reload that fails keeps the last tools that loaded and says why — in
-the log once, and in the prompt's tool list every turn it stays broken, since the agent that wrote the file is the one
-placed to fix it.
-Only TypeScript is re-read that way (`reloadKind`): jiti hands `.js`/`.mjs`/`.cjs`/`.json` to Node, whose cache
-keeps them, so a change to one is said to need a restart and is never reported as reloaded. A file nothing imports
-(`README.md`, an editor's swap file) is not a change at all.
-The rest of the code — `channels/`, `routines/`, config — is the agent's wiring, reloaded by a restart (the dev
-supervisor's, in `dev`). The low-level `createPiAgent({ instructions })` path takes the prompt body
+invocation, so persona/context/skill edits take effect on the next turn; code modules are reloaded by
+the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
+runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
+process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool
+(`selfSchedule`). `tools/`, `routines/` and `channels/` are the author's code: they change with a restart or a
+release. (Reloading them in-process was built and removed — the design is #582, why it went is #600.) A skill the
+agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
+and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
 
 ### Promise ports

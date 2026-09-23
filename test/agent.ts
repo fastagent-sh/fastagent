@@ -47,7 +47,8 @@ export function fauxAgent(
         modelRuntime.registerNativeProvider(faux.provider);
         return { modelRuntime, model: faux.getModel() };
       },
-      readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [], tools: options.tools }),
+      ...(options.tools ? { tools: options.tools } : {}),
+      readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
       cwd,
     }),
   });
@@ -97,8 +98,9 @@ export async function fauxControlledAgent(
   const sessionFactory = piAgentSessionFactory({
     sessions,
     engine: async () => ({ modelRuntime, model }),
+    ...(options.tools ? { tools: options.tools } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
-    readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [], tools: options.tools }),
+    readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
     cwd,
   });
   const { control, observer } = createPiSessionControl({

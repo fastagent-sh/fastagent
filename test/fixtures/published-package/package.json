@@ -1,5 +1,0 @@
-{
-  "name": "@fastagent-sh/fastagent",
-  "type": "module",
-  "exports": { ".": "./index.ts" }
-}

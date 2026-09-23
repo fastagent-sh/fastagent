@@ -21,7 +21,6 @@ import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
   type FastagentTool,
-  type LiveTools,
   type ToolCollision,
   isDeferredTool,
   loadTools,
@@ -170,14 +169,7 @@ export async function resolveAgentTools(
 // Fastagent owns identity and project context; Pi appends skills and cwd for both serving and chat.
 
 /** The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two deviations. */
-export function piBasePrompt(
-  options: {
-    tools?: MountedTool[];
-    persona?: string;
-    /** Why `tools/` as it is on disk is not what is mounted ({@link LiveTools}). */
-    toolsFailure?: string;
-  } = {},
-): string {
+export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string } = {}): string {
   const mounted = options.tools ?? [];
   // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so naming them here
   // would invite calls to tools that don't exist yet.
@@ -194,26 +186,32 @@ export function piBasePrompt(
     (fullCodingSurface
       ? "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files."
       : "You are an AI assistant operating inside pi, an agent harness. Help users using only the tools and context available to you.");
-  // Said where the model reads its tools: it is the one that edits tools/, and an absent tool does not say why.
-  const failureNote = options.toolsFailure
-    ? `\n\nYour tools/ changed but could not be loaded, so the tools above are the last set that loaded. The load is retried when a file under tools/ changes — after fixing a helper outside tools/, change one inside it too. A missing secret is read when the service starts, so it needs a restart:\n${options.toolsFailure}`
-    : "";
   const deferredNote =
     deferredCount > 0
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
       : "";
+  // What takes effect when, and the agent's own path to a new capability, are the same on every host; only how long
+  // the storage lives differs, below. The skill it writes lives in the definition directory, which the next
+  // deployment replaces (or, on AgentCore, erases with everything else) — so the sentence says so, and where a skill
+  // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
+  // once per process (machine.ts), so it would not be live.
+  const RUNTIME_CHANGES = ` Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash. It lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
+    // Named only when mounted (`selfSchedule`), like the deferred tools above: naming a tool the model does not
+    // have invites calls to it.
+    mountedNames.has("wake") ? " To schedule your own follow-up work, use the wake tool." : ""
+  }`;
   // How long the storage lives is the HOST's answer, not a deployment-wide one: AgentCore's managed
   // mount is reset by every deploy, so telling that agent to keep work "outside the definition" would
   // name a location its next deploy erases.
   const deploymentNote = !isDeployedWorkspace()
     ? ""
     : isAgentcoreRuntime()
-      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`
-      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`;
+      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database).${RUNTIME_CHANGES}`
+      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it.${RUNTIME_CHANGES}`;
   return `${identity}
 
 Available tools:
-${toolsList}${failureNote}${deferredNote}
+${toolsList}${deferredNote}
 
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
@@ -272,8 +270,6 @@ function assemblePi(opts: {
   /** The model registry to run on, used verbatim. */
   models?: ModelRuntime;
   readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
-  /** The tools as assembled — what the built-ins a lower-level list omits are computed from. The tools each invoke
-   *  BINDS come from `readDefinition`. */
   tools?: MountedTool[];
   /** Where conversations live. */
   sessions?: PiSessionRecordStore;
@@ -315,6 +311,7 @@ function assemblePi(opts: {
     sessions,
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel,
+    tools: opts.tools,
     readDefinition: opts.readDefinition,
     cwd,
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
@@ -372,8 +369,6 @@ export interface CreatePiAgentOptions {
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
   const { instructions, skills = [] } = options;
-  // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
-  const tools = options.tools ? withSearchTool(options.tools) : options.tools;
   return agentOf(
     assemblePi({
       model: options.model,
@@ -384,9 +379,9 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
       readDefinition: () => ({
         systemPrompt: typeof instructions === "function" ? instructions() : instructions,
         skills,
-        tools,
       }),
-      tools,
+      // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
+      tools: options.tools ? withSearchTool(options.tools) : options.tools,
       sessions: options.sessions,
       env: options.env,
       lease: options.lease,
@@ -427,11 +422,7 @@ export interface CreatePiAgentFromDefinitionOptions {
 /** L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. */
 export async function assemblePiFromDefinition(
   dir: string,
-  options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & {
-    /** The tools as they are NOW, asked once per invoke; `tools` is the boot answer. The directory opener supplies it
-     *  so the agent's own `tools/` go live without a restart ({@link createPiAgentFromDir}). */
-    readTools?: () => Promise<LiveTools>;
-  },
+  options: Omit<CreatePiAgentFromDefinitionOptions, "observer">,
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
   // and whose ancestors are walked for ② context.
@@ -443,7 +434,6 @@ export async function assemblePiFromDefinition(
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied it; a caller's
   // own search_tools wins).
   const tools = withSearchTool(options.tools ?? piAllCodingTools(cwd));
-  const readTools = options.readTools;
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
@@ -467,24 +457,19 @@ export async function assemblePiFromDefinition(
     authPath,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills edits (the
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts
-    // are reserved for the code that is not (channels/routines/config).
+    // are reserved for code (tools/channels/config, module cache).
     readDefinition: async () => {
       const def = await loadAgentDefinition(dir, { cwd, env });
       reportFindingsIfChanged(def.dir, def);
-      // Read with the prompt because the prompt LISTS them: a new tool the model is not told about is one it
-      // does not call.
-      const read = readTools ? await readTools() : undefined;
-      const live = read ? withSearchTool(read.tools) : tools;
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity, re-read per turn
           // like AGENTS.md so edits go live.
-          base: options.base ?? piBasePrompt({ tools: live, persona: def.persona, toolsFailure: read?.failure }),
+          base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
         }),
         skills: def.skills,
-        tools: live,
       };
     },
     tools,

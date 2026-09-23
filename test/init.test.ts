@@ -33,19 +33,6 @@ function cliInit(args: string[], cwd: string): Promise<string> {
   });
 }
 
-/**
- * What `npm install` in a scaffolded agent provides: `@fastagent-sh/fastagent` in its own `node_modules`, here pointing
- * at this checkout's source (test/fixtures/published-package). Its tools import the package by name and load fresh
- * (loader.ts `importFresh`), which resolves the way Node does — vitest's alias for the name does not reach it.
- */
-async function installPublishedPackage(agentDir: string): Promise<void> {
-  await mkdir(join(agentDir, "node_modules", "@fastagent-sh"), { recursive: true });
-  await symlink(
-    fileURLToPath(new URL("./fixtures/published-package", import.meta.url)),
-    join(agentDir, "node_modules", "@fastagent-sh", "fastagent"),
-  );
-}
-
 describe("init: scaffoldAgent", () => {
   it("scaffolds a COMPLETE agent into ./fastagent/ with ZERO writes to the workspace around it", async () => {
     const dir = await freshDir();
@@ -122,7 +109,6 @@ describe("init: scaffoldAgent", () => {
     expect(configTemplate).not.toContain("codingTools");
 
     // The scaffolded agent ASSEMBLES: ① persona + tools from fastagent/, ② context walked from the workspace.
-    await installPublishedPackage(join(dir, "fastagent"));
     const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
     expect(a.agentDir).toBe(join(dir, "fastagent"));
     expect(a.workspace).toBe(dir);
@@ -226,7 +212,6 @@ describe("init: scaffoldAgent", () => {
     expect(agentDir).toBe("bot");
     expect(created).toContain(join("bot", "persona.md"));
     // …and it resolves under that name, with the surrounding tree as its workspace.
-    await installPublishedPackage(join(host, "bot"));
     const a = await createPiAgentFromDir(host, { model: "openai-codex/gpt-5.5" });
     expect([a.agentDir, a.workspace]).toEqual([join(host, "bot"), host]);
 
