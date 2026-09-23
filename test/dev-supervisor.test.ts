@@ -8,9 +8,8 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
-    expect(ignored(join(root, "tools"))).toBe(false);
-    expect(ignored(join(root, "tools", "word-count.ts"))).toBe(false);
-    expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
+    // tools/ goes live per invoke (open.ts), so an edit there must not cost the worker its process.
+    expect(ignored(join(root, "tools", "word-count.ts"))).toBe(true);
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
     expect(ignored(join(root, "routines", "daily.ts"))).toBe(false); // loaded once per worker — restart is the re-read
     // Which FILES are extensions is decided at boot, so an added or removed entry needs the restart
@@ -60,7 +59,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     const nestedRoot = join("/repo", "fastagent");
     const ig = devWatchIgnored(nestedRoot, join(nestedRoot, ".secrets", ".env"));
     expect(ig(nestedRoot)).toBe(false);
-    expect(ig(join(nestedRoot, "tools", "foo.ts"))).toBe(false);
+    expect(ig(join(nestedRoot, "channels", "foo.ts"))).toBe(false);
     expect(ig(join(nestedRoot, "persona.md"))).toBe(true); // live-read, no restart
     expect(ig(join(nestedRoot, ".secrets", ".env"))).toBe(false);
   });
@@ -79,6 +78,6 @@ describe("dev-supervisor: the watched .env follows FASTAGENT_SECRETS_DIR", () =>
   it("prunes everything when the .env resolves outside the agent (the supervisor warns instead)", () => {
     const ig = devWatchIgnored(root, "/data/.secrets/.env");
     expect(ig("/agent/.secrets/.env")).toBe(true);
-    expect(ig("/agent/tools/x.ts")).toBe(false); // code inputs unaffected
+    expect(ig("/agent/channels/x.ts")).toBe(false); // code inputs unaffected
   });
 });

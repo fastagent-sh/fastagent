@@ -124,9 +124,9 @@ generates and leaves `config/` alone), as does the aws CLI (a `0600` `~/.aws/con
 fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
+Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/`/`tools/` are re-read every turn (edits go
 live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
-`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`.
+`channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`.
 
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —

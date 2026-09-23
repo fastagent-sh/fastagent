@@ -6,6 +6,7 @@ import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
 import { log } from "./log.ts";
 
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
@@ -108,16 +109,31 @@ export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[])
   );
 }
 
-/** Import every module the directory declares ({@link moduleInventory}). */
+/**
+ * Import a module the agent may REWRITE while this process runs, as it is on disk now — the module and every local
+ * file it imports. Node's own `import()` caches by URL, and busting the entry's URL (`?v=2`) re-reads only the entry:
+ * a helper it imports stays the old one (measured), a half-swapped module. This is what pi's `/reload` does for
+ * extensions. What it does NOT re-evaluate is an installed package — jiti hands those to Node — which is also what
+ * keeps a tool's `@fastagent-sh/fastagent` the host's own.
+ */
+async function importFresh(file: string): Promise<{ default?: unknown }> {
+  // `fsCache: false`: no transpile cache written next to a deployed definition.
+  return createJiti(import.meta.url, { moduleCache: false, fsCache: false }).import(file);
+}
+
+/** Import every module the directory declares ({@link moduleInventory}); `fresh` imports through {@link importFresh}. */
 export async function loadModuleDir(
   subDir: string,
+  options: { fresh?: boolean } = {},
 ): Promise<{ modules: DiscoveredModule[]; failures: ModuleLoadFailure[] }> {
   const entries = await moduleInventory(subDir);
   const modules: DiscoveredModule[] = [];
   const failures: ModuleLoadFailure[] = [];
   for (const { name, label, file } of entries) {
     try {
-      const mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
+      const mod = options.fresh
+        ? await importFresh(file)
+        : ((await import(pathToFileURL(file).href)) as { default?: unknown });
       modules.push({ name, label, file, mod });
     } catch (error) {
       failures.push({

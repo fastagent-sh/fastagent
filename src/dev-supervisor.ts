@@ -13,8 +13,9 @@ import { declaredChannels } from "./channels/discover.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
-/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. */
-const CODE_INPUT_DIRS = ["tools", "channels", "routines", "extensions"] as const;
+/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. `tools/` is not one — each
+ *  invoke reloads it when it changed (open.ts `liveTools`), in `start` as much as here. */
+const CODE_INPUT_DIRS = ["channels", "routines", "extensions"] as const;
 
 const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, .secrets/.env`;
 
@@ -118,7 +119,7 @@ export async function runDevSupervisor(
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills/tools edits go live next turn without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {

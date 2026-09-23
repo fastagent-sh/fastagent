@@ -91,14 +91,15 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
-  with no restart (and no watcher involvement).
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the
-  dev worker — a new process is the only way to drop the ESM module cache.
+- **persona.md, AGENTS.md, `skills/`, and `tools/`** are re-read on every turn — edits go live on the next turn
+  with no restart (and no watcher involvement). `tools/` is reloaded when a file under it changed; a reload that
+  fails keeps the previous tools and logs why. `start` does the same.
+- **Code inputs** (`channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the
+  dev worker.
 
 Nothing else is watched: files the agent itself writes into the workspace (its work product) never
-trigger a restart. Helper code imported from outside `tools/`/`channels/` is out of watch scope —
-keep it under `tools/`, or restart manually. (`fastagent chat` is a startup snapshot — restart it
+trigger a restart. Helper code a tool imports from outside `tools/` is reloaded only when something under `tools/`
+changes — keep it under `tools/`. A `channels/` helper outside `channels/` needs a manual restart. (`fastagent chat` is a startup snapshot — restart it
 to pick up any edit.)
 
 If the worker stopped after a broken code edit, save another change after fixing the error. The supervisor should retry.

@@ -26,6 +26,8 @@ import { type TurnContext, agentSessionManager, sessionToolActivation, turnConte
 interface PiSessionDefinition {
   systemPrompt?: string;
   skills: Skill[];
+  /** The tools this invoke binds. Read with the prompt, because the prompt lists them. */
+  tools?: MountedTool[];
 }
 
 export interface PiAgentSessionFactoryOptions {
@@ -34,8 +36,7 @@ export interface PiAgentSessionFactoryOptions {
   /** The model to run and the hub that authenticates it, resolved on FIRST USE and kept. */
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   thinkingLevel?: ThinkingLevel;
-  tools?: MountedTool[];
-  /** Read once per binding; prompt and skills come from the same definition read. */
+  /** Read once per binding; prompt, skills and tools come from the same definition read. */
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
@@ -265,7 +266,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         "runs concurrent turns for different conversations. See docs/configuration.md#extensions.",
     );
   }
-  const tools = options.tools ?? [];
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
   let definition: PiSessionDefinition;
   let services: Promise<AgentSessionServices> | undefined;
@@ -328,7 +328,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       sessionManager,
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
-      tools,
+      // Per invoke, like the prompt: a turn already running keeps the tools it was bound with.
+      tools: next.tools ?? [],
       cwd,
       excludedToolNames,
       sessionId,

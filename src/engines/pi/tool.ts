@@ -1,4 +1,5 @@
 /** Tool authoring: `defineTool` (the authoring surface) and `loadTools` (filesystem discovery). */
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -162,7 +163,8 @@ export async function loadTools(dir: string): Promise<{
 }> {
   // The same containment guard channels/routines/skills get.
   await assertInsideAgentDir(dir, "tools");
-  const { modules, failures } = await loadModuleDir(join(dir, "tools"));
+  // Fresh: the agent can rewrite its own tools while it runs, and each read must see them as they are now.
+  const { modules, failures } = await loadModuleDir(join(dir, "tools"), { fresh: true });
   const byName = new Map<string, AgentTool>();
   const collisions: ToolCollision[] = [];
   const secrets = new Map<string, DeclaredSecret[]>();
@@ -185,6 +187,33 @@ export async function loadTools(dir: string): Promise<{
     secrets.set(name, declaration.secrets);
   }
   return { tools: [...byName.values()], secrets, collisions, failures };
+}
+
+/**
+ * What `tools/` looks like on disk, as one comparable string: every file under it, at any depth, with its size and
+ * modification time. Asked once per invoke, so it stats and never imports; a change here is what makes the next
+ * invoke load the tools again. Helpers a tool imports from OUTSIDE `tools/` are not in it — they reload with the tool
+ * that imports them, when that tool changes.
+ */
+export async function toolsStamp(agentDir: string): Promise<string> {
+  const dir = join(agentDir, "tools");
+  let files: string[];
+  try {
+    files = (await readdir(dir, { recursive: true, withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(entry.parentPath, entry.name))
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+  const stamps = await Promise.all(
+    files.map(async (file) => {
+      const { size, mtimeMs } = await stat(file);
+      return `${file}\u0000${size}\u0000${mtimeMs}`;
+    }),
+  );
+  return stamps.join("\u0001");
 }
 
 /** Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name. */

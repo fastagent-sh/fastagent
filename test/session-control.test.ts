@@ -1291,7 +1291,6 @@ describe("session control: boundary mutations", () => {
           sessions,
           engine: async () => ({ modelRuntime, model }),
           thinkingLevel,
-          tools: [],
           cwd,
           readDefinition: () => ({ systemPrompt: "test", skills: [] }),
         });

@@ -23,7 +23,8 @@ import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
-import type { ToolCollision, MountedTool } from "./tool.ts";
+import { type ToolCollision, type MountedTool, toolsStamp } from "./tool.ts";
+import { log } from "../../log.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 
@@ -109,6 +110,69 @@ export interface AgentAssembly {
   toolCollisions: ToolCollision[];
   /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
   toolSecrets: Map<string, DeclaredSecret[]>;
+  /** What `tools/` looked like on disk just before those tools were loaded ({@link toolsStamp}). */
+  toolsStamp: string;
+}
+
+/**
+ * The tools this agent runs with, or a refusal: every declared file loaded, every secret they declared present.
+ * Boot and a live reload ask the same question; they differ only in what a refusal does.
+ */
+async function mountableTools(config: FastagentConfig, agentDir: string, workspace: string) {
+  const resolved = await resolveAgentTools(config, agentDir, workspace);
+  // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
+  // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
+  // report an incomplete set, and fixing the file could then reveal more missing values. Refuse the broken file
+  // first and one pass reports every secret the definition actually wants.
+  refuseBrokenDeclarations(resolved.toolFailures);
+  // Both gates live here rather than inside resolveAgentTools, which `info` and `fastagent tool` call to REPORT on a
+  // definition and must survive both faults; every path through this function is about to run ALL of the tools, so
+  // no `owner`.
+  //
+  // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
+  // means "may run in this process" — letting it start would put the empty-credential failure back
+  // inside a turn. An author who does not want that opts out per tool by not declaring.
+  gateSecrets({ declared: resolved.toolSecrets, failures: [] });
+  return resolved;
+}
+
+/**
+ * The agent's own `tools/`, LIVE: each invoke asks, and gets them as they are on disk — so a tool the agent wrote
+ * for itself is one it can call on its next turn, with no restart. Loaded again only when {@link toolsStamp} moved;
+ * a turn already running keeps the tools it was bound with.
+ *
+ * A reload that fails KEEPS THE LAST TOOLS THAT LOADED and says why, once per state of the directory. Boot refuses
+ * the same failure, but here refusing would fail every turn after it — including the one the agent needs to repair
+ * what it just broke. All or nothing: a half-applied `tools/` is a set nobody wrote.
+ */
+export function liveTools(
+  boot: { stamp: string; tools: MountedTool[] },
+  load: () => Promise<MountedTool[]>,
+  agentDir: string,
+): () => Promise<MountedTool[]> {
+  let current = boot;
+  let reloading: Promise<void> | undefined;
+  return async () => {
+    const stamp = await toolsStamp(agentDir);
+    if (stamp === current.stamp) return current.tools;
+    // Concurrent invokes share one reload; whichever stamp it read, the next invoke compares again.
+    reloading ??= (async () => {
+      try {
+        const tools = await load();
+        current = { stamp, tools };
+        log.info(`[fastagent] tools/ changed — reloaded; the next turns run with the new tools`);
+      } catch (error) {
+        current = { stamp, tools: current.tools };
+        log.warn(
+          `[fastagent] tools/ changed but could not be loaded, so the previous tools stay in use: ${(error as Error).message}`,
+        );
+      } finally {
+        reloading = undefined;
+      }
+    })();
+    await reloading;
+    return current.tools;
+  };
 }
 
 export async function resolveAgentAssembly(
@@ -124,24 +188,13 @@ export async function resolveAgentAssembly(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
+  // Stamped BEFORE loading: a file written while the load runs then reads as a change on the next invoke.
+  const stamp = await toolsStamp(agentDir);
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolSecrets } = await mountableTools(
     config,
     agentDir,
     workspace,
   );
-  // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
-  // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
-  // report an incomplete set, and fixing the file could then reveal more missing values. Refuse the broken file
-  // first and one pass reports every secret the definition actually wants.
-  refuseBrokenDeclarations(toolFailures);
-  // Both gates live here rather than inside resolveAgentTools, which `info` and `fastagent tool` call to REPORT on a
-  // definition and must survive both faults; every path through this function is about to run ALL of the tools, so
-  // no `owner`.
-  //
-  // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
-  // means "may run in this process" — letting it start would put the empty-credential failure back
-  // inside a turn. An author who does not want that opts out per tool by not declaring.
-  gateSecrets({ declared: toolSecrets, failures: [] });
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
@@ -162,6 +215,7 @@ export async function resolveAgentAssembly(
     deferredToolNames,
     toolCollisions,
     toolSecrets,
+    toolsStamp: stamp,
   };
 }
 
@@ -228,10 +282,18 @@ export async function createPiAgentFromDir(
     toolNames,
     deferredToolNames,
     toolCollisions,
+    toolsStamp: stamp,
   } = await resolveAgentAssembly(dir, options);
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
   // opted into self-scheduling (config.selfSchedule).
-  const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
+  const withWake = (mounted: MountedTool[]) =>
+    withWakeTool(mounted, stateRoot, !!options.serving && !!config.selfSchedule);
+  const mountedTools = withWake(tools);
+  const readTools = liveTools(
+    { stamp, tools: mountedTools },
+    async () => withWake((await mountableTools(config, agentDir, workspace)).tools),
+    agentDir,
+  );
   // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
   // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
@@ -242,6 +304,7 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
+    readTools,
     authPath,
     ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
