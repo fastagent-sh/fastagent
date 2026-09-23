@@ -14,9 +14,13 @@ import { liveTools, resolveAgentAssembly } from "../src/engines/pi/open.ts";
 import { turnContext } from "../src/engines/pi/tool-context.ts";
 import type { MountedTool } from "../src/engines/pi/tool.ts";
 import { log } from "../src/log.ts";
+import { loadModuleDir } from "../src/loader.ts";
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const piUrl = new URL("../src/pi.ts", import.meta.url).href;
 
@@ -44,11 +48,7 @@ async function agentDir(): Promise<string> {
 /** The directory opener's live tools, over the same assembly boot uses. */
 async function live(dir: string) {
   const boot = await resolveAgentAssembly(dir);
-  return liveTools(
-    { stamp: boot.toolsStamp, tools: boot.tools },
-    async () => (await resolveAgentAssembly(dir)).tools,
-    dir,
-  );
+  return liveTools(boot, { stamp: boot.toolsStamp, tools: boot.tools });
 }
 
 /** Call `greet` the way a turn does: inside the turn's context. */
@@ -137,4 +137,48 @@ it("each invoke binds, and its prompt lists, the tools read for THAT invoke", as
   expect(seen[1]?.tools).toContain("second");
   expect(seen[1]?.tools).not.toContain("first");
   expect(seen[1]?.prompt).toContain("- second: The second tool.");
+});
+
+it("reloads under Bun too — whose own import() would keep the first module forever", async () => {
+  // jiti turns native imports ON when it sees `Bun`, and a native import is the cache that never lets go: every
+  // reload then logged "reloaded" over the old tools. The global is what jiti looks at, so this is that path.
+  vi.stubGlobal("Bun", {});
+  const dir = await agentDir();
+  const readTools = await live(dir);
+  vi.spyOn(log, "info").mockImplementation(() => {});
+
+  await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "from bun";\n`);
+
+  expect(await callGreet(await readTools())).toBe("from bun from /the/workspace");
+});
+
+it("one load evaluates a helper its tools share ONCE — a pool stays one pool", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fa-live-shared-"));
+  await mkdir(join(dir, "tools", "lib"), { recursive: true });
+  await writeFile(join(dir, "tools", "lib", "pool.ts"), "export const pool = {};\n");
+  await writeFile(join(dir, "tools", "a.ts"), 'export { pool as default } from "./lib/pool.ts";\n');
+  await writeFile(join(dir, "tools", "b.ts"), 'export { pool as default } from "./lib/pool.ts";\n');
+  await writeFile(join(dir, "tools", "broken.ts"), "export default {\n");
+
+  const { modules, failures } = await loadModuleDir(join(dir, "tools"), { fresh: true });
+
+  const [a, b] = modules.map((module) => module.mod.default);
+  expect(a).toBeDefined();
+  expect(a).toBe(b);
+  // ...and loading them together still isolates the one that is broken.
+  expect(failures.map((failure) => failure.label)).toEqual(["tools/broken.ts"]);
+});
+
+it("a reloaded tool that takes a mounted name is said, not silently absent", async () => {
+  const dir = await agentDir();
+  const readTools = await live(dir);
+  const warned: string[] = [];
+  vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+  vi.spyOn(log, "info").mockImplementation(() => {});
+
+  // `read` is a coding tool, so this file's tool is dropped.
+  await writeFile(join(dir, "tools", "read.ts"), greet());
+  await readTools();
+
+  expect(warned.join("\n")).toMatch(/tool "read" \(tools\/read\) dropped/);
 });

@@ -20,7 +20,7 @@ import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
-import { reportFindingsIfChanged } from "./report.ts";
+import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import { type ToolCollision, type MountedTool, toolsStamp } from "./tool.ts";
@@ -146,10 +146,19 @@ async function mountableTools(config: FastagentConfig, agentDir: string, workspa
  * what it just broke. All or nothing: a half-applied `tools/` is a set nobody wrote.
  */
 export function liveTools(
+  opened: { config: FastagentConfig; agentDir: string; workspace: string },
   boot: { stamp: string; tools: MountedTool[] },
-  load: () => Promise<MountedTool[]>,
-  agentDir: string,
+  /** What the opener adds on top of the discovered set (the `wake` tool), applied to every reload as at boot. */
+  mount: (tools: MountedTool[]) => MountedTool[] = (tools) => tools,
 ): () => Promise<MountedTool[]> {
+  const { config, agentDir, workspace } = opened;
+  const load = async (): Promise<MountedTool[]> => {
+    const loaded = await mountableTools(config, agentDir, workspace);
+    // Boot reports these where it reports the surface (cli/shared.ts); a reload is where an agent writing its own
+    // tools is likeliest to take a name that is already mounted, and a dropped tool is otherwise just absent.
+    reportToolCollisions(loaded.toolCollisions);
+    return mount(loaded.tools);
+  };
   let current = boot;
   let reloading: Promise<void> | undefined;
   return async () => {
@@ -289,11 +298,7 @@ export async function createPiAgentFromDir(
   const withWake = (mounted: MountedTool[]) =>
     withWakeTool(mounted, stateRoot, !!options.serving && !!config.selfSchedule);
   const mountedTools = withWake(tools);
-  const readTools = liveTools(
-    { stamp, tools: mountedTools },
-    async () => withWake((await mountableTools(config, agentDir, workspace)).tools),
-    agentDir,
-  );
+  const readTools = liveTools({ config, agentDir, workspace }, { stamp, tools: mountedTools }, withWake);
   // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
   // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);

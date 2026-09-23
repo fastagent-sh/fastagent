@@ -93,7 +93,9 @@ For `start`, hosted environments can set `PORT`.
 
 - **persona.md, AGENTS.md, `skills/`, and `tools/`** are re-read on every turn — edits go live on the next turn
   with no restart (and no watcher involvement). `tools/` is reloaded when a file under it changed; a reload that
-  fails keeps the previous tools and logs why. `start` does the same.
+  fails keeps the previous tools and logs why. `start` does the same. A reload evaluates `tools/` again as a whole:
+  a helper your tools share is still one instance, but a NEW one — module state kept there (a connection pool, a
+  cache) starts over.
 - **Code inputs** (`channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the
   dev worker.
 

@@ -209,11 +209,19 @@ export async function toolsStamp(agentDir: string): Promise<string> {
   }
   const stamps = await Promise.all(
     files.map(async (file) => {
-      const { size, mtimeMs } = await stat(file);
-      return `${file}\u0000${size}\u0000${mtimeMs}`;
+      try {
+        const { size, mtimeMs } = await stat(file);
+        return `${file}\u0000${size}\u0000${mtimeMs}`;
+      } catch (error) {
+        // Removed between the listing and the stat — a turn running `rm` or `git checkout` beside this one, or an
+        // editor's temp file. Gone is a state of the directory, not a fault; the next stamp sees it. Not reproduced in
+        // a test: the window is two awaits wide and there is no seam to hold it open.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+        throw error;
+      }
     }),
   );
-  return stamps.join("\u0001");
+  return stamps.filter(Boolean).join("\u0001");
 }
 
 /** Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name. */
