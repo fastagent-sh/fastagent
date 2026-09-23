@@ -91,13 +91,18 @@ describe("deploy/container: shared Docker context", () => {
       process.env.FASTAGENT_RELEASE_FILE = values[0];
       expect(piBasePrompt()).toContain("Your workspace survives restarts and deployments");
       expect(piBasePrompt()).toContain("replaces your definition directory");
-      // The agent's runtime path to a new capability is a skill + script, not a code reload.
+      // The agent's runtime path to a new capability is a skill + script, not a code reload — and that skill is
+      // gone with the definition at the next deployment, which the same sentence has to say.
       expect(piBasePrompt()).toContain("To give yourself a new capability now, write a skill");
+      expect(piBasePrompt()).toContain("It lasts until the next deployment replaces that directory");
       // The host whose storage a deploy RESETS must not be told that work outside the definition
       // survives one — that would name a location its next deploy erases.
       process.env.FASTAGENT_AGENTCORE = "1";
       expect(piBasePrompt()).not.toContain("survives restarts and deployments");
       expect(piBasePrompt()).toContain("resets this host's storage entirely");
+      // Same path, same lifetime warning: this host's next deploy erases the definition along with the rest.
+      expect(piBasePrompt()).toContain("To give yourself a new capability now, write a skill");
+      expect(piBasePrompt()).toContain("It lasts until the next deployment replaces that directory");
     } finally {
       for (const [key, value] of [
         ["FASTAGENT_RELEASE_FILE", before],

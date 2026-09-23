@@ -142,7 +142,9 @@ the dev supervisor instead, and by a restart under `start`. That is also how an 
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
 process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool
 (`selfSchedule`). `tools/`, `routines/` and `channels/` are the author's code: they change with a restart or a
-release. (Reloading them in-process was built and removed: see #582.) The low-level `createPiAgent({ instructions })` path takes the prompt body
+release. (Reloading them in-process was built and removed — the design is #582, why it went is #600.) A skill the
+agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
+and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
 
 ### Promise ports

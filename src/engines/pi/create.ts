@@ -190,14 +190,21 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
     deferredCount > 0
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
       : "";
+  // What takes effect when, and the agent's own path to a new capability, are the same on every host; only how long
+  // the storage lives differs, below. The skill it writes lives in the definition directory, which the next
+  // deployment replaces (or, on AgentCore, erases with everything else) — so the sentence says so, and where a skill
+  // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
+  // once per process (machine.ts), so it would not be live.
+  const RUNTIME_CHANGES =
+    " Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash. It lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them. To schedule your own follow-up work, use the wake tool if you have it.";
   // How long the storage lives is the HOST's answer, not a deployment-wide one: AgentCore's managed
   // mount is reset by every deploy, so telling that agent to keep work "outside the definition" would
   // name a location its next deploy erases.
   const deploymentNote = !isDeployedWorkspace()
     ? ""
     : isAgentcoreRuntime()
-      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash; to schedule your own follow-up work, use the wake tool if you have it.`
-      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash; to schedule your own follow-up work, use the wake tool if you have it.`;
+      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database).${RUNTIME_CHANGES}`
+      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it.${RUNTIME_CHANGES}`;
   return `${identity}
 
 Available tools:
