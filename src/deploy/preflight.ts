@@ -20,7 +20,7 @@ import {
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
-import { resolveCommandSurface } from "../engines/pi/agent-session-factory.ts";
+import { isMachineCommand, resolveCommandSurface } from "../engines/pi/agent-session-factory.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
@@ -189,7 +189,7 @@ export async function preflightDeploy(input: {
   // knows what they are shipping, and stopping a deploy over a skill they never meant to carry is how a warning
   // becomes something to skim past. `fastagent add skill <name>` is the way to carry one.
   const borrowed = (await resolveCommandSurface(agentDir, workspace))
-    .filter((command) => command.source !== "skill")
+    .filter(isMachineCommand)
     .map((command) => command.name);
   if (borrowed.length > 0) {
     const shown = borrowed.slice(0, 6).join(", ");

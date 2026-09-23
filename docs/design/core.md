@@ -255,8 +255,9 @@ vendoring a copy in both pins it and makes it travel.
 The portability guarantee it replaced is now a REPORT at the moment it stops holding — `deploy`'s
 pre-flight names the skills and prompts this machine lends the agent and the image will not have. A
 note, not a gate: a deployed image is a machine too, and whatever `~/.pi/agent/skills` its builder put
-in it is that environment's answer. `commands()` says which is which (`source`: `skill` travels,
-`machine-skill` / `machine-prompt` do not).
+in it is that environment's answer. `commands()` says which is which through `source`, decided by where
+the file is rather than which loader found it — the project-level `.pi/` and `.agents/` directories are
+inside the workspace, so they ride along with `COPY . .` and count as travelling.
 
 Extensions stay out of this, for a reason that is not portability: pi's extension runtime is
 process-wide, and serving runs concurrent turns for unrelated conversations

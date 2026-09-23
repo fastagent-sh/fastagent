@@ -17,7 +17,7 @@ import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/
 import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { resolveCommandSurface } from "../../engines/pi/agent-session-factory.ts";
+import { isMachineCommand, resolveCommandSurface } from "../../engines/pi/agent-session-factory.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -173,7 +173,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");
   // What this BOX lends the agent, named apart from what the definition carries: the two behave identically
   // today and differently the moment this is deployed (docs/design/core.md §5).
-  const borrowed = (await resolveCommandSurface(agentDir, workspace)).filter((c) => c.source !== "skill");
+  const borrowed = (await resolveCommandSurface(agentDir, workspace)).filter(isMachineCommand);
   if (borrowed.length > 0) {
     line("machine", `${borrowed.map((c) => c.name).join(", ")} (from this machine — NOT in a deployment)`);
   }

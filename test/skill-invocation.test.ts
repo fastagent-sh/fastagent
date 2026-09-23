@@ -175,3 +175,21 @@ it("an expansion that fails because the LIST outlived the file is reported, not 
   expect(warned.join("\n")).toMatch(/skill_expansion failed for .*SKILL\.md: ENOENT/);
   expect(seen.join("")).toContain("/skill:weather now"); // unexpanded, as pi leaves it
 });
+
+it("a bare `/<name>` expands a PROMPT TEMPLATE — the second spelling the contract now names", async () => {
+  // §5.1.1 lists two: `/skill:<name>` for a skill, the bare name for a prompt template. Templates come from the
+  // machine (an agent inherits its box), and the expansion is pi's `expandPromptTemplate`, reached for the same
+  // reason the skill one is — fastagent never passes `expandPromptTemplates: false`.
+  const home = await mkdtemp(join(tmpdir(), "fa-prompt-home-"));
+  await mkdir(join(home, ".pi", "agent", "prompts"), { recursive: true });
+  // `$ARGUMENTS` is pi's placeholder: a template decides WHERE its arguments land, unlike a skill, where they are
+  // appended after the body.
+  await writeFile(join(home, ".pi", "agent", "prompts", "triage.md"), "TEMPLATE-BODY-MARKER for: $ARGUMENTS");
+  vi.stubEnv("HOME", home);
+
+  const { agent, sent } = await agentWithSkill();
+  await collect(agent.invoke({ session: "s" }, { text: "/triage this inbox" }));
+
+  expect(sent()).toContain("TEMPLATE-BODY-MARKER for:");
+  expect(sent()).toContain("this inbox");
+});

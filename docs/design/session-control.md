@@ -198,11 +198,12 @@ What a composer's `/` completion LISTS. It cannot be reconstructed client-side �
 only place that knows the set after first-wins collision resolution, and for a REMOTE agent the files
 behind it are not on the client's machine at all.
 
-`source` answers a second question the client needs: does this name TRAVEL? `skill` is the
-definition's own and will be there after a deploy. `machine-skill` and `machine-prompt` come from the
-box this process runs on (an agent inherits its machine — `docs/design/core.md` §5), so a deployed
-copy has them only if its image was built with them. A client that offers the list unmarked invites a
-workflow built on a name that disappears in the cloud.
+`source` answers a second question the client needs: does this name TRAVEL? `skill` and `prompt` sit
+inside the workspace — the definition's own `skills/`, and the project-level `.pi/` and `.agents/`
+directories pi also discovers — so a deploy carries them. `machine-skill` and `machine-prompt` are
+this box's (an agent inherits its machine — `docs/design/core.md` §5), and a deployed copy has them
+only if its image was built with them. A client that offers the list unmarked invites a workflow built
+on a name that disappears in the cloud.
 
 NOT a dispatch surface, and a client MUST NOT expand a name itself. The data plane takes prompts as
 text; what a name means when it appears in one is the ENGINE's, because the engine is the side that

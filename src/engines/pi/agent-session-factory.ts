@@ -2,11 +2,11 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
-import { dirname } from "node:path";
+import { dirname, relative } from "node:path";
 import type { AgentCommand } from "../../session.ts";
 import { loadAgentSkills } from "./definition.ts";
-import { reportFindingsIfChanged } from "./report.ts";
-import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { reportDefinitionWarnings, reportFindingsIfChanged } from "./report.ts";
+import type { Skill, SkillDiagnostic, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
   type AgentSessionServices,
@@ -15,7 +15,9 @@ import {
   type SessionManager,
   type ToolDefinition,
   createAgentSessionFromServices,
+  DefaultResourceLoader,
   createAgentSessionServices,
+  getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
@@ -296,10 +298,19 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     } else {
       // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only reaches the model
       // after a reload.
+      //
+      // AGAINST THE DEFINITION WE LAST APPLIED, never against the loader's skill list: that list is the merge
+      // (definition + machine), so comparing the definition's half to it made `definitionChanged` true whenever the
+      // machine had any skill at all — a full `reload()` per turn on a loader concurrent turns share, re-reading
+      // settings, re-resolving packages, re-scanning four directories and clearing pi's extension cache.
+      //
+      // The MACHINE's half is therefore not live: it is read once, when this process built its services. That is
+      // the same deal as the rest of the environment — a `PATH` entry added after a process started does not reach
+      // it either — while the DEFINITION stays live, which is the property `dev` is built on.
       const loader = (await services).resourceLoader;
       const definitionChanged =
         loader.getSystemPrompt() !== (next.systemPrompt || " ") ||
-        skillSet(loader.getSkills().skills) !== skillSet(next.skills);
+        skillSet(definition.skills) !== skillSet(next.skills);
       if (definitionChanged) {
         definition = next;
         await loader.reload();
@@ -388,28 +399,57 @@ export async function resolveCommandSurface(agentDir: string, workspace: string)
   // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer with
   // no signal anywhere.
   reportFindingsIfChanged(own.dir, own);
-  const { resourceLoader } = await createAgentSessionServices({
+  // THE LOADER ALONE. `createAgentSessionServices` would build a `ModelRuntime` with it — reading `auth.json` and
+  // `models.json` — and a listing has no use for one. `getAgentDir()` is pi's own answer for where its user-level
+  // resources live, asked rather than spelled: writing `~/.pi/agent` here would be this file's second copy of a
+  // convention it has spent the rest of the change NOT copying.
+  const resourceLoader = new DefaultResourceLoader({
     cwd: workspace,
-    resourceLoaderOptions: definitionResourceLoaderOptions({
-      systemPrompt: () => undefined,
-      skills: () => own.skills,
-    }),
+    agentDir: getAgentDir(),
+    ...definitionResourceLoaderOptions({ systemPrompt: () => undefined, skills: () => own.skills }),
   });
+  await resourceLoader.reload();
+  const discovered = resourceLoader.getSkills();
+  // The machine's half has its own broken files, and until now nobody read them: a `SKILL.md` with no description
+  // in `~/.pi/agent/skills` was absent from the prompt, absent from this list, and silent. Same door the
+  // definition's findings go through, so a name that vanished says why exactly once.
+  reportDefinitionWarnings([], discovered.diagnostics as SkillDiagnostic[]);
   const ownNames = new Set(own.skills.map((skill) => skill.name));
   return [
     ...own.skills.map((skill) => ({ name: skill.name, description: skill.description, source: "skill" })),
-    ...resourceLoader
-      .getSkills()
-      .skills.filter((skill: { name: string }) => !ownNames.has(skill.name))
-      .map((skill: { name: string; description: string }) => ({
+    ...discovered.skills
+      .filter((skill: { name: string }) => !ownNames.has(skill.name))
+      .map((skill: { name: string; description: string; filePath?: string }) => ({
         name: skill.name,
         description: skill.description,
-        source: "machine-skill",
+        source: commandSource("skill", skill.filePath, workspace),
       })),
-    ...resourceLoader.getPrompts().prompts.map((prompt: { name: string; description?: string }) => ({
+    ...resourceLoader.getPrompts().prompts.map((prompt: { name: string; description?: string; filePath?: string }) => ({
       name: prompt.name,
       ...(prompt.description ? { description: prompt.description } : {}),
-      source: "machine-prompt",
+      source: commandSource("prompt", prompt.filePath, workspace),
     })),
   ];
+}
+
+/**
+ * Does this name TRAVEL — the one question `source` answers, decided by where its file is.
+ *
+ * pi discovers project-level `.pi/skills` and `.agents/skills` (and their prompt equivalents) as well as the
+ * user-level ones, and those sit INSIDE the workspace: `COPY . .` puts them in the image and the deployed process
+ * finds them exactly where it finds them here. Calling them "from this machine" told an author the opposite of
+ * what happens, in the one message meant to warn them.
+ *
+ * NO PATH MEANS MACHINE, deliberately: a name we cannot place is one we cannot promise will be there, and the
+ * expensive mistake is the reassuring one. (`PromptTemplate` does not declare `filePath` — it carries one at
+ * runtime, measured 2026-09-23 — so this is also what happens if that ever stops being true.)
+ */
+function commandSource(kind: "skill" | "prompt", filePath: string | undefined, workspace: string): string {
+  const inside = filePath !== undefined && !relative(workspace, filePath).startsWith("..");
+  return inside ? kind : `machine-${kind}`;
+}
+
+/** Does this `source` name something that will NOT be in a deployment? The one reading of it, for every caller. */
+export function isMachineCommand(command: AgentCommand): boolean {
+  return command.source.startsWith("machine-");
 }

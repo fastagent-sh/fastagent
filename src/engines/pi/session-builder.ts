@@ -121,9 +121,10 @@ export async function buildAgentSessionRuntime(
       sessionStartEvent,
       model,
       // The SPELLING serving uses (agent-session-factory), never `thinkingLevel` alone: pi resolves an ABSENT level
-      // from its own settings, and chat reads those from the machine (`~/.pi/agent/settings.json`) while a served
-      // turn reads them from the definition. A `/thinking` + Ctrl+S saved for coding would otherwise silently make
-      // this the one posture that answers at a different reasoning effort than the deployment does.
+      // from its own settings, which every posture now reads from the machine (`~/.pi/agent/settings.json`). A
+      // `/thinking` + Ctrl+S saved for coding would otherwise silently make this the one posture that answers at a
+      // different reasoning effort than the deployment does — the effort is the DEFINITION's (`thinkingLevel` in
+      // fastagent.config.ts), unlike the engine knobs around it.
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools,
       // A tool must see one spelling of the workspace, including when opened through a symlink.

@@ -801,9 +801,10 @@ outcome; the settlement is the truth.
 
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
 the definition exposes, plus what the MACHINE this process runs on exposes. `source` says which:
-`skill` is the definition's own and travels with a deploy; `machine-skill` and `machine-prompt` come
-from the box (`~/.pi/agent/skills` and friends) and a deployed image has them only if it was built
-with them. It is a LISTING, not a dispatch surface: to RUN one, send its engine spelling as ordinary
+`skill` / `prompt` are inside the workspace — the definition's `skills/`, plus the project-level
+`.pi/` and `.agents/` directories pi discovers — and travel with a deploy; `machine-skill` /
+`machine-prompt` are the box's (`~/.pi/agent/skills` and friends), and a deployed image has them only
+if it was built with them. It is a LISTING, not a dispatch surface: to RUN one, send its engine spelling as ordinary
 prompt text and let the engine expand it — for the pi engine a skill is `/skill:<name> [args]`, which
 the server turns into the skill's body with the arguments appended, and a prompt template is the bare
 `/<name>`.

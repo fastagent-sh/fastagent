@@ -241,8 +241,10 @@ stops being true is the deploy, and that is where it is reported: `deploy` print
 skills and prompts this machine lends the agent and the image will not have.
 `fastagent add skill <name>` vendors one into `skills/`, where it travels and is git-tracked.
 
-`commands()` (and therefore a `/` composer) says which is which through `source`: `skill` travels,
-`machine-skill` and `machine-prompt` do not.
+`commands()` (and therefore a `/` composer) says which is which through `source`, by where the file is:
+`skill` / `prompt` are inside the workspace and travel (the definition's `skills/`, and the
+project-level `.pi/` and `.agents/` directories), `machine-skill` / `machine-prompt` are this box's and
+do not.
 
 **Extensions are the exception**, for a reason that is not portability — see
 [Why serving does not run them](#why-serving-does-not-run-them). So is the **system prompt**:

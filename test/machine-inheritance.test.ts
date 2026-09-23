@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { resolveCommandSurface } from "../src/engines/pi/agent-session-factory.ts";
+import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -105,4 +106,73 @@ it("an empty machine contributes nothing — the definition is still the whole a
   expect(await resolveCommandSurface(dir, dir)).toEqual([
     { name: "digest", description: "Definition skill.", source: "skill" },
   ]);
+});
+
+it("a PROJECT-level skill travels, and is not reported as the machine's", async () => {
+  // pi discovers `.pi/skills` and `.agents/skills` under the workspace as well as the user-level ones, and those
+  // ride into the image with `COPY . .`. Calling them "from this machine" is the opposite of what happens, in the
+  // one message meant to warn an author.
+  await machine({ skills: { fromhome: "User-level." } });
+  const dir = await definition();
+  for (const [where, name] of [
+    [".pi/skills", "piloc"],
+    [".agents/skills", "agloc"],
+  ] as const) {
+    await mkdir(join(dir, where, name), { recursive: true });
+    await writeFile(join(dir, where, name, "SKILL.md"), `---\nname: ${name}\ndescription: In the repo.\n---\nbody\n`);
+  }
+
+  const bySource = new Map((await resolveCommandSurface(dir, dir)).map((c) => [c.name, c.source]));
+
+  expect(bySource.get("piloc")).toBe("skill");
+  expect(bySource.get("agloc")).toBe("skill");
+  expect(bySource.get("fromhome")).toBe("machine-skill"); // the one that really is only here
+});
+
+it("a broken SKILL.md on the machine says so — it is the silence this change was about", async () => {
+  // Absent from the prompt, absent from the list, and until now absent from the logs too: an author with a
+  // description-less skill in `~/.pi/agent/skills` had nothing at all to read.
+  const home = await mkdtemp(join(tmpdir(), "fa-machine-broken-"));
+  await mkdir(join(home, ".pi", "agent", "skills", "broken"), { recursive: true });
+  await writeFile(
+    join(home, ".pi", "agent", "skills", "broken", "SKILL.md"),
+    "---\nname: broken\n---\nno description\n",
+  );
+  vi.stubEnv("HOME", home);
+  const warned: string[] = [];
+  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+
+  const commands = await resolveCommandSurface(await definition(), await definition());
+  warn.mockRestore();
+
+  expect(commands.map((c) => c.name)).not.toContain("broken");
+  expect(warned.join("\n")).toMatch(/broken/);
+});
+
+it("the machine's half is read ONCE — a definition that did not change does not reload the loader", async () => {
+  // The merge made `definitionChanged` true whenever the machine had any skill at all, because the loader's list
+  // (definition + machine) was being compared against the definition's half. Every turn then paid a full
+  // `reload()` on a loader concurrent turns share. The cost is invisible; the tell is that the machine's half
+  // became live, which it is not: like a `PATH` entry added after a process started, it lands on the next boot.
+  const home = await machine({ skills: { drift: "First description." } });
+  const dir = await definition();
+  const { faux } = makeFaux();
+  const sent: string[] = [];
+  faux.setResponses(
+    Array.from({ length: 2 }, () => (context: Parameters<typeof sentPrompt>[0]) => {
+      sent.push(sentPrompt(context));
+      return fauxAssistantMessage("ok");
+    }),
+  );
+  const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+  await collect(agent.invoke({ session: "s" }, { text: "one" }));
+
+  await writeFile(
+    join(home, ".pi", "agent", "skills", "drift", "SKILL.md"),
+    "---\nname: drift\ndescription: Second description.\n---\nbody\n",
+  );
+  await collect(agent.invoke({ session: "s" }, { text: "two" }));
+
+  expect(sent[1]).toContain("First description.");
+  expect(sent[1]).not.toContain("Second description.");
 });
