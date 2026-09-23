@@ -44,8 +44,8 @@ What makes per-invoke binding affordable on that class, measured:
   0.08 ms per turn unchanged, ~5.5 ms on the turn after an edit.
 - **The engine's TUI origins need adapting, not fighting.** pi buffers a new session until its first
   assistant message (so the store publishes the record on create), rejects every session id a channel
-  mints (so ids are encoded), and reads its own machine-global settings unless pointed elsewhere (so
-  serving points it at a definition-scoped path). Each is named where it is applied.
+  mints (so ids are encoded), and installs a missing package whenever it resolves one (so fastagent
+  resolves them itself and skips the absent). Each is named where it is applied.
 
 ## 3. Posture pins the level
 

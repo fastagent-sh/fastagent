@@ -1,60 +1,57 @@
 /**
- * An agent inherits the machine it runs on (docs/design/core.md §5).
+ * An agent inherits the machine it runs on (src/engines/pi/machine.ts, docs/design/core.md §5).
  *
- * The rule it replaced was "skills come ONLY from the definition's own `skills/`", whose reason was portability: a
- * definition that loads different skills on different machines behaves differently once deployed. The reason it
- * lost to is that the agent ALREADY inherits the box — `bash` runs whatever is on the PATH, `read` opens whatever
- * is on the disk — so treating the machine's executables as environment and its skills as contamination was a line
- * drawn in the wrong place. What replaces the guarantee is a report at the moment the artifact leaves the machine
- * (`deploy`'s pre-flight), which is when an author can act on it.
+ * It already inherited the box — `bash` runs whatever is on the PATH — so its skills, prompt templates and pi's
+ * engine settings are inherited the same way. Deploying ships the project scope; nothing here is compared against a
+ * deployment.
  *
  * These tests stub HOME on purpose: `test/setup.ts` gives every file an EMPTY one, so anything here is the
  * machine's contribution and nothing else.
  */
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { machineLoan, piAgentSessionFactory, resolveCommandSurface } from "../src/engines/pi/agent-session-factory.ts";
+import { collect, createPiAgentFromDefinition } from "../src/index.ts";
+import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { agentCommands } from "../src/engines/pi/open.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
-/** A machine with skills and prompt templates of its own, as pi keeps them. */
-async function machine(files: { skills?: Record<string, string>; prompts?: Record<string, string> }): Promise<string> {
+/** A machine with skills and prompt templates of its own, as pi keeps them. Returns pi's directory on it. */
+async function machine(
+  files: { skills?: Record<string, string>; prompts?: Record<string, string>; settings?: object } = {},
+): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "fa-machine-"));
   const agent = join(home, ".pi", "agent");
+  await mkdir(agent, { recursive: true });
   for (const [name, description] of Object.entries(files.skills ?? {})) {
-    await mkdir(join(agent, "skills", name), { recursive: true });
-    await writeFile(
-      join(agent, "skills", name, "SKILL.md"),
-      `---\nname: ${name}\ndescription: ${description}\n---\nBody of ${name}.\n`,
-    );
+    await skill(join(agent, "skills", name), name, description);
   }
   for (const [name, body] of Object.entries(files.prompts ?? {})) {
     await mkdir(join(agent, "prompts"), { recursive: true });
     await writeFile(join(agent, "prompts", `${name}.md`), body);
   }
+  if (files.settings) await writeFile(join(agent, "settings.json"), JSON.stringify(files.settings));
   vi.stubEnv("HOME", home);
-  return home;
+  return agent;
+}
+
+async function skill(dir: string, name: string, description: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\nBody of ${name}.\n`);
 }
 
 /** An agent directory with its own skills. */
 async function definition(skills: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-def-"));
   await writeFile(join(dir, "persona.md"), "You are terse.\n");
-  for (const [name, description] of Object.entries(skills)) {
-    await mkdir(join(dir, "skills", name), { recursive: true });
-    await writeFile(
-      join(dir, "skills", name, "SKILL.md"),
-      `---\nname: ${name}\ndescription: ${description}\n---\nDefinition's ${name}.\n`,
-    );
-  }
+  for (const [name, description] of Object.entries(skills)) await skill(join(dir, "skills", name), name, description);
   return dir;
 }
 
@@ -73,6 +70,18 @@ async function promptSentBy(dir: string): Promise<string> {
   return sent;
 }
 
+/** Collect `log.warn` while `fn` runs. Read before restoring: `mockRestore()` clears `mock.calls` with it. */
+async function warnings(fn: () => Promise<unknown>): Promise<string> {
+  const warned: string[] = [];
+  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+  try {
+    await fn();
+  } finally {
+    warn.mockRestore();
+  }
+  return warned.join("\n");
+}
+
 it("a skill installed on the machine reaches the model", async () => {
   await machine({ skills: { metar: "Read aviation weather." } });
   expect(await promptSentBy(await definition())).toContain("Read aviation weather.");
@@ -86,79 +95,102 @@ it("the DEFINITION wins a name collision — vendoring one in is how an author o
   expect(prompt).not.toContain("The MACHINE version.");
 });
 
-it("`commands()` says which names TRAVEL and which belong to this box", async () => {
-  // The client's only way to warn before someone builds a workflow on a name that will not be in the image.
+it("`commands()` lists every skill the agent has and the machine's prompts, by how each is invoked", async () => {
+  // `source` is the spelling: a `skill` is sent as `/skill:<name>`, a `prompt` as `/<name>`. Where a name came
+  // from is not something a client needs to act on.
   await machine({ skills: { metar: "Machine skill." }, prompts: { review: "Review this: " } });
   const dir = await definition({ digest: "Definition skill." });
 
-  const commands = await resolveCommandSurface(dir, dir);
-
-  expect(commands).toEqual(
-    expect.arrayContaining([
-      { name: "digest", description: "Definition skill.", source: "skill" },
-      { name: "metar", description: "Machine skill.", source: "machine-skill" },
-      expect.objectContaining({ name: "review", source: "machine-prompt" }),
-    ]),
-  );
+  expect(await agentCommands(dir, dir)).toEqual([
+    { name: "digest", description: "Definition skill.", source: "skill" },
+    { name: "metar", description: "Machine skill.", source: "skill" },
+    expect.objectContaining({ name: "review", source: "prompt" }),
+  ]);
 });
 
-it("an empty machine contributes nothing — the definition is still the whole answer", async () => {
-  // `test/setup.ts`'s empty HOME is this case, and it is the one a container is in.
+it("an empty machine contributes nothing — the definition is the whole answer", async () => {
+  // `test/setup.ts`'s empty HOME is this case, and it is the one a fresh container is in.
   const dir = await definition({ digest: "Definition skill." });
-  expect(await resolveCommandSurface(dir, dir)).toEqual([
+  expect(await agentCommands(dir, dir)).toEqual([
     { name: "digest", description: "Definition skill.", source: "skill" },
   ]);
 });
 
-it("a PROJECT-level skill travels, and is not reported as the machine's", async () => {
-  // pi discovers `.pi/skills` and `.agents/skills` under the workspace as well as the user-level ones, and those
-  // ride into the image with `COPY . .`. Calling them "from this machine" is the opposite of what happens, in the
-  // one message meant to warn an author.
-  await machine({ skills: { fromhome: "User-level." } });
+it("an INSTALLED pi package's skills are inherited like any other", async () => {
+  // A package lives where pi's package manager put it (`~/.pi/agent/git/…`), not under `~/.pi/agent/skills`, so
+  // only resolving `packages` finds it — the only thing fastagent never does is install one.
+  const agent = await machine({ settings: { packages: ["git:github.com/acme/tools"] } });
+  await skill(join(agent, "git", "github.com", "acme", "tools", "skills", "lint"), "lint", "Lint from a package.");
+
+  expect(await promptSentBy(await definition())).toContain("Lint from a package.");
+});
+
+it("a pi package that is NOT installed is skipped and said — never installed", async () => {
+  // pi's own loader would `npm install` it, and throw out of `reload()` when that failed (measured): one offline
+  // laptop or registry 404 took boot and every turn down. The npm here only records what it is asked to do.
+  const log = join(await mkdtemp(join(tmpdir(), "fa-npm-")), "calls.log");
+  const npm = join(tmpdir(), `fa-npm-${process.pid}-${Date.now()}.sh`);
+  await writeFile(npm, `#!/bin/sh\necho "$@" >> ${log}\nexit 1\n`, { mode: 0o755 });
+  await writeFile(log, "");
+  await machine({
+    skills: { metar: "Read aviation weather." },
+    settings: { npmCommand: [npm], packages: ["npm:not-installed-anywhere"] },
+  });
+
+  let prompt = "";
+  const warned = await warnings(async () => {
+    prompt = await promptSentBy(await definition());
+  });
+
+  expect(prompt).toContain("Read aviation weather."); // the machine's local skills still load
+  expect(warned).toMatch(/pi package npm:not-installed-anywhere is not installed/);
+  const asked = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+  expect(
+    asked.filter((line) => line.startsWith("install")),
+    asked.join("\n"),
+  ).toEqual([]);
+});
+
+it("a broken SKILL.md on the machine says so, once — not once per `GET /control/commands`", async () => {
+  // Absent from the prompt and the list either way; the warning is the only thing that says why. The whole line
+  // is asserted because the name is in the path regardless of what the message renders.
+  const agent = await machine();
+  await mkdir(join(agent, "skills", "broken"), { recursive: true });
+  await writeFile(join(agent, "skills", "broken", "SKILL.md"), "---\nname: broken\n---\nno description\n");
   const dir = await definition();
-  for (const [where, name] of [
-    [".pi/skills", "piloc"],
-    [".agents/skills", "agloc"],
-  ] as const) {
-    await mkdir(join(dir, where, name), { recursive: true });
-    await writeFile(join(dir, where, name, "SKILL.md"), `---\nname: ${name}\ndescription: In the repo.\n---\nbody\n`);
-  }
 
-  const bySource = new Map((await resolveCommandSurface(dir, dir)).map((c) => [c.name, c.source]));
+  let names: string[] = [];
+  const warned = await warnings(async () => {
+    for (let i = 0; i < 3; i++) names = (await agentCommands(dir, dir)).map((c) => c.name);
+  });
 
-  expect(bySource.get("piloc")).toBe("skill");
-  expect(bySource.get("agloc")).toBe("skill");
-  expect(bySource.get("fromhome")).toBe("machine-skill"); // the one that really is only here
+  expect(names).not.toContain("broken");
+  expect(warned).toMatch(/^\[fastagent\] skill warning: .*description.*SKILL\.md\)$/m);
+  expect(warned.split("\n").filter((line) => line.includes("description"))).toHaveLength(1);
 });
 
-it("a broken SKILL.md on the machine says so — it is the silence this change was about", async () => {
-  // Absent from the prompt, absent from the list, and until now absent from the logs too: an author with a
-  // description-less skill in `~/.pi/agent/skills` had nothing at all to read.
-  const home = await mkdtemp(join(tmpdir(), "fa-machine-broken-"));
-  await mkdir(join(home, ".pi", "agent", "skills", "broken"), { recursive: true });
-  await writeFile(
-    join(home, ".pi", "agent", "skills", "broken", "SKILL.md"),
-    "---\nname: broken\n---\nno description\n",
-  );
-  vi.stubEnv("HOME", home);
-  const warned: string[] = [];
-  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+it("the machine is read ONCE, and the listing and a turn read the same one", async () => {
+  // Like a `PATH` entry added after a process started, a skill installed after boot arrives on the next start —
+  // in the menu AND the turn, so `/` cannot offer a name the prompt would not expand. The definition, by contrast,
+  // is live: that is what `dev` is built on.
+  const agent = await machine({ skills: { early: "Present at boot." } });
+  const dir = await definition();
+  expect((await agentCommands(dir, dir)).map((c) => c.name)).toEqual(["early"]);
 
-  const commands = await resolveCommandSurface(await definition(), await definition());
-  warn.mockRestore();
+  await skill(join(agent, "skills", "late"), "late", "Installed after boot.");
 
-  expect(commands.map((c) => c.name)).not.toContain("broken");
-  // The whole line, because the name is in the path either way: a `${d.code}` that pi's `ResourceDiagnostic` does
-  // not have rendered this as `[fastagent] undefined: …`, and a test matching the name could not see it.
-  expect(warned.join("\n")).toMatch(/^\[fastagent\] skill warning: .*description.*SKILL\.md\)$/m);
+  expect(
+    (await agentCommands(dir, dir)).map((c) => c.name),
+    "offered a name no turn would expand",
+  ).toEqual(["early"]);
+  expect(await promptSentBy(dir)).not.toContain("Installed after boot.");
 });
 
-it("the machine's half is read ONCE — a definition that did not change does not reload the loader", async () => {
-  // The merge made `definitionChanged` true whenever the machine had any skill at all, because the loader's list
-  // (definition + machine) was being compared against the definition's half. Every turn then paid a full
-  // `reload()` on a loader concurrent turns share. The cost is invisible; the tell is that the machine's half
-  // became live, which it is not: like a `PATH` entry added after a process started, it lands on the next boot.
-  const home = await machine({ skills: { drift: "First description." } });
+it("a definition that did not change does not reload the loader per turn", async () => {
+  // The loader's skill list is the MERGE (definition + machine); comparing the definition's half against it made
+  // every turn look like a definition change — a full `reload()` on a loader concurrent turns share. The tell is
+  // that the machine's half turns live, which it must not.
+  const agent = await machine({ skills: { drift: "First description." } });
   const dir = await definition();
   const { faux } = makeFaux();
   const sent: string[] = [];
@@ -168,103 +200,23 @@ it("the machine's half is read ONCE — a definition that did not change does no
       return fauxAssistantMessage("ok");
     }),
   );
-  const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-  await collect(agent.invoke({ session: "s" }, { text: "one" }));
+  const { agent: served } = await createPiAgentFromDefinition(dir, {
+    model: "faux/faux-1",
+    providers: [faux.provider],
+  });
+  await collect(served.invoke({ session: "s" }, { text: "one" }));
 
-  await writeFile(
-    join(home, ".pi", "agent", "skills", "drift", "SKILL.md"),
-    "---\nname: drift\ndescription: Second description.\n---\nbody\n",
-  );
-  await collect(agent.invoke({ session: "s" }, { text: "two" }));
+  await skill(join(agent, "skills", "drift"), "drift", "Second description.");
+  await collect(served.invoke({ session: "s" }, { text: "two" }));
 
   expect(sent[1]).toContain("First description.");
   expect(sent[1]).not.toContain("Second description.");
 });
 
-it("lists and runs the SAME machine — a skill installed after boot is in neither", async () => {
-  // The menu used to re-discover per call while a bound session read once, so `/` could offer a name the very
-  // next prompt would pass through as prose. Both halves come from one read now.
-  const home = await machine({ skills: { early: "Present at boot." } });
-  const dir = await definition();
-  expect((await resolveCommandSurface(dir, dir)).map((c) => c.name)).toEqual(["early"]);
-
-  await mkdir(join(home, ".pi", "agent", "skills", "late"), { recursive: true });
-  await writeFile(
-    join(home, ".pi", "agent", "skills", "late", "SKILL.md"),
-    "---\nname: late\ndescription: Installed after boot.\n---\nbody\n",
-  );
-
-  expect(
-    (await resolveCommandSurface(dir, dir)).map((c) => c.name),
-    "offered a name no turn would expand",
-  ).toEqual(["early"]);
-  expect(await promptSentBy(dir)).not.toContain("Installed after boot.");
-});
-
-it("reports the machine's broken files ONCE, not once per `GET /control/commands`", async () => {
-  const home = await mkdtemp(join(tmpdir(), "fa-machine-once-"));
-  await mkdir(join(home, ".pi", "agent", "skills", "broken"), { recursive: true });
-  await writeFile(
-    join(home, ".pi", "agent", "skills", "broken", "SKILL.md"),
-    "---\nname: broken\n---\nno description\n",
-  );
-  vi.stubEnv("HOME", home);
-  const dir = await definition();
-  const warned: string[] = [];
-  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
-
-  for (let i = 0; i < 3; i++) await resolveCommandSurface(dir, dir);
-  warn.mockRestore();
-
-  // `commands()` is an unauthenticated route (`GET /control/commands`): a caller decides how often this runs.
-  expect(
-    warned.filter((line) => line.includes("description")),
-    warned.join("\n"),
-  ).toHaveLength(1);
-});
-
-it("a pi package this machine cannot install degrades to a warning — the turn still runs", async () => {
-  // Resolving a missing package INSTALLS it, and a failed install throws out of pi's `reload()`. Uncaught, one
-  // offline laptop or registry 404 failed boot, `info`, `deploy` and every turn, over a skill nobody asked for.
-  // `npmCommand: ["false"]` is that failure without the network.
-  const home = await machine({ skills: { metar: "Read aviation weather." } });
-  await writeFile(
-    join(home, ".pi", "agent", "settings.json"),
-    JSON.stringify({ npmCommand: ["false"], packages: ["npm:not-installed-anywhere"] }),
-  );
-  const warned: string[] = [];
-  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
-
-  const prompt = await promptSentBy(await definition());
-  warn.mockRestore();
-
-  expect(prompt).toContain("Read aviation weather."); // the machine's LOCAL half survives
-  expect(warned.join("\n")).toMatch(/pi packages could not be resolved.*not-installed-anywhere/);
-});
-
-it("GLOBAL turn settings are lent and reported; the PROJECT file travels and is not", async () => {
-  // The same path rule as skills: `<workspace>/.pi/settings.json` rides into the image with `COPY . .`, the global
-  // one does not. A global `retry.enabled: false` used to change `dev` and silently revert once deployed.
-  const home = await machine({});
-  await mkdir(join(home, ".pi", "agent"), { recursive: true });
-  await writeFile(
-    join(home, ".pi", "agent", "settings.json"),
-    JSON.stringify({ retry: { enabled: false }, compaction: {}, theme: "dark" }),
-  );
-  const dir = await definition();
-  await mkdir(join(dir, ".pi"), { recursive: true });
-  await writeFile(join(dir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: "off" }));
-
-  const { settings } = await machineLoan(dir, dir);
-
-  expect(settings).toEqual(["retry"]); // not `compaction: {}` (pi's default), not `theme` (not a turn setting)
-  expect(settings).not.toContain("cacheWarming"); // the project file's, which travels
-});
-
-it("the PROJECT settings file is honored by a served turn — the way to pin one to the artifact", async () => {
-  // The deploy note tells an author to move a setting here, so this has to be true: the served loader reads the
-  // project scope of the machine snapshot, and the project file is inside the workspace.
-  await machine({});
+it("pi's engine settings are inherited, the project file deep-merged over the machine's, as pi does", async () => {
+  // Two scopes, which is why the served settings are not `SettingsManager.inMemory` (one scope): flattening them
+  // first would let a project `retry.enabled` wipe the machine's `retry.maxRetries`.
+  await machine({ settings: { retry: { maxRetries: 7 } } });
   const dir = await definition();
   await mkdir(join(dir, ".pi"), { recursive: true });
   await writeFile(join(dir, ".pi", "settings.json"), JSON.stringify({ retry: { enabled: false } }));
@@ -279,5 +231,6 @@ it("the PROJECT settings file is honored by a served turn — the way to pin one
     cwd: dir,
   })("s");
 
-  expect(session.settingsManager.getRetryEnabled()).toBe(false);
+  expect(session.settingsManager.getRetryEnabled()).toBe(false); // the project file
+  expect(session.settingsManager.getRetrySettings().maxRetries).toBe(7); // the machine's, kept by the merge
 });

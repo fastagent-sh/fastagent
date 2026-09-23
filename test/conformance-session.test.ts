@@ -36,7 +36,8 @@ import { listWakeups } from "../src/schedule/wakeups.ts";
 import { readFires } from "../src/schedule/state.ts";
 
 afterEach(() => vi.restoreAllMocks());
-import { definitionResourceLoaderOptions, machineResources } from "../src/engines/pi/agent-session-factory.ts";
+import { definitionResourceLoaderOptions } from "../src/engines/pi/agent-session-factory.ts";
+import { readMachine } from "../src/engines/pi/machine.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
@@ -72,7 +73,7 @@ async function sessionFactory(
     resourceLoaderOptions: definitionResourceLoaderOptions({
       systemPrompt: () => "test",
       skills: () => [],
-      machine: await machineResources(cwd),
+      machine: await readMachine(cwd),
     }),
   });
   const store = dir === undefined ? piInMemorySessionRecordStore({ cwd }) : piSessionRecordStore({ dir, cwd });

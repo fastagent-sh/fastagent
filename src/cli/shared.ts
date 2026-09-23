@@ -20,7 +20,7 @@ import {
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
-import { type MachineLoan, machineLoan } from "../engines/pi/agent-session-factory.ts";
+import { readMachine, withMachine } from "../engines/pi/machine.ts";
 import {
   createPiModelRuntime,
   createPiModels,
@@ -61,15 +61,6 @@ function reportWorkspaceHint(hint: string | undefined): void {
   if (hint) reportLine("hint", hint);
 }
 
-/** The `machine:` line — ONE wording for the startup report and `info`, or undefined when the box lends nothing. */
-export function machineLine({ commands, settings }: MachineLoan): string | undefined {
-  const parts = [
-    ...(commands.length > 0 ? [commands.map((c) => c.name).join(", ")] : []),
-    ...(settings.length > 0 ? [`pi settings ${settings.join(", ")}`] : []),
-  ];
-  return parts.length > 0 ? `${parts.join(" · ")} (from this machine — NOT in a deployment)` : undefined;
-}
-
 /** What the startup report reads off an opened directory. */
 export interface ReportableAssembly {
   agentDir: string;
@@ -102,11 +93,9 @@ export async function reportAssembly(
   await reportAuth(a.agentDir, a.modelSpec, a.authPath, a.fallbackAuthPath);
   reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (a.definition.persona) reportLine("persona", "persona.md");
-  reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
-  // Said at boot because it is the one difference between this process and the deployed copy of it that an
-  // author cannot see any other way.
-  const lent = machineLine(await machineLoan(a.agentDir, a.workspace));
-  if (lent) reportLine("machine", lent);
+  // What this agent HAS — the definition's skills and the ones its machine lends (machine.ts).
+  const skills = withMachine(a.definition.skills, (await readMachine(a.workspace)).skills);
+  reportLine("skills", skills.map((s) => s.name).join(", ") || "(none)");
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
   if (a.deferredToolNames.length > 0) {

@@ -153,9 +153,8 @@ async function readSkills(
   e: ExecutionEnv,
   root: string,
 ): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
-  // The definition's OWN skills/ — its half of the answer. The machine's are pi's to discover, merged at the
-  // resource posture (agent-session-factory.ts) where a name collision is decided in this half's favour. Read
-  // separately here because `deploy` and `commands()` both need to say which half a name came from.
+  // The definition's OWN skills/ — its half of the answer. The machine's half is machine.ts's, and `withMachine`
+  // decides a name collision in this half's favour.
   await assertInsideAgentDir(root, "skills");
   const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")], BACKGROUND_CONTEXT);
   const byName = new Map<string, Skill>();

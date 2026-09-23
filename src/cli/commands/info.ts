@@ -17,8 +17,7 @@ import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/
 import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { machineLoan } from "../../engines/pi/agent-session-factory.ts";
-import { machineLine } from "../shared.ts";
+import { readMachine, withMachine } from "../../engines/pi/machine.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -37,6 +36,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON (its cwd, whose
   // AGENTS.md ancestors are ② context).
   const definition = await loadAgentDefinition(agentDir, { cwd: workspace }).catch(failStartup);
+  // What this agent HAS: the definition's skills plus the ones its machine lends (machine.ts).
+  const skills = withMachine(definition.skills, (await readMachine(workspace)).skills);
   // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a tool), is
   // isolated the same way everywhere (G2).
   const tools = await resolveAgentTools(config, agentDir, workspace)
@@ -125,9 +126,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           codingTools: [...CODING_TOOL_NAMES],
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
-          skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
-          // What this box lends and a deployment will not have — the same answer the text line and `deploy` give.
-          machine: await machineLoan(agentDir, workspace),
+          skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
           tools: tools.names,
           deferredTools: tools.deferred,
           toolError: tools.error ?? null,
@@ -170,11 +169,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("codingTools", CODING_TOOL_NAMES.join(", "));
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   line("persona", definition.persona ? "persona.md" : "(none)");
-  line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");
-  // What this BOX lends the agent, named apart from what the definition carries: the two behave identically
-  // today and differently the moment this is deployed (docs/design/core.md §5).
-  const lent = machineLine(await machineLoan(agentDir, workspace));
-  if (lent) line("machine", lent);
+  line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
   line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
   if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
   line("channels", channels.join(", ") || "(none)");

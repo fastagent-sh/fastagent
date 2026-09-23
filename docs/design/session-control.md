@@ -198,12 +198,9 @@ What a composer's `/` completion LISTS. It cannot be reconstructed client-side �
 only place that knows the set after first-wins collision resolution, and for a REMOTE agent the files
 behind it are not on the client's machine at all.
 
-`source` answers a second question the client needs: does this name TRAVEL? `skill` and `prompt` sit
-inside the workspace — the definition's own `skills/`, and the project-level `.pi/` and `.agents/`
-directories pi also discovers — so a deploy carries them. `machine-skill` and `machine-prompt` are
-this box's (an agent inherits its machine — `docs/design/core.md` §5), and a deployed copy has them
-only if its image was built with them. A client that offers the list unmarked invites a workflow built
-on a name that disappears in the cloud.
+The list is what THIS agent has: the definition's skills plus the ones its machine lends, and the
+machine's prompt templates (`docs/design/core.md` §5). `source` says how each is invoked — `skill` or
+`prompt`, the two spellings below — which is the one thing a client needs to act on.
 
 NOT a dispatch surface, and a client MUST NOT expand a name itself. The data plane takes prompts as
 text; what a name means when it appears in one is the ENGINE's, because the engine is the side that
@@ -463,7 +460,7 @@ excludes editor replacement, themes, widgets, and all other TUI presentation sur
 ## 10. Definition fidelity
 
 The serving planes must run the same agent that `dev`, `start`, and embedded Agent Handler run:
-FastAgent prompt assembly, definition-local skills and tools, the same deferred-tool activation,
+FastAgent prompt assembly, the same skills (definition and machine, core §5) and tools, the same deferred-tool activation,
 FastAgent auth (never implicit `~/.pi` state), model policy from config, and host-owned working
 directory and session repository — never client-provided paths.
 

@@ -13,18 +13,48 @@ import {
   resolveModelSpec,
 } from "./config.ts";
 import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
-import type { SessionControl } from "../../session.ts";
+import type { AgentCommand, SessionControl } from "../../session.ts";
 import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
-import type { LoadedDefinition } from "./definition.ts";
-import { resolveCommandSurface } from "./agent-session-factory.ts";
+import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
+import { reportFindingsIfChanged } from "./report.ts";
+import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
+
+/**
+ * The names a `/` composer completes: this agent's skills — the definition's, plus the ones its machine lends
+ * (machine.ts) — and the machine's prompt templates.
+ *
+ * `source` says how a name is INVOKED, which is the one thing a client needs from it: a `skill` is sent as
+ * `/skill:<name>`, a `prompt` as `/<name>` (docs/design/session-control.md §5.1.1).
+ *
+ * The definition is read live, like every turn reads it; the machine is the process's one read, the same snapshot a
+ * bound session runs on, so the menu cannot offer a name the next prompt would not expand.
+ */
+export async function agentCommands(agentDir: string, workspace: string): Promise<AgentCommand[]> {
+  const own = await loadAgentSkills(agentDir, { cwd: workspace });
+  // A skill whose frontmatter broke simply is not in `skills` — it would vanish from the composer with no signal.
+  reportFindingsIfChanged(own.dir, own);
+  const machine = await readMachine(workspace);
+  return [
+    ...withMachine(own.skills, machine.skills).map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      source: "skill",
+    })),
+    ...machine.prompts.map((prompt) => ({
+      name: prompt.name,
+      ...(prompt.description ? { description: prompt.description } : {}),
+      source: "prompt",
+    })),
+  ];
+}
 
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). */
@@ -244,7 +274,7 @@ export async function createPiAgentFromDir(
       // What a client offers is what a turn WOULD run, which since this agent inherits its machine is not the
       // definition alone. Built through the same resource posture the turn uses, so the menu cannot list a name
       // the prompt would not expand — a second reading of "which skills exist" is how those two come to disagree.
-      commands: () => resolveCommandSurface(agentDir, workspace),
+      commands: () => agentCommands(agentDir, workspace),
       // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
       // data plane's observer seam.
       tap: caller ? (session, event) => caller(session, event) : undefined,

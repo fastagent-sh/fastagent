@@ -13,7 +13,8 @@ import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { inProcessLease, type RunControls } from "../src/engines/pi/turn-kit.ts";
 import type { SessionEvent } from "../src/session.ts";
-import { definitionResourceLoaderOptions, machineResources } from "../src/engines/pi/agent-session-factory.ts";
+import { definitionResourceLoaderOptions } from "../src/engines/pi/agent-session-factory.ts";
+import { readMachine } from "../src/engines/pi/machine.ts";
 import { makeFaux } from "./faux.ts";
 import { log } from "../src/log.ts";
 
@@ -275,7 +276,7 @@ describe("AgentSession L0: the observation plane", () => {
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => "test",
         skills: () => [],
-        machine: await machineResources(cwd),
+        machine: await readMachine(cwd),
       }),
     });
     const store = piInMemorySessionRecordStore({ cwd });

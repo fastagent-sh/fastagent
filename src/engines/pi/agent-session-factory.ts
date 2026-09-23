@@ -2,10 +2,8 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
-import { dirname, relative } from "node:path";
-import type { AgentCommand } from "../../session.ts";
-import { loadAgentSkills } from "./definition.ts";
-import { reportFindingsIfChanged } from "./report.ts";
+import { dirname } from "node:path";
+import { type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
@@ -15,10 +13,7 @@ import {
   type SessionManager,
   type ToolDefinition,
   createAgentSessionFromServices,
-  DefaultResourceLoader,
-  SettingsManager,
   createAgentSessionServices,
-  getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
@@ -213,122 +208,12 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 /** What pi is allowed to discover, minus the parts each assembly fills in itself. */
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
-/** pi's own shapes, taken from the loader rather than re-declared: both carry a `filePath` this file classifies by. */
-type DiscoveredSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
-type DiscoveredPrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
-
-type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
-
-/** pi's settings files as read at boot, per scope — pi merges them, so they stay apart here. */
-interface MachineSettings {
-  global: Settings;
-  project: Settings;
-}
-
-/** What the box lends an agent, read once per process. */
-interface MachineResources {
-  skills: DiscoveredSkill[];
-  prompts: DiscoveredPrompt[];
-  settings: MachineSettings;
-}
-
-/**
- * A SettingsManager over a snapshot: pi's `reload()` re-reads THIS rather than the files, and a write stays in
- * memory — a served turn never edits the operator's `~/.pi/agent/settings.json`.
- */
-function settingsFrom(snapshot: MachineSettings): SettingsManager {
-  const stored: Record<keyof MachineSettings, string | undefined> = {
-    global: JSON.stringify(snapshot.global),
-    project: JSON.stringify(snapshot.project),
-  };
-  return SettingsManager.fromStorage({
-    withLock(scope, fn) {
-      const next = fn(stored[scope]);
-      if (next !== undefined) stored[scope] = next;
-    },
-  });
-}
-
-/**
- * The snapshot minus pi `packages`. Resolving one INSTALLS it when it is missing (`npm install`, `git clone`), and a
- * failed install throws out of `reload()`.
- */
-function withoutPackages({ global, project }: MachineSettings): MachineSettings {
-  const strip = ({ packages: _, ...rest }: Settings): Settings => rest;
-  return { global: strip(global), project: strip(project) };
-}
-
-/** Keyed by the two directories it reads: the workspace (project-level) and pi's own (user-level). */
-const machineReads = new Map<string, Promise<MachineResources>>();
-
-/**
- * THE machine's half, read ONCE and handed to both planes.
- *
- * Two things made this a function rather than two reads. The listing was live while the run plane's loader was
- * not, so `/` could offer a skill installed after boot that the very next prompt would not expand — the menu
- * promising a name the turn did not have. And each listing re-reported the machine's diagnostics, so
- * `GET /control/commands` printed the same warning once per request.
- *
- * NOT LIVE, on purpose: the DEFINITION is what `dev` re-reads per turn, because it is the thing an author is
- * editing. The machine is the environment around it, and a process does not notice a `PATH` entry added after it
- * started either. Restart to pick one up — and a deployment restarts on every release anyway.
- */
-export function machineResources(workspace: string): Promise<MachineResources> {
-  // pi's own answer for where its user-level resources live, asked rather than spelled: `~/.pi/agent` written
-  // here would be a second copy of a convention (and of `PI_CODING_AGENT_DIR`) that belongs to pi.
-  const agentDir = getAgentDir();
-  const key = `${workspace}\u0000${agentDir}`;
-  const cached = machineReads.get(key);
-  if (cached) return cached;
-  const reading = (async (): Promise<MachineResources> => {
-    const files = SettingsManager.create(workspace, agentDir);
-    const settings: MachineSettings = { global: files.getGlobalSettings(), project: files.getProjectSettings() };
-    // Discovery ONLY — no definition overrides here, because this is the other half. Extensions stay off for the
-    // same concurrency reason the serving posture keeps them off.
-    const discover = async (snapshot: MachineSettings) => {
-      const loader = new DefaultResourceLoader({
-        cwd: workspace,
-        agentDir,
-        settingsManager: settingsFrom(snapshot),
-        noExtensions: true,
-        noContextFiles: true,
-      });
-      await loader.reload();
-      return loader;
-    };
-    let loader: DefaultResourceLoader;
-    try {
-      loader = await discover(settings);
-    } catch (error) {
-      // THE MACHINE'S HALF DEGRADES; it does not take the definition down with it. A package this box lists but
-      // cannot install (offline, a typo, a registry 404) would otherwise fail boot, `info`, `deploy` and every turn
-      // — for a skill the agent may never use. Its local skills and prompts still load; restart once it is fixed.
-      log.warn(
-        `[fastagent] this machine's pi packages could not be resolved, so their skills and prompts are left out ` +
-          `until restart: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      loader = await discover(withoutPackages(settings));
-    }
-    const { skills, diagnostics } = loader.getSkills();
-    // The machine's broken files, said ONCE — this read is the process's only one. A `SKILL.md` with no
-    // description in `~/.pi/agent/skills` used to be absent from the prompt, absent from the listing, and silent.
-    for (const diagnostic of diagnostics) {
-      log.warn(
-        `[fastagent] skill ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
-      );
-    }
-    return { skills, prompts: loader.getPrompts().prompts, settings };
-  })();
-  machineReads.set(key, reading);
-  return reading;
-}
-
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
-  /** {@link machineResources} for this workspace — resolved by the caller, because this function is synchronous. */
-  machine: MachineResources;
+  /** {@link readMachine} for this workspace — resolved by the caller, because this function is synchronous. */
+  machine: Machine;
   /** Omitted by serving, which does not run them. */
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
@@ -352,26 +237,17 @@ export function definitionResourceLoaderOptions(source: {
     systemPromptOverride: () => source.systemPrompt() || " ",
     appendSystemPromptOverride: () => [],
     /**
-     * THE DEFINITION'S SKILLS, PLUS THE MACHINE'S — an agent inherits the box it runs on, the same way it already
-     * inherits the commands on its PATH. `base` is what pi discovered by the Agent Skills standard (the four
-     * directories, the package entries, this machine's pi settings); the definition's own win a name collision,
-     * because vendoring one in is how an author overrides the machine.
+     * THE DEFINITION'S SKILLS, PLUS THE MACHINE'S — an agent inherits the box it runs on (machine.ts), and the
+     * definition wins a name collision.
      *
-     * A deployed image is a machine too: whatever `~/.pi/agent/skills` it has is the environment its builder chose,
-     * and `deploy` reports which of the local ones will not be in it.
+     * NO DISCOVERY OF ITS OWN: the machine's half is the process's single read, so a bound session and `commands()`
+     * describe the same box. A loader discovering for itself is what made the menu live while a session was not.
      */
-    // NO DISCOVERY OF ITS OWN, by either loader: the machine's half comes from {@link machineResources}, the
-    // process's single read, so the run plane and `commands()` describe the same box. Letting each loader discover
-    // separately is what made the menu live while a bound session was not.
     noSkills: true,
-    skillsOverride: () => {
-      const own = toPiSkills(source.skills()) as DiscoveredSkill[];
-      const names = new Set(own.map((skill) => skill.name));
-      return {
-        skills: [...own, ...source.machine.skills.filter((skill) => !names.has(skill.name))],
-        diagnostics: [],
-      };
-    },
+    skillsOverride: () => ({
+      skills: withMachine(toPiSkills(source.skills()) as MachineSkill[], source.machine.skills),
+      diagnostics: [],
+    }),
     noPromptTemplates: true,
     promptsOverride: () => ({ prompts: [...source.machine.prompts], diagnostics: [] }),
   };
@@ -396,14 +272,12 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
   const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> => {
-    const machine = await machineResources(cwd);
+    const machine = await readMachine(cwd);
     return createAgentSessionServices({
       cwd,
       modelRuntime,
-      // Packageless: this loader discards everything packages contribute (skills and prompts come from the machine
-      // read, extensions do not run, there is no TUI to theme), so resolving them would only add a network install,
-      // and its failure, to a turn.
-      settingsManager: settingsFrom(withoutPackages(machine.settings)),
+      // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
+      settingsManager: machine.settingsManager(),
       // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
       // question the two assemblies answer differently.
       resourceLoaderOptions: definitionResourceLoaderOptions({
@@ -506,107 +380,4 @@ function toPiSkills(skills: Skill[]) {
       disableModelInvocation: skill.disableModelInvocation ?? false,
     };
   });
-}
-
-/**
- * The names a `/` composer completes: the definition's skills, this machine's skills, and its prompt templates.
- *
- * `source` says whether a name TRAVELS, decided by where its file is ({@link commandSource}): inside the
- * workspace it rides into the image, outside it belongs to the box this process runs on. That distinction is the
- * client's only way to warn before someone builds a workflow on a name that disappears in the cloud.
- *
- * The machine's half is {@link machineResources} — the same snapshot a bound session runs on, and pi's own
- * discovery rather than a re-derivation of the standard's directories, so the list and the turn cannot disagree
- * about which names exist.
- */
-export async function resolveCommandSurface(agentDir: string, workspace: string): Promise<AgentCommand[]> {
-  const own = await loadAgentSkills(agentDir, { cwd: workspace });
-  // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer with
-  // no signal anywhere.
-  reportFindingsIfChanged(own.dir, own);
-  // THE SAME SNAPSHOT a bound session runs on, not a second reading of the same directories: a listing that
-  // re-discovered would offer names installed after this process booted, which the next prompt would not expand.
-  const machine = await machineResources(workspace);
-  const ownNames = new Set(own.skills.map((skill) => skill.name));
-  return [
-    ...own.skills.map((skill) => ({ name: skill.name, description: skill.description, source: "skill" })),
-    ...machine.skills
-      .filter((skill) => !ownNames.has(skill.name))
-      .map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        source: commandSource("skill", skill.filePath, workspace),
-      })),
-    ...machine.prompts.map((prompt) => ({
-      name: prompt.name,
-      ...(prompt.description ? { description: prompt.description } : {}),
-      source: commandSource("prompt", prompt.filePath, workspace),
-    })),
-  ];
-}
-
-/**
- * Does this name TRAVEL — the one question `source` answers, decided by where its file is.
- *
- * pi discovers project-level `.pi/skills` and `.agents/skills` (and their prompt equivalents) as well as the
- * user-level ones, and those sit INSIDE the workspace: `COPY . .` puts them in the image and the deployed process
- * finds them exactly where it finds them here. Calling them "from this machine" told an author the opposite of
- * what happens, in the one message meant to warn them.
- *
- * NO PATH MEANS MACHINE, deliberately: a name we cannot place is one we cannot promise will be there, and the
- * expensive mistake is the reassuring one. pi declares `filePath` on both shapes today, so the branch is what
- * happens if that ever stops being true rather than something reachable now.
- */
-function commandSource(kind: "skill" | "prompt", filePath: string | undefined, workspace: string): string {
-  const inside = filePath !== undefined && !relative(workspace, filePath).startsWith("..");
-  return inside ? kind : `machine-${kind}`;
-}
-
-/** Does this `source` name something that will NOT be in a deployment? */
-function isMachineCommand(command: AgentCommand): boolean {
-  return command.source.startsWith("machine-");
-}
-
-/**
- * The pi settings that change what a TURN does — the ones worth an author's attention when they will not travel.
- * Presentation-only keys (theme, editor, TUI) are the machine's business and stay out of the report;
- * `defaultThinkingLevel` does too, because the definition's `thinkingLevel` overrides it in every posture.
- */
-const TURN_SETTINGS = [
-  "compaction",
-  "retry",
-  "cacheWarming",
-  "thinkingBudgets",
-  "transport",
-  "httpIdleTimeoutMs",
-  "websocketConnectTimeoutMs",
-] as const;
-
-/** Set to something, as opposed to absent or `{}` — pi treats both of those as its default. */
-function isSet(value: unknown): boolean {
-  if (value === undefined) return false;
-  return !(typeof value === "object" && value !== null && Object.keys(value).length === 0);
-}
-
-/** What this machine lends the agent and a deployed image will not have. */
-export interface MachineLoan {
-  /** Skills and prompt templates from outside the workspace. */
-  commands: AgentCommand[];
-  /** {@link TURN_SETTINGS} keys set in pi's GLOBAL settings file. */
-  settings: string[];
-}
-
-/**
- * THE ANSWER to "what does this box lend", for every place that has to say it (AGENTS.md: anything inherited is
- * reported where it stops being true) — `deploy`'s pre-flight, the startup `machine:` line, `info`.
- *
- * Settings are the GLOBAL file's only. The project file is `<workspace>/.pi/settings.json`, inside the workspace,
- * so `COPY . .` carries it and the deployed process reads it from the same place: it travels, the way a project
- * `.pi/skills` does. A global `retry.enabled: false` does not, and without this the deployed agent quietly went
- * back to pi's retry budget with nothing in the deploy to say so.
- */
-export async function machineLoan(agentDir: string, workspace: string): Promise<MachineLoan> {
-  const commands = (await resolveCommandSurface(agentDir, workspace)).filter(isMachineCommand);
-  const { global } = (await machineResources(workspace)).settings;
-  return { commands, settings: TURN_SETTINGS.filter((key) => isSet(global[key])) };
 }

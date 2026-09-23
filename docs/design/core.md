@@ -43,7 +43,7 @@ One agent shape, one marker:
 ├── skills/  tools/  channels/  routines/
 ├── fastagent.config.ts     # THE marker
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
-│                           # travels into the image; pi's machine-global ~/.pi one stays unread)
+│                           # travels into the image — model endpoints are identity, not environment)
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # .env + auth.json; only the tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state
@@ -133,7 +133,7 @@ The pi reference prompt has four segments:
 |---|---|
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
 | ② project context | `AGENTS.md` files loaded by pi from the agent dir and the workspace ancestor walk |
-| ③ skills listing | pi appends definition-local skills when `read` is active |
+| ③ skills listing | pi appends the agent's skills — the definition's and the machine's (§5) — when `read` is active |
 | ④ runtime context | pi appends cwd, without a date line that would invalidate the prefix cache daily |
 
 `persona.md` is authored identity; `AGENTS.md` is project context. The definition is re-read for every
@@ -245,19 +245,16 @@ only re-run the whole prompt and execute the tool a second time).
 
 ## 5. Tools, skills, and execution environment
 
-An agent inherits the machine it runs on. Skills and prompt templates come from the definition's own
-`skills/` AND from the box a turn runs on — pi's Agent Skills discovery, unchanged — because the agent
-already inherits that box: `bash` runs whatever is on the PATH, `read` opens whatever is on the disk.
-Treating the machine's executables as environment and its skills as contamination was a line in the
-wrong place. A name in the definition wins a collision, which is what `fastagent add skill` is for:
-vendoring a copy in both pins it and makes it travel.
+**An agent inherits the machine it runs on**, the way it already inherits the `PATH`. Skills and
+prompt templates come from the definition's own `skills/` and from the box — pi's Agent Skills
+discovery, installed pi packages included (fastagent never installs one) — and pi's engine settings
+come from the box too. A name in the definition wins a collision; `fastagent add skill` vendors one in.
+The machine is read once per process, like any environment; the definition stays live.
 
-The portability guarantee it replaced is now a REPORT at the moment it stops holding — `deploy`'s
-pre-flight names the skills and prompts this machine lends the agent and the image will not have. A
-note, not a gate: a deployed image is a machine too, and whatever `~/.pi/agent/skills` its builder put
-in it is that environment's answer. `commands()` says which is which through `source`, decided by where
-the file is rather than which loader found it — the project-level `.pi/` and `.agents/` directories are
-inside the workspace, so they ride along with `COPY . .` and count as travelling.
+Deploying ships the project scope, the workspace. What the machine lends is not compared against a
+deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
+machine too, and whatever its builder put in it is that environment's answer
+(`src/engines/pi/machine.ts`).
 
 Extensions stay out of this, for a reason that is not portability: pi's extension runtime is
 process-wide, and serving runs concurrent turns for unrelated conversations

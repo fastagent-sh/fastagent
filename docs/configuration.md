@@ -230,27 +230,20 @@ FastAgent:
 
 ## What the machine lends the agent
 
-An agent inherits the box it runs on. It always did for executables — `bash` runs whatever is on the
-PATH — and it does for pi's resources too: **skills** and **prompt templates** are loaded from the
-definition's own `skills/` *and* from this machine, by pi's [Agent Skills](https://agentskills.io/specification)
-discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, project `.pi/skills/` and `.agents/skills/`).
-A name in the definition wins a collision.
+An agent inherits the box it runs on, the same way it inherits the `PATH` (the rule:
+[core §5](design/core.md#5-tools-skills-and-execution-environment)). **Skills** and **prompt templates**
+are loaded from the definition's own `skills/` *and* from this machine, by pi's
+[Agent Skills](https://agentskills.io/specification) discovery (`~/.pi/agent/skills/`,
+`~/.agents/skills/`, project `.pi/skills/` and `.agents/skills/`). A name in the definition wins a
+collision; `fastagent add skill <name>` vendors one into `skills/`.
 
-The machine is read once, at startup; restart to pick up a skill installed after that. Skills and
-prompts from pi **packages** (`packages` in pi's `settings.json`) are included when the package is
-installed or can be installed. If one cannot be (offline, a typo, a registry 404), fastagent warns and
-runs without the skills and prompts of every package until restart; the definition and the machine's
-local skills still load.
+Skills and prompts from pi **packages** (`packages` in pi's `settings.json`) are loaded when the package
+is installed. fastagent never installs one: a package that is listed but not installed is skipped, with
+a warning naming it. The machine is read once, at startup — restart to pick up something installed
+after that.
 
-A deployed image is a machine too, and an empty one unless you put something in it. So the moment that
-stops being true is the deploy, and that is where it is reported: `deploy` prints a note naming the
-skills and prompts this machine lends the agent and the image will not have.
-`fastagent add skill <name>` vendors one into `skills/`, where it travels and is git-tracked.
-
-`commands()` (and therefore a `/` composer) says which is which through `source`, by where the file is:
-`skill` / `prompt` are inside the workspace and travel (the definition's `skills/`, and the
-project-level `.pi/` and `.agents/` directories), `machine-skill` / `machine-prompt` are this box's and
-do not.
+Deploying ships the project scope, the workspace, and nothing more: a deployed image has whatever its
+build put in it, the way it has whatever binaries its build installed.
 
 **Extensions are the exception**, for a reason that is not portability — see
 [Why serving does not run them](#why-serving-does-not-run-them). So is the **system prompt**:
@@ -270,15 +263,11 @@ definition, where a reader can see it.
 
 The knobs that shape a turn rather than the agent — compaction, retries, prompt-cache warming, transport
 timeouts — belong to pi, not to `fastagent.config.ts`, and they come from the machine like everything
-else above: `dev`, `start` and `chat` all read pi's own files (serving reads them once, at startup), so
-the posture you tuned locally is the posture you get.
+else above: `dev`, `start` and `chat` all read pi's own files (serving reads them once, at startup).
 
-pi has two, and only one of them travels. The **global** file, `~/.pi/agent/settings.json`, is this
-machine's: a deployed image does not have it unless it was built with one, and then pi's defaults
-apply — `deploy` names every turn setting you set there. The **project** file,
-`<workspace>/.pi/settings.json`, sits inside the workspace, so the image carries it and the deployed
-agent reads it from the same place. That is where a setting goes when the artifact must pin it; the
-project file wins over the global one, as it does in pi.
+pi has two: the machine's `~/.pi/agent/settings.json`, and the project's
+`<workspace>/.pi/settings.json`, deep-merged with the project file winning, as in pi. The project one
+is inside the workspace, so it is part of what a deploy ships.
 
 The file is pi's own settings format; the ones worth knowing here:
 

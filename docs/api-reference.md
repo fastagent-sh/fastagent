@@ -800,11 +800,8 @@ without its prompt being consumed, when the run finishes inside the window — a
 outcome; the settlement is the truth.
 
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
-the definition exposes, plus what the MACHINE this process runs on exposes. `source` says which:
-`skill` / `prompt` are inside the workspace — the definition's `skills/`, plus the project-level
-`.pi/` and `.agents/` directories pi discovers — and travel with a deploy; `machine-skill` /
-`machine-prompt` are the box's (`~/.pi/agent/skills` and friends), and a deployed image has them only
-if it was built with them. It is a LISTING, not a dispatch surface: to RUN one, send its engine spelling as ordinary
+the definition exposes, plus the skills and prompt templates the machine this process runs on lends it
+(core §5). `source` is how each is invoked: `skill` or `prompt`. It is a LISTING, not a dispatch surface: to RUN one, send its engine spelling as ordinary
 prompt text and let the engine expand it — for the pi engine a skill is `/skill:<name> [args]`, which
 the server turns into the skill's body with the arguments appended, and a prompt template is the bare
 `/<name>`.

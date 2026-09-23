@@ -153,7 +153,7 @@ What it runs is **this agent's identity** on **this machine's environment**, the
 definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and `extensions/` are loaded, your machine's skills and
 prompt templates are inherited alongside them (see
 [What the machine lends the agent](configuration.md#what-the-machine-lends-the-agent)), and your pi's own
-extensions and `APPEND_SYSTEM.md` stay out. What deploys is the definition's half — `deploy` names the rest.
+extensions and `APPEND_SYSTEM.md` stay out.
 
 Sessions are pi's own per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), so `/resume` finds them
 beside your other chats. A served conversation — a schedule's, a channel thread's — is not opened here: it belongs to
