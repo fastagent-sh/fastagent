@@ -48,13 +48,16 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
 }
 
 /**
- * Whether a change the watcher reported restarts the worker. TypeScript under `tools/` does not while a worker
- * serves — that worker reloads it on its next invoke, and a restart would cost it every session in flight. With no
- * worker it does: the one that exited refused a broken tool at boot, and this change may be the fix.
+ * Whether a change the watcher reported restarts the worker. Under `tools/`, while a worker serves, only what that
+ * worker cannot take in itself does: a format Node caches — the SAME line its reload draws (open.ts `liveTools` warns
+ * for exactly these). Anything else there — TypeScript, a new `tools/lib/` directory — the worker handles on its next
+ * invoke, and a restart would cost it every session in flight. With no worker, everything restarts: the one that
+ * exited refused a broken tool at boot, and this change may be the fix.
  */
 export function devChangeRestarts(root: string, path: string, serving: boolean): boolean {
   const underTools = relative(root, path).split(sep)[0] === "tools";
-  return !(serving && underTools && reloadKind(path) === "fresh");
+  if (serving && underTools) return reloadKind(path) === "restart";
+  return true;
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */

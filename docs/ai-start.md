@@ -219,7 +219,9 @@ The filename supplies the tool name. `defineTool` infers `items` and `size` from
 validates incoming arguments before calling the body. TypeScript annotations alone do not validate
 external JSON. Import `z` from FastAgent so schema construction and conversion use the same Zod copy.
 Keep helpers in a subdirectory of `tools/`, such as `tools/lib/`: only the files directly in `tools/` must
-default-export tools, and a helper there reloads with the tools that import it. Add IO and authorization checks
+default-export tools, and a helper there reloads with the tools that import it. Tools load their own copy of
+the local files they import, so module state there (a queue, a cache) is not shared with `channels/` or
+`routines/` that import the same file; keep shared state in an installed package or an external store. Add IO and authorization checks
 at the boundary that performs the real operation; keep imports free of network calls and side effects.
 
 **`fastagent/test/batches.test.ts`**

@@ -200,7 +200,9 @@ export function liveTools(
       } catch (error) {
         const failure = (error as Error).message;
         current = { stamp, tools: current.tools, failure };
-        log.warn(`[fastagent] tools/ changed but could not be loaded, so the previous tools stay in use: ${failure}`);
+        log.warn(
+          `[fastagent] tools/ changed but could not be loaded, so the previous tools stay in use until the next change under tools/ loads: ${failure}`,
+        );
       } finally {
         reloading = undefined;
       }

@@ -97,6 +97,11 @@ describe("dev-supervisor: devChangeRestarts (which watched change costs the work
     expect(devChangeRestarts(root, join(root, "tools", "lib", "word.ts"), true)).toBe(false);
   });
 
+  it("nor does a directory under tools/ — an agent's first helper creates tools/lib/ in the middle of its turn", () => {
+    // chokidar reports it as `addDir`/`unlinkDir`; with no extension it is neither code nor cached code.
+    expect(devChangeRestarts(root, join(root, "tools", "lib"), true)).toBe(false);
+  });
+
   it("with the worker DOWN it restarts — the worker refused a broken tool at boot, and this may be the fix", () => {
     expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), false)).toBe(true);
   });

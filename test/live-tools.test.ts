@@ -144,6 +144,9 @@ it("each invoke binds, and its prompt lists, the tools read for THAT invoke", as
   expect(seen[1]?.tools).not.toContain("first");
   expect(seen[1]?.prompt).toContain("- second: The second tool.");
   expect(seen[1]?.prompt).toMatch(/tools\/ changed but could not be loaded[\s\S]*tools\/third\.ts failed to load/);
+  // The retry condition as it is — a stamp of tools/ — not "once fixed": a fixed helper outside tools/, or a secret
+  // set in a running process, changes nothing the reload looks at.
+  expect(seen[1]?.prompt).toMatch(/retried when a file under tools\/ changes/);
 });
 
 it("reloads under Bun too — whose own import() would keep the first module forever", async () => {

@@ -98,6 +98,12 @@ For `start`, hosted environments can set `PORT`.
   - **Only TypeScript** (`.ts`, `.mts`, `.cts`, `.tsx`). A `.js`, `.mjs`, `.cjs` or `.json` file under `tools/` is
     loaded by Node itself, which keeps it as first read — as in pi's `/reload`. Editing one restarts the `dev`
     worker; under `start` it logs that a restart is needed, and nothing is reported as reloaded.
+  - **A failed reload is retried when a file under `tools/` changes** — not when a helper outside it does, and not
+    when a secret is set: secrets are read at startup, so a missing one needs a restart.
+  - **Tools have their own copy of local modules.** A reload re-reads the local files a tool imports, so tools load
+    them apart from `channels/` and `routines/` — from boot, not only after a reload. A `lib/queue.ts` both a channel
+    and a tool import is two queues. State they must share belongs in an installed package (Node loads those once)
+    or outside the process.
   - **Module state is not carried over, and not cleaned up.** A reload evaluates `tools/` again as a whole: a helper
     your tools share is still one instance, but a new one, and the old one is not closed — its connection pool,
     `setInterval` or `process.on` listener stays alive beside the new one, once more per reload. Open resources when

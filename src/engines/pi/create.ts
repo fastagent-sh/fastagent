@@ -196,7 +196,7 @@ export function piBasePrompt(
       : "You are an AI assistant operating inside pi, an agent harness. Help users using only the tools and context available to you.");
   // Said where the model reads its tools: it is the one that edits tools/, and an absent tool does not say why.
   const failureNote = options.toolsFailure
-    ? `\n\nYour tools/ changed but could not be loaded, so the tools above are the last set that loaded. Once this is fixed, the change loads on your next turn:\n${options.toolsFailure}`
+    ? `\n\nYour tools/ changed but could not be loaded, so the tools above are the last set that loaded. The load is retried when a file under tools/ changes — after fixing a helper outside tools/, change one inside it too. A missing secret is read when the service starts, so it needs a restart:\n${options.toolsFailure}`
     : "";
   const deferredNote =
     deferredCount > 0
