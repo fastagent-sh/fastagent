@@ -3,6 +3,7 @@
  * drive.
  */
 import { mkdir } from "node:fs/promises";
+import { relative } from "node:path";
 import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
@@ -18,12 +19,12 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import { refuseBrokenDeclarations } from "../../loader.ts";
+import { refuseBrokenDeclarations, reloadsLive } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
-import { type ToolCollision, type MountedTool, toolsStamp } from "./tool.ts";
+import { type ToolCollision, type MountedTool, type ToolsStamp, changedTools, toolsStamp } from "./tool.ts";
 import { log } from "../../log.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
@@ -111,7 +112,7 @@ export interface AgentAssembly {
   /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
   toolSecrets: Map<string, DeclaredSecret[]>;
   /** What `tools/` looked like on disk just before those tools were loaded ({@link toolsStamp}). */
-  toolsStamp: string;
+  toolsStamp: ToolsStamp;
 }
 
 /**
@@ -144,10 +145,14 @@ async function mountableTools(config: FastagentConfig, agentDir: string, workspa
  * A reload that fails KEEPS THE LAST TOOLS THAT LOADED and says why, once per state of the directory. Boot refuses
  * the same failure, but here refusing would fail every turn after it — including the one the agent needs to repair
  * what it just broke. All or nothing: a half-applied `tools/` is a set nobody wrote.
+ *
+ * Only TypeScript reloads ({@link reloadsLive}); a change to any other file is said to need a restart, and when that
+ * is all that changed nothing is reloaded — logging "reloaded" over a file Node still has cached is the one outcome
+ * worse than not reloading.
  */
 export function liveTools(
   opened: { config: FastagentConfig; agentDir: string; workspace: string },
-  boot: { stamp: string; tools: MountedTool[] },
+  boot: { stamp: ToolsStamp; tools: MountedTool[] },
   /** What the opener adds on top of the discovered set (the `wake` tool), applied to every reload as at boot. */
   mount: (tools: MountedTool[]) => MountedTool[] = (tools) => tools,
 ): () => Promise<MountedTool[]> {
@@ -163,7 +168,19 @@ export function liveTools(
   let reloading: Promise<void> | undefined;
   return async () => {
     const stamp = await toolsStamp(agentDir);
-    if (stamp === current.stamp) return current.tools;
+    const changed = changedTools(current.stamp, stamp);
+    if (changed.length === 0) return current.tools;
+    const cached = changed.filter((file) => !reloadsLive(file));
+    if (cached.length > 0) {
+      log.warn(
+        `[fastagent] ${cached.map((file) => relative(agentDir, file)).join(", ")} changed — only TypeScript in ` +
+          "tools/ reloads while the agent runs, so restart to load this change",
+      );
+    }
+    if (cached.length === changed.length) {
+      current = { stamp, tools: current.tools };
+      return current.tools;
+    }
     // Concurrent invokes share one reload; whichever stamp it read, the next invoke compares again.
     reloading ??= (async () => {
       try {

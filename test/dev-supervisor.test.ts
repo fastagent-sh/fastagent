@@ -8,8 +8,13 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
-    // tools/ goes live per invoke (open.ts), so an edit there must not cost the worker its process.
+    // tools/ TypeScript goes live per invoke (open.ts), so an edit there must not cost the worker its process...
     expect(ignored(join(root, "tools", "word-count.ts"))).toBe(true);
+    // ...but anything else there is served from Node's cache (loader.ts `reloadsLive`): only a restart re-reads it,
+    // and a directory must stay in scope for its files to be asked about at all.
+    expect(ignored(join(root, "tools", "word-count.js"))).toBe(false);
+    expect(ignored(join(root, "tools", "lib"))).toBe(false);
+    expect(ignored(join(root, "tools", "lib", "data.json"))).toBe(false);
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
     expect(ignored(join(root, "routines", "daily.ts"))).toBe(false); // loaded once per worker — restart is the re-read
     // Which FILES are extensions is decided at boot, so an added or removed entry needs the restart

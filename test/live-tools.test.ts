@@ -182,3 +182,44 @@ it("a reloaded tool that takes a mounted name is said, not silently absent", asy
 
   expect(warned.join("\n")).toMatch(/tool "read" \(tools\/read\) dropped/);
 });
+
+it("a change only Node's cache would serve is said to need a restart — never logged as reloaded", async () => {
+  // An ESM `.js`/`.mjs`, a `.cjs` or a `.json` is loaded by Node itself, which keeps it as first read. pi's `/reload`
+  // has the same line; what must not happen is "reloaded" over a file that did not.
+  const dir = await agentDir();
+  await writeFile(join(dir, "package.json"), JSON.stringify({ type: "module" }));
+  const readTools = await live(dir);
+  const warned: string[] = [];
+  const informed: string[] = [];
+  vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+  vi.spyOn(log, "info").mockImplementation((message) => void informed.push(message));
+  const evaluations = () => (globalThis as { __faGreetEvaluations?: number }).__faGreetEvaluations ?? 0;
+  const before = evaluations();
+
+  await writeFile(join(dir, "tools", "lib", "limits.js"), "export const max = 2;\n");
+  await readTools();
+
+  expect(warned.join("\n")).toMatch(/tools\/lib\/limits\.js changed — only TypeScript in tools\/ reloads/);
+  expect(informed.join("\n")).not.toMatch(/reloaded/);
+  expect(evaluations()).toBe(before);
+
+  // Alongside a TypeScript change, the TypeScript still reloads — and the rest is still said.
+  warned.length = 0;
+  await writeFile(join(dir, "tools", "lib", "limits.js"), "export const max = 3;\n");
+  await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "mixed";\n`);
+  expect(await callGreet(await readTools())).toBe("mixed from /the/workspace");
+  expect(warned.join("\n")).toMatch(/tools\/lib\/limits\.js changed/);
+});
+
+it("a tool file of any name loads — the load's own entry cannot shadow one", async () => {
+  // jiti keys its cache by the entry's path; a real `tools/<that name>` would have been answered with the entry.
+  const dir = await mkdtemp(join(tmpdir(), "fa-live-entry-"));
+  await mkdir(join(dir, "tools"), { recursive: true });
+  await writeFile(join(dir, "tools", "fastagent-load.mjs"), 'export default "mine";\n');
+  await writeFile(join(dir, "tools", "fastagent-load.ts"), 'export default "mine too";\n');
+
+  const { modules, failures } = await loadModuleDir(join(dir, "tools"), { fresh: true });
+
+  expect(failures).toEqual([]);
+  expect(modules.map((module) => module.mod.default)).toEqual(["mine", "mine too"]);
+});

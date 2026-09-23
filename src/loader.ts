@@ -109,6 +109,16 @@ export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[])
   );
 }
 
+/**
+ * Whether {@link importFresh} can re-read this file in a running process: TypeScript, which jiti always transpiles.
+ * Every other format it hands to Node's own loaders — an ESM `.mjs`/`.js` to `import()`, a `.cjs`/`.json` to
+ * `require` — whose caches keep the file as first loaded (measured: a `.js` helper edited from 1 to 2 still reads 1).
+ * pi's `/reload` has the same line for extensions. A change to any other file takes a restart.
+ */
+export function reloadsLive(file: string): boolean {
+  return /\.[cm]?tsx?$/.test(file);
+}
+
 /** One module's import: what it exported, or why it could not be imported. */
 type Imported = { mod: { default?: unknown } } | { error: unknown };
 
@@ -141,8 +151,9 @@ async function importFresh(dir: string, files: readonly string[]): Promise<Impor
       }
       return out;
     };`,
-    // Never written: the name only anchors resolution, and nothing resolves relative to it (the files are absolute).
-    { filename: join(dir, "fastagent-load.mjs"), async: true },
+    // Never written, and named so it cannot be: jiti keys its cache by this path, so a real `tools/<name>.ts` would
+    // be answered with this entry. `ext` makes it transpiled — an `.mjs` name was first tried as a native import.
+    { filename: join(dir, "fastagent-load"), ext: ".ts", async: true },
   )) as { default: (files: readonly string[]) => Promise<Imported[]> };
   return entry.default(files);
 }

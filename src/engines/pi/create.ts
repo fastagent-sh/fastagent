@@ -196,8 +196,8 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
   const deploymentNote = !isDeployedWorkspace()
     ? ""
     : isAgentcoreRuntime()
-      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files and tools/ are read each turn; changes to channels, routines or configuration take effect when the service restarts.`
-      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and tools/ are read each turn; changes to channels, routines or configuration take effect when the service restarts.`;
+      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`
+      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`;
   return `${identity}
 
 Available tools:

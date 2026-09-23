@@ -189,13 +189,15 @@ export async function loadTools(dir: string): Promise<{
   return { tools: [...byName.values()], secrets, collisions, failures };
 }
 
+/** Every file under `tools/`, at any depth, with its size and modification time ({@link toolsStamp}). */
+export type ToolsStamp = ReadonlyMap<string, string>;
+
 /**
- * What `tools/` looks like on disk, as one comparable string: every file under it, at any depth, with its size and
- * modification time. Asked once per invoke, so it stats and never imports; a change here is what makes the next
- * invoke load the tools again. Helpers a tool imports from OUTSIDE `tools/` are not in it — they reload with the tool
- * that imports them, when that tool changes.
+ * What `tools/` looks like on disk. Asked once per invoke, so it stats and never imports; a change here is what makes
+ * the next invoke load the tools again. Helpers a tool imports from OUTSIDE `tools/` are not in it — they reload with
+ * the tool that imports them, when that tool changes.
  */
-export async function toolsStamp(agentDir: string): Promise<string> {
+export async function toolsStamp(agentDir: string): Promise<ToolsStamp> {
   const dir = join(agentDir, "tools");
   let files: string[];
   try {
@@ -204,24 +206,30 @@ export async function toolsStamp(agentDir: string): Promise<string> {
       .map((entry) => join(entry.parentPath, entry.name))
       .sort();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
     throw error;
   }
   const stamps = await Promise.all(
     files.map(async (file) => {
       try {
         const { size, mtimeMs } = await stat(file);
-        return `${file}\u0000${size}\u0000${mtimeMs}`;
+        return [file, `${size}\u0000${mtimeMs}`] as const;
       } catch (error) {
         // Removed between the listing and the stat — a turn running `rm` or `git checkout` beside this one, or an
         // editor's temp file. Gone is a state of the directory, not a fault; the next stamp sees it. Not reproduced in
         // a test: the window is two awaits wide and there is no seam to hold it open.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
         throw error;
       }
     }),
   );
-  return stamps.filter(Boolean).join("\u0001");
+  return new Map(stamps.filter((stamp) => stamp !== undefined));
+}
+
+/** The files added, removed or rewritten between two stamps. */
+export function changedTools(before: ToolsStamp, after: ToolsStamp): string[] {
+  const changed = [...after].filter(([file, stamp]) => before.get(file) !== stamp).map(([file]) => file);
+  return [...changed, ...[...before.keys()].filter((file) => !after.has(file))];
 }
 
 /** Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name. */

@@ -8,16 +8,18 @@ import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, resolveStateRoot, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
+import { reloadsLive } from "./loader.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
-/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. `tools/` is not one — each
- *  invoke reloads it when it changed (open.ts `liveTools`), in `start` as much as here. */
+/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. `tools/` is half of one: its
+ *  TypeScript reloads per invoke (open.ts `liveTools`), in `start` as much as here; its other files do not
+ *  (loader.ts `reloadsLive`), so those still restart the worker. */
 const CODE_INPUT_DIRS = ["channels", "routines", "extensions"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, tools/ (all but TypeScript), package.json, fastagent.config.ts, models.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -34,6 +36,8 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // any other code input.
     if (rel === AGENT_MODELS_FILE) return false;
     const segments = rel.split(sep);
+    // A directory under tools/ has no extension, so it stays in scope and its files are asked one by one.
+    if (segments[0] === "tools") return reloadsLive(path);
     if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
     // The `.env` restarts too (credentials are process-bound).
     if (segments.length <= envRel.length && segments.every((seg, i) => seg === envRel[i])) return false;
@@ -119,7 +123,7 @@ export async function runDevSupervisor(
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills/tools edits go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills and TypeScript tools/ edits go live next turn without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {
