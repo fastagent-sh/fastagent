@@ -5,8 +5,8 @@
 import { dirname, relative } from "node:path";
 import type { AgentCommand } from "../../session.ts";
 import { loadAgentSkills } from "./definition.ts";
-import { reportDefinitionWarnings, reportFindingsIfChanged } from "./report.ts";
-import type { Skill, SkillDiagnostic, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { reportFindingsIfChanged } from "./report.ts";
+import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
   type AgentSessionServices,
@@ -213,9 +213,60 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
+/** pi's own shapes, taken from the loader rather than re-declared: both carry a `filePath` this file classifies by. */
+type DiscoveredSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
+type DiscoveredPrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
+
+/** What the box lends an agent, read once per process. */
+interface MachineResources {
+  skills: DiscoveredSkill[];
+  prompts: DiscoveredPrompt[];
+}
+
+/** Keyed by the two directories it reads: the workspace (project-level) and pi's own (user-level). */
+const machineReads = new Map<string, Promise<MachineResources>>();
+
+/**
+ * THE machine's half, read ONCE and handed to both planes.
+ *
+ * Two things made this a function rather than two reads. The listing was live while the run plane's loader was
+ * not, so `/` could offer a skill installed after boot that the very next prompt would not expand — the menu
+ * promising a name the turn did not have. And each listing re-reported the machine's diagnostics, so
+ * `GET /control/commands` printed the same warning once per request.
+ *
+ * NOT LIVE, on purpose: the DEFINITION is what `dev` re-reads per turn, because it is the thing an author is
+ * editing. The machine is the environment around it, and a process does not notice a `PATH` entry added after it
+ * started either. Restart to pick one up — and a deployment restarts on every release anyway.
+ */
+export function machineResources(workspace: string): Promise<MachineResources> {
+  const agentDir = getAgentDir();
+  const key = `${workspace}\u0000${agentDir}`;
+  const cached = machineReads.get(key);
+  if (cached) return cached;
+  const reading = (async (): Promise<MachineResources> => {
+    // Discovery ONLY — no definition overrides here, because this is the other half. Extensions stay off for the
+    // same concurrency reason the serving posture keeps them off.
+    const loader = new DefaultResourceLoader({ cwd: workspace, agentDir, noExtensions: true, noContextFiles: true });
+    await loader.reload();
+    const { skills, diagnostics } = loader.getSkills();
+    // The machine's broken files, said ONCE — this read is the process's only one. A `SKILL.md` with no
+    // description in `~/.pi/agent/skills` used to be absent from the prompt, absent from the listing, and silent.
+    for (const diagnostic of diagnostics) {
+      log.warn(
+        `[fastagent] skill ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
+      );
+    }
+    return { skills, prompts: loader.getPrompts().prompts };
+  })();
+  machineReads.set(key, reading);
+  return reading;
+}
+
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
+  /** {@link machineResources} for this workspace — resolved by the caller, because this function is synchronous. */
+  machine: MachineResources;
   /** Omitted by serving, which does not run them. */
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
@@ -247,14 +298,20 @@ export function definitionResourceLoaderOptions(source: {
      * A deployed image is a machine too: whatever `~/.pi/agent/skills` it has is the environment its builder chose,
      * and `deploy` reports which of the local ones will not be in it.
      */
-    skillsOverride: (base) => {
-      const own = toPiSkills(source.skills()) as typeof base.skills;
+    // NO DISCOVERY OF ITS OWN, by either loader: the machine's half comes from {@link machineResources}, the
+    // process's single read, so the run plane and `commands()` describe the same box. Letting each loader discover
+    // separately is what made the menu live while a bound session was not.
+    noSkills: true,
+    skillsOverride: () => {
+      const own = toPiSkills(source.skills()) as DiscoveredSkill[];
       const names = new Set(own.map((skill) => skill.name));
       return {
-        skills: [...own, ...base.skills.filter((skill) => !names.has(skill.name))],
-        diagnostics: base.diagnostics,
+        skills: [...own, ...source.machine.skills.filter((skill) => !names.has(skill.name))],
+        diagnostics: [],
       };
     },
+    noPromptTemplates: true,
+    promptsOverride: () => ({ prompts: [...source.machine.prompts], diagnostics: [] }),
   };
 }
 
@@ -285,6 +342,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => definition.systemPrompt,
         skills: () => definition.skills,
+        machine: await machineResources(cwd),
       }),
     });
 
@@ -403,28 +461,20 @@ export async function resolveCommandSurface(agentDir: string, workspace: string)
   // `models.json` — and a listing has no use for one. `getAgentDir()` is pi's own answer for where its user-level
   // resources live, asked rather than spelled: writing `~/.pi/agent` here would be this file's second copy of a
   // convention it has spent the rest of the change NOT copying.
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: workspace,
-    agentDir: getAgentDir(),
-    ...definitionResourceLoaderOptions({ systemPrompt: () => undefined, skills: () => own.skills }),
-  });
-  await resourceLoader.reload();
-  const discovered = resourceLoader.getSkills();
-  // The machine's half has its own broken files, and until now nobody read them: a `SKILL.md` with no description
-  // in `~/.pi/agent/skills` was absent from the prompt, absent from this list, and silent. Same door the
-  // definition's findings go through, so a name that vanished says why exactly once.
-  reportDefinitionWarnings([], discovered.diagnostics as SkillDiagnostic[]);
+  // THE SAME SNAPSHOT a bound session runs on, not a second reading of the same directories: a listing that
+  // re-discovered would offer names installed after this process booted, which the next prompt would not expand.
+  const machine = await machineResources(workspace);
   const ownNames = new Set(own.skills.map((skill) => skill.name));
   return [
     ...own.skills.map((skill) => ({ name: skill.name, description: skill.description, source: "skill" })),
-    ...discovered.skills
-      .filter((skill: { name: string }) => !ownNames.has(skill.name))
-      .map((skill: { name: string; description: string; filePath?: string }) => ({
+    ...machine.skills
+      .filter((skill) => !ownNames.has(skill.name))
+      .map((skill) => ({
         name: skill.name,
         description: skill.description,
         source: commandSource("skill", skill.filePath, workspace),
       })),
-    ...resourceLoader.getPrompts().prompts.map((prompt: { name: string; description?: string; filePath?: string }) => ({
+    ...machine.prompts.map((prompt) => ({
       name: prompt.name,
       ...(prompt.description ? { description: prompt.description } : {}),
       source: commandSource("prompt", prompt.filePath, workspace),
@@ -441,8 +491,8 @@ export async function resolveCommandSurface(agentDir: string, workspace: string)
  * what happens, in the one message meant to warn them.
  *
  * NO PATH MEANS MACHINE, deliberately: a name we cannot place is one we cannot promise will be there, and the
- * expensive mistake is the reassuring one. (`PromptTemplate` does not declare `filePath` — it carries one at
- * runtime, measured 2026-09-23 — so this is also what happens if that ever stops being true.)
+ * expensive mistake is the reassuring one. pi declares `filePath` on both shapes today, so the branch is what
+ * happens if that ever stops being true rather than something reachable now.
  */
 function commandSource(kind: "skill" | "prompt", filePath: string | undefined, workspace: string): string {
   const inside = filePath !== undefined && !relative(workspace, filePath).startsWith("..");

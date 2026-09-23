@@ -25,7 +25,8 @@ The design choices are deliberate:
 | **Small core, clear seams** | The stable center is `invoke(scope, prompt) => AsyncIterable<AgentEvent>`, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
 | **Typed edges** | Tools use Zod schemas, events have a closed shape, and invalid inputs fail at the boundary instead of becoming hidden prompt bugs. |
-| **Filesystem as source of truth** | The deployable definition is the directory. No ambient global skills, no hidden registry dependency, no builder-machine state. |
+| **Filesystem as source of truth** | The deployable definition is the directory: identity, tools, channels, routines and its own `skills/`. No hidden registry dependency, no builder-machine state baked into the artifact. |
+| **The machine is an environment, not a dependency** | An agent inherits the box it runs on — its `PATH`, and equally its Agent Skills directories and prompt templates. What is inherited is reported where it stops being true (`deploy`'s pre-flight, `commands()`'s `source`), never silently assumed to travel. |
 | **One path from dev to serve** | `info`, `dev`, `invoke`, and `start` assemble the same directory so local behavior matches served behavior. |
 | **Visible failures** | Runtime problems become `failed` events or diagnostics. Silent fallback is worse than a clear error. |
 | **Option value** | The contract is engine-, model-, channel-, and host-neutral so future engines and deployment targets can be added without changing agent authorship. |
@@ -75,7 +76,7 @@ Typed boundaries are product UX, not ceremony. FastAgent applies them where agen
 | `invoke` as the neutral contract | HTTP handlers as the only contract | The same agent can run behind an app route, GitHub, Telegram, tests, or future channels. |
 | Channel adapters | One-off webhook/bot implementations | Channel code should translate events, not duplicate the agent loop. |
 | The agent's own reasoning as control flow | A bundled workflow/orchestration engine | The agent decides its steps; deterministic multi-step orchestration is the app's job — call `invoke` from your queue or workflow. |
-| Definition-local skills | Global or machine-local skills | Deployment behavior must come from the repo, not a developer's home directory. |
+| Inheriting the machine's skills, and reporting what will not travel | Pretending a definition is the whole environment | An agent already inherits the `PATH`; refusing to inherit skills drew the line in the wrong place and cost every author a working `/` menu. `fastagent add skill` vendors one in when it must travel. |
 | No required build step | Generated runtime artifacts | The directory is already the deployable unit; fewer artifacts means less drift. |
 | Host-provided runtime concerns | Framework-owned everything | Secrets, sessions, execution environment, and policy vary by host and app. |
 | Consume existing standards | Inventing a parallel ecosystem | FastAgent should meet authors where they already are: `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE, and host adapters. |

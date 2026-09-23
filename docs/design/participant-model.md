@@ -16,6 +16,21 @@ documented in [core.md](core.md).
 The model is derived, not assembled. Everything below follows from one axiom, so changing the axiom
 invalidates the rules rather than adjusting them.
 
+
+## 0.1 What a participant's text can invoke
+
+A participant's message is prompt TEXT, and the engine expands two spellings in it before the model
+sees them: `/skill:<name>` and the bare `/<name>` of a prompt template. Both resolve against what this
+process loaded — the definition's skills plus the machine's (`docs/configuration.md`).
+
+That is worth stating here because of who is talking. On a chat channel the author is usually not in
+the room: the text comes from whoever sent it, so any participant can fire a template the operator
+keeps in `~/.pi/agent/prompts`, and a template named like a platform command (`start.md` against
+Telegram's `/start`) rewrites that message silently. No capability is added — the turn runs with the
+same tools whatever the text says — but the decision to run the operator's macro belongs to the sender.
+A `/stop` is the one exception, because the channel takes it before the agent ever sees it
+(`src/channels/kit/stop-command.ts`).
+
 ## 1. The axiom
 
 | | Participant (a colleague) | Endpoint (a command surface) |

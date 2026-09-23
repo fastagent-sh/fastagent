@@ -149,9 +149,11 @@ fastagent chat [dir] [--model provider/modelId]
 
 Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
 
-What it runs is **this agent**, not your pi: the definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and
-`extensions/` are loaded, while your machine-global pi skills, extensions, prompt templates and `APPEND_SYSTEM.md`
-stay out — the same rule serving follows, so what you try is what deploys.
+What it runs is **this agent's identity** on **this machine's environment**, the same split serving uses: the
+definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and `extensions/` are loaded, your machine's skills and
+prompt templates are inherited alongside them (see
+[What the machine lends the agent](configuration.md#what-the-machine-lends-the-agent)), and your pi's own
+extensions and `APPEND_SYSTEM.md` stay out. What deploys is the definition's half — `deploy` names the rest.
 
 Sessions are pi's own per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), so `/resume` finds them
 beside your other chats. A served conversation — a schedule's, a channel thread's — is not opened here: it belongs to

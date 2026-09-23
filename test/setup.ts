@@ -15,3 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
+// HOME IS THE FALLBACK, not the answer: pi's `getAgentDir()` reads `PI_CODING_AGENT_DIR` first, so a developer
+// who has it set would run the whole inheritance suite against their own agent directory — the exact failure
+// this file exists to prevent, one variable over.
+delete process.env.PI_CODING_AGENT_DIR;

@@ -125,8 +125,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
-          machineSkills: (await resolveCommandSurface(agentDir, workspace))
-            .filter((c) => c.source !== "skill")
+          // `machine`, not `machineSkills`: prompt templates are in here too. And `isMachineCommand`, not
+          // `source !== "skill"` — a project-level `.pi/prompts/x.md` has `source: "prompt"` and rides into the
+          // image, so counting it as the machine's said the opposite of what happens.
+          machine: (await resolveCommandSurface(agentDir, workspace))
+            .filter(isMachineCommand)
             .map((c) => ({ name: c.name, source: c.source })),
           tools: tools.names,
           deferredTools: tools.deferred,

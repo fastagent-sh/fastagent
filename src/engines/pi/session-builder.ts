@@ -13,7 +13,12 @@ import {
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
+import {
+  bindPiSession,
+  definitionResourceLoaderOptions,
+  machineResources,
+  reportExtensionErrors,
+} from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
@@ -106,6 +111,7 @@ export async function buildAgentSessionRuntime(
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => systemPrompt,
         skills: () => definition.skills,
+        machine: await machineResources(cwd),
         extensionPaths,
       }),
     });

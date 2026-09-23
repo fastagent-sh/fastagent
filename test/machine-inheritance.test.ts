@@ -146,7 +146,9 @@ it("a broken SKILL.md on the machine says so — it is the silence this change w
   warn.mockRestore();
 
   expect(commands.map((c) => c.name)).not.toContain("broken");
-  expect(warned.join("\n")).toMatch(/broken/);
+  // The whole line, because the name is in the path either way: a `${d.code}` that pi's `ResourceDiagnostic` does
+  // not have rendered this as `[fastagent] undefined: …`, and a test matching the name could not see it.
+  expect(warned.join("\n")).toMatch(/^\[fastagent\] skill warning: .*description.*SKILL\.md\)$/m);
 });
 
 it("the machine's half is read ONCE — a definition that did not change does not reload the loader", async () => {
@@ -175,4 +177,46 @@ it("the machine's half is read ONCE — a definition that did not change does no
 
   expect(sent[1]).toContain("First description.");
   expect(sent[1]).not.toContain("Second description.");
+});
+
+it("lists and runs the SAME machine — a skill installed after boot is in neither", async () => {
+  // The menu used to re-discover per call while a bound session read once, so `/` could offer a name the very
+  // next prompt would pass through as prose. Both halves come from one read now.
+  const home = await machine({ skills: { early: "Present at boot." } });
+  const dir = await definition();
+  expect((await resolveCommandSurface(dir, dir)).map((c) => c.name)).toEqual(["early"]);
+
+  await mkdir(join(home, ".pi", "agent", "skills", "late"), { recursive: true });
+  await writeFile(
+    join(home, ".pi", "agent", "skills", "late", "SKILL.md"),
+    "---\nname: late\ndescription: Installed after boot.\n---\nbody\n",
+  );
+
+  expect(
+    (await resolveCommandSurface(dir, dir)).map((c) => c.name),
+    "offered a name no turn would expand",
+  ).toEqual(["early"]);
+  expect(await promptSentBy(dir)).not.toContain("Installed after boot.");
+});
+
+it("reports the machine's broken files ONCE, not once per `GET /control/commands`", async () => {
+  const home = await mkdtemp(join(tmpdir(), "fa-machine-once-"));
+  await mkdir(join(home, ".pi", "agent", "skills", "broken"), { recursive: true });
+  await writeFile(
+    join(home, ".pi", "agent", "skills", "broken", "SKILL.md"),
+    "---\nname: broken\n---\nno description\n",
+  );
+  vi.stubEnv("HOME", home);
+  const dir = await definition();
+  const warned: string[] = [];
+  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+
+  for (let i = 0; i < 3; i++) await resolveCommandSurface(dir, dir);
+  warn.mockRestore();
+
+  // `commands()` is an unauthenticated route (`GET /control/commands`): a caller decides how often this runs.
+  expect(
+    warned.filter((line) => line.includes("description")),
+    warned.join("\n"),
+  ).toHaveLength(1);
 });

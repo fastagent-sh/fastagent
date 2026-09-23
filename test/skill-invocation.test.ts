@@ -193,3 +193,27 @@ it("a bare `/<name>` expands a PROMPT TEMPLATE — the second spelling the contr
   expect(sent()).toContain("TEMPLATE-BODY-MARKER for:");
   expect(sent()).toContain("this inbox");
 });
+
+it("an ANONYMOUS caller fires a machine prompt template too — who invokes one changes when you serve", async () => {
+  // Documented, not prevented (docs/configuration.md): the data plane's text comes from whoever is talking, so a
+  // group member or an unauthenticated POST can put the operator's macro into a turn. It grants no capability the
+  // agent lacked — the tools are the same either way — but the decision to run it moves from the author to them,
+  // and a name that collides with a platform command (`prompts/start.md` vs Telegram's `/start`) rewrites it.
+  const home = await mkdtemp(join(tmpdir(), "fa-prompt-wire-"));
+  await mkdir(join(home, ".pi", "agent", "prompts"), { recursive: true });
+  await writeFile(join(home, ".pi", "agent", "prompts", "start.md"), "OPERATOR-MACRO-MARKER $ARGUMENTS");
+  vi.stubEnv("HOME", home);
+
+  const { agent, sent } = await agentWithSkill();
+  const response = await createInvokeHandler(agent)(
+    new Request("http://agent/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session: "s", text: "/start now" }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  await response.text();
+
+  expect(sent()).toContain("OPERATOR-MACRO-MARKER");
+});

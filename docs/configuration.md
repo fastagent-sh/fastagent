@@ -250,6 +250,16 @@ do not.
 [Why serving does not run them](#why-serving-does-not-run-them). So is the **system prompt**:
 inheriting capability is one thing, inheriting an identity would make the agent someone else's.
 
+**Who fires a prompt template changes when you serve.** A template is invoked by name — a bare
+`/<name>` in the prompt text — and on a served agent that text comes from whoever is talking: a group
+member on Telegram, an anonymous `POST /invoke`. So your `~/.pi/agent/prompts/deploy.md` becomes
+something any participant can put into a turn, and a template whose name collides with a platform's
+own (`prompts/start.md` against Telegram's `/start`) silently rewrites that message. It grants no
+capability the agent did not already have — the turn runs with the same tools either way — but the
+decision to run your macro moves from you to them. Keep the machine's `prompts/` for `chat`, or name
+them so a stranger would not guess one; a template that must be part of the agent belongs in the
+definition, where a reader can see it.
+
 ## Engine settings: `~/.pi/agent/settings.json`
 
 The knobs that shape a turn rather than the agent — compaction, retries, prompt-cache warming, transport
