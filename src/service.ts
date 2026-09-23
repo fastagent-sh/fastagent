@@ -245,7 +245,7 @@ export function startSchedules(
 ): { routines: LoadedRoutine[]; stop: () => void } {
   if (routines.length === 0 && !selfSchedule) return { routines, stop: () => {} };
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock }),
+    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock, wakeups: selfSchedule }),
   );
   scheduler.start();
   if (routines.length > 0) {

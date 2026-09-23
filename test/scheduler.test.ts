@@ -782,3 +782,23 @@ describe("schedule/scheduler: externalClock mode", () => {
     s.stop();
   });
 });
+
+describe("schedule/scheduler: wake-ups need self-scheduling", () => {
+  it("with wake-ups off, one left in the store does not fire — its unwake tool is not mounted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T10:30:00Z"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const root = await freshRoot();
+    const added = addWakeup(root, { session: "chat", prompt: "check again", cron: "*/15 * * * *" });
+    expect(added.ok).toBe(true);
+    const { agent, calls } = recordingAgent();
+    // A routine keeps the scheduler running, which is how the wake-up poll ran with self-scheduling off.
+    const s = createScheduler({ agent, stateRoot: root, routines: [hourly()], wakeups: false });
+    s.start();
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(calls.map((c) => c.session)).toEqual(["routine:job"]); // the 11:00 routine, and no wake-up
+    s.stop();
+  });
+});

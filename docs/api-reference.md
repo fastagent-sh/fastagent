@@ -641,7 +641,8 @@ only way: it is session-scoped, and there is no operator command beside it. A wa
 serve is running, and a running serve is one whose session can be spoken to (`POST /invoke`, the control
 plane's `follow_up`, or the chat thread it lives in) — so "the alarm is loose" and "the agent is
 unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedule/wakeups.json`, which
-needs no command.
+needs no command. Wake-ups also fire only while `selfSchedule` is on: turning it off stops every one of them with
+the tools that manage them — they stay in the store, and fire again if it is turned back on.
 
 ## Config and models
 

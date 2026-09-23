@@ -59,6 +59,12 @@ export interface SchedulerOptions {
   now?: () => Date;
   /** External slot delivery owns cron timers and catch-up; local wake polling still runs. */
   externalClock?: boolean;
+  /**
+   * Poll the self-scheduled wake-ups (default on). Off when the agent may not schedule itself: a recurring wake-up
+   * left in the store from before `selfSchedule` was turned off would otherwise keep firing — the scheduler also
+   * runs for routines — and its envelope's `unwake({ id })` names a tool that is no longer mounted.
+   */
+  wakeups?: boolean;
 }
 
 /**
@@ -234,6 +240,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       routines,
       now = () => new Date(clock.currentTimeMillisUnsafe()),
       externalClock = false,
+      wakeups = true,
     } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
@@ -372,7 +379,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           if (due.getTime() <= current.getTime()) log.info(`[schedule] ${s.name}: catching up a missed run`);
           launch(s.name, cronLoop(s, due));
         }
-        if (!stopped) launch("wake-up poll", wakeLoop);
+        if (!stopped && wakeups) launch("wake-up poll", wakeLoop);
       },
       stop() {
         stopped = true;

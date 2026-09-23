@@ -267,6 +267,20 @@ describe("createAgentService", () => {
     }
   });
 
+  it("routines without selfSchedule run no wake-up poll", async () => {
+    // The scheduler runs for the routine; the wake-up poll (its 30 s timer) is self-scheduling's, and is off here.
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const service = await createAgentService(
+      await agentDir({ "routines/daily.mjs": `export default { cron: "0 9 * * *", prompt: "sum up" };\n` }),
+    );
+    try {
+      expect(timers.mock.calls.filter((args) => args[1] === 30_000)).toEqual([]);
+    } finally {
+      await service.close();
+      timers.mockRestore();
+    }
+  });
+
   it("close() stops the self-scheduling poll timer", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
