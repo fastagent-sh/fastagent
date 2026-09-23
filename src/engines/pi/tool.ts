@@ -5,7 +5,7 @@ import { assertInsideAgentDir } from "../../paths.ts";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
-import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
+import { type ModuleLoadFailure, loadModuleDir, reloadKind } from "../../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration, secretValues } from "../../declared-secrets.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
 
@@ -189,6 +189,12 @@ export async function loadTools(dir: string): Promise<{
   return { tools: [...byName.values()], secrets, collisions, failures };
 }
 
+/** The tools an invoke binds, and "why these are not what is on disk" when the last reload of `tools/` failed. */
+export interface LiveTools {
+  tools: MountedTool[];
+  failure?: string;
+}
+
 /** Every file under `tools/`, at any depth, with its size and modification time ({@link toolsStamp}). */
 export type ToolsStamp = ReadonlyMap<string, string>;
 
@@ -202,7 +208,8 @@ export async function toolsStamp(agentDir: string): Promise<ToolsStamp> {
   let files: string[];
   try {
     files = (await readdir(dir, { recursive: true, withFileTypes: true }))
-      .filter((entry) => entry.isFile())
+      // Only what a tool could import: a README or an editor's swap file coming and going is not a change.
+      .filter((entry) => entry.isFile() && reloadKind(entry.name) !== undefined)
       .map((entry) => join(entry.parentPath, entry.name))
       .sort();
   } catch (error) {

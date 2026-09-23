@@ -31,7 +31,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       "tsconfig.json",
       "persona.md",
       "skills/review-batches/SKILL.md",
-      "lib/batches.ts",
+      "tools/lib/batches.ts",
       "tools/plan-batches.ts",
       "test/batches.test.ts",
       "routines/daily-review.ts",

@@ -21,6 +21,7 @@ import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
   type FastagentTool,
+  type LiveTools,
   type ToolCollision,
   isDeferredTool,
   loadTools,
@@ -169,7 +170,14 @@ export async function resolveAgentTools(
 // Fastagent owns identity and project context; Pi appends skills and cwd for both serving and chat.
 
 /** The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two deviations. */
-export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string } = {}): string {
+export function piBasePrompt(
+  options: {
+    tools?: MountedTool[];
+    persona?: string;
+    /** Why `tools/` as it is on disk is not what is mounted ({@link LiveTools}). */
+    toolsFailure?: string;
+  } = {},
+): string {
   const mounted = options.tools ?? [];
   // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so naming them here
   // would invite calls to tools that don't exist yet.
@@ -186,6 +194,10 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
     (fullCodingSurface
       ? "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files."
       : "You are an AI assistant operating inside pi, an agent harness. Help users using only the tools and context available to you.");
+  // Said where the model reads its tools: it is the one that edits tools/, and an absent tool does not say why.
+  const failureNote = options.toolsFailure
+    ? `\n\nYour tools/ changed but could not be loaded, so the tools above are the last set that loaded. Once this is fixed, the change loads on your next turn:\n${options.toolsFailure}`
+    : "";
   const deferredNote =
     deferredCount > 0
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
@@ -201,7 +213,7 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
   return `${identity}
 
 Available tools:
-${toolsList}${deferredNote}
+${toolsList}${failureNote}${deferredNote}
 
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
@@ -418,7 +430,7 @@ export async function assemblePiFromDefinition(
   options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & {
     /** The tools as they are NOW, asked once per invoke; `tools` is the boot answer. The directory opener supplies it
      *  so the agent's own `tools/` go live without a restart ({@link createPiAgentFromDir}). */
-    readTools?: () => Promise<MountedTool[]>;
+    readTools?: () => Promise<LiveTools>;
   },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
@@ -461,12 +473,13 @@ export async function assemblePiFromDefinition(
       reportFindingsIfChanged(def.dir, def);
       // Read with the prompt because the prompt LISTS them: a new tool the model is not told about is one it
       // does not call.
-      const live = readTools ? withSearchTool(await readTools()) : tools;
+      const read = readTools ? await readTools() : undefined;
+      const live = read ? withSearchTool(read.tools) : tools;
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity, re-read per turn
           // like AGENTS.md so edits go live.
-          base: options.base ?? piBasePrompt({ tools: live, persona: def.persona }),
+          base: options.base ?? piBasePrompt({ tools: live, persona: def.persona, toolsFailure: read?.failure }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
         }),

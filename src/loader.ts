@@ -110,13 +110,18 @@ export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[])
 }
 
 /**
- * Whether {@link importFresh} can re-read this file in a running process: TypeScript, which jiti always transpiles.
- * Every other format it hands to Node's own loaders — an ESM `.mjs`/`.js` to `import()`, a `.cjs`/`.json` to
- * `require` — whose caches keep the file as first loaded (measured: a `.js` helper edited from 1 to 2 still reads 1).
- * pi's `/reload` has the same line for extensions. A change to any other file takes a restart.
+ * What a running process can do with a change to this file, as code a tool may import:
+ * - `"fresh"`: TypeScript, which jiti always transpiles, so {@link importFresh} re-reads it.
+ * - `"restart"`: a format jiti hands to Node's own loaders — an ESM `.mjs`/`.js` to `import()`, a `.cjs`/`.json` to
+ *   `require` — whose caches keep the file as first loaded (measured: a `.js` helper edited from 1 to 2 still reads
+ *   1). pi's `/reload` has the same line for extensions.
+ * - `undefined`: not code at all (`README.md`, an editor's `.swp`, `.DS_Store`) — nothing loads it, so a change to it
+ *   changes nothing and is not one to announce.
  */
-export function reloadsLive(file: string): boolean {
-  return /\.[cm]?tsx?$/.test(file);
+export function reloadKind(file: string): "fresh" | "restart" | undefined {
+  if (/\.[cm]?tsx?$/.test(file)) return "fresh";
+  if (/\.(m?js|cjs|json)$/.test(file)) return "restart";
+  return undefined;
 }
 
 /** One module's import: what it exported, or why it could not be imported. */

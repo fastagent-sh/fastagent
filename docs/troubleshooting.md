@@ -93,7 +93,8 @@ For `start`, hosted environments can set `PORT`.
 
 - **persona.md, AGENTS.md, `skills/`, and the TypeScript in `tools/`** are re-read on every turn — edits go live on
   the next turn with no restart (and no watcher involvement). `tools/` is reloaded when a file under it changed; a
-  reload that fails keeps the previous tools and logs why. `start` does the same.
+  reload that fails keeps the previous tools, logs why, and tells the agent in its system prompt on every turn until
+  the fix loads. `start` does the same.
   - **Only TypeScript** (`.ts`, `.mts`, `.cts`, `.tsx`). A `.js`, `.mjs`, `.cjs` or `.json` file under `tools/` is
     loaded by Node itself, which keeps it as first read — as in pi's `/reload`. Editing one restarts the `dev`
     worker; under `start` it logs that a restart is needed, and nothing is reported as reloaded.
@@ -101,8 +102,9 @@ For `start`, hosted environments can set `PORT`.
     your tools share is still one instance, but a new one, and the old one is not closed — its connection pool,
     `setInterval` or `process.on` listener stays alive beside the new one, once more per reload. Open resources when
     a tool is called, not at the top of the module.
-- **Code inputs** (`channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`, and non-TypeScript
-  files under `tools/`) restart the dev worker.
+- **Code inputs** (`channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`, and `.js`/`.mjs`/`.cjs`/`.json`
+  files under `tools/`) restart the dev worker. So does a TypeScript fix under `tools/` when the worker is down —
+  one that refused a broken tool at boot.
 
 Nothing else is watched: files the agent itself writes into the workspace (its work product) never
 trigger a restart. Helper code a tool imports from outside `tools/` is reloaded only when something under `tools/`

@@ -62,14 +62,14 @@ async function callGreet(tools: MountedTool[]): Promise<string> {
 it("a rewritten helper reaches the next invoke — and the tool still sees its turn", async () => {
   const dir = await agentDir();
   const readTools = await live(dir);
-  expect(await callGreet(await readTools())).toBe("hello from /the/workspace");
+  expect(await callGreet((await readTools()).tools)).toBe("hello from /the/workspace");
 
   // Only the HELPER changes. Node's own import cache would keep it (a busted entry URL re-reads the entry alone).
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "good morning";\n`);
 
   // `/the/workspace`, not this process's cwd: the reloaded tool re-evaluated fastagent's source, and still reads the
   // one turn context the host sets.
-  expect(await callGreet(await readTools())).toBe("good morning from /the/workspace");
+  expect(await callGreet((await readTools()).tools)).toBe("good morning from /the/workspace");
 });
 
 it("an unchanged tools/ is not imported again", async () => {
@@ -84,7 +84,7 @@ it("an unchanged tools/ is not imported again", async () => {
   expect(evaluations()).toBe(before);
 });
 
-it("a reload that fails keeps the tools that loaded, says so once, and recovers when fixed", async () => {
+it("a reload that fails keeps the tools that loaded, logs once, tells the model while broken, and recovers", async () => {
   const dir = await agentDir();
   const readTools = await live(dir);
   const warned: string[] = [];
@@ -92,15 +92,18 @@ it("a reload that fails keeps the tools that loaded, says so once, and recovers 
   vi.spyOn(log, "info").mockImplementation(() => {});
 
   await writeFile(join(dir, "tools", "broken.ts"), "export default {\n");
-  expect(await callGreet(await readTools())).toBe("hello from /the/workspace");
-  await readTools(); // the same broken state is not re-announced every turn
-
+  const broken = await readTools();
+  expect(await callGreet(broken.tools)).toBe("hello from /the/workspace");
+  expect(broken.failure).toMatch(/tools\/broken\.ts/);
+  // The log is not re-announced every turn; the model, which has no log, hears it every turn the state lasts.
+  expect((await readTools()).failure).toBe(broken.failure);
   expect(warned.filter((line) => line.includes("tools/ changed but could not be loaded"))).toHaveLength(1);
-  expect(warned.join("\n")).toMatch(/tools\/broken\.ts/);
 
   await rm(join(dir, "tools", "broken.ts"));
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "fixed";\n`);
-  expect(await callGreet(await readTools())).toBe("fixed from /the/workspace");
+  const fixed = await readTools();
+  expect(await callGreet(fixed.tools)).toBe("fixed from /the/workspace");
+  expect(fixed.failure).toBeUndefined();
 });
 
 it("each invoke binds, and its prompt lists, the tools read for THAT invoke", async () => {
@@ -119,24 +122,28 @@ it("each invoke binds, and its prompt lists, the tools read for THAT invoke", as
     execute: async () => ({ content: [{ type: "text", text: name }], details: {} }),
   });
   let current = [tool("first")];
+  let failure: string | undefined;
   const dir = await mkdtemp(join(tmpdir(), "fa-live-bind-"));
   await writeFile(join(dir, "persona.md"), "You are terse.\n");
   const { assembly } = await assemblePiFromDefinition(dir, {
     model: "faux/faux-1",
     providers: [faux.provider],
     tools: current,
-    readTools: async () => current,
+    readTools: async () => ({ tools: current, failure }),
   });
   const agent = agentOf(assembly);
 
   await collect(agent.invoke({ session: "s" }, { text: "one" }));
   current = [tool("second")];
+  failure = "tools/third.ts failed to load";
   await collect(agent.invoke({ session: "s" }, { text: "two" }));
 
   expect(seen[0]?.tools).toContain("first");
+  expect(seen[0]?.prompt).not.toContain("could not be loaded");
   expect(seen[1]?.tools).toContain("second");
   expect(seen[1]?.tools).not.toContain("first");
   expect(seen[1]?.prompt).toContain("- second: The second tool.");
+  expect(seen[1]?.prompt).toMatch(/tools\/ changed but could not be loaded[\s\S]*tools\/third\.ts failed to load/);
 });
 
 it("reloads under Bun too — whose own import() would keep the first module forever", async () => {
@@ -149,7 +156,7 @@ it("reloads under Bun too — whose own import() would keep the first module for
 
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "from bun";\n`);
 
-  expect(await callGreet(await readTools())).toBe("from bun from /the/workspace");
+  expect(await callGreet((await readTools()).tools)).toBe("from bun from /the/workspace");
 });
 
 it("one load evaluates a helper its tools share ONCE — a pool stays one pool", async () => {
@@ -207,8 +214,25 @@ it("a change only Node's cache would serve is said to need a restart — never l
   warned.length = 0;
   await writeFile(join(dir, "tools", "lib", "limits.js"), "export const max = 3;\n");
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "mixed";\n`);
-  expect(await callGreet(await readTools())).toBe("mixed from /the/workspace");
+  expect(await callGreet((await readTools()).tools)).toBe("mixed from /the/workspace");
   expect(warned.join("\n")).toMatch(/tools\/lib\/limits\.js changed/);
+});
+
+it("a file nothing imports is not a change — no restart notice, no reload", async () => {
+  const dir = await agentDir();
+  const readTools = await live(dir);
+  const logged: string[] = [];
+  vi.spyOn(log, "warn").mockImplementation((message) => void logged.push(message));
+  vi.spyOn(log, "info").mockImplementation((message) => void logged.push(message));
+  const evaluations = () => (globalThis as { __faGreetEvaluations?: number }).__faGreetEvaluations ?? 0;
+  const before = evaluations();
+
+  await writeFile(join(dir, "tools", "README.md"), "# tools\n");
+  await writeFile(join(dir, "tools", ".greet.ts.swp"), "swap");
+  await readTools();
+
+  expect(logged).toEqual([]);
+  expect(evaluations()).toBe(before);
 });
 
 it("a tool file of any name loads — the load's own entry cannot shadow one", async () => {

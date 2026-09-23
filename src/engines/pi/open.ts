@@ -19,12 +19,19 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import { refuseBrokenDeclarations, reloadsLive } from "../../loader.ts";
+import { refuseBrokenDeclarations, reloadKind } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
-import { type ToolCollision, type MountedTool, type ToolsStamp, changedTools, toolsStamp } from "./tool.ts";
+import {
+  type LiveTools,
+  type MountedTool,
+  type ToolCollision,
+  type ToolsStamp,
+  changedTools,
+  toolsStamp,
+} from "./tool.ts";
 import { log } from "../../log.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
@@ -142,11 +149,13 @@ async function mountableTools(config: FastagentConfig, agentDir: string, workspa
  * for itself is one it can call on its next turn, with no restart. Loaded again only when {@link toolsStamp} moved;
  * a turn already running keeps the tools it was bound with.
  *
- * A reload that fails KEEPS THE LAST TOOLS THAT LOADED and says why, once per state of the directory. Boot refuses
- * the same failure, but here refusing would fail every turn after it — including the one the agent needs to repair
- * what it just broke. All or nothing: a half-applied `tools/` is a set nobody wrote.
+ * A reload that fails KEEPS THE LAST TOOLS THAT LOADED and says why: in the log once per state of the directory, and
+ * to the model as `failure` for as long as that state lasts — the agent that broke the file is the one placed to fix
+ * it, and a tool that is simply absent tells it nothing. Boot refuses the same failure, but here refusing would fail
+ * every turn after it — including the one the agent needs to repair what it just broke. All or nothing: a
+ * half-applied `tools/` is a set nobody wrote.
  *
- * Only TypeScript reloads ({@link reloadsLive}); a change to any other file is said to need a restart, and when that
+ * Only TypeScript reloads ({@link reloadKind}); a change to a file Node caches is said to need a restart, and when that
  * is all that changed nothing is reloaded — logging "reloaded" over a file Node still has cached is the one outcome
  * worse than not reloading.
  */
@@ -155,7 +164,7 @@ export function liveTools(
   boot: { stamp: ToolsStamp; tools: MountedTool[] },
   /** What the opener adds on top of the discovered set (the `wake` tool), applied to every reload as at boot. */
   mount: (tools: MountedTool[]) => MountedTool[] = (tools) => tools,
-): () => Promise<MountedTool[]> {
+): () => Promise<LiveTools> {
   const { config, agentDir, workspace } = opened;
   const load = async (): Promise<MountedTool[]> => {
     const loaded = await mountableTools(config, agentDir, workspace);
@@ -164,13 +173,14 @@ export function liveTools(
     reportToolCollisions(loaded.toolCollisions);
     return mount(loaded.tools);
   };
-  let current = boot;
+  let current: LiveTools & { stamp: ToolsStamp } = boot;
   let reloading: Promise<void> | undefined;
+  const answer = (): LiveTools => ({ tools: current.tools, failure: current.failure });
   return async () => {
     const stamp = await toolsStamp(agentDir);
     const changed = changedTools(current.stamp, stamp);
-    if (changed.length === 0) return current.tools;
-    const cached = changed.filter((file) => !reloadsLive(file));
+    if (changed.length === 0) return answer();
+    const cached = changed.filter((file) => reloadKind(file) === "restart");
     if (cached.length > 0) {
       log.warn(
         `[fastagent] ${cached.map((file) => relative(agentDir, file)).join(", ")} changed — only TypeScript in ` +
@@ -178,8 +188,8 @@ export function liveTools(
       );
     }
     if (cached.length === changed.length) {
-      current = { stamp, tools: current.tools };
-      return current.tools;
+      current = { ...current, stamp };
+      return answer();
     }
     // Concurrent invokes share one reload; whichever stamp it read, the next invoke compares again.
     reloading ??= (async () => {
@@ -188,16 +198,15 @@ export function liveTools(
         current = { stamp, tools };
         log.info(`[fastagent] tools/ changed — reloaded; the next turns run with the new tools`);
       } catch (error) {
-        current = { stamp, tools: current.tools };
-        log.warn(
-          `[fastagent] tools/ changed but could not be loaded, so the previous tools stay in use: ${(error as Error).message}`,
-        );
+        const failure = (error as Error).message;
+        current = { stamp, tools: current.tools, failure };
+        log.warn(`[fastagent] tools/ changed but could not be loaded, so the previous tools stay in use: ${failure}`);
       } finally {
         reloading = undefined;
       }
     })();
     await reloading;
-    return current.tools;
+    return answer();
   };
 }
 

@@ -117,7 +117,7 @@ Use **Node >= 22.19** (`node --version`) and ESM (`"type": "module"` in the agen
 set by the default scaffold). Node runs erasable TypeScript directly. It removes types without checking
 them and does not read `tsconfig.json` to transform code or resolve aliases.
 
-- Use explicit `.ts` extensions for relative source imports, such as `../lib/batches.ts`.
+- Use explicit `.ts` extensions for relative source imports, such as `./lib/batches.ts`.
 - Use `import type` for types that have no runtime value.
 - Avoid enums, runtime namespaces, constructor parameter properties, import aliases, decorators, and
   JSX in this no-build path. Native type stripping does not compile them into JavaScript.
@@ -153,7 +153,7 @@ Extend `include` when adding other source directories.
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["tools/**/*.ts", "channels/**/*.ts", "routines/**/*.ts", "lib/**/*.ts", "test/**/*.ts", "fastagent.config.ts"]
+  "include": ["tools/**/*.ts", "channels/**/*.ts", "routines/**/*.ts", "test/**/*.ts", "fastagent.config.ts"]
 }
 ```
 
@@ -189,7 +189,7 @@ Confirm which proposals are in scope and the owner's preferred batch size. Use p
 count. Group related proposals, explain uncertain evidence, and present a draft plan for approval.
 ```
 
-**`fastagent/lib/batches.ts`**
+**`fastagent/tools/lib/batches.ts`**
 
 ```ts
 export function batchCount(items: number, size: number): number {
@@ -201,7 +201,7 @@ export function batchCount(items: number, size: number): number {
 
 ```ts
 import { defineTool, z } from "@fastagent-sh/fastagent";
-import { batchCount } from "../lib/batches.ts";
+import { batchCount } from "./lib/batches.ts";
 
 export default defineTool({
   description: "Count review batches for a non-negative item count and a positive batch size.",
@@ -218,7 +218,8 @@ export default defineTool({
 The filename supplies the tool name. `defineTool` infers `items` and `size` from the Zod schema and
 validates incoming arguments before calling the body. TypeScript annotations alone do not validate
 external JSON. Import `z` from FastAgent so schema construction and conversion use the same Zod copy.
-Keep helpers outside `tools/`, whose files must default-export tools. Add IO and authorization checks
+Keep helpers in a subdirectory of `tools/`, such as `tools/lib/`: only the files directly in `tools/` must
+default-export tools, and a helper there reloads with the tools that import it. Add IO and authorization checks
 at the boundary that performs the real operation; keep imports free of network calls and side effects.
 
 **`fastagent/test/batches.test.ts`**
@@ -226,7 +227,7 @@ at the boundary that performs the real operation; keep imports free of network c
 ```ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { batchCount } from "../lib/batches.ts";
+import { batchCount } from "../tools/lib/batches.ts";
 import planBatches from "../tools/plan-batches.ts";
 
 test("batch planning calculates counts and validates external arguments", async () => {
@@ -285,14 +286,15 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, and skills are read on the next turn.
-With watching enabled, changes under the agent's `tools/`, `channels/`, `routines/`, and `extensions/`
-restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
-`.env` (only when that file is inside the agent directory).
+`dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, skills, and the TypeScript under `tools/`
+(helpers in `tools/lib/` included) are read on the next turn, in `start` as in `dev`; a reload that fails keeps
+the previous tools and says why. With watching enabled, changes under the agent's `channels/`, `routines/`, and
+`extensions/` restart the worker, as do `.js`, `.mjs`, `.cjs` and `.json` files under `tools/` (Node keeps those
+cached) and changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved `.env` (only when
+that file is inside the agent directory).
 
-**After editing `fastagent/lib/batches.ts` or another imported helper outside those watched directories,
-stop and restart `fastagent dev`.** `lib/` is not watched, and imported modules remain cached in the
-running worker. `start` serves without watching. `chat` opens the same definition in an interactive TUI.
+**After editing a helper outside `tools/`, `channels/` and `routines/`, stop and restart `fastagent dev`.** It is
+not watched, and a tool reloads it only when something under `tools/` changes. `start` serves without watching. `chat` opens the same definition in an interactive TUI.
 A coding agent should background servers with a cleanup path or delegate them to the owner.
 
 ## 6. Add a native channel

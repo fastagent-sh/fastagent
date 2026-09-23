@@ -140,9 +140,12 @@ The pi reference prompt has four segments:
 invocation, so persona/context/skill edits take effect on the next turn — and so do `tools/`, the code an
 agent writes to improve itself: each invoke reloads them when a file under `tools/` changed (open.ts
 `liveTools`), in `start` as in `dev`. They import fresh (`importFresh`, as pi's `/reload` imports extensions), so
-a helper a tool imports is re-read with it; a reload that fails keeps the last tools that loaded and says why.
-Only TypeScript is re-read that way (`reloadsLive`): jiti hands any other format to Node, whose cache keeps it,
-so a change to one is said to need a restart and is never reported as reloaded.
+a helper a tool imports is re-read with it; a reload that fails keeps the last tools that loaded and says why — in
+the log once, and in the prompt's tool list every turn it stays broken, since the agent that wrote the file is the one
+placed to fix it.
+Only TypeScript is re-read that way (`reloadKind`): jiti hands `.js`/`.mjs`/`.cjs`/`.json` to Node, whose cache
+keeps them, so a change to one is said to need a restart and is never reported as reloaded. A file nothing imports
+(`README.md`, an editor's swap file) is not a change at all.
 The rest of the code — `channels/`, `routines/`, config — is the agent's wiring, reloaded by a restart (the dev
 supervisor's, in `dev`). The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
